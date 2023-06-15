@@ -13,6 +13,6 @@ jobs:
       - name: cmake-configure
         run: cmake -S . -B build -D CMAKE_BUILD_TYPE=Release
       - name: build
-        run: cmake --build build --parallel 10
+        run: cmake --build build --parallel 10 --target run_all_tests
       - name: run_all_tests
         run: cd build ; mpirun -np 10 ./run_all_tests 7 0.0001 0.01 4
