@@ -1,0 +1,18 @@
+name: Dendro-5.01 Testing
+
+on:
+  push:
+    branches: [ resync_with_dendrogr ]
+
+jobs:
+  simpletest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: mpi4py/setup-mpi@v1
+      - name: cmake-configure
+        run: cmake -S . -B build -D CMAKE_BUILD_TYPE=Release
+      - name: build
+        run: cmake --build build --parallel 10
+      - name: run_all_tests
+        run: cd build ; mpirun -np 10 ./run_all_tests 7 0.0001 0.01 4
