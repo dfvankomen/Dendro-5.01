@@ -13,7 +13,7 @@ jobs:
       - name: cmake configuration
         run: cmake -S . -B build -D CMAKE_BUILD_TYPE=Release
       - name: build several targets
-        run: cmake --build build --parallel 10 --target run_all_tests testOctUtils meshE2NCheck heatEq laplaceEq
+        run: cmake --build build --parallel 10 --target run_all_tests testOctUtils testInterp meshE2NCheck heatEq laplaceEq
       - name: Test Octree Utilities (rm Dupes)
         run: cd build ; mpirun -np 10 ./testOctUtils 600 3 8 1e-5 0 1
       - name: Test Octree Utilities (Construct Octree)
