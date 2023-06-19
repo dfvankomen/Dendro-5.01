@@ -909,6 +909,7 @@ target_include_directories(heatEq
 target_include_directories(heatEq PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(heatEq PRIVATE ${GSL_INCLUDE_DIRS})
 
+# this is not working, carving things out from octree domain
 set(SOURCE_FILES FEM/examples/src/subdaExample.cpp)
 add_executable(subDAExample ${SOURCE_FILES})
 target_link_libraries(subDAExample dendro5 ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
@@ -934,6 +935,7 @@ target_include_directories(subDAExample
 target_include_directories(subDAExample PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(subDAExample PRIVATE ${GSL_INCLUDE_DIRS})
 
+# apply the metric in a different way - traversing the tree without using the datastructures
 set(SOURCE_FILES FEM/examples/src/sfcLaplace.cpp)
 add_executable(sfcLaplaceEq ${SOURCE_FILES})
 target_link_libraries(sfcLaplaceEq dendro5 ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
