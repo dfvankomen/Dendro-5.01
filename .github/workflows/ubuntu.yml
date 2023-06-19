@@ -15,4 +15,4 @@ jobs:
       - name: build
         run: cmake --build build --parallel 10 --target run_all_tests
       - name: run_all_tests
-        run: cd build ; mpirun -np 10 ./run_all_tests 7 0.0001 0.01 4
+        run: cd build ; mpirun -np 10 ./run_all_tests 8 1e-5 0.1 6
