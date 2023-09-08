@@ -82,6 +82,7 @@ set(DENDRO_INCLUDE_FILES
     test/include/testUtils.tcc
     test/include/meshTestUtils.h
     include/launcher.h
+    include/compression.h
     include/device.h)
 
 set(DENDRO_SOURCE_FILES
@@ -105,6 +106,7 @@ set(DENDRO_SOURCE_FILES
     src/sub_oda.cpp
     src/meshUtils.cpp
     src/waveletRefEl.cpp
+    src/compression.cpp
     test/src/meshTestUtils.cpp)
 
 set(FEM_INC
