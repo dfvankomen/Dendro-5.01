@@ -19,6 +19,10 @@ find_package(OpenMP REQUIRED)
 find_package(MPI REQUIRED)
 find_package(GSL REQUIRED)
 
+# Packages needed for the compression algorithms
+find_package(Eigen3 REQUIRED)
+include_directories(${EIGEN3_INCLUDE_DIR})
+
 # For now we just make it compulsory to have LAPACK installed. TODO: make Lapack
 # install if not present.
 

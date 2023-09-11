@@ -44,6 +44,7 @@ set(DENDRO_INCLUDE_FILES
     include/parUtils.tcc
     include/mesh.h
     include/mesh.tcc
+    include/compression.h
     include/meshE2NUtils.tcc
     include/dendro.h
     include/colors.h
@@ -95,6 +96,7 @@ set(DENDRO_SOURCE_FILES
     src/treenode2vtk.cpp
     src/parUtils.cpp
     src/mesh.cpp
+    src/compression.cpp
     src/octUtils.cpp
     src/dendroIO.cpp
     src/block.cpp
