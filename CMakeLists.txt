@@ -771,3 +771,9 @@ target_include_directories(sfcLaplaceEq
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(sfcLaplaceEq PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(sfcLaplaceEq PRIVATE ${GSL_INCLUDE_DIRS})
+
+
+
+
+
+add_subdirectory(NLSigma)
