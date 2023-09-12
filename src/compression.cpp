@@ -684,6 +684,7 @@ namespace FFTAlgorithms {
 }
 
 
+#if 0
 
 namespace ZFPAlgorithms {
 
@@ -756,3 +757,5 @@ namespace ZFPAlgorithms {
         return decompressedData;
     }
 }
+
+#endif

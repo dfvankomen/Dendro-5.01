@@ -125,6 +125,7 @@ namespace FFTAlgorithms {
 #endif // FFT_ALGORITHMS_H
 
 
+#if 0
 
 #ifndef _ZFPALGORITHMS_H_
 #define _ZFPALGORITHMS_H_
@@ -145,3 +146,5 @@ namespace ZFPAlgorithms {
 }
 
 #endif // _ZFPALGORITHMS_H_ 
+
+#endif
