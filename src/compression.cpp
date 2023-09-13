@@ -726,6 +726,42 @@ namespace ZFPAlgorithms {
         return buffer;
     }
 
+    unsigned char* compressMatrix1D(double* originalData, int n, double rate, int& size) {
+        // Initialize a 3D array with original data, using ZFP's special 'field' structure. 
+        // The field has the type of double and the dimensions are given by x, y, and z.
+        zfp_field* field = zfp_field_1d(originalData, zfp_type_double, n);
+        // Open a new ZFP stream. A ZFP stream is responsible for compressing and decompressing data.
+        zfp_stream* zfp = zfp_stream_open(NULL);
+        // Set the compression rate for the ZFP stream. The type of the data is double, the dimensionality is 3, and '0' indicates we're not using a user-specified precision.
+        zfp_stream_set_rate(zfp, rate, zfp_type_double, 1, 0);
+
+        // Determine the maximum buffer size necessary for this ZFP stream given the input field.
+        int bufsize = zfp_stream_maximum_size(zfp, field);
+        size = bufsize + 1 * sizeof(int) + sizeof(double); // metadata x,y,z,rate
+        // Create a buffer with enough capacity to store the compressed data.
+        unsigned char* buffer = new unsigned char[size];
+        unsigned char* ptr = buffer;
+        memcpy(ptr, &n, sizeof(int));
+        ptr += sizeof(int);
+        memcpy(ptr, &rate, sizeof(double));
+        ptr += sizeof(double);
+        // Create a bitstream from the buffer to store compressed data.
+        bitstream* stream = stream_open(ptr, bufsize);
+        // Associate the bitstream with the ZFP stream, so compressed data will go into our buffer.
+        zfp_stream_set_bit_stream(zfp, stream);
+        // Compress the data. The results will be stored in the buffer we've created.
+        zfp_compress(zfp, field);
+
+        // Close the bitstream. All compressed data should now reside in our buffer.
+        stream_close(stream);
+        // Close the ZFP stream since we're done with compression.
+        zfp_stream_close(zfp);
+        // Release the memory allocated for the field since we're done with it.
+        zfp_field_free(field);
+
+        return buffer;
+    }
+
 
     double* decompressMatrix(unsigned char* buffer, int bufferSize) {
         // Deserialize metadata
@@ -748,6 +784,30 @@ namespace ZFPAlgorithms {
         zfp_stream_set_bit_stream(zfp, stream);
         double* decompressedData = new double[x * y * z];
         zfp_field* dec_field = zfp_field_3d(decompressedData, zfp_type_double, x, y, z);
+        zfp_decompress(zfp, dec_field);
+        zfp_field_free(dec_field);
+        stream_close(stream);
+        zfp_stream_close(zfp);
+        return decompressedData;
+    }
+
+    double* decompressMatrix1D(unsigned char* buffer, int bufferSize) {
+        // Deserialize metadata
+        int n;
+        memcpy(&n, buffer, sizeof(int));
+        buffer += sizeof(int);
+        double rate;
+        memcpy(&rate, buffer, sizeof(double));
+        buffer += sizeof(double);
+
+        zfp_stream* zfp = zfp_stream_open(NULL);
+
+        // Set the decompression rate instead of accuracy
+        zfp_stream_set_rate(zfp, rate, zfp_type_double, 1, 0);
+        bitstream* stream = stream_open(buffer, bufferSize - 1 * sizeof(int) - sizeof(double));
+        zfp_stream_set_bit_stream(zfp, stream);
+        double* decompressedData = new double[n];
+        zfp_field* dec_field = zfp_field_1d(decompressedData, zfp_type_double, n);
         zfp_decompress(zfp, dec_field);
         zfp_field_free(dec_field);
         stream_close(stream);

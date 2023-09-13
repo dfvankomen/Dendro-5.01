@@ -167,13 +167,27 @@ namespace ZFPAlgorithms {
      * For high level documentation of the ZFP functios used:
      * https://zfp.readthedocs.io/en/release0.5.4/high-level-api.html#
      * @param rate Valid values are positive doubles. 
+     *             The rate is defined as maxbits / 4^d, where d=3 for this implementation.
      *             Through testing we found values 15.0 - 35.0 to offer the most consistent compression. 
      *             Values closer to 35 have minimal compression rates while values closer to 0 have much 
      *             higher compression rates at the cost of precision. 
      *             Values above 35.0 offer no compression and make the compressed data larger than the original data.
+     * 
     */
     unsigned char* compressMatrix(double* originalData, int x, int y, int z, double rate, int& size);
     double* decompressMatrix(unsigned char* buffer, int bufferSize);
+
+    /**
+     * We used ZFP's fixde-rate mode for this compression algoithm in 3x7x7 matrices.
+     * For high level documentation of the ZFP functios used:
+     * https://zfp.readthedocs.io/en/release0.5.4/high-level-api.html#
+     * @param rate Valid values are positive doubles. 
+     *             The rate is defined as maxbits / 4^d, where d=1 for this algorithm.
+     *             Therefore, the rate should be bounded by 4/4 -> 64/4 or 1 -> 16
+     * 
+    */
+    unsigned char* compressMatrix1D(double* originalData, int n, double rate, int& size);
+    double* decompressMatrix1D(unsigned char* buffer, int bufferSize);
 }
 
 #endif // _ZFPALGORITHMS_H_ 
