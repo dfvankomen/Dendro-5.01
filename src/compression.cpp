@@ -684,8 +684,6 @@ namespace FFTAlgorithms {
 }
 
 
-#if 0
-
 namespace ZFPAlgorithms {
 
     unsigned char* compressMatrix(double* originalData, int x, int y, int z, double rate, int& size) {
@@ -757,5 +755,3 @@ namespace ZFPAlgorithms {
         return decompressedData;
     }
 }
-
-#endif

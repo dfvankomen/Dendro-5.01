@@ -22,6 +22,29 @@ if(DENDROLIB_ISOLATED_DIR)
   include("CMakeLists-NonLibraryDefs.txt")
 endif()
 
+
+# ======= Set up the ZFP Library through CMake
+message(STATUS "Now configuring zfp library")
+
+include(FetchContent)
+FetchContent_Declare(
+  zfp
+  URL https://github.com/LLNL/zfp/releases/download/1.0.0/zfp-1.0.0.tar.gz
+  URL_HASH SHA256=0ea08ae3e50e3c92f8b8cf41ba5b6e2de8892bc4a4ca0c59b8945b6c2ab617c4
+)
+# FetchContent_GetProperties(zfp)
+# if(NOT zfp_POPULATED)
+#   FetchContent_Populate(zfp)
+
+#   add_subdirectory(${zfp_SOURCE_DIR} ${zfp_BINARY_DIR})
+# endif()
+
+FetchContent_MakeAvailable(zfp)
+
+# message(STATUS "zfp_source " ${zfp_SOURCE_DIR})
+# message(STATUS "zfp_binary " ${zfp_BINARY_DIR})
+# == END ZFP LIBRARY BUILD
+
 message(STATUS "Now setting the CMake files for the Dendro Library...")
 
 set(DENDRO_INCLUDE_FILES
@@ -268,6 +291,10 @@ if(BUILD_WITH_PETSC)
   target_include_directories(dendro5 PUBLIC ${PETSC_INCLUDES})
   target_link_libraries(dendro5 PUBLIC ${PETSC_LIBRARIES})
 endif()
+
+# LINK ZFP to dendro5
+target_include_directories(dendro5 PUBLIC ${zfp_SOURCE_DIR})
+target_link_libraries(dendro5 PUBLIC zfp)
 
 # =======================
 # =======================
