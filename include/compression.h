@@ -13,6 +13,11 @@
 #define EIGEN_DONT_ALIGN
 #include <Eigen/Dense> 
 #include <iostream>
+#include <utility>
+#include <cmath>
+#include <vector>
+#include <Eigen/SVD>
+#include <cmath>
 
 
 namespace SVDAlgorithms {
@@ -21,12 +26,12 @@ namespace SVDAlgorithms {
     * Compress a 3D matrix using Singular Value Decomposition (SVD).
     *
     * In a 3x7x7 matrix, k can be anywhere from 1 - 21
-    * 
-    * In our tests, we found setting k = 2 to be the most consistant overall. It provided 
-    * near lossless compression with 3:1 compression ratios. This algorithm was 
-    * much slower than the others. Roughly 100 times slower than ZFP and 10 times slower than FFT 
+    *
+    * In our tests, we found setting k = 2 to be the most consistant overall. It provided
+    * near lossless compression with 3:1 compression ratios. This algorithm was
+    * much slower than the others. Roughly 100 times slower than ZFP and 10 times slower than FFT
     * compression algorithms.
-    * 
+    *
     *
     * @param originalMatrix: A pointer to the 3D matrix to be compressed. It must be stored in a 1D array in column-major order.
     * @param x: The size of the first dimension of the original matrix.
@@ -38,9 +43,18 @@ namespace SVDAlgorithms {
     * @return: A pointer to a byte stream containing the compressed matrix and meta-information.
     */
     unsigned char* compressMatrix(double*& originalMatrix, const int x, const int y, const int z, const int k, int& size);
-
     double* decompressMatrix(unsigned char*& buffer, int bufferSize);
 
+    std::pair<int, int> findSquareLikeDimensions(int n);
+
+    /**
+    *
+    * @param cmp_str Intesity of compression to be performed. Valid values are 1 through n/2.
+    *                If cmp_str is set too high, then cmp_str will be set to the highest cmp_str allowed.
+    *                Recemmended to slowly test values starting at 3.
+    */
+	unsigned char* compressMatrix1d(double*& originalMatrix, const int n, const int cmp_str, int& size);
+    double* decompressMatrix1d(unsigned char*& buffer, int bufferSize);
 }
 #endif // _SVDALGORITHMS_H_
 
@@ -61,9 +75,9 @@ namespace SVDAlgorithms {
   ISBN: 9780444894885
   DOI: https://doi.org/10.1016/B978-0-444-89488-5.50065-8
   Link: https://www.sciencedirect.com/science/article/pii/B9780444894885500658
-  
-  Abstract: This paper proposes an algorithm for data compression of multi-dimensional images, 
-  prior to input into neural network feature detectors, using Chebyshev approximation. 
+
+  Abstract: This paper proposes an algorithm for data compression of multi-dimensional images,
+  prior to input into neural network feature detectors, using Chebyshev approximation.
   Illustrations are given of the fidelity obtainable for geophysical data.
   -----------------------------------------------------------------------
 */
@@ -81,31 +95,31 @@ namespace SVDAlgorithms {
 
 namespace ChebyshevAlgorithms {
 
-	double chebyshevT(int n, double x);
+    double chebyshevT(int n, double x);
 
-	/**
-     * To compress the data, 
+    /**
+     * To compress the data,
      * choose N such that N < x,
      * choose Q such that Q < y, and/or
      * choose S such that S < z.
-     * 
-     * All three values can be modified at once. The closer N, Q, and S are to 
+     *
+     * All three values can be modified at once. The closer N, Q, and S are to
      * 0, the higher the compression ratio. Through testing we found this
      * chebyshev compression algorithm to be enreliable as it produced single
-     * errors greater than 0.001. Best compression values were simply reducing N < x. 
-     * 
-	 * @param originalMatrix A three dimensional array represented in one dimension through row majoring order
-	 * @param x The number of elements in the x dimension
-	 * @param y The number of elements in the y dimension
-	 * @param z The number of elements in the z dimension
-	 * @param N The number of the coefficients in the x dimension. Must be less than x.
-	 * @param Q The number of the coefficients in the y dimension. Must be less than y.
-	 * @param S The number of the coefficients in the z dimension. Must be less than z.
-	 *
-	 * @return A pointer to the byte stream containing the compressed data.
-	 */
-	unsigned char* compressMatrix(double*& originalMatrix, int x, int y, int z, int N, int Q, int S, int& bufferSize);
-	double* decompressMatrix(unsigned char*& buffer, int bufferSize);
+     * errors greater than 0.001. Best compression values were simply reducing N < x.
+     *
+     * @param originalMatrix A three dimensional array represented in one dimension through row majoring order
+     * @param x The number of elements in the x dimension
+     * @param y The number of elements in the y dimension
+     * @param z The number of elements in the z dimension
+     * @param N The number of the coefficients in the x dimension. Must be less than x.
+     * @param Q The number of the coefficients in the y dimension. Must be less than y.
+     * @param S The number of the coefficients in the z dimension. Must be less than z.
+     *
+     * @return A pointer to the byte stream containing the compressed data.
+     */
+    unsigned char* compressMatrix(double*& originalMatrix, int x, int y, int z, int N, int Q, int S, int& bufferSize);
+    double* decompressMatrix(unsigned char*& buffer, int bufferSize);
 
 }
 #endif // _CHEBYSHEVALGORITHMS_H_
@@ -132,12 +146,12 @@ namespace FFTAlgorithms {
 
     /**
      * To compress the data choose compressionRatio to be anywhere from 0.0 through 1.0.
-     * In our testing, we found the FFT compression algorithm to be highly inconsitent 
-     * for all values. The best overall values were achieved when compressionRatio 
+     * In our testing, we found the FFT compression algorithm to be highly inconsitent
+     * for all values. The best overall values were achieved when compressionRatio
      * was set to 0.10 through 0.45.
-     * In a 3x7x7 matrix, compressionRatio above 0.45 offers no compression and makes the 
+     * In a 3x7x7 matrix, compressionRatio above 0.45 offers no compression and makes the
      * compressed data larger than the original data.
-     * 
+     *
      * @param compressionRatio Valid values 0.0 through 1.0.
     */
     unsigned char* compressMatrix(double* originalMatrix, int x, int y, int z, double compressionRatio, int& size);
@@ -166,13 +180,13 @@ namespace ZFPAlgorithms {
      * We used ZFP's fixde-rate mode for this compression algoithm in 3x7x7 matrices.
      * For high level documentation of the ZFP functios used:
      * https://zfp.readthedocs.io/en/release0.5.4/high-level-api.html#
-     * @param rate Valid values are positive doubles. 
+     * @param rate Valid values are positive doubles.
      *             The rate is defined as maxbits / 4^d, where d=3 for this implementation.
-     *             Through testing we found values 15.0 - 35.0 to offer the most consistent compression. 
-     *             Values closer to 35 have minimal compression rates while values closer to 0 have much 
-     *             higher compression rates at the cost of precision. 
+     *             Through testing we found values 15.0 - 35.0 to offer the most consistent compression.
+     *             Values closer to 35 have minimal compression rates while values closer to 0 have much
+     *             higher compression rates at the cost of precision.
      *             Values above 35.0 offer no compression and make the compressed data larger than the original data.
-     * 
+     *
     */
     unsigned char* compressMatrix(double* originalData, int x, int y, int z, double rate, int& size);
     double* decompressMatrix(unsigned char* buffer, int bufferSize);
@@ -181,14 +195,13 @@ namespace ZFPAlgorithms {
      * We used ZFP's fixde-rate mode for this compression algoithm in 3x7x7 matrices.
      * For high level documentation of the ZFP functios used:
      * https://zfp.readthedocs.io/en/release0.5.4/high-level-api.html#
-     * @param rate Valid values are positive doubles. 
+     * @param rate Valid values are positive doubles.
      *             The rate is defined as maxbits / 4^d, where d=1 for this algorithm.
      *             Therefore, the rate should be bounded by 4/4 -> 64/4 or 1 -> 16
-     * 
+     *
     */
     unsigned char* compressMatrix1D(double* originalData, int n, double rate, int& size);
     double* decompressMatrix1D(unsigned char* buffer, int bufferSize);
 }
 
 #endif // _ZFPALGORITHMS_H_ 
-
