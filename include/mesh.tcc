@@ -838,79 +838,86 @@ namespace ot
     template<typename T>
     void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec, unsigned int dof)
     {
-        if(this->getMPICommSizeGlobal()==1 || (!m_uiIsActive))
-            return;
+        if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
 
         // send recv buffers.
         T* sendB = NULL;
         T* recvB = NULL;
-        
 
-        if(this->isActive())
-        {
-            const std::vector<unsigned int>& nodeSendCount=this->getNodalSendCounts();
-            const std::vector<unsigned int>& nodeSendOffset=this->getNodalSendOffsets();
+        if (this->isActive()) {
+            const std::vector<unsigned int>& nodeSendCount =
+                this->getNodalSendCounts();
+            const std::vector<unsigned int>& nodeSendOffset =
+                this->getNodalSendOffsets();
 
-            const std::vector<unsigned int>& nodeRecvCount=this->getNodalRecvCounts();
-            const std::vector<unsigned int>& nodeRecvOffset=this->getNodalRecvOffsets();
+            const std::vector<unsigned int>& nodeRecvCount =
+                this->getNodalRecvCounts();
+            const std::vector<unsigned int>& nodeRecvOffset =
+                this->getNodalRecvOffsets();
 
-            const std::vector<unsigned int>& sendProcList=this->getSendProcList();
-            const std::vector<unsigned int>& recvProcList=this->getRecvProcList();
+            const std::vector<unsigned int>& sendProcList =
+                this->getSendProcList();
+            const std::vector<unsigned int>& recvProcList =
+                this->getRecvProcList();
 
-            const std::vector<unsigned int>& sendNodeSM=this->getSendNodeSM();
-            const std::vector<unsigned int>& recvNodeSM=this->getRecvNodeSM();
+            const std::vector<unsigned int>& sendNodeSM = this->getSendNodeSM();
+            const std::vector<unsigned int>& recvNodeSM = this->getRecvNodeSM();
 
+            const unsigned int activeNpes = this->getMPICommSize();
 
-            const unsigned int activeNpes=this->getMPICommSize();
-
-            const unsigned int sendBSz=nodeSendOffset[activeNpes-1] + nodeSendCount[activeNpes-1];
-            const unsigned int recvBSz=nodeRecvOffset[activeNpes-1] + nodeRecvCount[activeNpes-1];
+            const unsigned int sendBSz =
+                nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+            const unsigned int recvBSz =
+                nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
             unsigned int proc_id;
 
-            MPI_Comm commActive=this->getMPICommunicator();
+            MPI_Comm commActive = this->getMPICommunicator();
 
-
-            if(recvBSz)
-            {
-                recvB=(T*)ctx.getRecvBuffer();
+            if (recvBSz) {
+                recvB = (T*)ctx.getRecvBuffer();
 
                 // active recv procs
-                for(unsigned int recv_p=0;recv_p<recvProcList.size();recv_p++)
-                {
-                    proc_id=recvProcList[recv_p];
-                    par::Mpi_Irecv((recvB+dof*nodeRecvOffset[proc_id]),dof*nodeRecvCount[proc_id],proc_id,m_uiCommTag,commActive,&ctx.m_recv_req[recv_p]);
+                for (unsigned int recv_p = 0; recv_p < recvProcList.size();
+                     recv_p++) {
+                    proc_id = recvProcList[recv_p];
+                    par::Mpi_Irecv((recvB + dof * nodeRecvOffset[proc_id]),
+                                   dof * nodeRecvCount[proc_id], proc_id,
+                                   m_uiCommTag, commActive,
+                                   &ctx.m_recv_req[recv_p]);
                 }
-
             }
 
-            if(sendBSz)
-            {
-                sendB=(T*)ctx.getSendBuffer();
-                for(unsigned int send_p=0;send_p<sendProcList.size();send_p++) {
-                    proc_id=sendProcList[send_p];
+            if (sendBSz) {
+                sendB = (T*)ctx.getSendBuffer();
+                for (unsigned int send_p = 0; send_p < sendProcList.size();
+                     send_p++) {
+                    proc_id = sendProcList[send_p];
 
-                    for(unsigned int var=0;var<dof;var++)
-                    {
-                        for (unsigned int k = nodeSendOffset[proc_id]; k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]); k++)
-                        {
-                            sendB[dof*(nodeSendOffset[proc_id]) + (var*nodeSendCount[proc_id])+(k-nodeSendOffset[proc_id])] = (vec+var*m_uiNumActualNodes)[sendNodeSM[k]];
+                    for (unsigned int var = 0; var < dof; var++) {
+                        for (unsigned int k = nodeSendOffset[proc_id];
+                             k <
+                             (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
+                             k++) {
+                            sendB[dof * (nodeSendOffset[proc_id]) +
+                                  (var * nodeSendCount[proc_id]) +
+                                  (k - nodeSendOffset[proc_id])] =
+                                (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
                         }
-
                     }
                 }
 
                 // active send procs
-                for(unsigned int send_p=0;send_p<sendProcList.size();send_p++)
-                {
-                    proc_id=sendProcList[send_p];
-                    par::Mpi_Isend(sendB+dof*nodeSendOffset[proc_id],dof*nodeSendCount[proc_id],proc_id,m_uiCommTag,commActive,&ctx.m_send_req[send_p]);
-
+                for (unsigned int send_p = 0; send_p < sendProcList.size();
+                     send_p++) {
+                    proc_id = sendProcList[send_p];
+                    par::Mpi_Isend(sendB + dof * nodeSendOffset[proc_id],
+                                   dof * nodeSendCount[proc_id], proc_id,
+                                   m_uiCommTag, commActive,
+                                   &ctx.m_send_req[send_p]);
                 }
-            
             }
 
             m_uiCommTag++;
-            
         }
 
         return;
@@ -979,82 +986,79 @@ namespace ot
     template<typename T>
     void Mesh::readFromGhostBeginElementVec(T* vec, unsigned int dof)
     {
-        if(this->getMPICommSizeGlobal()==1 || (!m_uiIsActive))
-            return;
+        if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
 
         // send recv buffers.
         T* sendB = NULL;
         T* recvB = NULL;
 
-        if(this->isActive())
-        {
-            const unsigned int activeNpes=m_uiActiveNpes;
-            const unsigned int sendBSz = m_uiSendEleOffset[activeNpes-1] + m_uiSendEleCount[activeNpes-1];
-            const unsigned int recvBSz = m_uiRecvEleOffset[activeNpes-1] + m_uiRecvEleCount[activeNpes-1];
+        if (this->isActive()) {
+            const unsigned int activeNpes = m_uiActiveNpes;
+            const unsigned int sendBSz = m_uiSendEleOffset[activeNpes - 1] +
+                                         m_uiSendEleCount[activeNpes - 1];
+            const unsigned int recvBSz = m_uiRecvEleOffset[activeNpes - 1] +
+                                         m_uiRecvEleCount[activeNpes - 1];
             unsigned int proc_id;
 
             AsyncExchangeContex ctx(vec);
-            MPI_Comm commActive=this->getMPICommunicator();
+            MPI_Comm commActive = this->getMPICommunicator();
 
-            if(recvBSz)
-            {
-                ctx.allocateRecvBuffer((sizeof(T)*recvBSz*dof));
-                recvB=(T*)ctx.getRecvBuffer();
+            if (recvBSz) {
+                ctx.allocateRecvBuffer((sizeof(T) * recvBSz * dof));
+                recvB = (T*)ctx.getRecvBuffer();
 
                 // active recv procs
-                for(unsigned int recv_p = 0 ;  recv_p <  m_uiElementRecvProcList.size(); recv_p++)
-                {
-                    proc_id=m_uiElementRecvProcList[recv_p];
-                    MPI_Request* req=new MPI_Request();
-                    par::Mpi_Irecv((recvB+dof*m_uiRecvEleOffset[proc_id]),dof*m_uiRecvEleCount[proc_id],proc_id,m_uiCommTag,commActive,req);
+                for (unsigned int recv_p = 0;
+                     recv_p < m_uiElementRecvProcList.size(); recv_p++) {
+                    proc_id = m_uiElementRecvProcList[recv_p];
+                    MPI_Request* req = new MPI_Request();
+                    par::Mpi_Irecv((recvB + dof * m_uiRecvEleOffset[proc_id]),
+                                   dof * m_uiRecvEleCount[proc_id], proc_id,
+                                   m_uiCommTag, commActive, req);
                     ctx.getRequestList().push_back(req);
-
                 }
-
             }
 
-            if(sendBSz)
-            {
-                ctx.allocateSendBuffer(sizeof(T)*dof*sendBSz);
-                sendB=(T*)ctx.getSendBuffer();
+            if (sendBSz) {
+                ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
+                sendB = (T*)ctx.getSendBuffer();
 
-                for(unsigned int send_p = 0; send_p < m_uiElementSendProcList.size(); send_p++) {
-                    proc_id=m_uiElementSendProcList[send_p];
+                for (unsigned int send_p = 0;
+                     send_p < m_uiElementSendProcList.size(); send_p++) {
+                    proc_id = m_uiElementSendProcList[send_p];
 
-                    for(unsigned int var=0;var<dof;var++)
-                    {
-                        for (unsigned int k = m_uiSendEleOffset[proc_id]; k < (m_uiSendEleOffset[proc_id] + m_uiSendEleCount[proc_id]); k++)
-                        {
-                            sendB[dof*(m_uiSendEleOffset[proc_id]) + (var*m_uiSendEleCount[proc_id])+(k-m_uiSendEleOffset[proc_id])] = (vec+var*m_uiNumTotalElements)[ m_uiElementLocalBegin +  m_uiScatterMapElementRound1[k]];
+                    for (unsigned int var = 0; var < dof; var++) {
+                        for (unsigned int k = m_uiSendEleOffset[proc_id];
+                             k < (m_uiSendEleOffset[proc_id] +
+                                  m_uiSendEleCount[proc_id]);
+                             k++) {
+                            sendB[dof * (m_uiSendEleOffset[proc_id]) +
+                                  (var * m_uiSendEleCount[proc_id]) +
+                                  (k - m_uiSendEleOffset[proc_id])] =
+                                (vec + var * m_uiNumTotalElements)
+                                    [m_uiElementLocalBegin +
+                                     m_uiScatterMapElementRound1[k]];
                         }
-
                     }
-
                 }
 
-                
                 // active send procs
-                for(unsigned int send_p = 0; send_p < m_uiElementSendProcList.size(); send_p++) 
-                {
-                    proc_id=m_uiElementSendProcList[send_p];
-                    MPI_Request * req=new MPI_Request();
-                    par::Mpi_Isend(sendB+dof*m_uiSendEleOffset[proc_id],dof*m_uiSendEleCount[proc_id],proc_id,m_uiCommTag,commActive,req);
+                for (unsigned int send_p = 0;
+                     send_p < m_uiElementSendProcList.size(); send_p++) {
+                    proc_id = m_uiElementSendProcList[send_p];
+                    MPI_Request* req = new MPI_Request();
+                    par::Mpi_Isend(sendB + dof * m_uiSendEleOffset[proc_id],
+                                   dof * m_uiSendEleCount[proc_id], proc_id,
+                                   m_uiCommTag, commActive, req);
                     ctx.getRequestList().push_back(req);
-
                 }
-
-
             }
-
 
             m_uiCommTag++;
             m_uiMPIContexts.push_back(ctx);
-        
         }
 
         return;
-    
-    
     }
 
 
