@@ -926,57 +926,66 @@ namespace ot
     template<typename T>
     void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec, unsigned int dof)
     {
-        if(this->getMPICommSizeGlobal()==1 || (!m_uiIsActive))
-            return;
+        if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
 
         // send recv buffers.
         T* sendB = NULL;
         T* recvB = NULL;
 
-        if(this->isActive())
-        {
-            const std::vector<unsigned int>& nodeSendCount=this->getNodalSendCounts();
-            const std::vector<unsigned int>& nodeSendOffset=this->getNodalSendOffsets();
+        if (this->isActive()) {
+            const std::vector<unsigned int>& nodeSendCount =
+                this->getNodalSendCounts();
+            const std::vector<unsigned int>& nodeSendOffset =
+                this->getNodalSendOffsets();
 
-            const std::vector<unsigned int>& nodeRecvCount=this->getNodalRecvCounts();
-            const std::vector<unsigned int>& nodeRecvOffset=this->getNodalRecvOffsets();
+            const std::vector<unsigned int>& nodeRecvCount =
+                this->getNodalRecvCounts();
+            const std::vector<unsigned int>& nodeRecvOffset =
+                this->getNodalRecvOffsets();
 
-            const std::vector<unsigned int>& sendProcList=this->getSendProcList();
-            const std::vector<unsigned int>& recvProcList=this->getRecvProcList();
+            const std::vector<unsigned int>& sendProcList =
+                this->getSendProcList();
+            const std::vector<unsigned int>& recvProcList =
+                this->getRecvProcList();
 
-            const std::vector<unsigned int>& sendNodeSM=this->getSendNodeSM();
-            const std::vector<unsigned int>& recvNodeSM=this->getRecvNodeSM();
+            const std::vector<unsigned int>& sendNodeSM = this->getSendNodeSM();
+            const std::vector<unsigned int>& recvNodeSM = this->getRecvNodeSM();
 
+            const unsigned int activeNpes = this->getMPICommSize();
 
-            const unsigned int activeNpes=this->getMPICommSize();
-
-            const unsigned int sendBSz=nodeSendOffset[activeNpes-1] + nodeSendCount[activeNpes-1];
-            const unsigned int recvBSz=nodeRecvOffset[activeNpes-1] + nodeRecvCount[activeNpes-1];
+            const unsigned int sendBSz =
+                nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+            const unsigned int recvBSz =
+                nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
             unsigned int proc_id;
 
             MPI_Status status;
             // need to wait for the commns to finish ...
-            MPI_Waitall(sendProcList.size(),ctx.m_send_req.data(),MPI_STATUSES_IGNORE);
-            MPI_Waitall(recvProcList.size(),ctx.m_recv_req.data(),MPI_STATUSES_IGNORE);
-            
-            if(recvBSz)
-            {
+            MPI_Waitall(sendProcList.size(), ctx.m_send_req.data(),
+                        MPI_STATUSES_IGNORE);
+            MPI_Waitall(recvProcList.size(), ctx.m_recv_req.data(),
+                        MPI_STATUSES_IGNORE);
+
+            if (recvBSz) {
                 // copy the recv data to the vec
-                recvB=(T*)ctx.getRecvBuffer();
+                recvB = (T*)ctx.getRecvBuffer();
 
-                for(unsigned int recv_p=0;recv_p<recvProcList.size();recv_p++){
-                    proc_id=recvProcList[recv_p];
+                for (unsigned int recv_p = 0; recv_p < recvProcList.size();
+                     recv_p++) {
+                    proc_id = recvProcList[recv_p];
 
-                    for(unsigned int var=0;var<dof;var++)
-                    {
-                        for (unsigned int k = nodeRecvOffset[proc_id]; k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]); k++)
-                        {
-                            (vec+var*m_uiNumActualNodes)[recvNodeSM[k]]=recvB[dof*(nodeRecvOffset[proc_id]) + (var*nodeRecvCount[proc_id])+(k-nodeRecvOffset[proc_id])];
+                    for (unsigned int var = 0; var < dof; var++) {
+                        for (unsigned int k = nodeRecvOffset[proc_id];
+                             k <
+                             (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
+                             k++) {
+                            (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
+                                recvB[dof * (nodeRecvOffset[proc_id]) +
+                                      (var * nodeRecvCount[proc_id]) +
+                                      (k - nodeRecvOffset[proc_id])];
                         }
                     }
-
                 }
-
             }
         }
 
