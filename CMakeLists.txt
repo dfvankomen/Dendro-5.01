@@ -801,6 +801,25 @@ target_include_directories(sfcLaplaceEq PRIVATE ${GSL_INCLUDE_DIRS})
 
 
 
+set(SOURCE_FILES test/src/compressDecompressTest.cpp)
+add_executable(testCompDecomp ${SOURCE_FILES})
+target_link_libraries(testCompDecomp dendro5 ${LAPACK_LIBRARIES} m)
+target_include_directories(testCompDecomp
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(testCompDecomp
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(testCompDecomp
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(testCompDecomp
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(testCompDecomp
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(testCompDecomp
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(testCompDecomp
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(testCompDecomp PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(testCompDecomp PRIVATE ${GSL_INCLUDE_DIRS})
 
 
 add_subdirectory(NLSigma)
