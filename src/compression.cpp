@@ -1,4 +1,5 @@
 #include "compression.h"
+// #include "mpi.h"
 
 namespace SVDAlgorithms {
 	unsigned char* compressMatrix(double*& originalMatrix, const int x, const int y, const int z, int k, int& buffer_size) {
@@ -685,6 +686,8 @@ namespace ChebyshevAlgorithms {
 	*/
 }
 
+#if 0
+
 namespace FFTAlgorithms {
 
 	/*
@@ -872,6 +875,8 @@ namespace FFTAlgorithms {
 }
 
 
+#endif
+
 namespace ZFPAlgorithms {
 
 	unsigned char* compressMatrix(double* originalData, int x, int y, int z, double rate, int& size) {
@@ -1001,5 +1006,37 @@ namespace ZFPAlgorithms {
 		stream_close(stream);
 		zfp_stream_close(zfp);
 		return decompressedData;
+	}
+
+    void decompressMatrix1D(unsigned char* buffer, int bufferSize, double* outBuff) {
+		// std::cout << "in decompress" << std::endl;
+		// std::cout << "buffersize: " << bufferSize << std::endl;
+		// Deserialize metadata
+		int n;
+		memcpy(&n, buffer, sizeof(int));
+
+		// int rank = 0;
+		// MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+		buffer += sizeof(int);
+		double rate;
+		memcpy(&rate, buffer, sizeof(double));
+
+		// std::cout << rank << ": " << "Decompressing " << bufferSize << " to: " << n * sizeof(double) << " with rate parameter of " << rate << std::endl;
+		buffer += sizeof(double);
+
+		zfp_stream* zfp = zfp_stream_open(NULL);
+
+		// Set the decompression rate instead of accuracy
+		zfp_stream_set_rate(zfp, rate, zfp_type_double, 1, 0);
+		bitstream* stream = stream_open(buffer, bufferSize - 1 * sizeof(int) - sizeof(double));
+		zfp_stream_set_bit_stream(zfp, stream);
+
+		zfp_field* dec_field = zfp_field_1d(outBuff, zfp_type_double, n);
+		zfp_decompress(zfp, dec_field);
+		zfp_field_free(dec_field);
+		stream_close(stream);
+		zfp_stream_close(zfp);
+
 	}
 }

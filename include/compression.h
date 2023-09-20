@@ -124,7 +124,7 @@ namespace ChebyshevAlgorithms {
 }
 #endif // _CHEBYSHEVALGORITHMS_H_
 
-
+#if 0
 
 #ifndef FFT_ALGORITHMS_H
 #define FFT_ALGORITHMS_H
@@ -160,7 +160,7 @@ namespace FFTAlgorithms {
 
 #endif // FFT_ALGORITHMS_H
 
-
+#endif
 
 #ifndef _ZFPALGORITHMS_H_
 #define _ZFPALGORITHMS_H_
@@ -202,6 +202,9 @@ namespace ZFPAlgorithms {
     */
     unsigned char* compressMatrix1D(double* originalData, int n, double rate, int& size);
     double* decompressMatrix1D(unsigned char* buffer, int bufferSize);
+
+    // pre-allocated memory version
+    void decompressMatrix1D(unsigned char* buffer, int bufferSize, double* outBuff);
 }
 
 #endif // _ZFPALGORITHMS_H_ 

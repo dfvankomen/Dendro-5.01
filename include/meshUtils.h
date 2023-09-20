@@ -164,14 +164,30 @@ namespace ot
                 const unsigned int v_end    = (((i+1)*dof)/async_k);
                 const unsigned int batch_sz = (v_end-v_begin);
 
-                if(sendBSz)
+                if(sendBSz) {
                     ctx_list[i].allocateSendBuffer(batch_sz * sendBSz * sizeof(T));
 
-                if(recvBSz) 
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+                    ctx_list[i].allocateCompressSendBuffers(activeNpes);
+#endif
+                }
+
+                if(recvBSz) {
                     ctx_list[i].allocateRecvBuffer(batch_sz * recvBSz * sizeof(T));
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+                    // simple preallocation, this will be reallocated when needed
+                    ctx_list[i].allocateCompressRecvBuffer(10 * sizeof(T));
+#endif
+                }
 
                 ctx_list[i].m_send_req.resize(pMesh->getMPICommSize(), MPI_Request());
                 ctx_list[i].m_recv_req.resize(pMesh->getMPICommSize(), MPI_Request());
+
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+                ctx_list[i].getSendCompressCounts().resize(pMesh->getMPICommSize(), 0);
+                ctx_list[i].getReceiveCompressCounts().resize(pMesh->getMPICommSize(), 0);
+#endif
+
             }
         
         }
@@ -210,14 +226,28 @@ namespace ot
             const unsigned int v_end    = (((i+1)*dof)/async_k);
             const unsigned int batch_sz = (v_end-v_begin);
 
-            if(sendBSz)
+            if(sendBSz){
                 ctx_list[i].deAllocateSendBuffer();
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+                ctx_list[i].clearCompressSendBuffers();
+#endif
+            }
 
-            if(recvBSz)
+            if(recvBSz){
                 ctx_list[i].deAllocateRecvBuffer();
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+                ctx_list[i].deallocateCompressRecvBuffer();
+#endif
+            }
 
             ctx_list[i].m_send_req.clear();
             ctx_list[i].m_recv_req.clear();
+
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+            ctx_list[i].getSendCompressCounts().clear();
+            ctx_list[i].getReceiveCompressCounts().clear();
+#endif
+
         }
 
         ctx_list.clear();

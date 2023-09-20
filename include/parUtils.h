@@ -109,6 +109,28 @@ namespace par
       }
    };
 
+   template <>
+   class Mpi_datatype<_T<unsigned char>> 
+   {
+     public:
+
+      static MPI_Datatype value()
+      {
+        static bool         first = true;
+        static MPI_Datatype datatype;
+
+        if (first)
+        {
+            first = false;
+            MPI_Type_contiguous(sizeof(_T<unsigned char>), MPI_BYTE, &datatype);
+            MPI_Type_commit(&datatype);
+        }
+
+        return datatype;
+      }
+   };
+
+
 
 }
 

@@ -43,6 +43,10 @@
 #include "dendroProfileParams.h" // only need to profile unzip_asyn for bssn. remove this header file later.
 #include "point.h"
 
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+#include "compression.h"
+#endif
+
 extern double t_e2e; // e2e map generation time
 extern double t_e2n; // e2n map generation time
 extern double t_sm;  // sm map generation time
