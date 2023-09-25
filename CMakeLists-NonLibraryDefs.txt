@@ -14,6 +14,13 @@
 # in the future
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++11")
 
+# set up fsanatize flags to check for memory leaks, need to set them for C++, X, and linker but only on debug
+#  -fno-sanitize-recover
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address,undefined")
+set(CMAKE_C_FLAGS_DEBUG "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address,undefined")
+set(CMAKE_EXE_LINKER_FLAGS_DEBUG "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined")
+
+
 # OpenMP, MPI, and GSL are required packages for all aspects of the project
 find_package(OpenMP REQUIRED)
 find_package(MPI REQUIRED)
@@ -74,6 +81,8 @@ option(WITH_CUDA " build dendro with cuda " OFF)
 option(BUILD_WITH_PETSC " build dendro with PETSC " OFF)
 option(USE_FD_INTERP_FOR_UNZIP "use FD style interpolation for unzip" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "use FD style interpolation for unzip" OFF)
+
+option(DENDRO_ENABLE_GHOST_COMPRESSION "Enable compression on Ghost Communication" ON)
 
 # option(KWAY "K parameter for alltoallv_kway" 128)
 set(KWAY
@@ -209,6 +218,10 @@ endif()
 
 if(USE_FD_INTERP_FOR_UNZIP)
   add_definitions(-DUSE_FD_INTERP_FOR_UNZIP)
+endif()
+
+if(DENDRO_ENABLE_GHOST_COMPRESSION)
+  add_definitions(-DDENDRO_ENABLE_GHOST_COMPRESSION)
 endif()
 
 add_definitions(-DMATVEC_PROFILE)
