@@ -672,7 +672,7 @@ namespace nlsm
             
             #ifdef NLSM_COMPARE_WITH_ANALYTICAL_SOL
                 double* evolVar[2];
-                m_uiEVar.Get2DVec(evolVar);
+                m_evar.to_2d(evolVar);
                 double * chiAnalytical=m_uiMesh->createVector<double>();
                 double * diffVec=m_uiMesh->createVector<double>();
 
