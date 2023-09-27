@@ -264,7 +264,7 @@ namespace nlsm
 
     int NLSMCtx::write_vtu()
     {
-
+        if (!m_uiMesh->isActive()) return 0;
         
         DendroScalar * evolUnzipVar = NULL;
         DendroScalar * consUnzipVar = NULL;
