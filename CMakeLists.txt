@@ -17,6 +17,13 @@ project(Dendro-5.0-Library C CXX Fortran)
 
 option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
 
+option(DENDRO_ENABLE_GHOST_COMPRESSION "Enable compression on Ghost Communication" ON)
+
+
+if(DENDRO_ENABLE_GHOST_COMPRESSION)
+  add_definitions(-DDENDRO_ENABLE_GHOST_COMPRESSION)
+endif()
+
 # we need a lot of other definitions if we are calling cmake directly for this folder.
 if(DENDROLIB_ISOLATED_DIR)
   include("CMakeLists-NonLibraryDefs.txt")
@@ -44,6 +51,11 @@ FetchContent_MakeAvailable(zfp)
 # message(STATUS "zfp_source " ${zfp_SOURCE_DIR})
 # message(STATUS "zfp_binary " ${zfp_BINARY_DIR})
 # == END ZFP LIBRARY BUILD
+
+# Packages needed for the compression algorithms
+find_package(Eigen3 REQUIRED)
+include_directories(${EIGEN3_INCLUDE_DIR})
+
 
 message(STATUS "Now setting the CMake files for the Dendro Library...")
 
