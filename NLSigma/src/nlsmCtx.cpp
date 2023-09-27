@@ -651,129 +651,152 @@ namespace nlsm
         return m_pvar;
     }
 
-    int NLSMCtx::terminal_output()
-    {
-        
-
-        if(m_uiMesh->isActive())
-        {
-            
-            DendroScalar min=0, max=0;
-            min = vecMin(m_uiMesh, m_evar.get_vec_ptr(), ot::VEC_TYPE::CG_NODAL, true);
-            max = vecMax(m_uiMesh, m_evar.get_vec_ptr(), ot::VEC_TYPE::CG_NODAL, true);
+    int NLSMCtx::terminal_output() {
+        if (m_uiMesh->isActive()) {
+            DendroScalar min = 0, max = 0;
+            min = vecMin(m_uiMesh, m_evar.get_vec_ptr(), ot::VEC_TYPE::CG_NODAL,
+                         true);
+            max = vecMax(m_uiMesh, m_evar.get_vec_ptr(), ot::VEC_TYPE::CG_NODAL,
+                         true);
             if (!(m_uiMesh->getMPIRank())) {
-                std::cout << "[NLSMCtx]:  " << NLSM_VAR_NAMES[0] << " (min, max) : \t( " << min << ", " << max << " )" << std::endl;
+                std::cout << "[NLSMCtx]:  " << NLSM_VAR_NAMES[0]
+                          << " (min, max) : \t( " << min << ", " << max << " )"
+                          << std::endl;
             }
 
             // for(unsigned int v=0; v < m_evar.get_dof(); v++)
             // {
 
-
-
             //     DendroScalar min=0, max=0;
             //     min=vecMin(m_uiMesh,m_evar.get_vec_ptr(),ot::VEC_TYPE::CG_NODAL,true);
             //     max=vecMax(m_uiMesh,m_evar.get_vec_ptr(),ot::VEC_TYPE::CG_NODAL,true);
             //     if(!(m_uiMesh->getMPIRank()))
-            //        std::cout<<"[NLSMCtx]:  "<<NLSM_VAR_NAMES[v]<<" (min,max) : \t ( "<<min<<", "<<max<<" ) "<<std::endl;
+            //        std::cout<<"[NLSMCtx]:  "<<NLSM_VAR_NAMES[v]<<" (min,max)
+            //        : \t ( "<<min<<", "<<max<<" ) "<<std::endl;
 
             // }
 
+#ifdef NLSM_COMPARE_WITH_ANALYTICAL_SOL
+            double* evolVar[2];
+            m_evar.to_2d(evolVar);
+            double* chiAnalytical = m_uiMesh->createVector<double>();
+            double* diffVec = m_uiMesh->createVector<double>();
 
-            
-            #ifdef NLSM_COMPARE_WITH_ANALYTICAL_SOL
-                double* evolVar[2];
-                m_evar.to_2d(evolVar);
-                double * chiAnalytical=m_uiMesh->createVector<double>();
-                double * diffVec=m_uiMesh->createVector<double>();
+            std::function<void(double, double, double, double, double*)> u_x_t =
+                [](double x, double y, double z, double t, double* var) {
+                    nlsm::analyticalSol(x, y, z, t, var);
+                };
 
-                std::function<void(double,double,double,double,double*)> u_x_t=[](double x,double y,double z,double t,double*var){nlsm::analyticalSol(x,y,z,t,var);};
+            // initialize diff begin.
+            unsigned int nodeLookUp_CG;
+            unsigned int nodeLookUp_DG;
+            double x, y, z, len;
+            const ot::TreeNode* pNodes =
+                &(*(m_uiMesh->getAllElements().begin()));
+            unsigned int ownerID, ii_x, jj_y, kk_z;
+            unsigned int eleOrder = m_uiMesh->getElementOrder();
+            const unsigned int* e2n_cg =
+                &(*(m_uiMesh->getE2NMapping().begin()));
+            const unsigned int* e2n_dg =
+                &(*(m_uiMesh->getE2NMapping_DG().begin()));
+            const unsigned int nPe = m_uiMesh->getNumNodesPerElement();
+            const unsigned int nodeLocalBegin = m_uiMesh->getNodeLocalBegin();
+            const unsigned int nodeLocalEnd = m_uiMesh->getNodeLocalEnd();
 
-                // initialize diff begin.
-                unsigned int nodeLookUp_CG;
-                unsigned int nodeLookUp_DG;
-                double x,y,z,len;
-                const ot::TreeNode * pNodes=&(*(m_uiMesh->getAllElements().begin()));
-                unsigned int ownerID,ii_x,jj_y,kk_z;
-                unsigned int eleOrder=m_uiMesh->getElementOrder();
-                const unsigned int * e2n_cg=&(*(m_uiMesh->getE2NMapping().begin()));
-                const unsigned int * e2n_dg=&(*(m_uiMesh->getE2NMapping_DG().begin()));
-                const unsigned int nPe=m_uiMesh->getNumNodesPerElement();
-                const unsigned int nodeLocalBegin=m_uiMesh->getNodeLocalBegin();
-                const unsigned int nodeLocalEnd=m_uiMesh->getNodeLocalEnd();
+            double var[2];
 
+            double mp, mm, mp_adm, mm_adm, E, J1, J2, J3;
 
-                double var[2];
+            for (unsigned int elem = m_uiMesh->getElementLocalBegin();
+                 elem < m_uiMesh->getElementLocalEnd(); elem++) {
+                for (unsigned int k = 0; k < (eleOrder + 1); k++)
+                    for (unsigned int j = 0; j < (eleOrder + 1); j++)
+                        for (unsigned int i = 0; i < (eleOrder + 1); i++) {
+                            nodeLookUp_CG =
+                                e2n_cg[elem * nPe +
+                                       k * (eleOrder + 1) * (eleOrder + 1) +
+                                       j * (eleOrder + 1) + i];
+                            if (nodeLookUp_CG >= nodeLocalBegin &&
+                                nodeLookUp_CG < nodeLocalEnd) {
+                                nodeLookUp_DG =
+                                    e2n_dg[elem * nPe +
+                                           k * (eleOrder + 1) * (eleOrder + 1) +
+                                           j * (eleOrder + 1) + i];
+                                m_uiMesh->dg2eijk(nodeLookUp_DG, ownerID, ii_x,
+                                                  jj_y, kk_z);
+                                len = (double)(1u
+                                               << (m_uiMaxDepth -
+                                                   pNodes[ownerID].getLevel()));
+                                x = pNodes[ownerID].getX() +
+                                    ii_x * (len / (eleOrder));
+                                y = pNodes[ownerID].getY() +
+                                    jj_y * (len / (eleOrder));
+                                z = pNodes[ownerID].getZ() +
+                                    kk_z * (len / (eleOrder));
 
-                double mp, mm, mp_adm, mm_adm, E, J1, J2, J3;
-
-                for(unsigned int elem=m_uiMesh->getElementLocalBegin();elem<m_uiMesh->getElementLocalEnd();elem++)
-                {
-
-
-                    for(unsigned int k=0;k<(eleOrder+1);k++)
-                        for(unsigned int j=0;j<(eleOrder+1);j++ )
-                            for(unsigned int i=0;i<(eleOrder+1);i++)
-                            {
-                                nodeLookUp_CG=e2n_cg[elem*nPe+k*(eleOrder+1)*(eleOrder+1)+j*(eleOrder+1)+i];
-                                if(nodeLookUp_CG>=nodeLocalBegin && nodeLookUp_CG<nodeLocalEnd)
-                                {
-                                    nodeLookUp_DG=e2n_dg[elem*nPe+k*(eleOrder+1)*(eleOrder+1)+j*(eleOrder+1)+i];
-                                    m_uiMesh->dg2eijk(nodeLookUp_DG,ownerID,ii_x,jj_y,kk_z);
-                                    len= (double) (1u<<(m_uiMaxDepth-pNodes[ownerID].getLevel()));
-                                    x=pNodes[ownerID].getX()+ ii_x*(len/(eleOrder));
-                                    y=pNodes[ownerID].getY()+ jj_y*(len/(eleOrder));
-                                    z=pNodes[ownerID].getZ()+ kk_z*(len/(eleOrder));
-                                    
-                                    u_x_t((double)x,(double)y,(double)z,m_uiTinfo._m_uiT,var);
-                                    diffVec[nodeLookUp_CG]=var[nlsm::VAR::U_CHI]-evolVar[nlsm::VAR::U_CHI][nodeLookUp_CG];
-                                    chiAnalytical[nodeLookUp_CG]=var[nlsm::VAR::U_CHI];
-
-
-                                }
-
+                                u_x_t((double)x, (double)y, (double)z,
+                                      m_uiTinfo._m_uiT, var);
+                                diffVec[nodeLookUp_CG] =
+                                    var[nlsm::VAR::U_CHI] -
+                                    evolVar[nlsm::VAR::U_CHI][nodeLookUp_CG];
+                                chiAnalytical[nodeLookUp_CG] =
+                                    var[nlsm::VAR::U_CHI];
                             }
+                        }
+            }
 
-                }
+            m_uiMesh->performGhostExchange(diffVec);
+            m_uiMesh->performGhostExchange(chiAnalytical);
 
-                m_uiMesh->performGhostExchange(diffVec);
-                m_uiMesh->performGhostExchange(chiAnalytical);
+            double l_rs = rsNormLp<double>(m_uiMesh, diffVec, 2);
+            double l_min = vecMin(diffVec + m_uiMesh->getNodeLocalBegin(),
+                                  (m_uiMesh->getNumLocalMeshNodes()),
+                                  m_uiMesh->getMPICommunicator());
+            double l_max = vecMax(diffVec + m_uiMesh->getNodeLocalBegin(),
+                                  (m_uiMesh->getNumLocalMeshNodes()),
+                                  m_uiMesh->getMPICommunicator());
+            double l2_norm = normL2(diffVec + m_uiMesh->getNodeLocalBegin(),
+                                    (m_uiMesh->getNumLocalMeshNodes()),
+                                    m_uiMesh->getMPICommunicator());
+            DendroIntL local_dof = m_uiMesh->getNumLocalMeshNodes();
+            DendroIntL total_dof = 0;
+            par::Mpi_Reduce(&local_dof, &total_dof, 1, MPI_SUM, 0,
+                            m_uiMesh->getMPICommunicator());
 
-                double l_rs = rsNormLp<double>(m_uiMesh,diffVec,2);
-                double l_min=vecMin(diffVec+m_uiMesh->getNodeLocalBegin(),(m_uiMesh->getNumLocalMeshNodes()),m_uiMesh->getMPICommunicator());
-                double l_max=vecMax(diffVec+m_uiMesh->getNodeLocalBegin(),(m_uiMesh->getNumLocalMeshNodes()),m_uiMesh->getMPICommunicator());
-                double l2_norm=normL2(diffVec+m_uiMesh->getNodeLocalBegin(),(m_uiMesh->getNumLocalMeshNodes()),m_uiMesh->getMPICommunicator());
-                DendroIntL local_dof=m_uiMesh->getNumLocalMeshNodes();
-                DendroIntL total_dof=0;
-                par::Mpi_Reduce(&local_dof,&total_dof,1,MPI_SUM,0,m_uiMesh->getMPICommunicator());
+            if (!m_uiMesh->getMPIRank()) {
+                // std::cout << "executing step: " << m_uiCurrentStep << " dt: "
+                // << m_uiT_h << " rk_time : "<< m_uiCurrentTime << std::endl;
+                l2_norm =
+                    sqrt((l2_norm * l2_norm) / (double)(total_dof * total_dof));
+                std::cout << YLW << "\t ||VAR::DIFF|| (min, max,l2,l_2rs) : ("
+                          << l_min << ", " << l_max << ", " << l2_norm << ", "
+                          << l_rs << " ) " << NRM << std::endl;
 
+                std::ofstream fileGW;
+                char fName[256];
+                sprintf(fName, "%s_error.dat",
+                        nlsm::NLSM_PROFILE_FILE_PREFIX.c_str());
+                fileGW.open(fName, std::ofstream::app);
+                // writes the header
+                if (m_uiTinfo._m_uiStep == 0)
+                    fileGW << "TimeStep\t"
+                           << " time\t"
+                           << " min\t"
+                           << " max\t"
+                           << " l2\t cgNodes\t l2_rs" << std::endl;
 
-                if(!m_uiMesh->getMPIRank()) {
-                    //std::cout << "executing step: " << m_uiCurrentStep << " dt: " << m_uiT_h << " rk_time : "<< m_uiCurrentTime << std::endl;
-                    l2_norm=sqrt((l2_norm*l2_norm)/(double)(total_dof*total_dof));
-                    std::cout <<YLW<< "\t ||VAR::DIFF|| (min, max,l2,l_2rs) : ("<<l_min<<", "<<l_max<<", "<<l2_norm<<", "<<l_rs<<" ) "<<NRM<<std::endl;
-
-                    std::ofstream fileGW;
-                    char fName[256];
-                    sprintf(fName,"%s_error.dat",nlsm::NLSM_PROFILE_FILE_PREFIX.c_str());
-                    fileGW.open (fName,std::ofstream::app);
-                    // writes the header
-                    if(m_uiTinfo._m_uiStep==0)
-                        fileGW<<"TimeStep\t"<<" time\t"<<" min\t"<<" max\t"<<" l2\t cgNodes\t l2_rs"<<std::endl;
-
-                    fileGW<<m_uiTinfo._m_uiStep<<"\t"<<m_uiTinfo._m_uiT<<"\t"<<l_min<<"\t"<<l_max<<"\t"<<l2_norm<<"\t"<<total_dof<<"\t "<<l_rs<<std::endl;
-                    fileGW.close();
-
-
-                }
-                // initialize diff end
-                delete [] chiAnalytical;
-                delete [] diffVec;
-            #endif
-
-            
+                fileGW << m_uiTinfo._m_uiStep << "\t" << m_uiTinfo._m_uiT
+                       << "\t" << l_min << "\t" << l_max << "\t" << l2_norm
+                       << "\t" << total_dof << "\t " << l_rs << std::endl;
+                fileGW.close();
+            }
+            // initialize diff end
+            delete[] chiAnalytical;
+            delete[] diffVec;
+#endif
         }
 
-        return 0; 
+        return 0;
     }
 
     unsigned int NLSMCtx::getBlkTimestepFac(unsigned int blev, unsigned int lmin, unsigned int lmax)
