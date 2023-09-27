@@ -839,6 +839,118 @@ namespace FFTAlgorithms {
 		return decompressedMatrix;
 	}
 
+	unsigned char* compressMatrix1D(double* originalArray, int n, double threshold, int& size) {
+		// Create extended array with sign-flipped mirrored extensions
+		int extended_n = 2 * n;
+		double* extendedArray = new double[extended_n];
+		for (int i = 0; i < n; ++i) {
+			extendedArray[i] = originalArray[i];
+			extendedArray[extended_n - i - 1] = -originalArray[i];
+		}
+
+		// Performing FFT on the extended array
+		ComplexVec complexArray(extended_n);
+		fftw_plan p = fftw_plan_dft_r2c_1d(extended_n, extendedArray, reinterpret_cast<fftw_complex*>(complexArray.data()), FFTW_ESTIMATE);
+		fftw_execute(p);
+		fftw_destroy_plan(p);
+
+		delete[] extendedArray;
+
+		// Get magnitudes and corresponding indices
+		std::vector<MagnitudeIndexPair> magnitudes;
+		for (int i = 0; i < extended_n; ++i) {
+			magnitudes.push_back(MagnitudeIndexPair(std::abs(complexArray[i]), i));
+		}
+
+		// Prepare the bitmask
+		int bitMaskSize = (extended_n + 7) / 8;
+		unsigned char* bitMask = new unsigned char[bitMaskSize];
+		memset(bitMask, 0, bitMaskSize);
+
+		// Number of components to keep
+		int numToKeep = 0;
+
+		// Zero out coefficients below threshold and prepare bitmask
+		for (int i = 0; i < extended_n; ++i) {
+			if (magnitudes[i].first < threshold) {
+				complexArray[magnitudes[i].second] = 0.0;
+			}
+			else {
+				bitMask[i / 8] |= (1 << (i % 8));
+				numToKeep++;
+			}
+		}
+
+		// Compute the size of the data and prepare the buffer
+		size = bitMaskSize + numToKeep * sizeof(std::complex<double>) + sizeof(int);
+		unsigned char* byteStream = new unsigned char[size];
+		unsigned char* dataPtr = sizeof(int) + bitMaskSize + byteStream; // extended_n + bitMaskSize  + byteStream
+
+		// Write extended_n to the start of the bytestream
+		std::memcpy(byteStream, &extended_n, sizeof(int));
+
+		// Copy the bitmask and non-zero values to byteStream
+		std::memcpy(byteStream + sizeof(int), bitMask, bitMaskSize);
+		for (int i = 0; i < extended_n; ++i) {
+			if (complexArray[i] != 0.0) {
+				std::memcpy(dataPtr, &complexArray[i], sizeof(std::complex<double>));
+				dataPtr += sizeof(std::complex<double>);
+			}
+		}
+
+		delete[] bitMask;
+
+		return byteStream;
+	}
+
+
+	double* decompressMatrix1D(unsigned char* byteStream, int byteStreamSize) {
+		// Read extended_n from the start of the bytestream
+		int extended_n;
+		std::memcpy(&extended_n, byteStream, sizeof(int));
+
+		// Calculate the size of the bitmask
+		int bitMaskSize = (extended_n + 7) / 8;
+
+		// Copy the bitmask from the byteStream
+		unsigned char* bitMask = new unsigned char[bitMaskSize];
+		std::memcpy(bitMask, byteStream + sizeof(int), bitMaskSize);
+
+		// Initialize complexArray with zeros
+		ComplexVec complexArray(extended_n, 0.0);
+
+		// Prepare to read the data
+		unsigned char* dataPtr = byteStream + bitMaskSize + sizeof(int);
+
+		// Populate the complexArray based on bitmask
+		for (int i = 0; i < extended_n; ++i) {
+			if (bitMask[i / 8] & (1 << (i % 8))) {
+				std::memcpy(&complexArray[i], dataPtr, sizeof(std::complex<double>));
+				dataPtr += sizeof(std::complex<double>);
+			}
+		}
+
+		delete[] bitMask;
+
+		// Perform inverse FFT
+		double* decompressedExtendedArray = new double[extended_n];
+		fftw_plan q = fftw_plan_dft_c2r_1d(extended_n, reinterpret_cast<fftw_complex*>(complexArray.data()), decompressedExtendedArray, FFTW_ESTIMATE);
+		fftw_execute(q);
+		fftw_destroy_plan(q);
+
+		// Normalize the result and truncate to original size
+		int n = extended_n / 2;
+		double* decompressedArray = new double[n];
+		for (int i = 0; i < n; ++i) {
+			decompressedArray[i] = decompressedExtendedArray[i] / extended_n;
+		}
+
+		// Delete the extended array
+		delete[] decompressedExtendedArray;
+
+		return decompressedArray;
+	}
+
 	/*
 	int main() {
 		int x = 3, y = 7, z = 7; // Dimensions of matrix. Modify as needed.

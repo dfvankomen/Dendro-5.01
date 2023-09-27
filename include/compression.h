@@ -156,6 +156,9 @@ namespace FFTAlgorithms {
     */
     unsigned char* compressMatrix(double* originalMatrix, int x, int y, int z, double compressionRatio, int& size);
     double* decompressMatrix(unsigned char* buffer, int bufferSize);
+
+    unsigned char* compressMatrix1D(double* originalMatrix, int n, double threshold, int& size);
+    double* decompressMatrix1D(unsigned char* buffer, int bufferSize);
 }
 
 #endif // FFT_ALGORITHMS_H
