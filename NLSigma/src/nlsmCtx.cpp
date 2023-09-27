@@ -657,16 +657,26 @@ namespace nlsm
 
         if(m_uiMesh->isActive())
         {
-
-            for(unsigned int v=0; v < m_evar.get_dof(); v++)
-            {
-                DendroScalar min=0, max=0;
-                min=vecMin(m_uiMesh,m_evar.get_vec_ptr(),ot::VEC_TYPE::CG_NODAL,true);
-                max=vecMax(m_uiMesh,m_evar.get_vec_ptr(),ot::VEC_TYPE::CG_NODAL,true);
-                if(!(m_uiMesh->getMPIRank()))
-                   std::cout<<"[NLSMCtx]:  "<<NLSM_VAR_NAMES[v]<<" (min,max) : \t ( "<<min<<", "<<max<<" ) "<<std::endl;
-
+            
+            DendroScalar min=0, max=0;
+            min = vecMin(m_uiMesh, m_evar.get_vec_ptr(), ot::VEC_TYPE::CG_NODAL, true);
+            max = vecMax(m_uiMesh, m_evar.get_vec_ptr(), ot::VEC_TYPE::CG_NODAL, true);
+            if (!(m_uiMesh->getMPIRank())) {
+                std::cout << "[NLSMCtx]:  " << NLSM_VAR_NAMES[0] << " (min, max) : \t( " << min << ", " << max << " )" << std::endl;
             }
+
+            // for(unsigned int v=0; v < m_evar.get_dof(); v++)
+            // {
+
+
+
+            //     DendroScalar min=0, max=0;
+            //     min=vecMin(m_uiMesh,m_evar.get_vec_ptr(),ot::VEC_TYPE::CG_NODAL,true);
+            //     max=vecMax(m_uiMesh,m_evar.get_vec_ptr(),ot::VEC_TYPE::CG_NODAL,true);
+            //     if(!(m_uiMesh->getMPIRank()))
+            //        std::cout<<"[NLSMCtx]:  "<<NLSM_VAR_NAMES[v]<<" (min,max) : \t ( "<<min<<", "<<max<<" ) "<<std::endl;
+
+            // }
 
 
             
