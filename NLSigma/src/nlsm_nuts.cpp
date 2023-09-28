@@ -353,6 +353,9 @@ int main (int argc, char** argv)
                   appCtx->remesh_and_gridtransfer(nlsm::NLSM_DENDRO_GRAIN_SZ, nlsm::NLSM_LOAD_IMB_TOL,nlsm::NLSM_SPLIT_FIX);
                   appCtx->terminal_output();
 
+                  nlsm::deallocate_nlsm_deriv_workspace();
+                  nlsm::allocate_nlsm_deriv_workspace(appCtx->get_mesh(), 1);
+
                   ets->sync_with_mesh();    
 
               }

@@ -45,7 +45,7 @@ endif()
 # include/nlsmInvCtx.h )
 
 set(NLSM_SRC src/parameters.cpp src/nlsmUtils.cpp src/rhs.cpp src/derivs.cpp
-             src/profile_params.cpp)
+             src/profile_params.cpp src/compact_derivs.cpp)
 
 set(SOURCE_FILES src/nlsm.cpp src/rk4nlsm.cpp ${NLSM_SRC})
 add_executable(nlsmSolver ${SOURCE_FILES})
@@ -99,6 +99,7 @@ target_include_directories(nlsmSolverNUTS PRIVATE ${GSL_INCLUDE_DIRS})
 if(WITH_CUDA)
   target_include_directories(nlsmSolverNUTS PRIVATE ${CUDA_INCLUDE_DIRS})
 endif()
+target_link_libraries(nlsmSolverNUTS xsmm) # "-Wl,--wrap=dgemm_,--wrap=sgemm_ ${BLAS_LIBRARIES} $<TARGET_FILE:xsmm>")
 target_link_libraries(nlsmSolverNUTS dendro5 ${LAPACK_LIBRARIES}
                       ${MPI_LIBRARIES} m)
 

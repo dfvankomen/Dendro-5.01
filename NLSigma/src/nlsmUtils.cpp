@@ -25,6 +25,10 @@ namespace nlsm
         unsigned int chp_len;
         unsigned int prf_len;
 
+        int temp_NLSM_DERIV_TYPE = (int)nlsm::NLSM_DERIV_TYPE;
+        int temp_NLSM_FILTER_TYPE = (int)nlsm::NLSM_FILTER_TYPE;
+
+
         if(!rank)
         {
             std::ifstream infile(fName);
@@ -66,6 +70,11 @@ namespace nlsm
             nlsm::NLSM_GRID_MIN_Z=parFile["NLSM_GRID_MIN_Z"];
             nlsm::NLSM_GRID_MAX_Z=parFile["NLSM_GRID_MAX_Z"];
             nlsm::KO_DISS_SIGMA=parFile["KO_DISS_SIGMA"];
+
+            if(parFile.find("NLSM_DERIV_TYPE")!=parFile.end())
+                temp_NLSM_DERIV_TYPE = parFile["NLSM_DERIV_TYPE"];
+            if(parFile.find("NLSM_DERIV_TYPE")!=parFile.end())
+                temp_NLSM_FILTER_TYPE = parFile["NLSM_FILTER_TYPE"];
 
             nlsm::NLSM_ID_TYPE=parFile["NLSM_ID_TYPE"];
             nlsm::NLSM_ID_AMP1=parFile["NLSM_ID_AMP1"];
@@ -158,6 +167,11 @@ namespace nlsm
         par::Mpi_Bcast(&NLSM_CHI_COARSEN_VAL,1,0,comm);
         par::Mpi_Bcast((unsigned int*)&NLSM_REFINE_MODE,1,0,comm);
         
+        par::Mpi_Bcast(&temp_NLSM_DERIV_TYPE, 1, 0, comm);
+        nlsm::NLSM_DERIV_TYPE = static_cast<dendro_cfd::DerType>(temp_NLSM_DERIV_TYPE);
+
+        par::Mpi_Bcast(&temp_NLSM_FILTER_TYPE, 1, 0, comm);
+        nlsm::NLSM_FILTER_TYPE = static_cast<dendro_cfd::FilterType>(temp_NLSM_FILTER_TYPE);
 
         char vtu_name[vtu_len+1];
         char chp_name[chp_len+1];
@@ -354,6 +368,9 @@ namespace nlsm
             for(unsigned int i=0;i<nlsm::NLSM_NUM_EVOL_VARS_VTU_OUTPUT-1;i++)
                 sout<<nlsm::NLSM_VTU_OUTPUT_EVOL_INDICES[i]<<", ";
             sout<<nlsm::NLSM_VTU_OUTPUT_EVOL_INDICES[nlsm::NLSM_NUM_EVOL_VARS_VTU_OUTPUT-1]<<"]"<<NRM<<std::endl;
+
+            sout << YLW "\tNLSM_DERIV_TYPE : " << nlsm::NLSM_DERIV_TYPE << NRM << std::endl;
+            sout << YLW "\tNLSM_FILTER_TYPE : " << nlsm::NLSM_FILTER_TYPE << NRM << std::endl;
 
         }
 
@@ -651,6 +668,37 @@ namespace nlsm
        return nlsm::NLSM_WAVELET_TOL;
     }
 
+    void allocate_nlsm_deriv_workspace(const ot::Mesh* pMesh,
+                                      unsigned int s_fac) {
+        deallocate_nlsm_deriv_workspace();
+
+        if (!pMesh->isActive()) return;
+
+        // gets the largest block size.
+        const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
+        unsigned int max_blk_sz = 0;
+        for (unsigned int i = 0; i < blkList.size(); i++) {
+            unsigned int blk_sz = blkList[i].getAllocationSzX() *
+                                  blkList[i].getAllocationSzY() *
+                                  blkList[i].getAllocationSzZ();
+            if (blk_sz > max_blk_sz) max_blk_sz = blk_sz;
+        }
+
+        if (nlsm::NLSM_DERIV_WORKSPACE != nullptr) {
+            delete[] nlsm::NLSM_DERIV_WORKSPACE;
+            nlsm::NLSM_DERIV_WORKSPACE = nullptr;
+        }
+
+        nlsm::NLSM_DERIV_WORKSPACE =
+            new double[s_fac * max_blk_sz * nlsm::NLSM_NUM_DERIVS];
+    }
+
+    void deallocate_nlsm_deriv_workspace() {
+        if (nlsm::NLSM_DERIV_WORKSPACE != nullptr) {
+            delete[] nlsm::NLSM_DERIV_WORKSPACE;
+            nlsm::NLSM_DERIV_WORKSPACE = nullptr;
+        }
+    }
 
     bool isRemeshForce(const ot::Mesh* pMesh, const double ** unzipVec, unsigned int vIndex, double refine_th, double coarsen_th, bool isOverwrite)
     {

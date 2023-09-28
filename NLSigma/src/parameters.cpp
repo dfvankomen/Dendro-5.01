@@ -8,6 +8,7 @@
 //
 
 #include "parameters.h"
+#include "compact_derivs.h"
 
 namespace nlsm
 {
@@ -28,6 +29,12 @@ namespace nlsm
     double NLSM_RK45_TIME_END=10;
 
     double NLSM_RK45_DESIRED_TOL=1e-6;
+
+    // compact finite difference stuff
+    dendro_cfd::DerType NLSM_DERIV_TYPE=dendro_cfd::DerType::CFD_NONE;
+    dendro_cfd::FilterType NLSM_FILTER_TYPE=dendro_cfd::FilterType::FILT_KO_DISS;
+
+    double * NLSM_DERIV_WORKSPACE = nullptr;
 
 
     unsigned int NLSM_CHECKPT_FREQ=10;

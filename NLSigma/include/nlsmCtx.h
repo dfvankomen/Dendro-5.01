@@ -19,6 +19,8 @@
 #include "checkPoint.h"
 #include "mathMeshUtils.h"
 #include "meshUtils.h"
+#include "compact_derivs.h"
+
 namespace nlsm
 {
     typedef ot::DVector<DendroScalar, unsigned int> DVec;

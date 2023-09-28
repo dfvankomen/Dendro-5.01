@@ -97,6 +97,12 @@ namespace nlsm
 
   unsigned int getEleWeight(const ot::TreeNode* pNode);
 
+
+  void allocate_nlsm_deriv_workspace(const ot::Mesh* pMesh,
+                                      unsigned int s_fac);
+
+void deallocate_nlsm_deriv_workspace();    
+
 }// end of namespace nlsm
 
 

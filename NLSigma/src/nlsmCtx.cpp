@@ -26,8 +26,22 @@ namespace nlsm
         m_uiMinPt = Point(NLSM_GRID_MIN_X,NLSM_GRID_MIN_Y,NLSM_GRID_MIN_Z);
         m_uiMaxPt = Point(NLSM_GRID_MAX_X,NLSM_GRID_MAX_Y,NLSM_GRID_MAX_Z);
 
+        nlsm::deallocate_nlsm_deriv_workspace();
+        nlsm::allocate_nlsm_deriv_workspace(m_uiMesh, 1);
+
         ot::dealloc_mpi_ctx<DendroScalar>(m_uiMesh,m_mpi_ctx,NLSM_NUM_VARS,NLSM_ASYNC_COMM_K);
         ot::alloc_mpi_ctx<DendroScalar>(m_uiMesh,m_mpi_ctx,NLSM_NUM_VARS,NLSM_ASYNC_COMM_K);
+
+        // set up the actual compact finite difference object for the size
+        unsigned int sz2 = 2 * NLSM_ELE_ORDER + 1;
+
+        dendro_cfd::cfd.set_filter_type(NLSM_FILTER_TYPE);
+        dendro_cfd::cfd.set_deriv_type(NLSM_DERIV_TYPE);
+        dendro_cfd::cfd.set_padding_size(NLSM_PADDING_WIDTH);
+        // NOTE: the changing of dim size will reinitialize everything if the size
+        // is different meaning that the main matrix will be recalculated and the
+        // filter matrix will be recalculated
+        dendro_cfd::cfd.change_dim_size(sz2);
 
         return;
 
@@ -39,6 +53,8 @@ namespace nlsm
         m_evar.destroy_vector();
         m_evar_unzip[0].destroy_vector();
         m_evar_unzip[1].destroy_vector();
+
+        nlsm::deallocate_nlsm_deriv_workspace();
 
         ot::dealloc_mpi_ctx<DendroScalar>(m_uiMesh,m_mpi_ctx,NLSM_NUM_VARS,NLSM_ASYNC_COMM_K);
     }
@@ -97,6 +113,9 @@ namespace nlsm
 
                     }
         }
+
+        // assert the deriv workspace is allocated
+        nlsm::allocate_nlsm_deriv_workspace(m_uiMesh, 1);
         
         return 0;
 
@@ -162,7 +181,8 @@ namespace nlsm
                 m_uiCtxpt[ts::CTXPROFILE::RHS].start();
             #endif
 
-            nlsmRhs(unzipOut,(const DendroScalar**)unzipIn, offset, ptmin, ptmax, lsz, bflag);
+            // nlsmRhs(unzipOut,(const DendroScalar**)unzipIn, offset, ptmin, ptmax, lsz, bflag);
+            nlsmRhs_COMPACT(unzipOut,(const DendroScalar**)unzipIn, offset, ptmin, ptmax, lsz, bflag);
             
             // std::cout<<":::\n";
             // for(unsigned int n=0; n < lsz[0]*lsz[1]*lsz[2]; n++)
@@ -564,6 +584,9 @@ namespace nlsm
 
             std::swap(m_uiMesh,newMesh);
             delete newMesh;
+
+        nlsm::deallocate_nlsm_deriv_workspace();
+        nlsm::allocate_nlsm_deriv_workspace(m_uiMesh, 1);
             
         unsigned int localSz=m_uiMesh->getNumLocalMeshElements();
         unsigned int totalElems=0;

@@ -24,6 +24,8 @@ if(DENDRO_ENABLE_GHOST_COMPRESSION)
   add_definitions(-DDENDRO_ENABLE_GHOST_COMPRESSION)
 endif()
 
+add_subdirectory(libs)
+
 # we need a lot of other definitions if we are calling cmake directly for this folder.
 if(DENDROLIB_ISOLATED_DIR)
   include("CMakeLists-NonLibraryDefs.txt")
@@ -31,7 +33,7 @@ endif()
 
 
 # ======= Set up the ZFP Library through CMake
-message(STATUS "Now configuring zfp library")
+message(STATUS "=== Now configuring zfp library")
 
 include(FetchContent)
 FetchContent_Declare(
@@ -47,6 +49,8 @@ FetchContent_Declare(
 # endif()
 
 FetchContent_MakeAvailable(zfp)
+
+message(STATUS "=== Finished configuring zfp library")
 
 # message(STATUS "zfp_source " ${zfp_SOURCE_DIR})
 # message(STATUS "zfp_binary " ${zfp_BINARY_DIR})
