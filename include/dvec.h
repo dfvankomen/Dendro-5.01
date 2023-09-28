@@ -155,15 +155,16 @@ namespace ot
     template<typename T,typename I>
     void DVector<T,I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type, DVEC_LOC loc, unsigned int dof, bool allocate_ghost)
     {
-        if(!(pMesh->isActive()))
-            return;
-        
+
         m_dof       = dof;
         m_comm      = pMesh->getMPICommunicator();
         m_vec_type  = type;
         m_vec_loc   = loc;
         m_ghost_allocated = allocate_ghost;
         m_size     = 0;
+
+        if(!(pMesh->isActive()))
+            return;
 
         if(m_vec_type == DVEC_TYPE::OCT_SHARED_NODES)
             (allocate_ghost) ? m_size = pMesh->getDegOfFreedom() * m_dof : m_size = pMesh->getNumLocalMeshNodes() * m_dof;
