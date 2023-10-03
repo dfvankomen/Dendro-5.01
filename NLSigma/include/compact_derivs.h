@@ -4,9 +4,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <map>
 #include <stdexcept>
-#include <cstring>
 
 #include "dendro.h"
 
@@ -461,3 +461,22 @@ bool initKimDeriv4(double *R, const unsigned int n);
  * @param n The number of rows/cols of the square matrix
  */
 bool initKim_Filter_Deriv4(double *RF, const unsigned int n);
+
+// KO explicit filters
+
+void buildKOExplicitFilter(double *R, const unsigned int n,
+                           const unsigned int padding, const unsigned int order,
+                           bool is_left_edge, bool is_right_edge);
+
+void buildKOExplicit6thOrder(double *R, const unsigned int n,
+                             const unsigned int padding, bool is_left_edge,
+                             bool is_right_edge);
+void buildKOExplicit8thOrder(double *R, const unsigned int n,
+                             const unsigned int padding, bool is_left_edge,
+                             bool is_right_edge);
+
+
+// explicit deriv operators
+void buildDerivExplicit6thOrder(double *R, const unsigned int n,
+                                bool is_left_edge,
+                                bool is_right_edge);

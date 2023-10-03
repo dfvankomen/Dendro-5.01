@@ -1,5 +1,7 @@
 #include "compact_derivs.h"
 
+#include <cstdint>
+
 #define FASTER_DERIV_CALC_VIA_MATRIX_MULT
 
 namespace dendro_cfd {
@@ -99,8 +101,6 @@ void CompactFiniteDiff::initialize_cfd_matrix() {
     // but these matrices are small compared to the blocks that they're probably
     // alright plus, these are only calculated once and not over and over again.
 
-    // TODO: need to build up the other three combinations (the last one is
-    // likely never going to happen)
     buildPandQMatrices(P, Q, m_padding_size, m_curr_dim_size, m_deriv_type,
                        false, false);
 
@@ -2892,4 +2892,354 @@ bool initKim_Filter_Deriv4(double *RF, const unsigned int n) {
     delete[] Qf;
 
     return 0;
+}
+
+void buildKOExplicitFilter(double *R, const unsigned int n,
+                           const unsigned int padding, const unsigned int order,
+                           bool is_left_edge = false,
+                           bool is_right_edge = false) {
+    // assuming R is n x n
+    //
+    if (order == 6) {
+        buildKOExplicit6thOrder(R, n, padding, is_left_edge, is_right_edge);
+    } else if (order == 8) {
+        buildKOExplicit8thOrder(R, n, padding, is_left_edge, is_right_edge);
+    }
+}
+
+void buildKOExplicit6thOrder(double *R, const unsigned int n,
+                             const unsigned int padding,
+                             bool is_left_edge = false,
+                             bool is_right_edge = false) {
+    // fill the top padding rows as identity, assume matrix is 0'd
+
+    if (padding < 3) {
+        throw std::invalid_argument(
+            "There isn't enough padding in the explicit 6th order KO matrix, "
+            "padding must be >= 3, and it is currently " +
+            std::to_string(padding));
+    }
+
+    if (is_left_edge && is_right_edge) {
+        if (n - (padding * 2) < 6) {
+            throw std::invalid_argument(
+                "There isn't enough space in the explicit 6th order KO matrix "
+                "for left and right edge to be set, n - 2 * padding must be > "
+                "6, and it is currently " +
+                std::to_string(n - (2 * padding)));
+        }
+    } else if (is_left_edge || is_right_edge) {
+        if (n - (padding * 2) < 3) {
+            throw std::invalid_argument(
+                "There isn't enough space in the explicit 6th order KO matrix "
+                "for left or right edge to be set, n - 2 * padding must be > "
+                "3, and it is currently " +
+                std::to_string(n - (2 * padding)));
+        }
+    }
+
+    for (unsigned int i = 0; i < padding; i++) {
+        R[INDEX_2D(i, i)] = 1.0;
+        R[INDEX_2D(n - i - 1, n - i - 1)] = 1.0;
+    }
+
+    uint32_t start = padding;
+    // n is now an *INDEX* for the "row" we want to use, not related to n
+    uint32_t end = n - padding - 1;
+
+    const double invSMR3 = 48.0 / (59.0 * 64.0);  // times dx!
+    const double invSMR2 = 48.0 / (43.0 * 64.0);
+    const double invSMR1 = 48.0 / (49.0 * 64.0);
+
+    // always assuming that we're starting with row 0, even if it's a right edge
+    if (is_left_edge) {
+        // first available row
+        R[INDEX_2D(start, start)] = 1 * invSMR3;
+        R[INDEX_2D(start, start + 1)] = -3.0 * invSMR3;
+        R[INDEX_2D(start, start + 2)] = 3.0 * invSMR3;
+        R[INDEX_2D(start, start + 3)] = -1.0 * invSMR3;
+
+        // second row
+        R[INDEX_2D(start + 1, start)] = 1.0 * invSMR2;
+        R[INDEX_2D(start + 1, start + 1)] = -6.0 * invSMR2;
+        R[INDEX_2D(start + 1, start + 2)] = 12.0 * invSMR2;
+        R[INDEX_2D(start + 1, start + 3)] = -10.0 * invSMR2;
+        R[INDEX_2D(start + 1, start + 4)] = 3.0 * invSMR2;
+
+        // third row
+        R[INDEX_2D(start + 2, start)] = 1.0 * invSMR1;
+        R[INDEX_2D(start + 2, start + 1)] = -6.0 * invSMR1;
+        R[INDEX_2D(start + 2, start + 2)] = 15.0 * invSMR1;
+        R[INDEX_2D(start + 2, start + 3)] = -19.0 * invSMR1;
+        R[INDEX_2D(start + 2, start + 4)] = 12.0 * invSMR1;
+        R[INDEX_2D(start + 2, start + 5)] = 3.0 * invSMR1;
+
+        start += 3;
+    }
+
+    if (is_right_edge) {
+        // first available row
+        R[INDEX_2D(end, end)] = 1 * invSMR3;
+        R[INDEX_2D(end, end - 1)] = -3.0 * invSMR3;
+        R[INDEX_2D(end, end - 2)] = 3.0 * invSMR3;
+        R[INDEX_2D(end, end - 3)] = -1.0 * invSMR3;
+
+        // second row
+        R[INDEX_2D(end - 1, end)] = 1.0 * invSMR2;
+        R[INDEX_2D(end - 1, end - 1)] = -6.0 * invSMR2;
+        R[INDEX_2D(end - 1, end - 2)] = 12.0 * invSMR2;
+        R[INDEX_2D(end - 1, end - 3)] = -10.0 * invSMR2;
+        R[INDEX_2D(end - 1, end - 4)] = 3.0 * invSMR2;
+
+        // third row
+        R[INDEX_2D(end - 2, end)] = 1.0 * invSMR1;
+        R[INDEX_2D(end - 2, end - 1)] = -6.0 * invSMR1;
+        R[INDEX_2D(end - 2, end - 2)] = 15.0 * invSMR1;
+        R[INDEX_2D(end - 2, end - 3)] = -19.0 * invSMR1;
+        R[INDEX_2D(end - 2, end - 4)] = 12.0 * invSMR1;
+        R[INDEX_2D(end - 2, end - 5)] = 3.0 * invSMR1;
+
+        end -= 3;
+    }
+
+    // have to include "end", so add 1
+    for (unsigned int i = start; i < end + 1; i++) {
+        R[INDEX_2D(i, i - 3)] = 1.0 / 64.0;
+        R[INDEX_2D(i, i - 2)] = -6.0 / 64.0;
+        R[INDEX_2D(i, i - 1)] = 15.0 / 64.0;
+        R[INDEX_2D(i, i - 0)] = -20.0 / 64.0;
+        R[INDEX_2D(i, i + 1)] = 15.0 / 64.0;
+        R[INDEX_2D(i, i + 2)] = -6.0 / 64.0;
+        R[INDEX_2D(i, i + 3)] = 1.0 / 64.0;
+    }
+}
+
+void buildKOExplicit8thOrder(double *R, const unsigned int n,
+                             const unsigned int padding,
+                             bool is_left_edge = false,
+                             bool is_right_edge = false) {
+    // fill the top padding rows as identity, assume matrix is 0'd
+
+    // FIXME: THIS MIGHT NOT BE COMPLETELY CORRECT, IT IS UNTESTED
+    // NOTE: these have come directly from the derivs.cpp files
+
+    if (padding < 4) {
+        throw std::invalid_argument(
+            "There isn't enough padding in the explicit 6th order KO matrix, "
+            "padding must be >= 4, and it is currently " +
+            std::to_string(padding));
+    }
+
+    if (is_left_edge && is_right_edge) {
+        if (n - (padding * 2) < 8) {
+            throw std::invalid_argument(
+                "There isn't enough space in the explicit 6th order KO matrix "
+                "for left and right edge to be set, n - 2 * padding must be > "
+                "8, and it is currently " +
+                std::to_string(n - (2 * padding)));
+        }
+    } else if (is_left_edge || is_right_edge) {
+        if (n - (padding * 2) < 4) {
+            throw std::invalid_argument(
+                "There isn't enough space in the explicit 6th order KO matrix "
+                "for left or right edge to be set, n - 2 * padding must be > "
+                "4, and it is currently " +
+                std::to_string(n - (2 * padding)));
+        }
+    }
+    for (unsigned int i = 0; i < padding; i++) {
+        R[INDEX_2D(i, i)] = 1.0;
+        R[INDEX_2D(n - i - 1, n - i - 1)] = 1.0;
+    }
+
+    uint32_t start = padding;
+    // n is now an *INDEX* for the "row" we want to use, not related to n
+    uint32_t end = n - padding - 1;
+
+    const double invSMR4 = 48.0 / (17.0 * 256.0);  // TIMES dx!
+    const double invSMR3 = 48.0 / (59.0 * 256.0);
+    const double invSMR2 = 48.0 / (43.0 * 256.0);
+    const double invSMR1 = 48.0 / (49.0 * 256.0);
+
+    // always assuming that we're starting with row 0, even if it's a right edge
+    if (is_left_edge) {
+        // first available row
+        R[INDEX_2D(start, start)] = -1.0 * invSMR4;
+        R[INDEX_2D(start, start + 1)] = 4.0 * invSMR4;
+        R[INDEX_2D(start, start + 2)] = -6.0 * invSMR4;
+        R[INDEX_2D(start, start + 3)] = 4.0 * invSMR4;
+        R[INDEX_2D(start, start + 4)] = -1.0 * invSMR4;
+
+        R[INDEX_2D(start + 1, start)] = 3.0 * invSMR3;
+        R[INDEX_2D(start + 1, start + 1)] = -11.0 * invSMR3;
+        R[INDEX_2D(start + 1, start + 2)] = 15.0 * invSMR3;
+        R[INDEX_2D(start + 1, start + 3)] = -9.0 * invSMR3;
+        R[INDEX_2D(start + 1, start + 4)] = -2.0 * invSMR3;
+        // Why isn't this one used?
+        // R[INDEX_2D(start + 1, start + 5)] = xxx * invSMR3;
+
+        // second row
+        R[INDEX_2D(start + 2, start)] = -3.0 * invSMR2;
+        R[INDEX_2D(start + 2, start + 1)] = 9.0 * invSMR2;
+        R[INDEX_2D(start + 2, start + 2)] = -8.0 * invSMR2;
+        R[INDEX_2D(start + 2, start + 3)] = 3.0 * invSMR2;
+        R[INDEX_2D(start + 2, start + 4)] = -1.0 * invSMR2;
+        // why isn't this one used?
+        // R[INDEX_2D(start + 2, start + 5)] = xxx * invSMR2;
+
+        // third row
+        R[INDEX_2D(start + 3, start)] = 1.0 * invSMR1;
+        R[INDEX_2D(start + 3, start + 1)] = -1.0 * invSMR1;
+        R[INDEX_2D(start + 3, start + 2)] = -6.0 * invSMR1;
+        R[INDEX_2D(start + 3, start + 3)] = 15.0 * invSMR1;
+        R[INDEX_2D(start + 3, start + 4)] = -14.0 * invSMR1;
+        R[INDEX_2D(start + 3, start + 5)] = 6.0 * invSMR1;
+        R[INDEX_2D(start + 3, start + 6)] = -1.0 * invSMR1;
+
+        start += 4;
+    }
+
+    if (is_right_edge) {
+        // first available row
+        // first available row
+        R[INDEX_2D(end, end)] = -1.0 * invSMR4;
+        R[INDEX_2D(end, end - 1)] = 4.0 * invSMR4;
+        R[INDEX_2D(end, end - 2)] = -6.0 * invSMR4;
+        R[INDEX_2D(end, end - 3)] = 4.0 * invSMR4;
+        R[INDEX_2D(end, end - 4)] = -1.0 * invSMR4;
+
+        R[INDEX_2D(end - 1, end)] = 3.0 * invSMR3;
+        R[INDEX_2D(end - 1, end - 1)] = -11.0 * invSMR3;
+        R[INDEX_2D(end - 1, end - 2)] = 15.0 * invSMR3;
+        R[INDEX_2D(end - 1, end - 3)] = -9.0 * invSMR3;
+        R[INDEX_2D(end - 1, end - 4)] = -2.0 * invSMR3;
+        // Why isn't this one used?
+        // R[INDEX_2D(end - 1, end - 5)] = xxx * invSMR3;
+
+        // second row
+        R[INDEX_2D(end - 2, end)] = -3.0 * invSMR2;
+        R[INDEX_2D(end - 2, end - 1)] = 9.0 * invSMR2;
+        R[INDEX_2D(end - 2, end - 2)] = -8.0 * invSMR2;
+        R[INDEX_2D(end - 2, end - 3)] = 3.0 * invSMR2;
+        R[INDEX_2D(end - 2, end - 4)] = -1.0 * invSMR2;
+        // why isn't this one used?
+        // R[INDEX_2D(end - 2, end - 5)] = xxx * invSMR2;
+
+        // third row
+        R[INDEX_2D(end - 3, end)] = 1.0 * invSMR1;
+        R[INDEX_2D(end - 3, end - 1)] = -1.0 * invSMR1;
+        R[INDEX_2D(end - 3, end - 2)] = -6.0 * invSMR1;
+        R[INDEX_2D(end - 3, end - 3)] = 15.0 * invSMR1;
+        R[INDEX_2D(end - 3, end - 4)] = -14.0 * invSMR1;
+        R[INDEX_2D(end - 3, end - 5)] = 6.0 * invSMR1;
+        R[INDEX_2D(end - 3, end - 6)] = -1.0 * invSMR1;
+
+        end -= 4;
+    }
+
+    // have to include "end", so add 1
+    for (unsigned int i = start; i < end + 1; i++) {
+        R[INDEX_2D(i, i - 4)] = -1.0 / 256.0;
+        R[INDEX_2D(i, i - 3)] = 8.0 / 256.0;
+        R[INDEX_2D(i, i - 2)] = -28.0 / 256.0;
+        R[INDEX_2D(i, i - 1)] = 56.0 / 256.0;
+        R[INDEX_2D(i, i - 0)] = -70.0 / 256.0;
+        R[INDEX_2D(i, i + 1)] = 56.0 / 256.0;
+        R[INDEX_2D(i, i + 2)] = -28.0 / 256.0;
+        R[INDEX_2D(i, i + 3)] = 8.0 / 256.0;
+        R[INDEX_2D(i, i + 4)] = -1.0 / 256.0;
+    }
+}
+
+void buildDerivExplicit6thOrder(double *R, const unsigned int n,
+                                bool is_left_edge = false,
+                                bool is_right_edge = false) {
+    // this matrix assumes that the whole matrix should be filled
+    // send in a smaller n for other values
+
+    if (is_left_edge && is_right_edge) {
+        if (n < 6) {
+            throw std::invalid_argument(
+                "There isn't enough space in the explicit 6th order deriv "
+                "matrix "
+                "for left and right edge to be set, n must be >= "
+                "6, and it is currently " +
+                std::to_string(n));
+        }
+    } else if (is_left_edge || is_right_edge) {
+        if (n < 3) {
+            throw std::invalid_argument(
+                "There isn't enough space in the explicit 6th order deriv "
+                "matrix "
+                "for left or right edge to be set, n must be >= "
+                "3, and it is currently " +
+                std::to_string(n));
+        }
+    }
+
+    uint32_t start = 0;
+    // n is now an *INDEX* for the "row" we want to use, not related to n
+    uint32_t end = n - 1;
+
+    // always assuming that we're starting with row 0, even if it's a right edge
+    if (is_left_edge) {
+        // first available row
+        R[INDEX_2D(start, start)] = -25.0 / 12.0;
+        R[INDEX_2D(start, start + 1)] = 48.0 / 12.0;
+        R[INDEX_2D(start, start + 2)] = -36.0 / 12.0;
+        R[INDEX_2D(start, start + 3)] = 16.0 / 12.0;
+        R[INDEX_2D(start, start + 4)] = -3.0 / 12.0;
+
+        // second row
+        R[INDEX_2D(start + 1, start)] = -3.0 / 12.0;
+        R[INDEX_2D(start + 1, start + 1)] = -10.0 / 12.0;
+        R[INDEX_2D(start + 1, start + 2)] = 18.0 / 12.0;
+        R[INDEX_2D(start + 1, start + 3)] = -6.0 / 12.0;
+        R[INDEX_2D(start + 1, start + 4)] = 1.0 / 12.0;
+
+        // third row
+        R[INDEX_2D(start + 2, start)] = 1.0 / 12.0;
+        R[INDEX_2D(start + 2, start + 1)] = -8.0 / 12.0;
+        // 2 is empty
+        R[INDEX_2D(start + 2, start + 3)] = +8.0 / 12.0;
+        R[INDEX_2D(start + 2, start + 4)] = -1.0 / 12.0;
+
+        start += 3;
+    }
+
+    if (is_right_edge) {
+        // first available row
+        R[INDEX_2D(end, end)] = 25.0 / 12.0;
+        R[INDEX_2D(end, end - 1)] = -48.0 / 12.0;
+        R[INDEX_2D(end, end - 2)] = 36.0 / 12.0;
+        R[INDEX_2D(end, end - 3)] = -16.0 / 12.0;
+        R[INDEX_2D(end, end - 4)] = 3.0 / 12.0;
+
+        // second row
+        R[INDEX_2D(end - 1, end)] = 3.0 / 12.0;
+        R[INDEX_2D(end - 1, end - 1)] = 10.0 / 12.0;
+        R[INDEX_2D(end - 1, end - 2)] = -18.0 / 12.0;
+        R[INDEX_2D(end - 1, end - 3)] = 6.0 / 12.0;
+        R[INDEX_2D(end - 1, end - 4)] = -1.0 / 12.0;
+
+        // third row
+        R[INDEX_2D(end - 2, end)] = 1.0 / 12.0;
+        R[INDEX_2D(end - 2, end - 1)] = -8.0 / 12.0;
+        // 2 is empty
+        R[INDEX_2D(end - 2, end - 3)] = 8.0 / 12.0;
+        R[INDEX_2D(end - 2, end - 4)] = -1.0 / 12.0;
+
+        end -= 3;
+    }
+
+    // have to include "end", so add 1
+    for (unsigned int i = start; i < end + 1; i++) {
+        R[INDEX_2D(i, i - 3)] = -1.0 / 60.0;
+        R[INDEX_2D(i, i - 2)] = 9.0 / 60.0;
+        R[INDEX_2D(i, i - 1)] = -45.0 / 60.0;
+        R[INDEX_2D(i, i - 0)] = 0.0;
+        R[INDEX_2D(i, i + 1)] = 45.0 / 60.0;
+        R[INDEX_2D(i, i + 2)] = -9.0 / 60.0;
+        R[INDEX_2D(i, i + 3)] = 1.0 / 60.0;
+    }
 }
