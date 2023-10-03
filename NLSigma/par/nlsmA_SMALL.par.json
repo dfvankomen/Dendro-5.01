@@ -26,7 +26,8 @@
             "NLSM_VTU_OUTPUT_EVOL_INDICES": [0,1],
     "__comment__" : "=======================================================",
 
-           "NLSM_DERIV_TYPE": 0,
+           "NLSM_DERIV_TYPE": -1,
+           "NLSM_2ND_DERIV_TYPE": 0,
            "NLSM_FILTER_TYPE": 0,
 
 

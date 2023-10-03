@@ -268,6 +268,7 @@ extern double NLSM_CHI_COARSEN_VAL;
 extern RefineMode NLSM_REFINE_MODE;
 
 extern dendro_cfd::DerType NLSM_DERIV_TYPE;
+extern dendro_cfd::DerType2nd NLSM_2ND_DERIV_TYPE;
 /** @brief: Used to choose which compact finite difference deriv Filter to use*/
 extern dendro_cfd::FilterType NLSM_FILTER_TYPE;
 

@@ -1,4 +1,5 @@
 #include "rhs.h"
+
 #include "compact_derivs.h"
 
 using namespace std;
@@ -13,8 +14,7 @@ using namespace dendro_cfd;
 void nlsmRhs(double **unzipVarsRHS, const double **uZipVars,
              const unsigned int &offset, const double *pmin, const double *pmax,
              const unsigned int *sz, const unsigned int &bflag) {
-
-    double* const deriv_base = nlsm::NLSM_DERIV_WORKSPACE;
+    double *const deriv_base = nlsm::NLSM_DERIV_WORKSPACE;
 
     const double *chi = &uZipVars[VAR::U_CHI][offset];
     const double *phi = &uZipVars[VAR::U_PHI][offset];
@@ -187,17 +187,17 @@ void nlsmRhs(double **unzipVarsRHS, const double **uZipVars,
  * RHS for non-linear sigma model
  *
  *----------------------------------------------------------------------*/
-void nlsmRhs_COMPACT(double **unzipVarsRHS, const double **uZipVars,
+void nlsmRhs_COMPACT(double **unzipVarsRHS, double **uZipVars,
                      const unsigned int &offset, const double *pmin,
                      const double *pmax, const unsigned int *sz,
                      const unsigned int &bflag) {
     double *const deriv_base = nlsm::NLSM_DERIV_WORKSPACE;
 
-    const double *chi = &uZipVars[VAR::U_CHI][offset];
-    const double *phi = &uZipVars[VAR::U_PHI][offset];
+    double *const chi = &uZipVars[VAR::U_CHI][offset];
+    double *const phi = &uZipVars[VAR::U_PHI][offset];
 
-    double *chi_rhs = &unzipVarsRHS[VAR::U_CHI][offset];
-    double *phi_rhs = &unzipVarsRHS[VAR::U_PHI][offset];
+    double *const chi_rhs = &unzipVarsRHS[VAR::U_CHI][offset];
+    double *const phi_rhs = &unzipVarsRHS[VAR::U_PHI][offset];
 
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
@@ -241,15 +241,18 @@ void nlsmRhs_COMPACT(double **unzipVarsRHS, const double **uZipVars,
 
     // compute the derivatives
 
-    if (nlsm::NLSM_DERIV_TYPE == CFD_NONE) {
+    if (nlsm::NLSM_2ND_DERIV_TYPE == CFD2ND_NONE) {
         deriv_xx(grad2_0_0_chi, chi, hx, sz, bflag);
         deriv_yy(grad2_1_1_chi, chi, hy, sz, bflag);
         deriv_zz(grad2_2_2_chi, chi, hz, sz, bflag);
     } else {
-        cfd.cfd_x(grad2_0_0_chi, chi, hx, sz, bflag);
-        cfd.cfd_y(grad2_1_1_chi, chi, hy, sz, bflag);
-        cfd.cfd_z(grad2_2_2_chi, chi, hz, sz, bflag);
+        cfd.cfd_xx(grad2_0_0_chi, chi, hx, sz, bflag);
+        cfd.cfd_yy(grad2_1_1_chi, chi, hy, sz, bflag);
+        cfd.cfd_zz(grad2_2_2_chi, chi, hz, sz, bflag);
     }
+
+    std::cout << "Grad 2 0 0" << std::endl;
+    dendro_cfd::print_square_mat(grad2_0_0_chi, sz[0]);
 
     nlsm::timer::t_deriv.stop();
 
@@ -301,6 +304,7 @@ void nlsmRhs_COMPACT(double **unzipVarsRHS, const double **uZipVars,
         nlsm::timer::t_bdyc.start();
 
         if (nlsm::NLSM_DERIV_TYPE == CFD_NONE) {
+            // std::cout << "doing not cfd deriv for bdy" << std::endl;
             deriv_x(grad_0_chi, chi, hx, sz, bflag);
             deriv_y(grad_1_chi, chi, hy, sz, bflag);
             deriv_z(grad_2_chi, chi, hz, sz, bflag);
@@ -309,6 +313,7 @@ void nlsmRhs_COMPACT(double **unzipVarsRHS, const double **uZipVars,
             deriv_y(grad_1_phi, phi, hy, sz, bflag);
             deriv_z(grad_2_phi, phi, hz, sz, bflag);
         } else {
+            // std::cout << "doing CFD** deriv for bdy" << std::endl;
             cfd.cfd_x(grad_0_chi, chi, hx, sz, bflag);
             cfd.cfd_y(grad_1_chi, chi, hy, sz, bflag);
             cfd.cfd_z(grad_2_chi, chi, hz, sz, bflag);
@@ -325,8 +330,10 @@ void nlsmRhs_COMPACT(double **unzipVarsRHS, const double **uZipVars,
         nlsm::timer::t_bdyc.stop();
     }
 
-    nlsm::timer::t_deriv.start();
-    if (nlsm::NLSM_DERIV_TYPE == CFD_NONE) {
+    
+    if (nlsm::NLSM_FILTER_TYPE == FILT_KO_DISS) {
+        // std::cout << "DOING KO DISS" << std::endl;
+        nlsm::timer::t_deriv.start();
         ko_deriv_x(grad_0_chi, chi, hx, sz, bflag);
         ko_deriv_y(grad_1_chi, chi, hy, sz, bflag);
         ko_deriv_z(grad_2_chi, chi, hz, sz, bflag);
@@ -334,36 +341,44 @@ void nlsmRhs_COMPACT(double **unzipVarsRHS, const double **uZipVars,
         ko_deriv_x(grad_0_phi, phi, hx, sz, bflag);
         ko_deriv_y(grad_1_phi, phi, hy, sz, bflag);
         ko_deriv_z(grad_2_phi, phi, hz, sz, bflag);
-    } else {
-        cfd.cfd_x(grad_0_chi, chi, hx, sz, bflag);
-        cfd.cfd_y(grad_1_chi, chi, hy, sz, bflag);
-        cfd.cfd_z(grad_2_chi, chi, hz, sz, bflag);
 
-        cfd.cfd_x(grad_0_phi, phi, hx, sz, bflag);
-        cfd.cfd_y(grad_1_phi, phi, hy, sz, bflag);
-        cfd.cfd_z(grad_2_phi, phi, hz, sz, bflag);
-    }
+        nlsm::timer::t_deriv.stop();
 
-    nlsm::timer::t_deriv.stop();
+        nlsm::timer::t_rhs.start();
 
-    nlsm::timer::t_rhs.start();
+        const double sigma = KO_DISS_SIGMA;
 
-    const double sigma = KO_DISS_SIGMA;
+        for (unsigned int k = PW; k < nz - PW; k++) {
+            for (unsigned int j = PW; j < ny - PW; j++) {
+                for (unsigned int i = PW; i < nx - PW; i++) {
+                    pp = i + nx * (j + ny * k);
 
-    for (unsigned int k = PW; k < nz - PW; k++) {
-        for (unsigned int j = PW; j < ny - PW; j++) {
-            for (unsigned int i = PW; i < nx - PW; i++) {
-                pp = i + nx * (j + ny * k);
-
-                chi_rhs[pp] +=
-                    sigma * (grad_0_chi[pp] + grad_1_chi[pp] + grad_2_chi[pp]);
-                phi_rhs[pp] +=
-                    sigma * (grad_0_phi[pp] + grad_1_phi[pp] + grad_2_phi[pp]);
+                    chi_rhs[pp] += sigma * (grad_0_chi[pp] + grad_1_chi[pp] +
+                                            grad_2_chi[pp]);
+                    phi_rhs[pp] += sigma * (grad_0_phi[pp] + grad_1_phi[pp] +
+                                            grad_2_phi[pp]);
+                }
             }
         }
+
+        nlsm::timer::t_rhs.stop();
+
+    } else {
+        nlsm::timer::t_deriv.start();
+        nlsm::timer::t_rhs.start();
+        cfd.filter_cfd_x(chi, grad_0_chi, hx, sz, bflag);
+        cfd.filter_cfd_y(chi, grad_1_chi, hy, sz, bflag);
+        cfd.filter_cfd_z(chi, grad_2_chi, hz, sz, bflag);
+
+        cfd.filter_cfd_x(phi, grad_0_phi, hx, sz, bflag);
+        cfd.filter_cfd_y(phi, grad_1_phi, hy, sz, bflag);
+        cfd.filter_cfd_z(phi, grad_2_phi, hz, sz, bflag);
+
+        nlsm::timer::t_deriv.stop();
+        nlsm::timer::t_rhs.stop();
     }
 
-    nlsm::timer::t_rhs.stop();
+    
 
     nlsm::timer::t_deriv.start();
 

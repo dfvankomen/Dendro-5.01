@@ -14,7 +14,7 @@ void nlsmRhs(double **uzipVarsRHS, const double **uZipVars,
              const double *ptmin, const double *ptmax, const unsigned int *sz,
              const unsigned int &bflag);
 
-void nlsmRhs_COMPACT(double **uzipVarsRHS, const double **uZipVars,
+void nlsmRhs_COMPACT(double **uzipVarsRHS, double **uZipVars,
              const unsigned int &offset,
              const double *ptmin, const double *ptmax, const unsigned int *sz,
              const unsigned int &bflag);

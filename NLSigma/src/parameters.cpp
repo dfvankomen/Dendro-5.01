@@ -32,6 +32,7 @@ namespace nlsm
 
     // compact finite difference stuff
     dendro_cfd::DerType NLSM_DERIV_TYPE=dendro_cfd::DerType::CFD_NONE;
+    dendro_cfd::DerType2nd NLSM_2ND_DERIV_TYPE=dendro_cfd::DerType2nd::CFD2ND_NONE;
     dendro_cfd::FilterType NLSM_FILTER_TYPE=dendro_cfd::FilterType::FILT_KO_DISS;
 
     double * NLSM_DERIV_WORKSPACE = nullptr;

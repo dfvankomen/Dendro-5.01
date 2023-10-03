@@ -26,6 +26,7 @@ namespace nlsm
         unsigned int prf_len;
 
         int temp_NLSM_DERIV_TYPE = (int)nlsm::NLSM_DERIV_TYPE;
+        int temp_NLSM_2ND_DERIV_TYPE = (int)nlsm::NLSM_2ND_DERIV_TYPE;
         int temp_NLSM_FILTER_TYPE = (int)nlsm::NLSM_FILTER_TYPE;
 
 
@@ -73,7 +74,9 @@ namespace nlsm
 
             if(parFile.find("NLSM_DERIV_TYPE")!=parFile.end())
                 temp_NLSM_DERIV_TYPE = parFile["NLSM_DERIV_TYPE"];
-            if(parFile.find("NLSM_DERIV_TYPE")!=parFile.end())
+            if(parFile.find("NLSM_2ND_DERIV_TYPE")!=parFile.end())
+                temp_NLSM_2ND_DERIV_TYPE = parFile["NLSM_2ND_DERIV_TYPE"];
+            if(parFile.find("NLSM_FILTER_TYPE")!=parFile.end())
                 temp_NLSM_FILTER_TYPE = parFile["NLSM_FILTER_TYPE"];
 
             nlsm::NLSM_ID_TYPE=parFile["NLSM_ID_TYPE"];
@@ -169,6 +172,9 @@ namespace nlsm
         
         par::Mpi_Bcast(&temp_NLSM_DERIV_TYPE, 1, 0, comm);
         nlsm::NLSM_DERIV_TYPE = static_cast<dendro_cfd::DerType>(temp_NLSM_DERIV_TYPE);
+
+        par::Mpi_Bcast(&temp_NLSM_2ND_DERIV_TYPE, 1, 0, comm);
+        nlsm::NLSM_2ND_DERIV_TYPE = static_cast<dendro_cfd::DerType2nd>(temp_NLSM_2ND_DERIV_TYPE);
 
         par::Mpi_Bcast(&temp_NLSM_FILTER_TYPE, 1, 0, comm);
         nlsm::NLSM_FILTER_TYPE = static_cast<dendro_cfd::FilterType>(temp_NLSM_FILTER_TYPE);
@@ -370,6 +376,7 @@ namespace nlsm
             sout<<nlsm::NLSM_VTU_OUTPUT_EVOL_INDICES[nlsm::NLSM_NUM_EVOL_VARS_VTU_OUTPUT-1]<<"]"<<NRM<<std::endl;
 
             sout << YLW "\tNLSM_DERIV_TYPE : " << nlsm::NLSM_DERIV_TYPE << NRM << std::endl;
+            sout << YLW "\tNLSM_2ND_DERIV_TYPE : " << nlsm::NLSM_2ND_DERIV_TYPE << NRM << std::endl;
             sout << YLW "\tNLSM_FILTER_TYPE : " << nlsm::NLSM_FILTER_TYPE << NRM << std::endl;
 
         }

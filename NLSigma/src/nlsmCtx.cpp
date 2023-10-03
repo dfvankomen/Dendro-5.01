@@ -37,6 +37,7 @@ namespace nlsm
 
         dendro_cfd::cfd.set_filter_type(NLSM_FILTER_TYPE);
         dendro_cfd::cfd.set_deriv_type(NLSM_DERIV_TYPE);
+        dendro_cfd::cfd.set_second_deriv_type(NLSM_2ND_DERIV_TYPE);
         dendro_cfd::cfd.set_padding_size(NLSM_PADDING_WIDTH);
         // NOTE: the changing of dim size will reinitialize everything if the size
         // is different meaning that the main matrix will be recalculated and the
@@ -182,7 +183,7 @@ namespace nlsm
             #endif
 
             // nlsmRhs(unzipOut,(const DendroScalar**)unzipIn, offset, ptmin, ptmax, lsz, bflag);
-            nlsmRhs_COMPACT(unzipOut,(const DendroScalar**)unzipIn, offset, ptmin, ptmax, lsz, bflag);
+            nlsmRhs_COMPACT(unzipOut, unzipIn, offset, ptmin, ptmax, lsz, bflag);
             
             // std::cout<<":::\n";
             // for(unsigned int n=0; n < lsz[0]*lsz[1]*lsz[2]; n++)
