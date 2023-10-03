@@ -251,8 +251,8 @@ void nlsmRhs_COMPACT(double **unzipVarsRHS, double **uZipVars,
         cfd.cfd_zz(grad2_2_2_chi, chi, hz, sz, bflag);
     }
 
-    std::cout << "Grad 2 0 0" << std::endl;
-    dendro_cfd::print_square_mat(grad2_0_0_chi, sz[0]);
+    // std::cout << "Grad 2 0 0" << std::endl;
+    // dendro_cfd::print_square_mat(grad2_0_0_chi, sz[0]);
 
     nlsm::timer::t_deriv.stop();
 

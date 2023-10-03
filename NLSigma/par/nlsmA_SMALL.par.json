@@ -7,7 +7,7 @@
             "           " : "Set to 1 restore solver from a checkpoint",
             "NLSM_RESTORE_SOLVER":0,
             "           " : "frequency for VTU output",
-            "NLSM_IO_OUTPUT_FREQ": 1,
+            "NLSM_IO_OUTPUT_FREQ": 100,
             "           " : "frequency for remeshing test based on wavelets",
             "NLSM_REMESH_TEST_FREQ": 1,
             "           " : "frequency for checkpoint output",
@@ -19,15 +19,15 @@
             "           " : "file prefix for the checkpoint files",
             "NLSM_CHKPT_FILE_PREFIX": "nlsm_cp",
             "           " : "file prefix for the intermediate profile files",
-            "NLSM_PROFILE_FILE_PREFIX": "nlsm_prof",
+            "NLSM_PROFILE_FILE_PREFIX": "nlsm_prof_disabled",
             "           " : "number of variables (evolution) to output in vtu files",
             "NLSM_NUM_EVOL_VARS_VTU_OUTPUT":2,
             "           " : "evolution variable ids",
             "NLSM_VTU_OUTPUT_EVOL_INDICES": [0,1],
     "__comment__" : "=======================================================",
 
-           "NLSM_DERIV_TYPE": -1,
-           "NLSM_2ND_DERIV_TYPE": 0,
+           "NLSM_DERIV_TYPE":-1,
+           "NLSM_2ND_DERIV_TYPE": 7,
            "NLSM_FILTER_TYPE": 0,
 
 
@@ -43,7 +43,7 @@
             "           " : "dimentionality of the octree, (meshing is supported only for 3D)",
             "NLSM_DIM": 3,
             "           " : "maximum level of refinement of the mesh",
-            "NLSM_MAXDEPTH": 7,
+            "NLSM_MAXDEPTH": 8,
     "__comment__" : "=======================================================",
 
 
@@ -69,7 +69,7 @@
             "           " : "simulation time end",
             "NLSM_RK45_TIME_END": 1,
             "           " : "CFL factor",
-            "NLSM_CFL_FACTOR":0.25,
+            "NLSM_CFL_FACTOR":0.125,
             "           " : "prefered time step size (this is overwrited with the specified CFL factor, not recommend to use this)",
             "NLSM_RK45_TIME_STEP_SIZE": 0.01,
             "           " : "used in adaptive time stepping (not currently used)",

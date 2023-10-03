@@ -18,9 +18,17 @@ void deriv42_x(double *const Dxu, const double *const u, const double dx, const 
 void deriv42_y(double *const Dyu, const double *const u, const double dy, const unsigned int *sz, unsigned bflag);
 void deriv42_z(double *const Dzu, const double *const u, const double dz, const unsigned int *sz, unsigned bflag);
 
+void deriv42_x_2pad(double *const Dxu, const double *const u, const double dx, const unsigned int *sz, unsigned bflag);
+void deriv42_y_2pad(double *const Dyu, const double *const u, const double dy, const unsigned int *sz, unsigned bflag);
+void deriv42_z_2pad(double *const Dzu, const double *const u, const double dz, const unsigned int *sz, unsigned bflag);
+
 void deriv42_xx(double *const DxDxu, const double *const u, const double dx, const unsigned int *sz, unsigned bflag);
 void deriv42_yy(double *const DyDyu, const double *const u, const double dy, const unsigned int *sz, unsigned bflag);
 void deriv42_zz(double *const DzDzu, const double *const u, const double dz, const unsigned int *sz, unsigned bflag);
+
+void deriv42_xx_2pad(double *const DxDxu, const double *const u, const double dx, const unsigned int *sz, unsigned bflag);
+void deriv42_yy_2pad(double *const DyDyu, const double *const u, const double dy, const unsigned int *sz, unsigned bflag);
+void deriv42_zz_2pad(double *const DzDzu, const double *const u, const double dz, const unsigned int *sz, unsigned bflag);
 
 void deriv42adv_x(double * const  Dxu, const double * const  u,const double dx, const unsigned int *sz, const double * const betax, unsigned bflag);
 void deriv42adv_y(double * const  Dyu, const double * const  u,const double dy, const unsigned int *sz, const double * const betay, unsigned bflag);

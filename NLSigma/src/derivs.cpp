@@ -325,6 +325,113 @@ void deriv42_x(double * const  Dxu, const double * const  u,
  *
  *
  *----------------------------------------------------------------------*/
+void deriv42_x_2pad(double *const Dxu, const double *const u, const double dx,
+               const unsigned int *sz, unsigned bflag)
+{
+    const double idx = 1.0 / dx;
+    const double idx_by_2 = 0.5 * idx;
+    const double idx_by_12 = idx / 12.0;
+
+    const int nx = sz[0];
+    const int ny = sz[1];
+    const int nz = sz[2];
+    const int ib = 2;
+    const int jb = 0;
+    const int kb = 0;
+    const int ie = sz[0] - 2;
+    const int je = sz[1];
+    const int ke = sz[2];
+
+    const int n = 1;
+
+    for (int k = kb; k < ke; k++)
+    {
+        for (int j = jb; j < je; j++)
+        {
+#ifdef DERIV_ENABLE_AVX
+#ifdef __INTEL_COMPILER
+#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+#pragma ivdep
+#endif
+#endif
+            for (int i = ib; i < ie; i++)
+            {
+                const int pp = IDX(i, j, k);
+                Dxu[pp] = (u[pp - 2] - 8.0 * u[pp - 1] + 8.0 * u[pp + 1] -
+                           u[pp + 2]) *
+                          idx_by_12;
+            }
+        }
+    }
+
+    if (bflag & (1u << OCT_DIR_LEFT))
+    {
+        for (int k = kb; k < ke; k++)
+        {
+#ifdef DERIV_ENABLE_AVX
+#ifdef __INTEL_COMPILER
+#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+#pragma ivdep
+#endif
+#endif
+            for (int j = jb; j < je; j++)
+            {
+                Dxu[IDX(2, j, k)] = (-3.0 * u[IDX(2, j, k)] +
+                                     4.0 * u[IDX(3, j, k)] - u[IDX(4, j, k)]) *
+                                    idx_by_2;
+                Dxu[IDX(3, j, k)] =
+                    (-u[IDX(2, j, k)] + u[IDX(4, j, k)]) * idx_by_2;
+            }
+        }
+    }
+
+    if (bflag & (1u << OCT_DIR_RIGHT))
+    {
+        for (int k = kb; k < ke; k++)
+        {
+#ifdef DERIV_ENABLE_AVX
+#ifdef __INTEL_COMPILER
+#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+#pragma ivdep
+#endif
+#endif
+            for (int j = jb; j < je; j++)
+            {
+                Dxu[IDX(ie - 1, j, k)] =
+                    (-u[IDX(ie - 2, j, k)] + u[IDX(ie, j, k)]) * idx_by_2;
+
+                Dxu[IDX(ie, j, k)] =
+                    (u[IDX(ie - 2, j, k)] - 4.0 * u[IDX(ie - 1, j, k)] +
+                     3.0 * u[IDX(ie, j, k)]) *
+                    idx_by_2;
+            }
+        }
+    }
+
+#ifdef DEBUG_DERIVS_COMP
+#pragma message("DEBUG_DERIVS_COMP: ON")
+    for (int k = kb; k < ke; k++)
+    {
+        for (int j = jb; j < je; j++)
+        {
+            for (int i = ib; i < ie; i++)
+            {
+                const int pp = IDX(i, j, k);
+                if (isnan(Dxu[pp]))
+                    std::cout << "NAN detected function " << __func__
+                              << " file: " << __FILE__ << " line: " << __LINE__
+                              << std::endl;
+            }
+        }
+    }
+#endif
+}
+
+/*----------------------------------------------------------------------;
+ *
+ *
+ *
+ *----------------------------------------------------------------------*/
 void deriv42_y(double * const  Dyu, const double * const  u,
                const double dy, const unsigned int *sz, unsigned bflag)
 {
@@ -414,6 +521,114 @@ void deriv42_y(double * const  Dyu, const double * const  u,
     }
   #endif
 
+}
+
+/*----------------------------------------------------------------------;
+ *
+ *
+ *
+ *----------------------------------------------------------------------*/
+void deriv42_y_2pad(double *const Dyu, const double *const u, const double dy,
+               const unsigned int *sz, unsigned bflag)
+{
+    const double idy = 1.0 / dy;
+    const double idy_by_2 = 0.50 * idy;
+    const double idy_by_12 = idy / 12.0;
+
+    const int nx = sz[0];
+    const int ny = sz[1];
+    const int nz = sz[2];
+    const int ib = 2;
+    const int jb = 2;
+    const int kb = 1;
+    const int ie = sz[0] - 2;
+    const int je = sz[1] - 2;
+    const int ke = sz[2] - 1;
+
+    const int n = nx;
+
+    for (int k = kb; k < ke; k++)
+    {
+        for (int i = ib; i < ie; i++)
+        {
+#ifdef DERIV_ENABLE_AVX
+#ifdef __INTEL_COMPILER
+#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+#pragma ivdep
+#endif
+#endif
+            for (int j = jb; j < je; j++)
+            {
+                const int pp = IDX(i, j, k);
+                Dyu[pp] = (u[pp - 2 * nx] - 8.0 * u[pp - nx] +
+                           8.0 * u[pp + nx] - u[pp + 2 * nx]) *
+                          idy_by_12;
+            }
+        }
+    }
+
+    if (bflag & (1u << OCT_DIR_DOWN))
+    {
+        for (int k = kb; k < ke; k++)
+        {
+#ifdef DERIV_ENABLE_AVX
+#ifdef __INTEL_COMPILER
+#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+#pragma ivdep
+#endif
+#endif
+            for (int i = ib; i < ie; i++)
+            {
+                Dyu[IDX(i, 2, k)] = (-3.0 * u[IDX(i, 2, k)] +
+                                     4.0 * u[IDX(i, 3, k)] - u[IDX(i, 4, k)]) *
+                                    idy_by_2;
+
+                Dyu[IDX(i, 3, k)] =
+                    (-u[IDX(i, 2, k)] + u[IDX(i, 4, k)]) * idy_by_2;
+            }
+        }
+    }
+
+    if (bflag & (1u << OCT_DIR_UP))
+    {
+        for (int k = kb; k < ke; k++)
+        {
+#ifdef DERIV_ENABLE_AVX
+#ifdef __INTEL_COMPILER
+#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+#pragma ivdep
+#endif
+#endif
+            for (int i = ib; i < ie; i++)
+            {
+                Dyu[IDX(i, je - 1, k)] =
+                    (-u[IDX(i, je - 2, k)] + u[IDX(i, je, k)]) * idy_by_2;
+
+                Dyu[IDX(i, je, k)] =
+                    (u[IDX(i, je - 2, k)] - 4.0 * u[IDX(i, je - 1, k)] +
+                     3.0 * u[IDX(i, je, k)]) *
+                    idy_by_2;
+            }
+        }
+    }
+
+#ifdef DEBUG_DERIVS_COMP
+#pragma message("DEBUG_DERIVS_COMP: ON")
+    for (int k = kb; k < ke; k++)
+    {
+        for (int j = jb; j < je; j++)
+        {
+            for (int i = ib; i < ie; i++)
+            {
+                const int pp = IDX(i, j, k);
+                if (std::isnan(Dyu[pp]))
+                    std::cout << "NAN detected function " << __func__
+                              << " file: " << __FILE__ << " line: " << __LINE__
+                              << std::endl;
+            }
+        }
+    }
+#endif
 }
 
 /*----------------------------------------------------------------------;
@@ -519,6 +734,114 @@ void deriv42_z(double * const  Dzu, const double * const  u,
  *
  *
  *----------------------------------------------------------------------*/
+void deriv42_z_2pad(double *const Dzu, const double *const u, const double dz,
+               const unsigned int *sz, unsigned bflag)
+{
+    const double idz = 1.0 / dz;
+    const double idz_by_2 = 0.50 * idz;
+    const double idz_by_12 = idz / 12.0;
+
+    const int nx = sz[0];
+    const int ny = sz[1];
+    const int nz = sz[2];
+    const int ib = 2;
+    const int jb = 2;
+    const int kb = 2;
+    const int ie = sz[0] - 2;
+    const int je = sz[1] - 2;
+    const int ke = sz[2] - 2;
+
+    const int n = nx * ny;
+
+    for (int j = jb; j < je; j++)
+    {
+        for (int i = ib; i < ie; i++)
+        {
+#ifdef DERIV_ENABLE_AVX
+#ifdef __INTEL_COMPILER
+#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+#pragma ivdep
+#endif
+#endif
+            for (int k = kb; k < ke; k++)
+            {
+                const int pp = IDX(i, j, k);
+                Dzu[pp] = (u[pp - 2 * n] - 8.0 * u[pp - n] + 8.0 * u[pp + n] -
+                           u[pp + 2 * n]) *
+                          idz_by_12;
+            }
+        }
+    }
+
+    if (bflag & (1u << OCT_DIR_BACK))
+    {
+        for (int j = jb; j < je; j++)
+        {
+#ifdef DERIV_ENABLE_AVX
+#ifdef __INTEL_COMPILER
+#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+#pragma ivdep
+#endif
+#endif
+            for (int i = ib; i < ie; i++)
+            {
+                Dzu[IDX(i, j, 2)] = (-3.0 * u[IDX(i, j, 2)] +
+                                     4.0 * u[IDX(i, j, 3)] - u[IDX(i, j, 4)]) *
+                                    idz_by_2;
+
+                Dzu[IDX(i, j, 3)] =
+                    (-u[IDX(i, j, 2)] + u[IDX(i, j, 4)]) * idz_by_2;
+            }
+        }
+    }
+
+    if (bflag & (1u << OCT_DIR_FRONT))
+    {
+        for (int j = jb; j < je; j++)
+        {
+#ifdef DERIV_ENABLE_AVX
+#ifdef __INTEL_COMPILER
+#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+#pragma ivdep
+#endif
+#endif
+            for (int i = ib; i < ie; i++)
+            {
+                Dzu[IDX(i, j, ke - 1)] =
+                    (-u[IDX(i, j, ke - 2)] + u[IDX(i, j, ke )]) * idz_by_2;
+
+                Dzu[IDX(i, j, ke )] =
+                    (u[IDX(i, j, ke - 2)] - 4.0 * u[IDX(i, j, ke - 1)] +
+                     3.0 * u[IDX(i, j, ke)]) *
+                    idz_by_2;
+            }
+        }
+    }
+
+#ifdef DEBUG_DERIVS_COMP
+#pragma message("DEBUG_DERIVS_COMP: ON")
+    for (int k = kb; k < ke; k++)
+    {
+        for (int j = jb; j < je; j++)
+        {
+            for (int i = ib; i < ie; i++)
+            {
+                const int pp = IDX(i, j, k);
+                if (std::isnan(Dzu[pp]))
+                    std::cout << "NAN detected function " << __func__
+                              << " file: " << __FILE__ << " line: " << __LINE__
+                              << std::endl;
+            }
+        }
+    }
+#endif
+}
+
+/*----------------------------------------------------------------------;
+ *
+ *
+ *
+ *----------------------------------------------------------------------*/
 void deriv42_xx(double * const  DxDxu, const double * const  u,
                 const double dx, const unsigned int *sz, unsigned bflag)
 {
@@ -598,6 +921,111 @@ void deriv42_xx(double * const  DxDxu, const double * const  u,
                                  + 4.0 * u[IDX(ie-3,j,k)]
                                  - 5.0 * u[IDX(ie-2,j,k)]
                                  + 2.0 * u[IDX(ie-1,j,k)]
+                               ) * idx_sqrd;
+
+      }
+    }
+  }
+
+  
+  #ifdef DEBUG_DERIVS_COMP
+  #pragma message("DEBUG_DERIVS_COMP: ON")
+    for (int k = kb; k < ke; k++) {
+      for (int j = jb; j < je; j++) {
+        for (int i = ib; i < ie; i++) {
+          const int pp = IDX(i,j,k);
+          if(std::isnan(DxDxu[pp])) std::cout<<"NAN detected function "<<__func__<<" file: "<<__FILE__<<" line: "<<__LINE__<<std::endl;
+        }
+      }
+    }
+  #endif
+
+}
+
+/*----------------------------------------------------------------------;
+ *
+ *
+ *
+ *----------------------------------------------------------------------*/
+void deriv42_xx_2pad(double * const  DxDxu, const double * const  u,
+                const double dx, const unsigned int *sz, unsigned bflag)
+{
+
+  const double idx_sqrd = 1.0/(dx*dx);
+  const double idx_sqrd_by_12 = idx_sqrd / 12.0;
+
+  const int nx = sz[0];
+  const int ny = sz[1];
+  const int nz = sz[2];
+  const int ib = 2;
+  const int jb = 2;
+  const int kb = 2;
+  const int ie = sz[0] - 2;
+  const int je = sz[1] - 2;
+  const int ke = sz[2] - 2;
+
+  for (int k = kb; k < ke; k++) {
+    for (int j = jb; j < je; j++) {
+      #ifdef DERIV_ENABLE_AVX
+        #ifdef __INTEL_COMPILER
+          #pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+          #pragma ivdep
+        #endif
+      #endif
+      for (int i = ib; i < ie; i++) {
+        const int pp = IDX(i,j,k);
+        DxDxu[pp] = (   -        u[pp-2]
+                        + 16.0 * u[pp-1]
+                        - 30.0 * u[pp  ]
+                        + 16.0 * u[pp+1]
+                        -        u[pp+2]
+                    ) * idx_sqrd_by_12;
+      }
+    }
+  }
+
+  if (bflag & (1u<<OCT_DIR_LEFT)) {
+    for (int k = kb; k < ke; k++) {
+      #ifdef DERIV_ENABLE_AVX
+        #ifdef __INTEL_COMPILER
+          #pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+          #pragma ivdep
+        #endif
+      #endif
+      for (int j = jb; j < je; j++) {
+        DxDxu[IDX(2,j,k)] = (   2.0 * u[IDX(2,j,k)]
+                              - 5.0 * u[IDX(3,j,k)]
+                              + 4.0 * u[IDX(4,j,k)]
+                              -       u[IDX(5,j,k)]
+                            ) * idx_sqrd;
+
+        DxDxu[IDX(3,j,k)] = (         u[IDX(2,j,k)]
+                              - 2.0 * u[IDX(3,j,k)]
+                              +       u[IDX(4,j,k)]
+                            ) * idx_sqrd;
+
+      }
+    }
+  }
+
+  if (bflag & (1u<<OCT_DIR_RIGHT)) {
+    for (int k = kb; k < ke; k++) {
+      #ifdef DERIV_ENABLE_AVX
+        #ifdef __INTEL_COMPILER
+          #pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+          #pragma ivdep
+        #endif
+      #endif
+      for (int j = jb; j < je; j++) {
+        DxDxu[IDX(ie-1,j,k)] = (         u[IDX(ie-2,j,k)]
+                                 - 2.0 * u[IDX(ie-1,j,k)]
+                                 +       u[IDX(ie,j,k)]
+                               ) * idx_sqrd;
+
+        DxDxu[IDX(ie,j,k)] = ( -       u[IDX(ie-3,j,k)]
+                                 + 4.0 * u[IDX(ie-2,j,k)]
+                                 - 5.0 * u[IDX(ie-1,j,k)]
+                                 + 2.0 * u[IDX(ie,j,k)]
                                ) * idx_sqrd;
 
       }
@@ -728,6 +1156,110 @@ void deriv42_yy(double * const  DyDyu, const double * const  u,
  *
  *
  *----------------------------------------------------------------------*/
+void deriv42_yy_2pad(double * const  DyDyu, const double * const  u,
+                const double dy, const unsigned int *sz, unsigned bflag)
+{
+
+  const double idy_sqrd = 1.0/(dy*dy);
+  const double idy_sqrd_by_12 = idy_sqrd / 12.0;
+
+  const int nx = sz[0];
+  const int ny = sz[1];
+  const int nz = sz[2];
+  const int ib = 2;
+  const int jb = 2;
+  const int kb = 2;
+  const int ie = sz[0] - 2;
+  const int je = sz[1] - 2;
+  const int ke = sz[2] - 2;
+
+  for (int k = kb; k < ke; k++) {
+    for (int i = ib; i < ie; i++) {
+      #ifdef DERIV_ENABLE_AVX
+        #ifdef __INTEL_COMPILER
+          #pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+          #pragma ivdep
+        #endif
+      #endif
+      for (int j = jb; j < je; j++) {
+        const int pp = IDX(i,j,k);
+        DyDyu[pp] = ( -        u[pp-2*nx] 
+                      + 16.0 * u[pp-  nx] 
+                      - 30.0 * u[pp     ]
+                      + 16.0 * u[pp+  nx] 
+                      -        u[pp+2*nx]
+                    ) * idy_sqrd_by_12;
+      }
+    }
+  }
+
+  if (bflag & (1u<<OCT_DIR_DOWN)) {
+    for (int k = kb; k < ke; k++) {
+      #ifdef DERIV_ENABLE_AVX
+        #ifdef __INTEL_COMPILER
+          #pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+          #pragma ivdep
+        #endif
+      #endif
+      for (int i = ib; i < ie; i++) {
+        DyDyu[IDX(i,2,k)] = (   2.0 * u[IDX(i,2,k)]
+                              - 5.0 * u[IDX(i,3,k)]
+                              + 4.0 * u[IDX(i,4,k)]
+                              -       u[IDX(i,5,k)]
+                            ) * idy_sqrd;
+
+        DyDyu[IDX(i,3,k)] = (         u[IDX(i,2,k)]
+                              - 2.0 * u[IDX(i,3,k)]
+                              +       u[IDX(i,4,k)]
+                            ) * idy_sqrd;
+      }
+    }
+  }
+
+  if (bflag & (1u<<OCT_DIR_UP)) {
+    for (int k = kb; k < ke; k++) {
+      #ifdef DERIV_ENABLE_AVX
+        #ifdef __INTEL_COMPILER
+          #pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+          #pragma ivdep
+        #endif
+      #endif
+      for (int i = ib; i < ie; i++) {
+        DyDyu[IDX(i,je-1,k)] = (         u[IDX(i,je-2,k)]
+                                 - 2.0 * u[IDX(i,je-1,k)]
+                                 +       u[IDX(i,je,k)]
+                               ) * idy_sqrd;
+
+        DyDyu[IDX(i,je,k)] = ( -       u[IDX(i,je-3,k)]
+                                 + 4.0 * u[IDX(i,je-2,k)]
+                                 - 5.0 * u[IDX(i,je-1,k)]
+                                 + 2.0 * u[IDX(i,je,k)]
+                               ) * idy_sqrd;
+
+      }
+    }
+  }
+
+
+  #ifdef DEBUG_DERIVS_COMP
+  #pragma message("DEBUG_DERIVS_COMP: ON")
+    for (int k = kb; k < ke; k++) {
+      for (int j = jb; j < je; j++) {
+        for (int i = ib; i < ie; i++) {
+          const int pp = IDX(i,j,k);
+          if(std::isnan(DyDyu[pp])) std::cout<<"NAN detected function "<<__func__<<" file: "<<__FILE__<<" line: "<<__LINE__<<std::endl;
+        }
+      }
+    }
+  #endif
+
+}
+
+/*----------------------------------------------------------------------;
+ *
+ *
+ *
+ *----------------------------------------------------------------------*/
 void deriv42_zz(double * const  DzDzu, const double * const  u,
                 const double dz, const unsigned int *sz, unsigned bflag)
 {
@@ -809,6 +1341,113 @@ void deriv42_zz(double * const  DzDzu, const double * const  u,
                                  + 4.0 * u[IDX(i,j,ke-3)]
                                  - 5.0 * u[IDX(i,j,ke-2)]
                                  + 2.0 * u[IDX(i,j,ke-1)]
+                               ) * idz_sqrd;
+
+      }
+    }
+  }
+
+  
+  #ifdef DEBUG_DERIVS_COMP
+  #pragma message("DEBUG_DERIVS_COMP: ON")
+    for (int k = kb; k < ke; k++) {
+      for (int j = jb; j < je; j++) {
+        for (int i = ib; i < ie; i++) {
+          const int pp = IDX(i,j,k);
+          if(std::isnan(DzDzu[pp])) std::cout<<"NAN detected function "<<__func__<<" file: "<<__FILE__<<" line: "<<__LINE__<<std::endl;
+        }
+      }
+    }
+  #endif
+
+}
+
+/*----------------------------------------------------------------------;
+ *
+ *
+ *
+ *----------------------------------------------------------------------*/
+void deriv42_zz_2pad(double * const  DzDzu, const double * const  u,
+                const double dz, const unsigned int *sz, unsigned bflag)
+{
+
+  const double idz_sqrd = 1.0/(dz*dz);
+  const double idz_sqrd_by_12 = idz_sqrd / 12.0;
+
+  const int nx = sz[0];
+  const int ny = sz[1];
+  const int nz = sz[2];
+  const int ib = 2;
+  const int jb = 2;
+  const int kb = 2;
+  const int ie = sz[0] - 2;
+  const int je = sz[1] - 2;
+  const int ke = sz[2] - 2;
+
+  const int n = nx * ny;
+
+  for (int j = jb; j < je; j++) {
+    for (int i = ib; i < ie; i++) {
+      #ifdef DERIV_ENABLE_AVX
+        #ifdef __INTEL_COMPILER
+          #pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+          #pragma ivdep
+        #endif
+      #endif
+      for (int k = kb; k < ke; k++) {
+        const int pp = IDX(i,j,k);
+        DzDzu[pp] = ( -        u[pp-2*n] 
+                      + 16.0 * u[pp-  n] 
+                      - 30.0 * u[pp    ]
+                      + 16.0 * u[pp+  n] 
+                      -        u[pp+2*n] 
+                    ) * idz_sqrd_by_12;
+      }
+    }
+  }
+
+  if (bflag & (1u<<OCT_DIR_BACK)) {
+    for (int j = jb; j < je; j++) {
+      #ifdef DERIV_ENABLE_AVX
+        #ifdef __INTEL_COMPILER
+          #pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+          #pragma ivdep
+        #endif
+      #endif
+      for (int i = ib; i < ie; i++) {
+        DzDzu[IDX(i,j,2)] = (   2.0 * u[IDX(i,j,2)]
+                              - 5.0 * u[IDX(i,j,3)]
+                              + 4.0 * u[IDX(i,j,4)]
+                              -       u[IDX(i,j,5)]
+                            ) * idz_sqrd;
+
+        DzDzu[IDX(i,j,3)] = (         u[IDX(i,j,2)]
+                              - 2.0 * u[IDX(i,j,3)]
+                              +       u[IDX(i,j,4)]
+                            ) * idz_sqrd;
+
+      }
+    }
+  }
+
+  if (bflag & (1u<<OCT_DIR_FRONT)) {
+    for (int j = jb; j < je; j++) {
+      #ifdef DERIV_ENABLE_AVX
+        #ifdef __INTEL_COMPILER
+          #pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
+          #pragma ivdep
+        #endif
+      #endif
+      for (int i = ib; i < ie; i++) {
+        DzDzu[IDX(i,j,ke-1)] = (         u[IDX(i,j,ke-2)]
+                                 - 2.0 * u[IDX(i,j,ke-1)]
+                                 +       u[IDX(i,j,ke)]
+                               ) * idz_sqrd;
+
+        DzDzu[IDX(i,j,ke)] = ( -       u[IDX(i,j,ke-3)]
+                                 + 4.0 * u[IDX(i,j,ke-2)]
+                                 - 5.0 * u[IDX(i,j,ke-1)]
+                                 + 2.0 * u[IDX(i,j,ke)]
                                ) * idz_sqrd;
 
       }
@@ -6674,6 +7313,9 @@ void deriv8666_zz(double * const  DzDzu, const double * const  u,
   const int ie = sz[0] - 4;
   const int je = sz[1] - 4;
   const int ke = sz[2] - 4;
+
+  std::cout << "kb and ke " << kb << " " << ke << std::endl;
+  std::cout << "nx is " << nx << std::endl;
 
   const int n = nx * ny;
 

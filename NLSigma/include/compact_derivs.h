@@ -50,6 +50,12 @@ enum DerType {
     CFD_KIM_O4,
     CFD_HAMR_O4,
     CFD_JT_O6,
+
+    // Explicit options using matrix mult
+    EXPLCT_FD_O4,
+    EXPLCT_FD_O6,
+    EXPLCT_FD_O8,
+
     // additional "helpers" that are mostly for internal/edge building
     CFD_DRCHLT_ORDER_4,
     CFD_DRCHLT_ORDER_6,
@@ -62,10 +68,6 @@ enum DerType {
     CFD_DRCHLT_Q6,
     CFD_DRCHLT_Q6_L6,
     CFD_Q1_O6_ETA1_CLOSE,
-
-    EXPLCT_FD_O4,
-    EXPLCT_FD_O6,
-    EXPLCT_FD_O8,
 
 };
 
@@ -81,6 +83,12 @@ enum DerType2nd {
     CFD2ND_KIM_O4,   // FIX: KIM second orders aren't supported yet
     CFD2ND_HAMR_O4,  // FIX: HAMR second order isn't supported yet
     CFD2ND_JT_O6,    // FIX: JT second order isn't supported yet
+
+    // explicit options using matrix mult
+    EXPLCT2ND_FD_O4,
+    EXPLCT2ND_FD_O6,
+    EXPLCT2ND_FD_O8,
+
     // additional "helpers" that are mostly for internal/edge building
     CFD2ND_DRCHLT_ORDER_4,
     CFD2ND_DRCHLT_ORDER_6,
@@ -93,10 +101,6 @@ enum DerType2nd {
     CFD2ND_DRCHLT_Q6,
     CFD2ND_DRCHLT_Q6_L6,
     CFD2ND_Q2_O6_ETA1_CLOSE,
-
-    EXPLCT2ND_FD_O4,
-    EXPLCT2ND_FD_O6,
-    EXPLCT2ND_FD_O8,
 
 };
 
@@ -431,7 +435,8 @@ class CompactFiniteDiff {
         if (deriv_type != CFD_NONE && deriv_type != CFD_P1_O4 &&
             deriv_type != CFD_P1_O6 && deriv_type != CFD_Q1_O6_ETA1 &&
             deriv_type != CFD_KIM_O4 && deriv_type != CFD_HAMR_O4 &&
-            deriv_type != CFD_JT_O6) {
+            deriv_type != CFD_JT_O6 && deriv_type != EXPLCT_FD_O4 &&
+            deriv_type != EXPLCT_FD_O6 && deriv_type != EXPLCT_FD_O8) {
             throw std::invalid_argument(
                 "Couldn't change deriv type of CFD object, deriv type was not "
                 "a valid "
@@ -446,9 +451,11 @@ class CompactFiniteDiff {
         if (deriv_type != CFD2ND_NONE && deriv_type != CFD2ND_P2_O4 &&
             deriv_type != CFD2ND_P2_O6 && deriv_type != CFD2ND_Q2_O6_ETA1 &&
             deriv_type != CFD2ND_KIM_O4 && deriv_type != CFD2ND_HAMR_O4 &&
-            deriv_type != CFD2ND_JT_O6) {
+            deriv_type != CFD2ND_JT_O6 && deriv_type != EXPLCT2ND_FD_O4 &&
+            deriv_type != EXPLCT2ND_FD_O6 && deriv_type != EXPLCT2ND_FD_O8) {
             throw std::invalid_argument(
-                "Couldn't change 2nd deriv type of CFD object, deriv type was not "
+                "Couldn't change 2nd deriv type of CFD object, deriv type was "
+                "not "
                 "a valid "
                 "'base' "
                 "type: deriv_type = " +
@@ -474,11 +481,11 @@ class CompactFiniteDiff {
                const unsigned int *sz, unsigned bflag);
 
     void cfd_xx(double *const Dxu, const double *const u, const double dx,
-               const unsigned int *sz, unsigned bflag);
+                const unsigned int *sz, unsigned bflag);
     void cfd_yy(double *const Dyu, const double *const u, const double dy,
-               const unsigned int *sz, unsigned bflag);
+                const unsigned int *sz, unsigned bflag);
     void cfd_zz(double *const Dzu, const double *const u, const double dz,
-               const unsigned int *sz, unsigned bflag);
+                const unsigned int *sz, unsigned bflag);
 
     // then the actual filters
     void filter_cfd_x(double *const u, double *const filtx_work,
@@ -524,6 +531,49 @@ void initializeKim4PQ(double *P, double *Q, int n);
  * filters," Journal of Computational Physics 241 (2013) 168–194.
  */
 void initializeKim6FilterPQ(double *P, double *Q, int n);
+
+// KO explicit filters
+
+void buildKOExplicitFilter(double *R, const unsigned int n,
+                           const unsigned int padding, const unsigned int order,
+                           bool is_left_edge, bool is_right_edge);
+
+void buildKOExplicit6thOrder(double *R, const unsigned int n,
+                             const unsigned int padding, bool is_left_edge,
+                             bool is_right_edge);
+void buildKOExplicit8thOrder(double *R, const unsigned int n,
+                             const unsigned int padding, bool is_left_edge,
+                             bool is_right_edge);
+
+void buildDerivExplicitRMatrix(double *R, const unsigned int padding,
+                               const unsigned int n, const DerType deriv_type,
+                               const bool is_left_edge,
+                               const bool is_right_edge);
+
+void build2ndDerivExplicitRMatrix(double *R, const unsigned int padding,
+                                  const unsigned int n,
+                                  const DerType2nd deriv_type,
+                                  const bool is_left_edge,
+                                  const bool is_right_edge);
+
+// explicit deriv operators
+void buildDerivExplicit4thOrder(double *R, const unsigned int n,
+                                bool is_left_edge, bool is_right_edge);
+
+void buildDerivExplicit6thOrder(double *R, const unsigned int n,
+                                bool is_left_edge, bool is_right_edge);
+
+void buildDerivExplicit8thOrder(double *R, const unsigned int n,
+                                bool is_left_edge, bool is_right_edge);
+
+void build2ndDerivExplicit4thOrder(double *R, const unsigned int n,
+                                   bool is_left_edge, bool is_right_edge);
+
+void build2ndDerivExplicit6thOrder(double *R, const unsigned int n,
+                                   bool is_left_edge, bool is_right_edge);
+
+void build2ndDerivExplicit8thOrder(double *R, const unsigned int n,
+                                   bool is_left_edge, bool is_right_edge);
 
 class CFDNotImplemented : public std::exception {
    private:
@@ -641,22 +691,3 @@ bool initKimDeriv4(double *R, const unsigned int n);
  * @param n The number of rows/cols of the square matrix
  */
 bool initKim_Filter_Deriv4(double *RF, const unsigned int n);
-
-// KO explicit filters
-
-void buildKOExplicitFilter(double *R, const unsigned int n,
-                           const unsigned int padding, const unsigned int order,
-                           bool is_left_edge, bool is_right_edge);
-
-void buildKOExplicit6thOrder(double *R, const unsigned int n,
-                             const unsigned int padding, bool is_left_edge,
-                             bool is_right_edge);
-void buildKOExplicit8thOrder(double *R, const unsigned int n,
-                             const unsigned int padding, bool is_left_edge,
-                             bool is_right_edge);
-
-
-// explicit deriv operators
-void buildDerivExplicit6thOrder(double *R, const unsigned int n,
-                                bool is_left_edge,
-                                bool is_right_edge);

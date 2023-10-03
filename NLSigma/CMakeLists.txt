@@ -188,3 +188,30 @@ target_link_libraries(nlsmSolverSDC dendro5 ${LAPACK_LIBRARIES}
 # endif()
 # target_link_libraries(nlsmInvSolver dendro5 ${LAPACK_LIBRARIES}
 #                       ${MPI_LIBRARIES} m)
+
+
+add_executable(testKOExplicit src/check_compact_derivs.cpp src/compact_derivs.cpp include/compact_derivs.h src/derivs.cpp include/derivs.h)
+target_include_directories(testKOExplicit
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+                           target_include_directories(nlsmSolverSDC
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(testKOExplicit
+                           PRIVATE ${CMAKE_SOURCE_DIR}/dendrolib/include)
+target_include_directories(testKOExplicit
+                           PRIVATE ${CMAKE_SOURCE_DIR}/dendrolib/include/test)
+target_include_directories(testKOExplicit
+                           PRIVATE ${CMAKE_SOURCE_DIR}/dendrolib/examples/include)
+target_include_directories(testKOExplicit
+                           PRIVATE ${CMAKE_SOURCE_DIR}/dendrolib/FEM/include)
+target_include_directories(testKOExplicit
+                           PRIVATE ${CMAKE_SOURCE_DIR}/dendrolib/ODE/include)
+target_include_directories(testKOExplicit
+                           PRIVATE ${CMAKE_SOURCE_DIR}/dendrolib/LinAlg/include)
+target_include_directories(testKOExplicit
+                           PRIVATE ${CMAKE_SOURCE_DIR}/dendrolib/IO/vtk/include)
+target_include_directories(testKOExplicit
+                           PRIVATE ${CMAKE_SOURCE_DIR}/dendrolib/IO/zlib/inc)
+                           target_include_directories(nlsmSolverSDC PRIVATE ${MPI_INCLUDE_PATH})
+                           target_include_directories(nlsmSolverSDC PRIVATE ${GSL_INCLUDE_DIRS})
+target_link_libraries(testKOExplicit xsmm)
+target_link_libraries(testKOExplicit dendro5)
