@@ -236,15 +236,15 @@ class CFDMethod2nd {
 
     CFDMethod2nd(DerType2nd dertype) {
         switch (dertype) {
-            case CFD_P1_O4:
+            case CFD2ND_P2_O4:
                 set_for_CFD_P2_O4();
                 break;
 
-            case CFD_P1_O6:
+            case CFD2ND_P2_O6:
                 set_for_CFD_P2_O6();
                 break;
 
-            case CFD_Q1_O6_ETA1:
+            case CFD2ND_Q2_O6_ETA1:
                 set_for_CFD_Q2_O6_ETA1();
                 break;
 
