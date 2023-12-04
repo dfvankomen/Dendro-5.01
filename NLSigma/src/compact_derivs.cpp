@@ -18,7 +18,8 @@ CompactFiniteDiff::CompactFiniteDiff(const unsigned int num_dim,
     if (deriv_type != CFD_NONE && deriv_type != CFD_P1_O4 &&
         deriv_type != CFD_P1_O6 && deriv_type != CFD_Q1_O6_ETA1 &&
         deriv_type != CFD_KIM_O4 && deriv_type != CFD_HAMR_O4 &&
-        deriv_type != CFD_JT_O6 && deriv_type != EXPLCT_FD_O4 && deriv_type != EXPLCT_FD_O6 && deriv_type != EXPLCT_FD_O8) {
+        deriv_type != CFD_JT_O6 && deriv_type != EXPLCT_FD_O4 &&
+        deriv_type != EXPLCT_FD_O6 && deriv_type != EXPLCT_FD_O8) {
         throw std::invalid_argument(
             "Couldn't initialize CFD object, deriv type was not a valid 'base' "
             "type: deriv_type = " +
@@ -562,9 +563,8 @@ void CompactFiniteDiff::cfd_xx(double *const Dxu, const double *const u,
         printf("Uh oh, DERIV_2ND_LEFTRIGHT was reached!");
     }
 
-    // std::cout << "bflag is: " << bflag << " dx: " << dx << " alpha: " << alpha << std::endl;
-    // print_square_mat(R_mat_use, nx);
-    // exit(0);
+    // std::cout << "bflag is: " << bflag << " dx: " << dx << " alpha: " <<
+    // alpha << std::endl; print_square_mat(R_mat_use, nx); exit(0);
 
 #ifdef FASTER_DERIV_CALC_VIA_MATRIX_MULT
     typedef libxsmm_mmfunction<double> kernel_type;
@@ -662,7 +662,7 @@ void CompactFiniteDiff::cfd_yy(double *const Dyu, const double *const u,
     }
 
 #ifdef FASTER_DERIV_CALC_VIA_MATRIX_MULT
-// #if 0
+    // #if 0
     typedef libxsmm_mmfunction<double> kernel_type;
     // kernel_type kernel(LIBXSMM_GEMM_FLAGS(TRANSA, TRANSB), M, N, K, alpha,
     // beta);
@@ -673,7 +673,7 @@ void CompactFiniteDiff::cfd_yy(double *const Dyu, const double *const u,
 
     for (unsigned int k = 0; k < nz; k++) {
 #ifdef FASTER_DERIV_CALC_VIA_MATRIX_MULT
-// #if 0
+        // #if 0
         // thanks to memory layout, we can just... use this as a matrix
         // so we can just grab the "matrix" of ny x nx for this one
 
