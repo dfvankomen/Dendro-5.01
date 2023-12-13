@@ -972,20 +972,18 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             ctx.allocateRecvBuffer((sizeof(T) * recvBSz * dof));
             recvB = (T*)ctx.getRecvBuffer();
 
-            // active recv procs
-            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
-                 recv_p++) {
-                proc_id = recvProcList[recv_p];
-                MPI_Request* req = new MPI_Request();
-                par::Mpi_Irecv((recvB + dof * nodeRecvOffset[proc_id]),
-                               dof * nodeRecvCount[proc_id], proc_id,
-                               m_uiCommTag, commActive, req);
-                ctx.getRequestList().push_back(req);
-                // std::cout << this->getMPIRank() << ": receiving from proc "
-                // << proc_id << " a total of " << dof * nodeRecvCount[proc_id]
-                // << std::endl;
+                // active recv procs
+                for (unsigned int recv_p = 0; recv_p < recvProcList.size();
+                     recv_p++) {
+                    proc_id = recvProcList[recv_p];
+                    MPI_Request* req = new MPI_Request();
+                    par::Mpi_Irecv((recvB + dof * nodeRecvOffset[proc_id]),
+                                   dof * nodeRecvCount[proc_id], proc_id,
+                                   m_uiCommTag, commActive, req);
+                    ctx.getRequestList().push_back(req);
+                    // std::cout << this->getMPIRank() << ": receiving from proc " << proc_id << " a total of " << dof * nodeRecvCount[proc_id] << std::endl;
+                }
             }
-        }
 
         if (sendBSz) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
@@ -1007,20 +1005,18 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                 }
             }
 
-            // active send procs
-            for (unsigned int send_p = 0; send_p < sendProcList.size();
-                 send_p++) {
-                proc_id = sendProcList[send_p];
-                MPI_Request* req = new MPI_Request();
-                par::Mpi_Isend(sendB + dof * nodeSendOffset[proc_id],
-                               dof * nodeSendCount[proc_id], proc_id,
-                               m_uiCommTag, commActive, req);
-                ctx.getRequestList().push_back(req);
-                // std::cout << this->getMPIRank() << ": sending from proc " <<
-                // proc_id << " a total of " << dof * nodeSendOffset[proc_id] <<
-                // std::endl;
+                // active send procs
+                for (unsigned int send_p = 0; send_p < sendProcList.size();
+                     send_p++) {
+                    proc_id = sendProcList[send_p];
+                    MPI_Request* req = new MPI_Request();
+                    par::Mpi_Isend(sendB + dof * nodeSendOffset[proc_id],
+                                   dof * nodeSendCount[proc_id], proc_id,
+                                   m_uiCommTag, commActive, req);
+                    ctx.getRequestList().push_back(req);
+                    // std::cout << this->getMPIRank() << ": sending from proc " << proc_id << " a total of " << dof * nodeSendOffset[proc_id] << std::endl;
+                }
             }
-        }
 
         m_uiCommTag++;
         m_uiMPIContexts.push_back(ctx);
