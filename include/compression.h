@@ -211,3 +211,82 @@ namespace ZFPAlgorithms {
 }
 
 #endif // _ZFPALGORITHMS_H_ 
+
+#ifndef _BLOSCOMPRESSION_H_
+#define _BLOSCCOMPRESSION_H_
+
+#include <blosc.h>
+#include <iostream>
+
+/**
+ * Namespace BLOSCCompression
+ * 
+ * Provides functionalities for compressing and decompressing data using the Blosc library.
+ * For more information about blosc: 
+ * https://github.com/dolphinking/blosc
+ * https://github.com/Blosc/c-blosc/blob/main/blosc/blosc.h
+ * https://www.blosc.org/
+ * 
+ * Example: 
+ * 
+int main() {
+    int n; // number of elements in your data
+    double* originalData = your data;
+    int compressionLevel = 9; // Choose the compression level (1-9, where 9 is highest compression)
+
+    int bytestreamSize;
+    blosc_init();
+    unsigned char* bytestream = BLOSCCompression::compressData("zstd" ,compressionLevel, n, originalMatrix, bytestreamSize);
+    blosc_destroy();
+
+    delete[] originalMatrix;
+
+    // ...
+    // Pass bytestream and bytestreamSize to a different machine 
+    // ...
+
+
+    blosc_init();
+    double* decompressedData = BLOSCCompression::decompressData(bytestream, bytestreamSize);
+    blosc_destroy();
+
+    delete[] decompressedData;
+    return 0;
+}
+ */
+namespace BLOSCCompression {
+
+    /**
+    * Compresses a block of data using the Blosc library.
+    * This function compresses a given array of doubles using the specified Blosc compressor and compression level.
+    *
+    * Before calling this function, ensure blosc_init() has been called to initialize the Blosc library.
+    * After using the compressed data, blosc_destroy() should be called for proper cleanup.
+    *
+    * @param blosc_compressor The compression algorithm to be used. Must be one of "blosclz", "lz4", "lz4hc", "zlib", or "zstd".
+    * @param clevel Choose the compression level (1-9, where 9 is highest compression)
+    * @param n The number of elements in the original data array.
+    * @param originalData Pointer to the original array of doubles to be compressed.
+    * @param byteStreamSize Reference to an integer where the size of the resulting bytestream will be stored.
+    * @return Pointer to the compressed data bytestream.
+    * @throw std::runtime_error if compression fails.
+    */
+    unsigned char* compressData(const char* blosc_compressor, int clevel, int n, double* originalData, int& byteStreamSize);
+
+    /**
+    * Decompresses a bytestream using the Blosc library.
+    * It decompresses a bytestream that was created by the compressData function. 
+    * 
+    * Before calling this function, ensure blosc_init() has been called to initialize the Blosc library.
+    * After using the compressed data, blosc_destroy() should be called for proper cleanup.
+    *
+    * @param byteStream Pointer to the bytestream containing the compressed data.
+    * @param byteStreamSize The size of the bytestream.
+    * @return Pointer to the decompressed data array.
+    * @throw std::runtime_error if decompression fails or if input is invalid.
+    */
+    double* decompressData(unsigned char* byteStream, int byteStreamSize);
+}
+
+#endif // _BLOSCCOMPRESSION_H_ 
+

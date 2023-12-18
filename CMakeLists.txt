@@ -20,6 +20,10 @@ option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
 option(DENDRO_ENABLE_GHOST_COMPRESSION "Enable compression on Ghost Communication" ON)
 
 
+if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
+  cmake_policy(SET CMP0135 NEW)
+endif()
+
 if(DENDRO_ENABLE_GHOST_COMPRESSION)
   add_definitions(-DDENDRO_ENABLE_GHOST_COMPRESSION)
 endif()
@@ -55,6 +59,32 @@ message(STATUS "=== Finished configuring zfp library")
 # message(STATUS "zfp_source " ${zfp_SOURCE_DIR})
 # message(STATUS "zfp_binary " ${zfp_BINARY_DIR})
 # == END ZFP LIBRARY BUILD
+
+# ======= Set up the blosc Library through CMake
+message(STATUS "=== Now configuring blosc library")
+
+include(FetchContent)
+FetchContent_Declare(
+  blosc
+  URL https://github.com/Blosc/c-blosc/archive/refs/tags/v1.21.5.tar.gz
+  URL_HASH SHA256=32e61961bbf81ffea6ff30e9d70fca36c86178afd3e3cfa13376adec8c687509
+)
+# FetchContent_GetProperties(blosc)
+# if(NOT blosc_POPULATED)
+#   FetchContent_Populate(blosc)
+
+#   add_subdirectory(${blosc_SOURCE_DIR} ${blosc_BINARY_DIR})
+# endif()
+
+FetchContent_MakeAvailable(blosc)
+
+message(STATUS "=== Finished configuring blosc library")
+
+message(STATUS "blosc_source " ${blosc_SOURCE_DIR})
+message(STATUS "blosc_binary " ${blosc_BINARY_DIR})
+
+include_directories(${blosc_SOURCE_DIR}/blosc)
+# == END BLOSC LIBRARY BUILD
 
 # Packages needed for the compression algorithms
 find_package(Eigen3 REQUIRED)
@@ -311,6 +341,11 @@ endif()
 # LINK ZFP to dendro5
 target_include_directories(dendro5 PUBLIC ${zfp_SOURCE_DIR})
 target_link_libraries(dendro5 PUBLIC zfp)
+
+# LINK blosc to dendro5
+target_include_directories(dendro5 PUBLIC ${blosc_SOURCE_DIR}/blosc)
+target_link_libraries(dendro5 PUBLIC blosc_static)
+# target_link_directories(dendro5 PUBLIC ${blosc_BUILD_DIR})
 
 # =======================
 # =======================
@@ -836,6 +871,9 @@ target_include_directories(testCompDecomp
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(testCompDecomp PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(testCompDecomp PRIVATE ${GSL_INCLUDE_DIRS})
+target_include_directories(testCompDecomp PUBLIC ${blosc_SOURCE_DIR}/blosc)
+target_link_directories(testCompDecomp PUBLIC ${blosc_BUILD_DIR})
+
 
 
 add_subdirectory(NLSigma)

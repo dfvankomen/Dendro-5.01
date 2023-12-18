@@ -1,7 +1,10 @@
 #pragma once
 
+#ifdef FASTER_DERIV_CALC_VIA_MATRIX_MULT
 #include <libxsmm.h>
+#endif
 
+#include <cstdint>
 #include <algorithm>
 #include <cmath>
 #include <cstring>

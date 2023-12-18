@@ -1152,3 +1152,65 @@ namespace ZFPAlgorithms {
 
 	}
 }
+
+
+
+namespace BLOSCCompression {
+
+    unsigned char* compressData(const char* blosc_compressor, int clevel, int n, double* originalData, int& byteStreamSize) {
+        blosc_set_compressor(blosc_compressor);
+        int originalDataBytes = n * sizeof(double); 
+        // Calculate the maximum possible size for the compressed data
+        // This value is suggested to not be modified and does not affect the size of the final compressed form
+        int maxCompressedSize = originalDataBytes + BLOSC_MAX_OVERHEAD; 
+        unsigned char* compressedData = new unsigned char[maxCompressedSize]; 
+
+        // Blosc compression function: int blosc_ocmpress(int clevel, int shuffle, size_t typesize, size_t nbytes, const void* src, void* dest, size_t destsize);
+        // Parameters:
+        // clevel: Compression level (0-9, 0 being no compression, 9 being maximum compression).
+        // shuffle: Bitshuffle filter for data rearrangement. 
+        //          - Pass 0 for no shuffling, which can be used for data without a specific pattern or when compression speed is a priority.
+        //          - Pass 1 for byte shuffle, which is effective for numerical data where each element is larger than a byte, as it aligns the least significant bits of the data types. Good for data with repeating patterns at the byte level.
+        //          - Pass 2 for bit shuffle, which is more aggressive than byte shuffle and aligns the bits across data types. Useful for numerical data with repeating patterns at the bit level, often leading to better compression.
+        // typesize: The size of the datatype in the array (in bytes).
+        // nbytes: The number of bytes to compress from the source buffer.
+        // src: Pointer to the data buffer to compress.
+        // dest: Pointer to the buffer where the compressed data will be stored.
+        // destsize: Maximum size of the destination buffer.
+        int compressedSize = blosc_compress(clevel, 1, sizeof(double), originalDataBytes, originalData, compressedData, maxCompressedSize); 
+        if (compressedSize < 0) {
+            throw std::runtime_error("blosc could not compress data.");
+        }
+
+        // Allocate memory for the bytestream, including space for the size of the original data
+        byteStreamSize = compressedSize + sizeof(originalDataBytes);
+        unsigned char* bytestream = new unsigned char[byteStreamSize];
+        // Copy compressed data to bytestream
+        std::memcpy(bytestream, compressedData, compressedSize);
+        // Pack originalDataBytes at the end of the bytestream
+        std::memcpy(bytestream + compressedSize, &originalDataBytes, sizeof(originalDataBytes));
+        delete[] compressedData;
+        return bytestream; 
+    }
+
+    double* decompressData(unsigned char* byteStream, int byteStreamSize) {
+        // Check if byteStream is valid
+        if (!byteStream || byteStreamSize <= 0) {
+            return nullptr;
+        }
+        // Unpack originalDataBytes from the end of the byteStream
+        int originalDataBytes;
+        std::memcpy(&originalDataBytes, byteStream + (byteStreamSize - sizeof(originalDataBytes)), sizeof(originalDataBytes));
+        double* decompressedData = new double[originalDataBytes / sizeof(double)];
+
+        int decompressedSize = blosc_decompress(byteStream, decompressedData, originalDataBytes);
+
+        // Check for decompression error
+        if (decompressedSize < 0) {
+            // Handle decompression error (e.g., return null or throw an exception)
+            throw std::runtime_error("blosc could not decompress data.");
+        }
+
+        return decompressedData;
+    }
+}
