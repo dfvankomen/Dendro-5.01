@@ -210,9 +210,6 @@ namespace ot
     template<typename T,typename I>
     void DVector<T,I>::set_vec_ptr(T*& ptr, const ot::Mesh* pMesh, DVEC_TYPE type, DVEC_LOC loc, unsigned int dof, bool allocate_ghost)
     {
-        if(!(pMesh->isActive()))
-            return;
-        
         m_dof       = dof;
         m_comm      = pMesh->getMPICommunicator();
         m_vec_type  = type;
@@ -233,6 +230,9 @@ namespace ot
             dendro_log(" unknown type in DVector");
             MPI_Abort(m_comm,0);
         }
+
+        if(!(pMesh->isActive()))
+            return;
 
         m_data_ptr = ptr;
         return;
