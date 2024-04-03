@@ -81,6 +81,7 @@ option(WITH_CUDA " build dendro with cuda " OFF)
 option(BUILD_WITH_PETSC " build dendro with PETSC " OFF)
 option(USE_FD_INTERP_FOR_UNZIP "use FD style interpolation for unzip" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "use FD style interpolation for unzip" OFF)
+option(DVEC_ZERO_ALLOC "Make the memory allocation of dvec on CPU initialize as zeros" OFF)
 
 option(DENDRO_ENABLE_GHOST_COMPRESSION "Enable compression on Ghost Communication" ON)
 
@@ -222,6 +223,10 @@ endif()
 
 if(DENDRO_ENABLE_GHOST_COMPRESSION)
   add_definitions(-DDENDRO_ENABLE_GHOST_COMPRESSION)
+endif()
+
+if(DVEC_ZERO_ALLOC)
+  add_definitions(-DDVEC_ZERO_ALLOC)
 endif()
 
 add_definitions(-DMATVEC_PROFILE)
