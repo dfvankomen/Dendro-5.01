@@ -160,25 +160,25 @@ int function2Octree(std::function<double(double, double, double)> fx,
     nodes.clear();
     std::vector<ot::TreeNode> nodes_new;
 
-    unsigned int depth = 1;
-    unsigned int num_intersected = 1;
+    unsigned int depth             = 1;
+    unsigned int num_intersected   = 1;
     unsigned int num_intersected_g = 1;
     const unsigned int nodesPerElement =
         (elementOrder + 1) * (elementOrder + 1) * (elementOrder + 1);
 
     double h, h1, h2;
-    double* dist_parent = new double[nodesPerElement];
-    double* dist_child = new double[nodesPerElement];
+    double* dist_parent   = new double[nodesPerElement];
+    double* dist_child    = new double[nodesPerElement];
     double* dist_child_ip = new double[nodesPerElement];
     Point pt;
     Point pt_child;
 
     const unsigned int maxDepth = m_uiMaxDepth;
 
-    h = 1.0 / (1 << (maxDepth));
+    h                           = 1.0 / (1 << (maxDepth));
     unsigned int mySz;
     RefElement refEl(m_uiDim, elementOrder);
-    double l2_norm = 0;
+    double l2_norm   = 0;
     bool splitOctant = false;
 
     if (!rank) {
@@ -201,10 +201,10 @@ int function2Octree(std::function<double(double, double, double)> fx,
                 }
 
                 mySz = (1 << (maxDepth - elem.getLevel()));
-                h1 = mySz / (double)elementOrder;
+                h1   = mySz / (double)elementOrder;
 
                 // check and split
-                pt = elem.getAnchor();
+                pt   = elem.getAnchor();
 
                 for (int k = 0; k < (elementOrder + 1); k++)
                     for (int j = 0; j < (elementOrder + 1); j++)
@@ -294,10 +294,10 @@ int function2Octree(std::function<double(double, double, double)> fx,
             }
 
             mySz = (1 << (maxDepth - elem.getLevel()));
-            h1 = mySz / (double)elementOrder;
+            h1   = mySz / (double)elementOrder;
 
             // check and split
-            pt = elem.getAnchor();
+            pt   = elem.getAnchor();
 
             for (int k = 0; k < (elementOrder + 1); k++)
                 for (int j = 0; j < (elementOrder + 1); j++)
@@ -385,26 +385,26 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
     nodes.clear();
     std::vector<ot::TreeNode> nodes_new;
 
-    unsigned int depth = 1;
-    unsigned int num_intersected = 1;
+    unsigned int depth             = 1;
+    unsigned int num_intersected   = 1;
     unsigned int num_intersected_g = 1;
     const unsigned int nodesPerElement =
         (elementOrder + 1) * (elementOrder + 1) * (elementOrder + 1);
 
     double h, h1, h2;
-    double* varVal = new double[numVars];
-    double* dist_parent = new double[numVars * nodesPerElement];
-    double* dist_child = new double[numVars * nodesPerElement];
+    double* varVal        = new double[numVars];
+    double* dist_parent   = new double[numVars * nodesPerElement];
+    double* dist_child    = new double[numVars * nodesPerElement];
     double* dist_child_ip = new double[numVars * nodesPerElement];
     Point pt;
     Point pt_child;
 
     const unsigned int maxDepth = m_uiMaxDepth;
 
-    h = 1.0 / (1 << (maxDepth));
+    h                           = 1.0 / (1 << (maxDepth));
     unsigned int mySz;
     RefElement refEl(m_uiDim, elementOrder);
-    double l2_norm = 0;
+    double l2_norm   = 0;
     bool splitOctant = false;
 
     if (!rank) {
@@ -427,10 +427,10 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
                 }
 
                 mySz = (1 << (maxDepth - elem.getLevel()));
-                h1 = mySz / (double)elementOrder;
-                h2 = h1 / 2.0;
+                h1   = mySz / (double)elementOrder;
+                h2   = h1 / 2.0;
                 // check and split
-                pt = elem.getAnchor();
+                pt   = elem.getAnchor();
 
                 for (int k = 0; k < (elementOrder + 1); k++)
                     for (int j = 0; j < (elementOrder + 1); j++)
@@ -533,11 +533,11 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
             }
 
             mySz = (1 << (maxDepth - elem.getLevel()));
-            h1 = mySz / (double)elementOrder;
-            h2 = h1 / 2.0;
+            h1   = mySz / (double)elementOrder;
+            h2   = h1 / 2.0;
 
             // check and split
-            pt = elem.getAnchor();
+            pt   = elem.getAnchor();
 
             for (int k = 0; k < (elementOrder + 1); k++)
                 for (int j = 0; j < (elementOrder + 1); j++)
@@ -676,7 +676,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
     // unsigned int numChildHasRegLev=0;
     unsigned int numRegGridOcts =
         0;  // total number of children that has given reg grid levels.
-    unsigned int pMaxDepthBit = 0;
+    unsigned int pMaxDepthBit     = 0;
 
     // unsigned  int debug_rank=1;
 
@@ -693,15 +693,15 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
         tmpBlock = initialBLocks.back();
         initialBLocks.pop_back();
 
-        parent = tmpBlock.getBlockNode();
+        parent         = tmpBlock.getBlockNode();
 
         currRegGridLev = tmpBlock.getRegularGridLev();
-        rot_id = tmpBlock.getRotationID();
-        nBegin = tmpBlock.getLocalElementBegin();
-        nEnd = tmpBlock.getLocalElementEnd();
+        rot_id         = tmpBlock.getRotationID();
+        nBegin         = tmpBlock.getLocalElementBegin();
+        nEnd           = tmpBlock.getLocalElementEnd();
         assert(parent.getLevel() <= currRegGridLev);
         bool octLevelGap = true;
-        bool isTagValid = true;
+        bool isTagValid  = true;
         if (parent.getLevel() == currRegGridLev) {
             assert((nEnd - nBegin) == 1);
             assert(pNodes[nBegin] == parent);
@@ -709,13 +709,13 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
             continue;
         }
 
-        numRegGridOcts = 0;
+        numRegGridOcts     = 0;
         numIdealRegGridOct = (1u << (currRegGridLev - parent.getLevel()));
-        blockVolume = 1uLL << ((maxDepth - parent.getLevel()) * 3);
+        blockVolume        = 1uLL << ((maxDepth - parent.getLevel()) * 3);
         (m_uiDim == 3)
-            ? numIdealRegGridOct =
+                   ? numIdealRegGridOct =
                   numIdealRegGridOct* numIdealRegGridOct* numIdealRegGridOct
-            : numIdealRegGridOct = numIdealRegGridOct * numIdealRegGridOct;
+                   : numIdealRegGridOct = numIdealRegGridOct * numIdealRegGridOct;
         octVolume = 0;
 
         if (tag != NULL) {
@@ -800,7 +800,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                 assert(splitters[hindex] <= splitters[hindexN]);
                 index = HILBERT_TABLE[NUM_CHILDREN * rot_id + hindex];
 
-                x = parent.getX() +
+                x     = parent.getX() +
                     (((int)((bool)(hindex & 1u))) << (pMaxDepthBit));
                 y = parent.getY() +
                     (((int)((bool)(hindex & 2u))) << (pMaxDepthBit));
@@ -848,13 +848,13 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
 #endif
 
 #ifdef OCT2BLK_DEBUG
-    unsigned int numIdealRegOcts = 0;
-    unsigned int numActualRegOcts = 0;
+    unsigned int numIdealRegOcts     = 0;
+    unsigned int numActualRegOcts    = 0;
     unsigned int singleOctBlockCount = 0;
     for (unsigned int i = 0; i < blockList.size(); i++) {
-        numIdealRegOcts = 1u << (blockList[i].getRegularGridLev() -
+        numIdealRegOcts  = 1u << (blockList[i].getRegularGridLev() -
                                  blockList[i].getBlockNode().getLevel());
-        numIdealRegOcts = numIdealRegOcts * numIdealRegOcts * numIdealRegOcts;
+        numIdealRegOcts  = numIdealRegOcts * numIdealRegOcts * numIdealRegOcts;
 
         numActualRegOcts = 0;
 
@@ -928,8 +928,8 @@ void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
         // if(in.size()<NUM_CHILDREN) return ;
 
         unsigned int blCount = 0;
-        int sendCount = 0;
-        int recvCount = 0;
+        int sendCount        = 0;
+        int recvCount        = 0;
 
         MPI_Request req;
         MPI_Status status;
@@ -1011,7 +1011,7 @@ void mergeKeys(std::vector<ot::SearchKey>& sKeys, std::vector<ot::Key>& keys) {
     assert(seq::test::isSorted(sKeys));
 
     ot::Key tmpKey;
-    unsigned int skip = 0;
+    unsigned int skip    = 0;
     const unsigned int K = 1;
     for (unsigned int e = 0; e < (sKeys.size()); e++) {
         tmpKey = ot::Key(sKeys[e].getX(), sKeys[e].getY(), sKeys[e].getZ(),
@@ -1040,16 +1040,16 @@ void mergeKeys(std::vector<ot::SearchKey>& sKeys, std::vector<ot::Key>& keys) {
 void generateBlkEdgeSKeys(const ot::Block& blk,
                           std::vector<ot::SearchKey>& sKeys) {
     const unsigned int domain_max = 1u << (m_uiMaxDepth);
-    const ot::TreeNode blkNode = blk.getBlockNode();
-    const unsigned int regLev = blk.getRegularGridLev();
+    const ot::TreeNode blkNode    = blk.getBlockNode();
+    const unsigned int regLev     = blk.getRegularGridLev();
 
     const unsigned int blkElem_1D = (1u << (regLev - blkNode.getLevel())) * 2;
 
-    const unsigned int myX = blkNode.getX();
-    const unsigned int myY = blkNode.getY();
-    const unsigned int myZ = blkNode.getZ();
-    const unsigned int mySz = 1u << (m_uiMaxDepth - blkNode.getLevel());
-    const unsigned int hsz = 1u << (m_uiMaxDepth - regLev - 1);  // hx/2
+    const unsigned int myX        = blkNode.getX();
+    const unsigned int myY        = blkNode.getY();
+    const unsigned int myZ        = blkNode.getZ();
+    const unsigned int mySz       = 1u << (m_uiMaxDepth - blkNode.getLevel());
+    const unsigned int hsz        = 1u << (m_uiMaxDepth - regLev - 1);  // hx/2
     std::vector<ot::SearchKey>::iterator hint;
 
     if (myX > 0 && myY > 0) {
@@ -1188,15 +1188,15 @@ void generateBlkEdgeSKeys(const ot::Block& blk,
 void generateBlkVertexSKeys(const ot::Block& blk,
                             std::vector<ot::SearchKey>& sKeys) {
     const unsigned int domain_max = 1u << (m_uiMaxDepth);
-    const ot::TreeNode blkNode = blk.getBlockNode();
-    const unsigned int regLev = blk.getRegularGridLev();
+    const ot::TreeNode blkNode    = blk.getBlockNode();
+    const unsigned int regLev     = blk.getRegularGridLev();
 
     const unsigned int blkElem_1D = (1u << (regLev - blkNode.getLevel())) * 2;
 
-    const unsigned int myX = blkNode.getX();
-    const unsigned int myY = blkNode.getY();
-    const unsigned int myZ = blkNode.getZ();
-    const unsigned int mySz = 1u << (m_uiMaxDepth - blkNode.getLevel());
+    const unsigned int myX        = blkNode.getX();
+    const unsigned int myY        = blkNode.getY();
+    const unsigned int myZ        = blkNode.getZ();
+    const unsigned int mySz       = 1u << (m_uiMaxDepth - blkNode.getLevel());
 
     std::vector<ot::SearchKey>::iterator hint;
 
@@ -1289,8 +1289,8 @@ unsigned int rankSelectRule(unsigned int size_global, unsigned int rank_global,
         return rank_i;
     else {
         const unsigned int commMaxLevel = binOp::fastLog2(size_global);
-        const unsigned int commLevel = binOp::fastLog2(size_local);
-        const unsigned int commK = 1u << (commMaxLevel - commLevel);
+        const unsigned int commLevel    = binOp::fastLog2(size_local);
+        const unsigned int commK        = 1u << (commMaxLevel - commLevel);
 
         return rank_i * commK;
     }

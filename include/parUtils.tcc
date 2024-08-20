@@ -520,7 +520,7 @@ int Mpi_Alltoallv_Kway(T *sbuff_, int *s_cnt_, int *sdisp_, T *rbuff_,
             new_range[i] = (range[0] * (kway - i) + range[1] * i) / kway;
         int p_class = (std::upper_bound(&new_range[0], &new_range[kway], pid) -
                        &new_range[0] - 1);
-        int new_np = new_range[p_class + 1] - new_range[p_class];
+        int new_np  = new_range[p_class + 1] - new_range[p_class];
         int new_pid = pid - new_range[p_class];
 
         // Communication.
@@ -530,7 +530,7 @@ int Mpi_Alltoallv_Kway(T *sbuff_, int *s_cnt_, int *sdisp_, T *rbuff_,
             // Exchange send sizes.
             for (int i = 0; i < kway; i++) {
                 MPI_Status status;
-                int cmp_np = new_range[i + 1] - new_range[i];
+                int cmp_np  = new_range[i + 1] - new_range[i];
                 int partner = (new_pid < cmp_np ? new_range[i] + new_pid
                                                 : new_range[i + 1] - 1);
                 assert((new_pid < cmp_np
@@ -563,7 +563,7 @@ int Mpi_Alltoallv_Kway(T *sbuff_, int *s_cnt_, int *sdisp_, T *rbuff_,
                     rdisp[new_np * kway - 1] + r_cnt[new_np * kway - 1];
                 rbuff_size_ext =
                     rdisp_ext[new_np * kway - 1] + r_cnt_ext[new_np * kway - 1];
-                rbuff = new char[rbuff_size];
+                rbuff     = new char[rbuff_size];
                 rbuff_ext = new char[rbuff_size_ext];
             }
 
@@ -580,9 +580,9 @@ int Mpi_Alltoallv_Kway(T *sbuff_, int *s_cnt_, int *sdisp_, T *rbuff_,
                     int i =
                         (i_ == 0 ? i1 : ((j + my_block / i_) % 2 ? i1 : i2));
                     MPI_Status status;
-                    int cmp_np = new_range[i + 1] - new_range[i];
-                    int partner = (new_pid < cmp_np ? new_range[i] + new_pid
-                                                    : new_range[i + 1] - 1);
+                    int cmp_np   = new_range[i + 1] - new_range[i];
+                    int partner  = (new_pid < cmp_np ? new_range[i] + new_pid
+                                                     : new_range[i + 1] - 1);
 
                     int send_dsp = sdisp[new_range[i] - new_range[0]];
                     int send_dsp_last =
@@ -663,14 +663,14 @@ int Mpi_Alltoallv_Kway(T *sbuff_, int *s_cnt_, int *sdisp_, T *rbuff_,
     char *tmp_ptr = sbuff;
     for (int i = 0; i < np; i++) {
         int &blk_size = ((int *)tmp_ptr)[0];
-        buff_ptr[i] = tmp_ptr;
+        buff_ptr[i]   = tmp_ptr;
         tmp_ptr += blk_size;
     }
 
 #pragma omp parallel for
     for (int i = 0; i < np; i++) {
         int &blk_size = ((int *)buff_ptr[i])[0];
-        int &src_pid = ((int *)buff_ptr[i])[1];
+        int &src_pid  = ((int *)buff_ptr[i])[1];
         assert(blk_size - 2 * sizeof(int) <= r_cnt_[src_pid] * sizeof(T));
         memcpy(&rbuff_[rdisp_[src_pid]], buff_ptr[i] + 2 * sizeof(int),
                blk_size - 2 * sizeof(int));
@@ -822,7 +822,7 @@ int scatterValues(std::vector<T> &in, std::vector<T> &out, DendroIntL outSz,
     // The Heart of the algorithm....
     // scnIn and outCnts are both sorted
     DendroIntL inCnt = 0;
-    int pCnt = 0;
+    int pCnt         = 0;
     while ((inCnt < inSz) && (pCnt < npes)) {
         if (scnIn[inCnt] <= outCnts[pCnt]) {
             sendSz[pCnt]++;
@@ -851,7 +851,7 @@ int scatterValues(std::vector<T> &in, std::vector<T> &out, DendroIntL outSz,
 
     assert(static_cast<unsigned int>(nn) == outSz);
     // perform All2All  ...
-    T *inPtr = NULL;
+    T *inPtr  = NULL;
     T *outPtr = NULL;
     if (!in.empty()) {
         inPtr = &(*(in.begin()));
@@ -908,8 +908,8 @@ int concatenate(std::vector<T> &listA, std::vector<T> &listB, MPI_Comm comm) {
     DendroIntL locAsz_locBsz[2];
     DendroIntL globAsz_globBsz[2];
 
-    locAsz_locBsz[0] = listA.size();
-    locAsz_locBsz[1] = listB.size();
+    locAsz_locBsz[0]   = listA.size();
+    locAsz_locBsz[1]   = listB.size();
     globAsz_globBsz[0] = 0;
     globAsz_globBsz[1] = 0;
 
@@ -950,8 +950,8 @@ int concatenate(std::vector<T> &listA, std::vector<T> &listB, MPI_Comm comm) {
 
     if (globAsz_globBsz[1] <= (numSmallProcs * avgTotalSize)) {
         numBhighProcs = 0;
-        numBlowProcs = ((globAsz_globBsz[1]) / avgTotalSize);
-        bSizeForBoth = ((globAsz_globBsz[1]) % avgTotalSize);
+        numBlowProcs  = ((globAsz_globBsz[1]) / avgTotalSize);
+        bSizeForBoth  = ((globAsz_globBsz[1]) % avgTotalSize);
 
         assert(numBlowProcs <= numSmallProcs);
 
@@ -961,21 +961,21 @@ int concatenate(std::vector<T> &listA, std::vector<T> &listB, MPI_Comm comm) {
             if (numBlowProcs < numSmallProcs) {
                 // We don't know if remTotalSize is 0 or not.
                 // So, let the common proc be a low proc.
-                aSizeForBoth = (avgTotalSize - bSizeForBoth);
+                aSizeForBoth  = (avgTotalSize - bSizeForBoth);
                 numAhighProcs = remTotalSize;
-                numAlowProcs = (numSmallProcs - (1 + numBlowProcs));
+                numAlowProcs  = (numSmallProcs - (1 + numBlowProcs));
             } else {
                 // No more room for small procs. The common has to be a high
                 // proc.
-                aSizeForBoth = ((avgTotalSize + 1) - bSizeForBoth);
+                aSizeForBoth  = ((avgTotalSize + 1) - bSizeForBoth);
                 numAhighProcs = (remTotalSize - 1);
-                numAlowProcs = 0;
+                numAlowProcs  = 0;
             }
         } else {
-            numBothProcs = 0;
-            aSizeForBoth = 0;
+            numBothProcs  = 0;
+            aSizeForBoth  = 0;
             numAhighProcs = remTotalSize;
-            numAlowProcs = (numSmallProcs - numBlowProcs);
+            numAlowProcs  = (numSmallProcs - numBlowProcs);
         }
     } else {
         // Some B procs will have (avgTotalSize+1) elements
@@ -987,28 +987,28 @@ int concatenate(std::vector<T> &listA, std::vector<T> &listB, MPI_Comm comm) {
             // Each block can use (avg+1) elements each, since there will be
             // some remaining for A
             numBhighProcs = numBusingAvgPlus1;
-            numBlowProcs = 0;
-            bSizeForBoth = remBusingAvgPlus1;
+            numBlowProcs  = 0;
+            bSizeForBoth  = remBusingAvgPlus1;
             if (bSizeForBoth) {
                 numBothProcs = 1;
                 if (numBhighProcs < remTotalSize) {
                     // We don't know if numSmallProcs is 0 or not.
                     // So, let the common proc be a high proc
-                    aSizeForBoth = ((avgTotalSize + 1) - bSizeForBoth);
+                    aSizeForBoth  = ((avgTotalSize + 1) - bSizeForBoth);
                     numAhighProcs = (remTotalSize - (numBhighProcs + 1));
-                    numAlowProcs = numSmallProcs;
+                    numAlowProcs  = numSmallProcs;
                 } else {
                     // No more room for high procs. The common has to be a low
                     // proc.
-                    aSizeForBoth = (avgTotalSize - bSizeForBoth);
+                    aSizeForBoth  = (avgTotalSize - bSizeForBoth);
                     numAhighProcs = 0;
-                    numAlowProcs = (numSmallProcs - 1);
+                    numAlowProcs  = (numSmallProcs - 1);
                 }
             } else {
-                numBothProcs = 0;
-                aSizeForBoth = 0;
+                numBothProcs  = 0;
+                aSizeForBoth  = 0;
                 numAhighProcs = (remTotalSize - numBhighProcs);
-                numAlowProcs = numSmallProcs;
+                numAlowProcs  = numSmallProcs;
             }
         } else {
             // Since numBusingAvgPlus1 > remTotalSize*(avg+1)
@@ -1020,24 +1020,24 @@ int concatenate(std::vector<T> &listA, std::vector<T> &listB, MPI_Comm comm) {
             assert(globAsz_globBsz[0] < (numSmallProcs * avgTotalSize));
 
             numAhighProcs = 0;
-            numAlowProcs = ((globAsz_globBsz[0]) / avgTotalSize);
-            aSizeForBoth = ((globAsz_globBsz[0]) % avgTotalSize);
+            numAlowProcs  = ((globAsz_globBsz[0]) / avgTotalSize);
+            aSizeForBoth  = ((globAsz_globBsz[0]) % avgTotalSize);
 
             assert(numAlowProcs < numSmallProcs);
 
             // remAsize is < avgTotalSize. So it will fit on one proc.
             if (aSizeForBoth) {
-                numBothProcs = 1;
+                numBothProcs  = 1;
                 // We don't know if remTotalSize is 0 or not.
                 // So, let the common proc be a low proc.
-                bSizeForBoth = (avgTotalSize - aSizeForBoth);
+                bSizeForBoth  = (avgTotalSize - aSizeForBoth);
                 numBhighProcs = remTotalSize;
-                numBlowProcs = (numSmallProcs - (1 + numAlowProcs));
+                numBlowProcs  = (numSmallProcs - (1 + numAlowProcs));
             } else {
-                numBothProcs = 0;
-                bSizeForBoth = 0;
+                numBothProcs  = 0;
+                bSizeForBoth  = 0;
                 numBhighProcs = remTotalSize;
-                numBlowProcs = (numSmallProcs - numAlowProcs);
+                numBlowProcs  = (numSmallProcs - numAlowProcs);
             }
         }
     }
@@ -1125,7 +1125,7 @@ int maxLowerBound(const std::vector<T> &keys, const std::vector<T> &searchList,
     assert(!searchList.empty());
 
     T *searchListPtr = NULL;
-    T *minsPtr = NULL;
+    T *minsPtr       = NULL;
     if (!searchList.empty()) {
         searchListPtr = &(*(searchList.begin()));
     }
@@ -1193,11 +1193,11 @@ int maxLowerBound(const std::vector<T> &keys, const std::vector<T> &searchList,
     // Now create sendK
     int *sendOffsets = new int[npes];
     assert(sendOffsets);
-    sendOffsets[0] = 0;
+    sendOffsets[0]   = 0;
 
     int *recvOffsets = new int[npes];
     assert(recvOffsets);
-    recvOffsets[0] = 0;
+    recvOffsets[0]  = 0;
 
     int *numKeysTmp = new int[npes];
     assert(numKeysTmp);
@@ -1207,7 +1207,7 @@ int maxLowerBound(const std::vector<T> &keys, const std::vector<T> &searchList,
     for (int i = 1; i < npes; i++) {
         sendOffsets[i] = sendOffsets[i - 1] + numKeysSend[i - 1];
         recvOffsets[i] = recvOffsets[i - 1] + numKeysRecv[i - 1];
-        numKeysTmp[i] = 0;
+        numKeysTmp[i]  = 0;
     }
 
     for (unsigned int i = 0; i < keys.size(); i++) {
@@ -1216,7 +1216,7 @@ int maxLowerBound(const std::vector<T> &keys, const std::vector<T> &searchList,
         // set entry ...
         sendK[sendOffsets[part[i]] + ni] = keys[i];
         // save mapping .. will need it later ...
-        comm_map[i] = sendOffsets[part[i]] + ni;
+        comm_map[i]                      = sendOffsets[part[i]] + ni;
     }
 
     if (part) {
@@ -1225,7 +1225,7 @@ int maxLowerBound(const std::vector<T> &keys, const std::vector<T> &searchList,
 
     assert(numKeysTmp);
     delete[] numKeysTmp;
-    numKeysTmp = NULL;
+    numKeysTmp  = NULL;
 
     T *sendKptr = NULL;
     T *recvKptr = NULL;
@@ -1323,8 +1323,8 @@ int partitionW(std::vector<T> &nodeList, unsigned int (*getWeight)(const T *),
 
     DendroIntL off1 = 0, off2 = 0, localWt = 0, totalWt = 0;
 
-    DendroIntL *wts = NULL;
-    DendroIntL *lscn = NULL;
+    DendroIntL *wts   = NULL;
+    DendroIntL *lscn  = NULL;
     DendroIntL nlSize = nodeList.size();
     if (nlSize) {
         wts = new DendroIntL[nlSize];
@@ -1398,7 +1398,7 @@ int partitionW(std::vector<T> &nodeList, unsigned int (*getWeight)(const T *),
 
     int *sendOff = new int[npes];
     assert(sendOff);
-    sendOff[0] = 0;
+    sendOff[0]   = 0;
 
     int *recvOff = new int[npes];
     assert(recvOff);
@@ -1414,9 +1414,9 @@ int partitionW(std::vector<T> &nodeList, unsigned int (*getWeight)(const T *),
 
     // Now determine the average load ...
     DendroIntL npesLong = npes;
-    DendroIntL avgLoad = (totalWt / npesLong);
+    DendroIntL avgLoad  = (totalWt / npesLong);
 
-    DendroIntL extra = (totalWt % npesLong);
+    DendroIntL extra    = (totalWt % npesLong);
 
     // The Heart of the algorithm....
     if (avgLoad > 0) {
@@ -1462,7 +1462,7 @@ int partitionW(std::vector<T> &nodeList, unsigned int (*getWeight)(const T *),
     par::Mpi_Alltoall<int>(sendSz, recvSz, 1, comm);
 
 #ifdef __DEBUG_PAR__
-    DendroIntL totSendToOthers = 0;
+    DendroIntL totSendToOthers   = 0;
     DendroIntL totRecvFromOthers = 0;
     for (int i = 0; i < npes; i++) {
         if (rank != i) {
@@ -1601,13 +1601,13 @@ int sampleSort(std::vector<T> &arr, std::vector<T> &SortedElem,
     int myrank;
     MPI_Comm_rank(comm, &myrank);
 
-    DendroIntL nelem = arr.size();
+    DendroIntL nelem     = arr.size();
     DendroIntL nelemCopy = nelem;
     DendroIntL totSize;
     /*Calculating the total size of elements*/
     par::Mpi_Allreduce<DendroIntL>(&nelemCopy, &totSize, 1, MPI_SUM, comm);
 
-    DendroIntL npesLong = npes;
+    DendroIntL npesLong   = npes;
     const DendroIntL FIVE = 5;
 
     if (totSize < (FIVE * npesLong * npesLong)) {
@@ -1676,7 +1676,7 @@ int sampleSort(std::vector<T> &arr, std::vector<T> &SortedElem,
     // if (!rank) std::cout << "[samplesort] repartitioning input" << std::endl;
     par::partitionW<T>(arr, NULL, comm);
 
-    nelem = arr.size();
+    nelem                          = arr.size();
 
     // if (!rank) std::cout << RED "[samplesort] initial local sort" NRM <<
     // std::endl; std::sort(arr.begin(),arr.end());
@@ -1738,7 +1738,7 @@ int sampleSort(std::vector<T> &arr, std::vector<T> &SortedElem,
 
     // All gather with last element of splitters.
     T *sendSplitsPtr = NULL;
-    T *splittersPtr = NULL;
+    T *splittersPtr  = NULL;
     if (sendSplits.size() > static_cast<unsigned int>(npes - 2)) {
         sendSplitsPtr = &(*(sendSplits.begin() + (npes - 2)));
     }
@@ -1792,15 +1792,15 @@ int sampleSort(std::vector<T> &arr, std::vector<T> &SortedElem,
     */
 
     auto splitterCalculation_end = std::chrono::system_clock::now();
-    auto all2all_start = std::chrono::system_clock::now();
+    auto all2all_start           = std::chrono::system_clock::now();
 
     {
-        int omp_p = omp_get_max_threads();
-        int *proc_split = new int[omp_p + 1];
+        int omp_p                  = omp_get_max_threads();
+        int *proc_split            = new int[omp_p + 1];
         DendroIntL *lst_split_indx = new DendroIntL[omp_p + 1];
-        proc_split[0] = 0;
-        lst_split_indx[0] = 0;
-        lst_split_indx[omp_p] = nelem;
+        proc_split[0]              = 0;
+        lst_split_indx[0]          = 0;
+        lst_split_indx[omp_p]      = nelem;
 #pragma omp parallel for
         for (int i = 1; i < omp_p; i++) {
             // proc_split[i] =
@@ -1817,18 +1817,18 @@ int sampleSort(std::vector<T> &arr, std::vector<T> &SortedElem,
                                      std::less<T>()) -
                     &arr[0];
             } else {
-                proc_split[i] = npes - 1;
+                proc_split[i]     = npes - 1;
                 lst_split_indx[i] = nelem;
             }
         }
 
         splitterCalculation_end = std::chrono::system_clock::now();
-        all2all_start = std::chrono::system_clock::now();
+        all2all_start           = std::chrono::system_clock::now();
 
 #pragma omp parallel for
         for (int i = 0; i < omp_p; i++) {
             int sendcnts_ = 0;
-            int k = proc_split[i];
+            int k         = proc_split[i];
             for (DendroIntL j = lst_split_indx[i]; j < lst_split_indx[i + 1];
                  j++) {
                 if (arr[j] <= splitters[k]) {
@@ -1874,7 +1874,7 @@ int sampleSort(std::vector<T> &arr, std::vector<T> &SortedElem,
     DendroIntL nsorted = rdispls[npes - 1] + recvcnts[npes - 1];
     SortedElem.resize(nsorted);
 
-    T *arrPtr = NULL;
+    T *arrPtr        = NULL;
     T *SortedElemPtr = NULL;
     if (!arr.empty()) {
         arrPtr = &(*(arr.begin()));
@@ -1898,11 +1898,11 @@ int sampleSort(std::vector<T> &arr, std::vector<T> &SortedElem,
     sdispls = NULL;
 
     delete[] rdispls;
-    rdispls = NULL;
+    rdispls              = NULL;
 
-    auto all2all_end = std::chrono::system_clock::now();
+    auto all2all_end     = std::chrono::system_clock::now();
 
-    DendroIntL localSz = SortedElem.size();
+    DendroIntL localSz   = SortedElem.size();
 
     // sort(SortedElem.begin(), SortedElem.end());
     // if (!rank) std::cout << "[samplesort] final local sort" << std::endl;
@@ -1912,14 +1912,14 @@ int sampleSort(std::vector<T> &arr, std::vector<T> &SortedElem,
     // if (!rank) std::cout << "[samplesort] final local sort" << std::endl;
 
     auto localSort_end = std::chrono::system_clock::now();
-    auto ss_end = std::chrono::system_clock::now();
+    auto ss_end        = std::chrono::system_clock::now();
 
     double splittercal =
         (std::chrono::duration_cast<std::chrono::milliseconds>(
              (splitterCalculation_end - splitterCalculation_start))
              .count()) /
         (MILLISECOND_CONVERSION);
-    double all2all = (std::chrono::duration_cast<std::chrono::milliseconds>(
+    double all2all   = (std::chrono::duration_cast<std::chrono::milliseconds>(
                           (all2all_end - all2all_start))
                           .count() /
                       (MILLISECOND_CONVERSION));
@@ -2025,7 +2025,7 @@ int sampleSort(std::vector<T> &arr, std::vector<T> &SortedElem,
         stats.push_back(ss_time_g[2]);  // ss overall time max
 
         //!!! Note : Quick fix for sample sort to match with the lengths for the
-        //!ts_stats vector.
+        //! ts_stats vector.
         stats.push_back(0);
         stats.push_back(0);
         stats.push_back(0);
@@ -2061,7 +2061,7 @@ void MergeSplit(std::vector<T> &local_list, int which_keys, int partner,
     std::vector<T> temp_list(recv_size);
 
     T *local_listPtr = NULL;
-    T *temp_listPtr = NULL;
+    T *temp_listPtr  = NULL;
     if (!local_list.empty()) {
         local_listPtr = &(*(local_list.begin()));
     }
@@ -2089,7 +2089,7 @@ void Par_bitonic_sort_incr(std::vector<T> &local_list, int proc_set_size,
     MPI_Comm_rank(comm, &my_rank);
 
     proc_set_dim = 0;
-    int x = proc_set_size;
+    int x        = proc_set_size;
     while (x > 1) {
         x = x >> 1;
         proc_set_dim++;
@@ -2121,7 +2121,7 @@ void Par_bitonic_sort_decr(std::vector<T> &local_list, int proc_set_size,
     MPI_Comm_rank(comm, &my_rank);
 
     proc_set_dim = 0;
-    int x = proc_set_size;
+    int x        = proc_set_size;
     while (x > 1) {
         x = x >> 1;
         proc_set_dim++;
@@ -2151,7 +2151,7 @@ void Par_bitonic_merge_incr(std::vector<T> &local_list, int proc_set_size,
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &npes);
 
-    unsigned int num_left = binOp::getPrevHighestPowerOfTwo(npes);
+    unsigned int num_left  = binOp::getPrevHighestPowerOfTwo(npes);
     unsigned int num_right = npes - num_left;
 
     // 1, Do merge between the k right procs and the highest k left procs.
@@ -2253,11 +2253,11 @@ void MergeLists(std::vector<T> &listA, std::vector<T> &listB, int KEEP_WHAT) {
     assert(!(listB.empty()));
 
     // max ( min(A,B) )
-    _low = ((listA[0] > listB[0]) ? listA[0] : listB[0]);
+    _low             = ((listA[0] > listB[0]) ? listA[0] : listB[0]);
     // min ( max(A,B) )
-    _high = ((listA[listA.size() - 1] < listB[listB.size() - 1])
-                 ? listA[listA.size() - 1]
-                 : listB[listB.size() - 1]);
+    _high            = ((listA[listA.size() - 1] < listB[listB.size() - 1])
+                            ? listA[listA.size() - 1]
+                            : listB[listB.size() - 1]);
 
     // We will do a full merge first ...
     size_t list_size = listA.size() + listB.size();
@@ -2321,7 +2321,7 @@ void parallel_rank(const T *in, unsigned int sz, DendroIntL *out,
     key.resize(sz);
 
     for (unsigned int i = 0; i < sz; i++) {
-        key[i].p = rank;
+        key[i].p   = rank;
         key[i].idx = i;
         key[i].val = in[i];
     }
@@ -2332,9 +2332,9 @@ void parallel_rank(const T *in, unsigned int sz, DendroIntL *out,
     std::swap(key, key_sorted);
     key.clear();
 
-    unsigned int localSz = sz;
+    unsigned int localSz        = sz;
 
-    unsigned int *sorted_couts = new unsigned int[npes];
+    unsigned int *sorted_couts  = new unsigned int[npes];
     unsigned int *sorted_offset = new unsigned int[npes];
 
     par::Mpi_Allgather(&localSz, sorted_couts, 1, comm);
@@ -2354,11 +2354,11 @@ void parallel_rank(const T *in, unsigned int sz, DendroIntL *out,
     int *rCounts = new int[npes];
     int *sOffset = new int[npes];
     int *rOffset = new int[npes];
-    int *ccount = new int[npes];
+    int *ccount  = new int[npes];
 
     for (unsigned int i = 0; i < npes; i++) {
         sCounts[i] = 0;
-        ccount[i] = 0;
+        ccount[i]  = 0;
     }
 
     for (unsigned int i = 0; i < key_sorted.size(); i++)

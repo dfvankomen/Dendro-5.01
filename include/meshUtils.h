@@ -39,10 +39,10 @@ namespace ot {
  */
 Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
                  unsigned int eleOrder, MPI_Comm comm, unsigned int verbose = 1,
-                 ot::SM_TYPE sm_type = ot::SM_TYPE::FDM,
+                 ot::SM_TYPE sm_type   = ot::SM_TYPE::FDM,
                  unsigned int grain_sz = DENDRO_DEFAULT_GRAIN_SZ,
-                 double ld_tol = DENDRO_DEFAULT_LB_TOL,
-                 unsigned int sf_k = DENDRO_DEFAULT_SF_K,
+                 double ld_tol         = DENDRO_DEFAULT_LB_TOL,
+                 unsigned int sf_k     = DENDRO_DEFAULT_SF_K,
                  unsigned int (*getWeight)(const ot::TreeNode*) = NULL);
 
 /**
@@ -65,11 +65,11 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
 Mesh* createWAMRMesh(std::function<void(double, double, double, double*)> func,
                      double wtol, unsigned int numVars, unsigned int eleOrder,
                      MPI_Comm comm, unsigned int verbose = 1,
-                     ot::SM_TYPE sm_type = ot::SM_TYPE::FDM,
+                     ot::SM_TYPE sm_type  = ot::SM_TYPE::FDM,
                      unsigned int* refIds = NULL, unsigned int sz = 0,
                      unsigned int grain_sz = DENDRO_DEFAULT_GRAIN_SZ,
-                     double ld_tol = DENDRO_DEFAULT_LB_TOL,
-                     unsigned int sf_k = DENDRO_DEFAULT_SF_K);
+                     double ld_tol         = DENDRO_DEFAULT_LB_TOL,
+                     unsigned int sf_k     = DENDRO_DEFAULT_SF_K);
 
 /**
  * @brief Creates a mesh which is guranteed to converge
@@ -170,7 +170,7 @@ void alloc_mpi_ctx(const Mesh* pMesh,
         const std::vector<unsigned int>& sendNodeSM = pMesh->getSendNodeSM();
         const std::vector<unsigned int>& recvNodeSM = pMesh->getRecvNodeSM();
 
-        const unsigned int activeNpes = pMesh->getMPICommSize();
+        const unsigned int activeNpes               = pMesh->getMPICommSize();
         const unsigned int nPe = pMesh->getNumNodesPerElement();
 
         const unsigned int sendBSzCg =
@@ -188,8 +188,8 @@ void alloc_mpi_ctx(const Mesh* pMesh,
 
         ctx_list.resize(async_k);
         for (unsigned int i = 0; i < async_k; i++) {
-            const unsigned int v_begin = ((i * dof) / async_k);
-            const unsigned int v_end = (((i + 1) * dof) / async_k);
+            const unsigned int v_begin  = ((i * dof) / async_k);
+            const unsigned int v_end    = (((i + 1) * dof) / async_k);
             const unsigned int batch_sz = (v_end - v_begin);
 
             if (sendBSz) {
@@ -244,10 +244,10 @@ void dealloc_mpi_ctx(const Mesh* pMesh,
     const std::vector<unsigned int>& sendProcList = pMesh->getSendProcList();
     const std::vector<unsigned int>& recvProcList = pMesh->getRecvProcList();
 
-    const std::vector<unsigned int>& sendNodeSM = pMesh->getSendNodeSM();
-    const std::vector<unsigned int>& recvNodeSM = pMesh->getRecvNodeSM();
+    const std::vector<unsigned int>& sendNodeSM   = pMesh->getSendNodeSM();
+    const std::vector<unsigned int>& recvNodeSM   = pMesh->getRecvNodeSM();
 
-    const unsigned int activeNpes = pMesh->getMPICommSize();
+    const unsigned int activeNpes                 = pMesh->getMPICommSize();
 
     const unsigned int sendBSz =
         nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
@@ -255,8 +255,8 @@ void dealloc_mpi_ctx(const Mesh* pMesh,
         nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
 
     for (unsigned int i = 0; i < ctx_list.size(); i++) {
-        const unsigned int v_begin = ((i * dof) / async_k);
-        const unsigned int v_end = (((i + 1) * dof) / async_k);
+        const unsigned int v_begin  = ((i * dof) / async_k);
+        const unsigned int v_end    = (((i + 1) * dof) / async_k);
         const unsigned int batch_sz = (v_end - v_begin);
 
         if (sendBSz) {
