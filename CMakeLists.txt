@@ -5,11 +5,12 @@
 # to the Dendro directory as it is compiled. This includes the example solvers
 # as well as the library itself.
 #
-# NOTE: there is a CMakeLists-NonLibraryDefs.txt file which contains more options.
-# The options in there must be included in the root directory of your project
-# that you are using this library with. This will configure everything for building,
-# but the options must be propagated to your own solvers and projects.
-# 
+# NOTE: there is a CMakeLists-NonLibraryDefs.txt file which contains more
+# options. The options in there must be included in the root directory of your
+# project that you are using this library with. This will configure everything
+# for building, but the options must be propagated to your own solvers and
+# projects.
+#
 # ##############################################################################
 
 cmake_minimum_required(VERSION 3.1)
@@ -17,10 +18,10 @@ project(Dendro-5.0-Library C CXX Fortran)
 
 option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
 
-option(DENDRO_ENABLE_GHOST_COMPRESSION "Enable compression on Ghost Communication" ON)
+option(DENDRO_ENABLE_GHOST_COMPRESSION
+       "Enable compression on Ghost Communication" ON)
 
-
-if (CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
+if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
   cmake_policy(SET CMP0135 NEW)
 endif()
 
@@ -30,11 +31,11 @@ endif()
 
 add_subdirectory(libs)
 
-# we need a lot of other definitions if we are calling cmake directly for this folder.
+# we need a lot of other definitions if we are calling cmake directly for this
+# folder.
 if(DENDROLIB_ISOLATED_DIR)
   include("CMakeLists-NonLibraryDefs.txt")
 endif()
-
 
 # ======= Set up the ZFP Library through CMake
 message(STATUS "=== Now configuring zfp library")
@@ -42,23 +43,19 @@ message(STATUS "=== Now configuring zfp library")
 include(FetchContent)
 FetchContent_Declare(
   zfp
-  URL https://github.com/LLNL/zfp/releases/download/1.0.0/zfp-1.0.0.tar.gz
-  URL_HASH SHA256=0ea08ae3e50e3c92f8b8cf41ba5b6e2de8892bc4a4ca0c59b8945b6c2ab617c4
-)
-# FetchContent_GetProperties(zfp)
-# if(NOT zfp_POPULATED)
-#   FetchContent_Populate(zfp)
+  GIT_REPOSITORY "https://github.com/LLNL/zfp"
+  GIT_TAG "1.0.1")
+# FetchContent_GetProperties(zfp) if(NOT zfp_POPULATED)
+# FetchContent_Populate(zfp)
 
-#   add_subdirectory(${zfp_SOURCE_DIR} ${zfp_BINARY_DIR})
-# endif()
+# add_subdirectory(${zfp_SOURCE_DIR} ${zfp_BINARY_DIR}) endif()
 
 FetchContent_MakeAvailable(zfp)
 
 message(STATUS "=== Finished configuring zfp library")
 
-# message(STATUS "zfp_source " ${zfp_SOURCE_DIR})
-# message(STATUS "zfp_binary " ${zfp_BINARY_DIR})
-# == END ZFP LIBRARY BUILD
+# message(STATUS "zfp_source " ${zfp_SOURCE_DIR}) message(STATUS "zfp_binary "
+# ${zfp_BINARY_DIR}) == END ZFP LIBRARY BUILD
 
 # ======= Set up the blosc Library through CMake
 message(STATUS "=== Now configuring blosc library")
@@ -66,15 +63,15 @@ message(STATUS "=== Now configuring blosc library")
 include(FetchContent)
 FetchContent_Declare(
   blosc
-  URL https://github.com/Blosc/c-blosc/archive/refs/tags/v1.21.5.tar.gz
-  URL_HASH SHA256=32e61961bbf81ffea6ff30e9d70fca36c86178afd3e3cfa13376adec8c687509
-)
-# FetchContent_GetProperties(blosc)
-# if(NOT blosc_POPULATED)
-#   FetchContent_Populate(blosc)
+  GIT_REPOSITORY "https://github.com/Blosc/c-blosc"
+  GIT_TAG "v1.21.6")
+# FetchContent_GetProperties(blosc) if(NOT blosc_POPULATED)
+# FetchContent_Populate(blosc)
 
-#   add_subdirectory(${blosc_SOURCE_DIR} ${blosc_BINARY_DIR})
-# endif()
+# add_subdirectory(${blosc_SOURCE_DIR} ${blosc_BINARY_DIR}) endif()
+
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
+set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
 
 FetchContent_MakeAvailable(blosc)
 
@@ -89,7 +86,6 @@ include_directories(${blosc_SOURCE_DIR}/blosc)
 # Packages needed for the compression algorithms
 find_package(Eigen3 REQUIRED)
 include_directories(${EIGEN3_INCLUDE_DIR})
-
 
 message(STATUS "Now setting the CMake files for the Dendro Library...")
 
@@ -826,7 +822,8 @@ target_include_directories(subDAExample
 target_include_directories(subDAExample PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(subDAExample PRIVATE ${GSL_INCLUDE_DIRS})
 
-# apply the metric in a different way - traversing the tree without using the datastructures
+# apply the metric in a different way - traversing the tree without using the
+# datastructures
 set(SOURCE_FILES FEM/examples/src/sfcLaplace.cpp)
 add_executable(sfcLaplaceEq ${SOURCE_FILES})
 target_link_libraries(sfcLaplaceEq dendro5 ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
@@ -850,8 +847,6 @@ target_include_directories(sfcLaplaceEq
 target_include_directories(sfcLaplaceEq PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(sfcLaplaceEq PRIVATE ${GSL_INCLUDE_DIRS})
 
-
-
 set(SOURCE_FILES test/src/compressDecompressTest.cpp)
 add_executable(testCompDecomp ${SOURCE_FILES})
 target_link_libraries(testCompDecomp dendro5 ${LAPACK_LIBRARIES} m)
@@ -873,7 +868,5 @@ target_include_directories(testCompDecomp PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(testCompDecomp PRIVATE ${GSL_INCLUDE_DIRS})
 target_include_directories(testCompDecomp PUBLIC ${blosc_SOURCE_DIR}/blosc)
 target_link_directories(testCompDecomp PUBLIC ${blosc_BUILD_DIR})
-
-
 
 add_subdirectory(NLSigma)
