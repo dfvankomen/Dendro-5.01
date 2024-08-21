@@ -93,12 +93,12 @@ enum NeighbourLevel { COARSE, SAME, REFINE };
 
 #define KS_MAX \
     31  // maximum number of points in any direction that wavelet DA supports.
-#define KEY_DIR_OFFSET 7
+#define KEY_DIR_OFFSET       7
 #define CHAINED_GHOST_OFFSET 5u
 
 #define OCT_NO_CHANGE 0u
-#define OCT_SPLIT 1u
-#define OCT_COARSE 2u
+#define OCT_SPLIT     1u
+#define OCT_COARSE    2u
 
 namespace ot {
 
@@ -548,7 +548,7 @@ class Mesh {
     unsigned int m_uiCoarsetBlkLev = OCT2BLK_COARSEST_LEV;
 
     /**@brief: domain min point*/
-    Point m_uiDMinPt = Point(0, 0, 0);
+    Point m_uiDMinPt               = Point(0, 0, 0);
 
     /**@brief: domain max point. */
     Point m_uiDMaxPt =
@@ -1188,10 +1188,10 @@ class Mesh {
      * */
     Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
          unsigned int activeNpes, MPI_Comm comm, bool pBlockSetup = true,
-         SM_TYPE smType = SM_TYPE::FDM,
+         SM_TYPE smType       = SM_TYPE::FDM,
          unsigned int grainSz = DENDRO_DEFAULT_GRAIN_SZ,
-         double ld_tol = DENDRO_DEFAULT_LB_TOL,
-         unsigned int sf_k = DENDRO_DEFAULT_SF_K);
+         double ld_tol        = DENDRO_DEFAULT_LB_TOL,
+         unsigned int sf_k    = DENDRO_DEFAULT_SF_K);
 
     /**@brief parallel mesh constructor
      * @param[in] in: complete sorted 2:1 balanced octree to generate mesh
@@ -1208,8 +1208,8 @@ class Mesh {
     Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
          MPI_Comm comm, bool pBlockSetup = true, SM_TYPE smType = SM_TYPE::FDM,
          unsigned int grainSz = DENDRO_DEFAULT_GRAIN_SZ,
-         double ld_tol = DENDRO_DEFAULT_LB_TOL,
-         unsigned int sf_k = DENDRO_DEFAULT_SF_K,
+         double ld_tol        = DENDRO_DEFAULT_LB_TOL,
+         unsigned int sf_k    = DENDRO_DEFAULT_SF_K,
          unsigned int (*getWeight)(const ot::TreeNode *) = NULL,
          unsigned int *blk_tags = NULL, unsigned int blk_tags_sz = 0);
 
@@ -2382,7 +2382,7 @@ class Mesh {
         const unsigned int numVars,
         std::function<double(double, double, double, double *)> wavelet_tol,
         double amr_coarse_fac = DENDRO_AMR_COARSEN_FAC,
-        double coarsen_hx = DENDRO_REMESH_UNZIP_SCALE_FAC);
+        double coarsen_hx     = DENDRO_REMESH_UNZIP_SCALE_FAC);
 
     /**
      * @brief
@@ -2403,7 +2403,7 @@ class Mesh {
                      const unsigned int *varIds, const unsigned int numVars,
                      std::function<double(double, double, double)> wavelet_tol,
                      double amr_coarse_fac = DENDRO_AMR_COARSEN_FAC,
-                     double coarsen_hx = DENDRO_REMESH_UNZIP_SCALE_FAC);
+                     double coarsen_hx     = DENDRO_REMESH_UNZIP_SCALE_FAC);
 
     /**
      * @brief: Remesh the mesh with the new computed elements.
@@ -2420,11 +2420,11 @@ class Mesh {
      * for an given octant
      * */
     ot::Mesh *ReMesh(unsigned int grainSz = DENDRO_DEFAULT_GRAIN_SZ,
-                     double ld_tol = DENDRO_DEFAULT_LB_TOL,
-                     unsigned int sfK = DENDRO_DEFAULT_SF_K,
+                     double ld_tol        = DENDRO_DEFAULT_LB_TOL,
+                     unsigned int sfK     = DENDRO_DEFAULT_SF_K,
                      unsigned int (*getWeight)(const ot::TreeNode *) = NULL,
-                     unsigned int *blk_tags = NULL,
-                     unsigned int blk_tag_sz = 0);
+                     unsigned int *blk_tags                          = NULL,
+                     unsigned int blk_tag_sz                         = 0);
 
     /**
      * @brief: Computes the all to all v communication parameters interms of
@@ -2462,7 +2462,7 @@ class Mesh {
     void interGridTransfer(
         T *&vec, const ot::Mesh *pMesh,
         INTERGRID_TRANSFER_MODE mode = INTERGRID_TRANSFER_MODE::INJECTION,
-        unsigned int dof = 1);
+        unsigned int dof             = 1);
 
     /**
      * @brief Performs intergrid transfer without deallocating the existing
@@ -2482,7 +2482,7 @@ class Mesh {
     void interGridTransfer(
         T *vecIn, T *vecOut, const ot::Mesh *pMesh,
         INTERGRID_TRANSFER_MODE mode = INTERGRID_TRANSFER_MODE::INJECTION,
-        unsigned int dof = 1);
+        unsigned int dof             = 1);
 
     /**
      * @brief Intergrid transfer for the 2D vector.
@@ -2624,6 +2624,11 @@ class Mesh {
      */
     void getFinerFaceNeighbors(unsigned int ele, unsigned int dir,
                                unsigned int *child) const;
+
+    /**
+     * @brief Extract the raw refinement flags from all local elements
+     */
+    std::vector<unsigned int> getAllRefinementFlags();
 
     /**
      * @brief Set the Mesh Refinement flags, for the local portion of the mesh.
@@ -2805,7 +2810,7 @@ inline bool Mesh::computeOveralppingNodes(const ot::TreeNode &parent,
         idy[k] = -1;
         idz[k] = -1;
     }
-    bool state = false;
+    bool state  = false;
     bool stateX = false;
     bool stateY = false;
     bool stateZ = false;
@@ -2830,24 +2835,30 @@ inline bool Mesh::computeOveralppingNodes(const ot::TreeNode &parent,
 
                 if (!(((child.getX() - parent.getX()) * dp * dc + k * Lc * dp) %
                       (Lp * dc)))
-                    index[0] = ((child.getX() - parent.getX()) * dp * dc +
-                                k * Lc * dp) /
-                               (Lp * dc);  //((child.getX()-parent.getX())*m_uiElementOrder
-                                           //+ k*Lc)/Lp;
+                    index[0] =
+                        ((child.getX() - parent.getX()) * dp * dc +
+                         k * Lc * dp) /
+                        (Lp *
+                         dc);  //((child.getX()-parent.getX())*m_uiElementOrder
+                               //+ k*Lc)/Lp;
 
                 if (!(((child.getY() - parent.getY()) * dp * dc + k * Lc * dp) %
                       (Lp * dc)))
-                    index[1] = ((child.getY() - parent.getY()) * dp * dc +
-                                k * Lc * dp) /
-                               (Lp * dc);  //((child.getY()-parent.getY())*m_uiElementOrder
-                                           //+ k*Lc)/Lp;
+                    index[1] =
+                        ((child.getY() - parent.getY()) * dp * dc +
+                         k * Lc * dp) /
+                        (Lp *
+                         dc);  //((child.getY()-parent.getY())*m_uiElementOrder
+                               //+ k*Lc)/Lp;
 
                 if (!(((child.getZ() - parent.getZ()) * dp * dc + k * Lc * dp) %
                       (Lp * dc)))
-                    index[2] = ((child.getZ() - parent.getZ()) * dp * dc +
-                                k * Lc * dp) /
-                               (Lp * dc);  //((child.getZ()-parent.getZ())*m_uiElementOrder
-                                           //+ k*Lc)/Lp;
+                    index[2] =
+                        ((child.getZ() - parent.getZ()) * dp * dc +
+                         k * Lc * dp) /
+                        (Lp *
+                         dc);  //((child.getZ()-parent.getZ())*m_uiElementOrder
+                               //+ k*Lc)/Lp;
 
                 if (!stateX && index[0] < (m_uiElementOrder + 1)) stateX = true;
 

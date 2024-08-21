@@ -21,7 +21,7 @@ namespace ot {
 class AsyncExchangeContex {
    protected:
     /** pointer to the variable which perform the ghost exchange */
-    void* m_uiBuffer = NULL;
+    void* m_uiBuffer  = NULL;
 
     /** pointer to the send buffer*/
     void* m_uiSendBuf = NULL;
@@ -55,11 +55,11 @@ class AsyncExchangeContex {
     /**@brief batched requests for recv */
     std::vector<MPI_Request> m_recv_req;
 
-    AsyncExchangeContex(){};
+    AsyncExchangeContex() {};
 
     /**@brief creates an async ghost exchange contex*/
     AsyncExchangeContex(const void* var) {
-        m_uiBuffer = (void*)var;
+        m_uiBuffer  = (void*)var;
         m_uiSendBuf = nullptr;
         m_uiRecvBuf = nullptr;
         m_uiRequests.clear();
@@ -68,7 +68,7 @@ class AsyncExchangeContex {
     }
 
     /**@brief : defaut destructor*/
-    ~AsyncExchangeContex(){};
+    ~AsyncExchangeContex() {};
 
     /**@brief allocates send buffer for ghost exchange*/
     inline void allocateSendBuffer(size_t bytes) {
@@ -148,7 +148,7 @@ class AsyncExchangeContex {
             exit(0);
         } else {
             m_uiCompRecvBuf = temp_ptr;
-            temp_ptr = NULL;
+            temp_ptr        = NULL;
         }
     }
 

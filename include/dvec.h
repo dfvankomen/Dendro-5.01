@@ -29,10 +29,10 @@ template <typename T, typename I>
 class DVector {
    protected:
     /**@brief ptr for the data*/
-    T* m_data_ptr = NULL;
+    T* m_data_ptr          = NULL;
 
     /**@brief size of the vector*/
-    I m_size = 0;
+    I m_size               = 0;
 
     /**@brief : true if allocated with ghost/halo regions, false otherwise */
     bool m_ghost_allocated = true;
@@ -148,9 +148,9 @@ class DVector {
 template <typename T, typename I>
 DVector<T, I>::DVector() {
     m_data_ptr = NULL;
-    m_size = 0;
-    m_dof = 0;
-    m_comm = MPI_COMM_NULL;
+    m_size     = 0;
+    m_dof      = 0;
+    m_comm     = MPI_COMM_NULL;
 }
 
 template <typename T, typename I>
@@ -161,14 +161,12 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
                                   DVEC_LOC loc, unsigned int dof,
                                   bool allocate_ghost) {
     // set the internal fields based on input for storage
-    m_dof = dof;
-    m_comm = pMesh->getMPICommunicator();
-    m_vec_type = type;
-    m_vec_loc = loc;
+    m_dof             = dof;
+    m_comm            = pMesh->getMPICommunicator();
+    m_vec_type        = type;
+    m_vec_loc         = loc;
     m_ghost_allocated = allocate_ghost;
-    m_size = 0;
-
-    if (!(pMesh->isActive())) return;
+    m_size            = 0;
 
     if (m_vec_type == DVEC_TYPE::OCT_SHARED_NODES)
         (allocate_ghost) ? m_size = pMesh->getDegOfFreedom()* m_dof
@@ -228,12 +226,12 @@ template <typename T, typename I>
 void DVector<T, I>::set_vec_ptr(T*& ptr, const ot::Mesh* pMesh, DVEC_TYPE type,
                                 DVEC_LOC loc, unsigned int dof,
                                 bool allocate_ghost) {
-    m_dof = dof;
-    m_comm = pMesh->getMPICommunicator();
-    m_vec_type = type;
-    m_vec_loc = loc;
+    m_dof             = dof;
+    m_comm            = pMesh->getMPICommunicator();
+    m_vec_type        = type;
+    m_vec_loc         = loc;
     m_ghost_allocated = allocate_ghost;
-    m_size = 0;
+    m_size            = 0;
 
     if (m_vec_type == DVEC_TYPE::OCT_SHARED_NODES)
         (allocate_ghost) ? m_size = pMesh->getDegOfFreedom()* m_dof
@@ -280,8 +278,8 @@ void DVector<T, I>::destroy_vector() {
     }
 
     m_data_ptr = nullptr;
-    m_size = 0;
-    m_dof = 0;
+    m_size     = 0;
+    m_dof      = 0;
 }
 
 template <typename T, typename I>
@@ -301,14 +299,14 @@ template <typename T, typename I>
 void DVector<T, I>::copy_data(const DVector<T, I>& v) {
     if (m_data_ptr == nullptr) return;
 
-    m_size = v.m_size;
-    m_dof = v.m_dof;
-    m_vec_type = v.m_vec_type;
-    m_vec_loc = v.m_vec_loc;
+    m_size            = v.m_size;
+    m_dof             = v.m_dof;
+    m_vec_type        = v.m_vec_type;
+    m_vec_loc         = v.m_vec_loc;
     m_ghost_allocated = v.m_ghost_allocated;
-    m_comm = v.m_comm;
+    m_comm            = v.m_comm;
 
-    T* dptr = v.m_data_ptr;
+    T* dptr           = v.m_data_ptr;
 
     if (v.m_vec_loc == DVEC_LOC::HOST)
         std::memcpy(m_data_ptr, dptr, sizeof(T) * m_size);
@@ -330,7 +328,7 @@ void DVector<T, I>::axpy(const ot::Mesh* const pMesh, T a,
     if (y.m_data_ptr == nullptr) return;
 
     const T* const x_ptr = x.m_data_ptr;
-    T* const y_ptr = y.m_data_ptr;
+    T* const y_ptr       = y.m_data_ptr;
 
     if (x.m_vec_loc == DVEC_LOC::HOST) {
         if (!local_only) {
@@ -339,7 +337,7 @@ void DVector<T, I>::axpy(const ot::Mesh* const pMesh, T a,
 
         } else {
             const unsigned int sz_dof = x.m_size / x.m_dof;
-            const unsigned int npe = pMesh->getNumNodesPerElement();
+            const unsigned int npe    = pMesh->getNumNodesPerElement();
             if (x.m_vec_type == DVEC_TYPE::OCT_SHARED_NODES) {
                 for (unsigned int v = 0; v < x.m_dof; v++)
                     for (unsigned int node = pMesh->getNodeLocalBegin();
@@ -359,8 +357,8 @@ void DVector<T, I>::axpy(const ot::Mesh* const pMesh, T a,
     } else if (x.m_vec_loc == DVEC_LOC::DEVICE) {
 #ifdef __CUDACC__
         if (x.m_dof == 0 || x.m_size == 0) return;
-        const unsigned int lb = pMesh->getNodeLocalBegin();
-        const unsigned int le = pMesh->getNodeLocalEnd();
+        const unsigned int lb     = pMesh->getNodeLocalBegin();
+        const unsigned int le     = pMesh->getNodeLocalEnd();
         const unsigned int szpdof = x.m_size / x.m_dof;
         // axpy_cu<<<x.m_size/1024 + 1, 1024>>>(x.m_size,a, x.m_data_ptr
         // ,y.m_data_ptr);
@@ -380,7 +378,7 @@ void DVector<T, I>::axpby(const ot::Mesh* const pMesh, T a,
     if (y.m_data_ptr == nullptr) return;
 
     const T* const x_ptr = x.m_data_ptr;
-    T* const y_ptr = y.m_data_ptr;
+    T* const y_ptr       = y.m_data_ptr;
 
     if (!local_only) {
         for (unsigned int i = 0; i < x.m_size; i++)
@@ -388,7 +386,7 @@ void DVector<T, I>::axpby(const ot::Mesh* const pMesh, T a,
 
     } else {
         const unsigned int sz_dof = x.m_size / x.m_dof;
-        const unsigned int npe = pMesh->getNumNodesPerElement();
+        const unsigned int npe    = pMesh->getNumNodesPerElement();
         if (x.m_vec_type == DVEC_TYPE::OCT_SHARED_NODES) {
             for (unsigned int v = 0; v < x.m_dof; v++)
                 for (unsigned int node = pMesh->getNodeLocalBegin();
@@ -412,10 +410,10 @@ void DVector<T, I>::grid_transfer(ot::Mesh* m_old, const ot::Mesh* m_new,
     vec_tmp.create_vector(m_new, dvec.get_type(), dvec.get_loc(),
                           dvec.get_dof(), dvec.is_ghost_allocated());
 
-    const unsigned int dof = dvec.get_dof();
+    const unsigned int dof            = dvec.get_dof();
 
-    T* in = dvec.get_vec_ptr();
-    T* out = vec_tmp.get_vec_ptr();
+    T* in                             = dvec.get_vec_ptr();
+    T* out                            = vec_tmp.get_vec_ptr();
 
     const unsigned int sz_per_dof_old = (dof != 0) ? dvec.get_size() / dof : 0;
     const unsigned int sz_per_dof_new =
