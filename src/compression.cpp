@@ -164,9 +164,6 @@ double* decompressMatrix(unsigned char*& byteStream, int buffer_size) {
 /*
 // Example how to use comperssion algorithm
 
-#include "TimingExperiment.h"
-#include "SVDAlgorithms.h"
-
 int main() {
         int x = 3, y = 7, z = 7; // Dimensions of matrix. Modify as needed.
         int k = 3; // min(x*y, z)
@@ -1192,6 +1189,7 @@ unsigned char* compressData(const char* blosc_compressor, int clevel, int n,
                             double* originalData, int& byteStreamSize) {
     blosc_set_compressor(blosc_compressor);
     int originalDataBytes         = n * sizeof(double);
+
     // Calculate the maximum possible size for the compressed data
     // This value is suggested to not be modified and does not affect the size
     // of the final compressed form
@@ -1260,5 +1258,30 @@ double* decompressData(unsigned char* byteStream, int byteStreamSize) {
     }
 
     return decompressedData;
+}
+
+void decompressData(unsigned char* byteStream, int byteStreamSize,
+                    double* outBuff) {
+    // Check if byteStream is valid
+    // if (!byteStream || byteStreamSize <= 0) {
+    //     return nullptr;
+    // }
+    // Unpack originalDataBytes from the end of the byteStream
+
+    int originalDataBytes;
+    std::memcpy(&originalDataBytes,
+                byteStream + (byteStreamSize - sizeof(originalDataBytes)),
+                sizeof(originalDataBytes));
+    // double* decompressedData = new double[originalDataBytes /
+    // sizeof(double)];
+
+    int decompressedSize =
+        blosc_decompress(byteStream, outBuff, originalDataBytes);
+
+    // Check for decompression error
+    if (decompressedSize < 0) {
+        // Handle decompression error (e.g., return null or throw an exception)
+        throw std::runtime_error("blosc could not decompress data.");
+    }
 }
 }  // namespace BLOSCCompression
