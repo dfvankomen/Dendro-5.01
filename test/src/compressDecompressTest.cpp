@@ -8,7 +8,7 @@
 
 #include "compression.h"
 
-#define IDX(i, j, k) ((i)*y * z + (j)*z + (k))  // 3D to 1D indexing
+#define IDX(i, j, k) ((i) * y * z + (j) * z + (k))  // 3D to 1D indexing
 
 #define UNIFORM_RAND_0_TO_X(X) ((double)rand() / (double)RAND_MAX * X)
 
@@ -62,7 +62,7 @@ void fillMatrixRandom(int x, int y, int z, double amplitude, double* vec) {
                 // well as the propagation factors fx, fy, and fz for each
                 // dimension. The result is a wave that can propagate
                 // differently along the x, y, and z dimensions.
-                double waveValue = amplitude * (UNIFORM_RAND_0_TO_X(2) - 1);
+                double waveValue  = amplitude * (UNIFORM_RAND_0_TO_X(2) - 1);
 
                 // Store the wave value in the 1D array. The 3D index (i, j, k)
                 // is converted to a 1D index using the IDX macro.
@@ -109,7 +109,7 @@ void printError(const double* originalMatrix, const double* decompressedMatrix,
     double maxError = 0;
     for (size_t i = 0; i < x * y * z; ++i) {
         double error = std::abs(originalMatrix[i] - decompressedMatrix[i]);
-        maxError = std::max(maxError, error);
+        maxError     = std::max(maxError, error);
     }
     std::cout << "Max Absolute Error: " << maxError << "\n";
 
@@ -137,7 +137,7 @@ void printComparison(const double* originalMatrix,
         std::cout << "z = " << k << ":\n";
         for (int i = 0; i < x; i++) {
             for (int j = 0; j < y; j++) {
-                double original = originalMatrix[IDX(i, j, k)];
+                double original     = originalMatrix[IDX(i, j, k)];
                 double decompressed = decompressedMatrix[IDX(i, j, k)];
 
                 std::cout << "[";
@@ -160,24 +160,26 @@ void printComparison(const double* originalMatrix,
 int main() {
     srand(time(0));
     int x = 50, y = 50, z = 20;  // Dimensions of matrix. Modify as needed.
-    int n = x * y * z;
-    int k = 7;
-    double rate = 64.0;
+    int n                     = x * y * z;
+    int k                     = 7;
+    double rate               = 64.0;
 
-    int total_points = x * y * z;
+    int total_points          = x * y * z;
 
-    int num_matrices = 10;
+    int num_matrices          = 10;
 
-    double* fullmatrix = new double[total_points * num_matrices];
+    double* fullmatrix        = new double[total_points * num_matrices];
     double* decompressed_full = new double[total_points * num_matrices]();
-    double* decompressed_full_second = new double[total_points * num_matrices]();
+    double* decompressed_full_second =
+        new double[total_points * num_matrices]();
 
     uint32_t offset = 0;
     for (int ii = 0; ii < num_matrices; ii++) {
         fillMatrixRandom(x, y, z, 100 * (ii + 1), &fullmatrix[offset]);
 
         fillMatrixRandom(x, y, z, 1000000000000, &decompressed_full[offset]);
-        fillMatrixRandom(x, y, z, 1000000000000, &decompressed_full_second[offset]);
+        fillMatrixRandom(x, y, z, 1000000000000,
+                         &decompressed_full_second[offset]);
 
         offset += total_points;
     }
@@ -198,14 +200,16 @@ int main() {
               << std::endl;
     std::cout << "Compressed matrix size: " << compressedSize << " bytes"
               << std::endl;
-    std::cout << "Compressed/Original: " << (double)compressedSize / (double)originalMatrixBytes << std::endl;
+    std::cout << "Compressed/Original: "
+              << (double)compressedSize / (double)originalMatrixBytes
+              << std::endl;
     // Printing various types of error between original and decompressed data
     printError(fullmatrix, decompressed_full, x, y, z);
 
     std::cout << "\n\n==== Sending as Chunks" << std::endl;
 
     // now test compressing a few chunks at a time
-    int all_compressedSize = 0;
+    int all_compressedSize      = 0;
     uint32_t decompressedOffset = 0;
     for (int ii = 0; ii < num_matrices; ii++) {
         int newCompressedSize;
@@ -229,7 +233,9 @@ int main() {
               << std::endl;
     std::cout << "Compressed matrix size: " << all_compressedSize << " bytes"
               << std::endl;
-    std::cout << "Compressed/Original: " << (double)all_compressedSize / (double)originalMatrixBytes << std::endl;
+    std::cout << "Compressed/Original: "
+              << (double)all_compressedSize / (double)originalMatrixBytes
+              << std::endl;
     // Printing various types of error between original and decompressed data
     printError(fullmatrix, decompressed_full_second, x, y, z);
 
