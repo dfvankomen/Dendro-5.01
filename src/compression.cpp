@@ -540,14 +540,18 @@ Eigen::MatrixXd getFullKronProductTruncated(int x, int y, int z, int N, int Q,
     return full_kron_product_truncated;
 }
 
-unsigned char* compressMatrix(double*& originalMatrix, int x, int y, int z,
-                              int N, int Q, int S, int& bufferSize) {
+void compressMatrixBuffer(const double* originalMatrix, const uint32_t x,
+                          const uint32_t y, const uint32_t z, const uint32_t N,
+                          const uint32_t Q, const uint32_t S,
+                          unsigned char* outputArray, int& bufferSize) {
     // Normalize the data inside originalMatrix
     double minVal =
         *std::min_element(originalMatrix, originalMatrix + x * y * z);
     double maxVal =
         *std::max_element(originalMatrix, originalMatrix + x * y * z);
-    double range = maxVal - minVal;
+    double range             = maxVal - minVal;
+
+    ChebyshevData dataToPack = {x, y, z, N, Q, S, minVal, maxVal};
 
     // Create normalizedMatrix as Eigen::VectorXd
     Eigen::VectorXd normalizedMatrix(x * y * z);
@@ -569,100 +573,87 @@ unsigned char* compressMatrix(double*& originalMatrix, int x, int y, int z,
     Eigen::VectorXd coefficients_truncated =
         full_kron_product_truncated.transpose() * normalizedMatrix;
 
-    // x + y + z + N + Q + S + minVal + maxVal + buffer
-    bufferSize =
-        (6 * sizeof(int)) + (2 * sizeof(double)) + (N * Q * S * sizeof(double));
+    bufferSize         = sizeof(dataToPack) + (N * Q * S * sizeof(double));
 
+    // std::cout << "buffer size: " << bufferSize << " (" << sizeof(dataToPack)
+    //           << ", " << N * Q * S * sizeof(double) << ")" << std::endl;
+
+    unsigned char* ptr = outputArray;
+
+    memcpy(ptr, &dataToPack, sizeof(dataToPack));
+    ptr += sizeof(dataToPack);
+
+    // then copy the coefficients_truncated
+    memcpy(ptr, coefficients_truncated.data(),
+           coefficients_truncated.size() * sizeof(double));
+
+    // for (size_t i = 0; i < coefficients_truncated.size(); ++i) {
+    //     memcpy(ptr, &coefficients_truncated[i], sizeof(double));
+    //     ptr += sizeof(double);
+    // }
+}
+
+unsigned char* compressMatrix(const double* originalMatrix, const uint32_t x,
+                              const uint32_t y, const uint32_t z,
+                              const uint32_t N, const uint32_t Q,
+                              const uint32_t S, int& bufferSize) {
+    bufferSize = sizeof(ChebyshevData) + (N * Q * S * sizeof(double));
     unsigned char* buffer = new unsigned char[bufferSize];
-    unsigned char* ptr    = buffer;
 
-    // Add x, y, and z integers to the buffer
-    memcpy(ptr, &x, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(ptr, &y, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(ptr, &z, sizeof(int));
-    ptr += sizeof(int);
-    // Add N, Q, and S integers to the buffer
-    memcpy(ptr, &N, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(ptr, &Q, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(ptr, &S, sizeof(int));
-    ptr += sizeof(int);
-    // Add minVal and maxVal to the buffer
-    memcpy(ptr, &minVal, sizeof(double));
-    ptr += sizeof(double);
-    memcpy(ptr, &maxVal, sizeof(double));
-    ptr += sizeof(double);
-
-    for (size_t i = 0; i < coefficients_truncated.size(); ++i) {
-        memcpy(ptr, &coefficients_truncated[i], sizeof(double));
-        ptr += sizeof(double);
-    }
+    // then just call the compressMatrixBfr function
+    compressMatrixBuffer(originalMatrix, x, y, z, N, Q, S, buffer, bufferSize);
 
     return buffer;
 }
 
-double* decompressMatrix(unsigned char*& buffer, int bufferSize) {
-    unsigned char* ptr = buffer;
+double* decompressMatrix(const unsigned char* buffer, const int bufferSize) {
+    unsigned char* ptr = (unsigned char*)buffer;
 
-    // Unpack x, y, and z from buffer
-    int x, y, z;
-    memcpy(&x, ptr, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(&y, ptr, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(&z, ptr, sizeof(int));
-    ptr += sizeof(int);
-    // Unpack N, Q, and S from buffer
-    int N, Q, S;
-    memcpy(&N, ptr, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(&Q, ptr, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(&S, ptr, sizeof(int));
-    ptr += sizeof(int);
-    // Unpack minVal and maxVal from buffer
-    double minVal, maxVal;
-    memcpy(&minVal, ptr, sizeof(double));
-    ptr += sizeof(double);
-    memcpy(&maxVal, ptr, sizeof(double));
-    ptr += sizeof(double);
+    ChebyshevData data{};
+    memcpy(&data, ptr, sizeof(data));
+
+    // create the array that we're going to send back
+    double* reconstructedArray = new double[data.x * data.y * data.z];
+
+    // then just call the decompress buffer function
+    decompressMatrixBuffer(buffer, bufferSize, reconstructedArray);
+
+    // return our array
+    return reconstructedArray;
+}
+
+void decompressMatrixBuffer(const unsigned char* buffer, const int bufferSize,
+                            double* outBuff) {
+    unsigned char* ptr = (unsigned char*)buffer;
+
+    ChebyshevData data;
+    memcpy(&data, ptr, sizeof(data));
+    ptr += sizeof(data);
 
     // Unpack the coefficients
-    int numCoefficients = N * Q * S;
-    Eigen::VectorXd coefficients_truncated =
-        Eigen::VectorXd::Zero(numCoefficients);
-    for (int i = 0; i < numCoefficients; ++i) {
-        memcpy(&coefficients_truncated[i], ptr, sizeof(double));
-        ptr += sizeof(double);
-    }
+    int numCoefficients = data.N * data.Q * data.S;
+    Eigen::VectorXd coefficients_truncated(numCoefficients);
 
-    Eigen::MatrixXd full_kron_product_truncated =
-        getFullKronProductTruncated(x, y, z, N, Q, S);
+    memcpy(coefficients_truncated.data(), ptr,
+           numCoefficients * sizeof(double));
+
+    Eigen::MatrixXd full_kron_product_truncated = getFullKronProductTruncated(
+        data.x, data.y, data.z, data.N, data.Q, data.S);
 
     // Reconstruct the matrix using the coefficients and the truncated Kronecker
     // product
     Eigen::VectorXd reconstructedMatrix =
         full_kron_product_truncated * coefficients_truncated;
 
+    // do the unnormalize
+    double range = data.maxVal - data.minVal;
+    reconstructedMatrix *= range / 2.0;
+    reconstructedMatrix.array() += data.minVal + (range / 2.0);
+
     // Convert Eigen::VectorXd back to double*
-    double* reconstructedArray = new double[x * y * z];
-    for (int i = 0; i < x * y * z; ++i) {
-        reconstructedArray[i] = reconstructedMatrix(i);
-    }
-
-    // Unnormalize the data
-    double range = maxVal - minVal;
-    for (int i = 0; i < x * y * z; ++i) {
-        reconstructedArray[i] =
-            ((reconstructedArray[i] + 1.0) / 2.0) * range + minVal;
-    }
-
-    return reconstructedArray;
+    memcpy(outBuff, reconstructedMatrix.data(),
+           data.x * data.y * data.z * sizeof(double));
 }
-
 /*
 int main() {
         int x = 3, y = 7, z = 7;
@@ -1001,15 +992,37 @@ namespace FFTAlgorithms {
 
 namespace ZFPAlgorithms {
 
-unsigned char* compressMatrix(double* originalData, int x, int y, int z,
-                              double rate, int& size) {
-    // Initialize a 3D array with original data, using ZFP's special 'field'
-    // structure. The field has the type of double and the dimensions are given
-    // by x, y, and z.
-    zfp_field* field = zfp_field_3d(originalData, zfp_type_double, x, y, z);
-    // Open a new ZFP stream. A ZFP stream is responsible for compressing and
-    // decompressing data.
-    zfp_stream* zfp  = zfp_stream_open(NULL);
+void compressMatrixBuffer(const double* originalData, const uint32_t x,
+                          const uint32_t y, const uint32_t z, double rate,
+                          unsigned char* outBuffer, int& size, zfp_field* field,
+                          zfp_stream* zfp) {
+    bool closeStream = false;
+    bool freeField   = false;
+
+    if (field == nullptr && zfp == nullptr) {
+        // Initialize a 3D array with original data, using ZFP's special 'field'
+        // structure. The field has the type of double and the dimensions are
+        // given by x, y, and z.
+        field = zfp_field_3d((double*)originalData, zfp_type_double, x, y, z);
+
+        // Open a new ZFP stream. A ZFP stream is responsible for compressing
+        // and decompressing data.
+        zfp   = zfp_stream_open(NULL);
+
+        closeStream = true;
+        freeField   = true;
+    } else if (field != nullptr && zfp == nullptr) {
+        throw std::invalid_argument(
+            "Received a null field and a non-null zfp stream! This doesn't "
+            "work!");
+    } else if (field == nullptr && zfp != nullptr) {
+        // then just create the field, because the zfp object could probably be
+        // open
+        field = zfp_field_3d((double*)originalData, zfp_type_double, x, y, z);
+
+        freeField = true;
+    }
+
     // Set the compression rate for the ZFP stream. The type of the data is
     // double, the dimensionality is 3, and '0' indicates we're not using a
     // user-specified precision.
@@ -1017,19 +1030,15 @@ unsigned char* compressMatrix(double* originalData, int x, int y, int z,
 
     // Determine the maximum buffer size necessary for this ZFP stream given the
     // input field.
-    int bufsize = zfp_stream_maximum_size(zfp, field);
-    size = bufsize + 3 * sizeof(int) + sizeof(double);  // metadata x,y,z,rate
-    // Create a buffer with enough capacity to store the compressed data.
-    unsigned char* buffer = new unsigned char[size];
-    unsigned char* ptr    = buffer;
-    memcpy(ptr, &x, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(ptr, &y, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(ptr, &z, sizeof(int));
-    ptr += sizeof(int);
-    memcpy(ptr, &rate, sizeof(double));
-    ptr += sizeof(double);
+    int bufsize        = zfp_stream_maximum_size(zfp, field);
+
+    unsigned char* ptr = outBuffer;
+
+    // store the x, y, z, and rate data for reconstruction
+    ZFPData3d outData{x, y, z, rate};
+    memcpy(ptr, &outData, sizeof(ZFPData3d));
+    ptr += sizeof(ZFPData3d);
+
     // Create a bitstream from the buffer to store compressed data.
     bitstream* stream = stream_open(ptr, bufsize);
     // Associate the bitstream with the ZFP stream, so compressed data will go
@@ -1037,16 +1046,82 @@ unsigned char* compressMatrix(double* originalData, int x, int y, int z,
     zfp_stream_set_bit_stream(zfp, stream);
     // Compress the data. The results will be stored in the buffer we've
     // created.
-    zfp_compress(zfp, field);
+    int outsize = zfp_compress(zfp, field);
+
+    // std::cout << outsize + sizeof(outData) << " vs " << size << std::endl;
+    size        = outsize + sizeof(outData);
 
     // Close the bitstream. All compressed data should now reside in our buffer.
     stream_close(stream);
+
     // Close the ZFP stream since we're done with compression.
-    zfp_stream_close(zfp);
+    if (closeStream) zfp_stream_close(zfp);
     // Release the memory allocated for the field since we're done with it.
+    if (freeField) zfp_field_free(field);
+}
+
+unsigned char* compressMatrix(double* originalData, int x, int y, int z,
+                              double rate, int& size) {
+    // start by setting up the stream and field
+
+    zfp_field* field = zfp_field_3d(originalData, zfp_type_double, x, y, z);
+    zfp_stream* zfp  = zfp_stream_open(NULL);
+
+    zfp_stream_set_rate(zfp, rate, zfp_type_double, 3, 0);
+
+    int bufsize           = zfp_stream_maximum_size(zfp, field);
+    size                  = bufsize + sizeof(ZFPData3d);
+
+    // then allocate the array
+    unsigned char* buffer = new unsigned char[size];
+
+    // send it for compression
+    compressMatrixBuffer(originalData, x, y, z, rate, buffer, size, field, zfp);
+
+    // clear the field and zfp, this function is "owning"
+    zfp_stream_close(zfp);
     zfp_field_free(field);
 
     return buffer;
+}
+
+void decompressMatrixBuffer(unsigned char* buffer, int bufferSize,
+                            double* outBuff) {
+    ZFPData3d data{};
+    memcpy(&data, buffer, sizeof(ZFPData3d));
+    buffer += sizeof(ZFPData3d);
+
+    zfp_stream* zfp = zfp_stream_open(NULL);
+
+    // Set the decompression rate instead of accuracy
+    zfp_stream_set_rate(zfp, data.rate, zfp_type_double, 3, 0);
+    bitstream* stream =
+        stream_open(buffer, bufferSize - 3 * sizeof(int) - sizeof(double));
+    zfp_stream_set_bit_stream(zfp, stream);
+
+    zfp_field* dec_field =
+        zfp_field_3d(outBuff, zfp_type_double, data.x, data.y, data.z);
+
+    // do the decompression
+    zfp_decompress(zfp, dec_field);
+
+    // free things and then close the stream
+    zfp_field_free(dec_field);
+    stream_close(stream);
+    zfp_stream_close(zfp);
+}
+
+double* decompressMatrix(unsigned char* buffer, int bufferSize) {
+    // Deserialize metadata
+
+    ZFPData3d data{};
+    memcpy(&data, buffer, sizeof(ZFPData3d));
+
+    double* decompressedData = new double[data.x * data.y * data.z];
+
+    decompressMatrixBuffer(buffer, bufferSize, decompressedData);
+
+    return decompressedData;
 }
 
 unsigned char* compressMatrix1D(double* originalData, int n, double rate,
@@ -1066,14 +1141,18 @@ unsigned char* compressMatrix1D(double* originalData, int n, double rate,
     // Determine the maximum buffer size necessary for this ZFP stream given the
     // input field.
     int bufsize = zfp_stream_maximum_size(zfp, field);
-    size = bufsize + 1 * sizeof(int) + sizeof(double);  // metadata x,y,z,rate
+    size = bufsize + sizeof(int) + sizeof(double);  // metadata x,y,z,rate
+
     // Create a buffer with enough capacity to store the compressed data.
     unsigned char* buffer = new unsigned char[size];
     unsigned char* ptr    = buffer;
+
+    // copy over the parameters
     memcpy(ptr, &n, sizeof(int));
     ptr += sizeof(int);
     memcpy(ptr, &rate, sizeof(double));
     ptr += sizeof(double);
+
     // Create a bitstream from the buffer to store compressed data.
     bitstream* stream = stream_open(ptr, bufsize);
     // Associate the bitstream with the ZFP stream, so compressed data will go
@@ -1093,42 +1172,61 @@ unsigned char* compressMatrix1D(double* originalData, int n, double rate,
     return buffer;
 }
 
-double* decompressMatrix(unsigned char* buffer, int bufferSize) {
-    // Deserialize metadata
-    int x, y, z;
-    memcpy(&x, buffer, sizeof(int));
-    buffer += sizeof(int);
-    memcpy(&y, buffer, sizeof(int));
-    buffer += sizeof(int);
-    memcpy(&z, buffer, sizeof(int));
-    buffer += sizeof(int);
-    double rate;
-    memcpy(&rate, buffer, sizeof(double));
-    buffer += sizeof(double);
+unsigned char* compressMatrix1D_fixedPrecision(double* originalData, int n,
+                                               double precision, int& size) {
+    // Initialize a 3D array with original data, using ZFP's special 'field'
+    // structure. The field has the type of double and the dimensions are given
+    // by x, y, and z.
+    zfp_field* field = zfp_field_1d(originalData, zfp_type_double, n);
+    // Open a new ZFP stream. A ZFP stream is responsible for compressing and
+    // decompressing data.
+    zfp_stream* zfp  = zfp_stream_open(NULL);
+    // Set the compression rate for the ZFP stream. The type of the data is
+    // double, the dimensionality is 3, and '0' indicates we're not using a
+    // user-specified precision.
+    zfp_stream_set_precision(zfp, precision);
 
-    zfp_stream* zfp = zfp_stream_open(NULL);
+    // Determine the maximum buffer size necessary for this ZFP stream given the
+    // input field.
+    int bufsize = zfp_stream_maximum_size(zfp, field);
+    size = bufsize + sizeof(int) + sizeof(double);  // metadata x,y,z,rate
 
-    // Set the decompression rate instead of accuracy
-    zfp_stream_set_rate(zfp, rate, zfp_type_double, 3, 0);
-    bitstream* stream =
-        stream_open(buffer, bufferSize - 3 * sizeof(int) - sizeof(double));
+    // Create a buffer with enough capacity to store the compressed data.
+    unsigned char* buffer = new unsigned char[size];
+    unsigned char* ptr    = buffer;
+
+    // copy over the parameters
+    memcpy(ptr, &n, sizeof(int));
+    ptr += sizeof(int);
+    memcpy(ptr, &precision, sizeof(double));
+    ptr += sizeof(double);
+
+    // Create a bitstream from the buffer to store compressed data.
+    bitstream* stream = stream_open(ptr, bufsize);
+    // Associate the bitstream with the ZFP stream, so compressed data will go
+    // into our buffer.
     zfp_stream_set_bit_stream(zfp, stream);
-    double* decompressedData = new double[x * y * z];
-    zfp_field* dec_field =
-        zfp_field_3d(decompressedData, zfp_type_double, x, y, z);
-    zfp_decompress(zfp, dec_field);
-    zfp_field_free(dec_field);
+    // Compress the data. The results will be stored in the buffer we've
+    // created.
+    zfp_compress(zfp, field);
+
+    // Close the bitstream. All compressed data should now reside in our buffer.
     stream_close(stream);
+    // Close the ZFP stream since we're done with compression.
     zfp_stream_close(zfp);
-    return decompressedData;
+    // Release the memory allocated for the field since we're done with it.
+    zfp_field_free(field);
+
+    return buffer;
 }
 
 double* decompressMatrix1D(unsigned char* buffer, int bufferSize) {
     // Deserialize metadata
     int n;
+    double rate;
+
     memcpy(&n, buffer, sizeof(int));
     buffer += sizeof(int);
-    double rate;
     memcpy(&rate, buffer, sizeof(double));
     buffer += sizeof(double);
 
@@ -1138,6 +1236,7 @@ double* decompressMatrix1D(unsigned char* buffer, int bufferSize) {
     zfp_stream_set_rate(zfp, rate, zfp_type_double, 1, 0);
     bitstream* stream =
         stream_open(buffer, bufferSize - 1 * sizeof(int) - sizeof(double));
+
     zfp_stream_set_bit_stream(zfp, stream);
     double* decompressedData = new double[n];
     zfp_field* dec_field = zfp_field_1d(decompressedData, zfp_type_double, n);
@@ -1154,33 +1253,70 @@ void decompressMatrix1D(unsigned char* buffer, int bufferSize,
     // std::cout << "buffersize: " << bufferSize << std::endl;
     // Deserialize metadata
     int n;
-    memcpy(&n, buffer, sizeof(int));
+    double rate;
 
     // int rank = 0;
     // MPI_Comm_rank(MPI_COMM_WORLD, &rank);
 
+    std::memcpy(&n, buffer, sizeof(int));
     buffer += sizeof(int);
-    double rate;
-    memcpy(&rate, buffer, sizeof(double));
+    std::memcpy(&rate, buffer, sizeof(double));
+    buffer += sizeof(double);
 
     // std::cout << rank << ": " << "Decompressing " << bufferSize << " to: " <<
     // n * sizeof(double) << " with rate parameter of " << rate << std::endl;
-    buffer += sizeof(double);
 
     zfp_stream* zfp = zfp_stream_open(NULL);
 
     // Set the decompression rate instead of accuracy
     zfp_stream_set_rate(zfp, rate, zfp_type_double, 1, 0);
     bitstream* stream =
-        stream_open(buffer, bufferSize - 1 * sizeof(int) - sizeof(double));
+        stream_open(buffer, bufferSize - sizeof(int) - sizeof(double));
     zfp_stream_set_bit_stream(zfp, stream);
 
     zfp_field* dec_field = zfp_field_1d(outBuff, zfp_type_double, n);
     zfp_decompress(zfp, dec_field);
+
     zfp_field_free(dec_field);
     stream_close(stream);
     zfp_stream_close(zfp);
 }
+
+void decompressMatrix1D_fixedPrecision(unsigned char* buffer, int bufferSize,
+                                       double* outBuff) {
+    // std::cout << "in decompress" << std::endl;
+    // std::cout << "buffersize: " << bufferSize << std::endl;
+    // Deserialize metadata
+    int n;
+    double precision;
+
+    // int rank = 0;
+    // MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+
+    std::memcpy(&n, buffer, sizeof(int));
+    buffer += sizeof(int);
+    std::memcpy(&precision, buffer, sizeof(double));
+    buffer += sizeof(double);
+
+    // std::cout << rank << ": " << "Decompressing " << bufferSize << " to: " <<
+    // n * sizeof(double) << " with rate parameter of " << rate << std::endl;
+
+    zfp_stream* zfp = zfp_stream_open(NULL);
+
+    // Set the decompression rate instead of accuracy
+    zfp_stream_set_precision(zfp, precision);
+    bitstream* stream =
+        stream_open(buffer, bufferSize - sizeof(int) - sizeof(double));
+    zfp_stream_set_bit_stream(zfp, stream);
+
+    zfp_field* dec_field = zfp_field_1d(outBuff, zfp_type_double, n);
+    zfp_decompress(zfp, dec_field);
+
+    zfp_field_free(dec_field);
+    stream_close(stream);
+    zfp_stream_close(zfp);
+}
+
 }  // namespace ZFPAlgorithms
 
 namespace BLOSCCompression {

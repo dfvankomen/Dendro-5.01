@@ -10,6 +10,7 @@
 #define _SVDALGORITHMS_H_
 
 // Disables Eigen's memory alignment which could lead to extra memory padding.
+#include <cstdint>
 #define EIGEN_DONT_ALIGN
 #include <Eigen/Dense>
 #include <Eigen/SVD>
@@ -95,7 +96,36 @@ double* decompressMatrix1d(unsigned char*& buffer, int bufferSize);
 
 namespace ChebyshevAlgorithms {
 
+/**
+ * Struct for using and storing data for Chebyshev computations, it's a touch
+ * faster to just memcpy a struct unpack than to
+ */
+struct ChebyshevData {
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+    uint32_t N;
+    uint32_t Q;
+    uint32_t S;
+    double_t minVal;
+    double_t maxVal;
+
+    void printSelf() {
+        std::cout << "ChebyshevData: (x, y, z, N, Q, S, minVal, MaxVal): (" << x
+                  << ", " << y << ", " << z << ", " << N << ", " << Q << ", "
+                  << S << ", " << minVal << ", " << maxVal << ")" << std::endl;
+    }
+};
+
 double chebyshevT(int n, double x);
+
+template <typename T>
+uint64_t calculateChebyshevBufferSize(uint32_t x, uint32_t y, uint32_t z,
+                                      uint32_t N, uint32_t Q, int S) {
+    // NOTE: this returns size in BYTES only to be used with unsigned char
+    // arrays!
+    return (6 * sizeof(int)) + (2 * sizeof(T)) + (N * Q * S * sizeof(T));
+}
 
 /**
  * To compress the data,
@@ -123,9 +153,19 @@ double chebyshevT(int n, double x);
  *
  * @return A pointer to the byte stream containing the compressed data.
  */
-unsigned char* compressMatrix(double*& originalMatrix, int x, int y, int z,
-                              int N, int Q, int S, int& bufferSize);
-double* decompressMatrix(unsigned char*& buffer, int bufferSize);
+unsigned char* compressMatrix(const double* originalMatrix, const uint32_t x,
+                              const uint32_t y, const uint32_t z,
+                              const uint32_t N, const uint32_t Q,
+                              const uint32_t S, int& bufferSize);
+
+void compressMatrixBuffer(const double* originalMatrix, const uint32_t x,
+                          const uint32_t y, const uint32_t z, const uint32_t N,
+                          const uint32_t Q, const uint32_t S,
+                          unsigned char* outputArray, int& bufferSize);
+
+double* decompressMatrix(const unsigned char* buffer, const int bufferSize);
+void decompressMatrixBuffer(const unsigned char* buffer, const int bufferSize,
+                            double* outBuff);
 
 }  // namespace ChebyshevAlgorithms
 #endif  // _CHEBYSHEVALGORITHMS_H_
@@ -188,6 +228,94 @@ namespace FFTAlgorithms {
 namespace ZFPAlgorithms {
 
 /**
+ * Struct for using and storing data for Chebyshev computations, it's a touch
+ * faster to just memcpy a struct unpack than to
+ */
+struct ZFPData3d {
+    uint32_t x;
+    uint32_t y;
+    uint32_t z;
+    double rate;
+
+    void printSelf() {
+        std::cout << "ZFPData3d: (x, y, z, rate): (" << x << ", " << y << ", "
+                  << z << ", " << rate << ")" << std::endl;
+    }
+};
+
+struct ZFPData {
+    uint32_t x;
+    double rate;
+
+    void printSelf() {
+        std::cout << "ZFPData: (x, rate): (" << x << ", " << rate << ")"
+                  << std::endl;
+    }
+};
+
+template <typename T>
+int32_t calculateZFPBufferSize3d(T* originalData, int x, int y, int z,
+                                 double rate) {
+    zfp_field* field;
+    zfp_stream* zfp = zfp_stream_open(NULL);
+
+    if constexpr (std::is_same_v<T, double>) {
+        field = zfp_field_3d(originalData, zfp_type_double, x, y, z);
+        zfp_stream_set_rate(zfp, rate, zfp_type_double, 3, 0);
+    } else if constexpr (std::is_same_v<T, float>) {
+        field = zfp_field_3d(originalData, zfp_type_float, x, y, z);
+        zfp_stream_set_rate(zfp, rate, zfp_type_float, 3, 0);
+    } else if constexpr (std::is_same_v<T, uint32_t>) {
+        field = zfp_field_3d(originalData, zfp_type_int32, x, y, z);
+        zfp_stream_set_rate(zfp, rate, zfp_type_int32, 3, 0);
+    } else if constexpr (std::is_same_v<T, uint64_t>) {
+        field = zfp_field_3d(originalData, zfp_type_int64, x, y, z);
+        zfp_stream_set_rate(zfp, rate, zfp_type_int64, 3, 0);
+    }
+
+    // then calculate the buffer size
+    int32_t bufsize = zfp_stream_maximum_size(zfp, field);
+
+    // then add the x, y, and z values along with the double for rate
+    bufsize += sizeof(ZFPData3d);
+
+    zfp_stream_close(zfp);
+    zfp_field_free(field);
+
+    return bufsize;
+}
+
+template <typename T>
+int32_t calculateZFPBufferSize(double* originalData, int n, double rate) {
+    zfp_field* field;
+    zfp_stream* zfp = zfp_stream_open(NULL);
+
+    if constexpr (std::is_same_v<T, double>) {
+        field = zfp_field_1d(originalData, zfp_type_double, n);
+        zfp_stream_set_rate(zfp, rate, zfp_type_double, 1, 0);
+    } else if constexpr (std::is_same_v<T, float>) {
+        field = zfp_field_1d(originalData, zfp_type_float, n);
+        zfp_stream_set_rate(zfp, rate, zfp_type_float, 1, 0);
+    } else if constexpr (std::is_same_v<T, uint32_t>) {
+        field = zfp_field_1d(originalData, zfp_type_int32, n);
+        zfp_stream_set_rate(zfp, rate, zfp_type_int32, 1, 0);
+    } else if constexpr (std::is_same_v<T, uint64_t>) {
+        field = zfp_field_1d(originalData, zfp_type_int64, n);
+        zfp_stream_set_rate(zfp, rate, zfp_type_int64, 1, 0);
+    }
+
+    int32_t bufsize = zfp_stream_maximum_size(zfp, field);
+
+    // then add the x, y, and z values along with the double for rate
+    bufsize += sizeof(ZFPData);
+
+    zfp_stream_close(zfp);
+    zfp_field_free(field);
+
+    return bufsize;
+}
+
+/**
  * We used ZFP's fixde-rate mode for this compression algoithm in 3x7x7
  * matrices. For high level documentation of the ZFP functios used:
  * https://zfp.readthedocs.io/en/release0.5.4/high-level-api.html#
@@ -204,6 +332,15 @@ unsigned char* compressMatrix(double* originalData, int x, int y, int z,
                               double rate, int& size);
 double* decompressMatrix(unsigned char* buffer, int bufferSize);
 
+void compressMatrixBuffer(const double* originalMatrix, const uint32_t x,
+                          const uint32_t y, const uint32_t z, double rate,
+                          unsigned char* outBuffer, int& size,
+                          zfp_field* field = nullptr,
+                          zfp_stream* zfp  = nullptr);
+
+void decompressMatrixBuffer(unsigned char* buffer, int bufferSize,
+                            double* outBuff);
+
 /**
  * We used ZFP's fixde-rate mode for this compression algoithm in 3x7x7
  * matrices. For high level documentation of the ZFP functios used:
@@ -219,6 +356,12 @@ double* decompressMatrix1D(unsigned char* buffer, int bufferSize);
 
 // pre-allocated memory version
 void decompressMatrix1D(unsigned char* buffer, int bufferSize, double* outBuff);
+
+unsigned char* compressMatrix1D_fixedPrecision(double* originalData, int n,
+                                               double precision, int& size);
+// pre-allocated memory version, fixed precision
+void decompressMatrix1D_fixedPrecision(unsigned char* buffer, int bufferSize,
+                                       double* outBuff);
 }  // namespace ZFPAlgorithms
 
 #endif  // _ZFPALGORITHMS_H_
