@@ -502,6 +502,13 @@ Mesh::~Mesh() {
     m_uiScatterMapActualNodeSend.clear();
     m_uiScatterMapActualNodeRecv.clear();
 
+    m_uiScatterMapConfigNodeSend.clear();
+    m_uiScatterMapConfigNodeSend.clear();
+    m_uiScatterMapConfigCountNodeSend.clear();
+    m_uiScatterMapConfigCountNodeRecv.clear();
+    m_uiScatterMapConfigOffsetNodeSend.clear();
+    m_uiScatterMapConfigOffsetNodeRecv.clear();
+
     m_uiSendNodeOffset.clear();
     m_uiSendNodeCount.clear();
     m_uiRecvNodeOffset.clear();
@@ -2909,7 +2916,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
     treeNodesTovtk(ghostElements, rank, "ghostElements");
 #endif
 
-    if (!rank) std::cout << "E2E mapping Ended" << std::endl;
+    if (!rank) std::cout << "[Dendro-MESH] E2E mapping ended!" << std::endl;
 }
 
 void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in) {
@@ -3079,7 +3086,7 @@ void Mesh::buildE2NWithSM() {
     if (m_uiActiveNpes > 1) computeNodalScatterMap4(m_uiCommActive);
 
     // 2. Use face edge vertex hanging information to modifying the data
-    // strucutres to the specified element order.
+    // structures to the specified element order.
     std::vector<unsigned int> e2n_dg;
     std::vector<unsigned int> e2n_cg;
 
@@ -3107,7 +3114,6 @@ void Mesh::buildE2NWithSM() {
         dg2eijk(m_uiE2NMapping_DG[e * m_uiNpE + IDX2(0, 1, 1)], ownerID, ii_x,
                 jj_y, kk_z);
         if (e != ownerID) {  // e does not own the face.
-
             for (unsigned int d2 = 0; d2 < nPe_1d; d2++)
                 for (unsigned int d1 = 0; d1 < nPe_1d; d1++)
                     e2n_dg[e * (nPe_3d) + IDXp(0, d1, d2)] =
@@ -3395,10 +3401,13 @@ void Mesh::buildE2NWithSM() {
                                           (kk_z * eleOrder) / pp);
     }
 
+    // copy dg to cg
     e2n_cg = e2n_dg;
+    // sort and then remove duplicates
     std::sort(e2n_dg.begin(), e2n_dg.end());
     e2n_dg.erase(std::unique(e2n_dg.begin(), e2n_dg.end()), e2n_dg.end());
 
+    // create a reverse mapping
     std::vector<unsigned int> cg2dg;
     cg2dg.resize(e2n_dg.size());
     cg2dg = e2n_dg;
@@ -3424,74 +3433,158 @@ void Mesh::buildE2NWithSM() {
     unsigned int n_dg;
     unsigned int dir;
     unsigned int ib, ie, jb, je, kb, ke;
+    unsigned char encoded_ijk;
 
     if (m_uiActiveNpes > 1) {
         std::vector<unsigned int> sendNodeCount;
         std::vector<unsigned int> recvNodeCount;
         std::vector<unsigned int> sendNodeSM;
         std::vector<unsigned int> recvNodeSM;
+        std::vector<unsigned char> sendNodeBlockConfig;
+        std::vector<unsigned char> recvNodeBlockConfig;
+        std::vector<unsigned int> sendNodeConfigCount;
+        std::vector<unsigned int> recvNodeConfigCount;
 
         sendNodeCount.resize(m_uiActiveNpes, 0);
         recvNodeCount.resize(m_uiActiveNpes, 0);
+        sendNodeConfigCount.resize(m_uiActiveNpes, 0);
+        recvNodeConfigCount.resize(m_uiActiveNpes, 0);
+
+        m_uiScatterMapConfigOffsetNodeSend.resize(m_uiActiveNpes, 0);
+        m_uiScatterMapConfigOffsetNodeRecv.resize(m_uiActiveNpes, 0);
 
         // send SM
         for (unsigned int m = 0; m < m_uiActiveNpes; m++) {
+            std::cout << m << ": Starting node count: " << sendNodeCount[m]
+                      << std::endl;
             for (unsigned int n = m_uiSendNodeOffset[m];
                  n < (m_uiSendNodeOffset[m] + m_uiSendNodeCount[m]); n++) {
                 n_dg = m_uiCG2DG[m_uiScatterMapActualNodeSend[n]];
                 dg2eijk(n_dg, ownerID, ii_x, jj_y, kk_z);
 
-                // std::cout << " owner "<<ownerID<<" ii_x: "<<ii_x<<" jj_y:
-                // "<<jj_y<<" kk_z: "<<kk_z<<std::endl;
+#ifdef DEBUG_E2N_MAPPING_SM
+                if (m_uiGlobalRank == 0)
+                    std::cout << " owner " << ownerID << " ii_x: " << ii_x
+                              << " jj_y: " << jj_y << " kk_z : " << kk_z
+                              << std::endl;
+#endif
 
-                if (ii_x == 0) {
-                    ib = 0;
-                    ie = 0;
-                }
-                if (jj_y == 0) {
-                    jb = 0;
-                    je = 0;
-                }
-                if (kk_z == 0) {
-                    kb = 0;
-                    ke = 0;
-                }
+                // combine the x, y, z into a single integer to reduce
+                // comparisons
+                encoded_ijk = (ii_x << 6) | (jj_y << 3) | kk_z;
 
-                if (ii_x == 1) {
-                    ib = 1;
-                    ie = eleOrder - 1;
-                }
-                if (jj_y == 1) {
-                    jb = 1;
-                    je = eleOrder - 1;
-                }
-                if (kk_z == 1) {
-                    kb = 1;
-                    ke = eleOrder - 1;
-                }
+                /**
+                 * if it's 0, then we want the slice **at the beginning**
+                 * if it's 1, then we want the entire "innards"
+                 * if it's 2, then we want the slice **at the end**
+                 *
+                 * So, in the "worst" (storage) case, a block might be of size
+                 * (eleOrder - 1)**3
+                 *
+                 * In the "best" (storage) case, a block might be a single
+                 * point.
+                 *
+                 * We could potentially have a block, a plane, a line, or a
+                 * point!
+                 */
+                switch (ii_x) {
+                    case 0:
+                        ib = 0;
+                        ie = 0;
+                        break;
+                    case 1:
+                        ib = 1;
+                        ie = eleOrder - 1;
+                        break;
+                    case 2:
+                        ib = eleOrder;
+                        ie = eleOrder;
+                        break;
+                    default:
+                        std::cerr << "CRITICAL ERROR in building scattermap! "
+                                     "ii_x was not 0, 1, or 2!"
+                                  << ii_x << std::endl;
+                        exit(1);
+                        break;
+                };
 
-                if (ii_x == 2) {
-                    ib = eleOrder;
-                    ie = eleOrder;
-                }
-                if (jj_y == 2) {
-                    jb = eleOrder;
-                    je = eleOrder;
-                }
-                if (kk_z == 2) {
-                    kb = eleOrder;
-                    ke = eleOrder;
-                }
+                switch (jj_y) {
+                    case 0:
+                        jb = 0;
+                        je = 0;
+                        break;
+                    case 1:
+                        jb = 1;
+                        je = eleOrder - 1;
+                        break;
+                    case 2:
+                        jb = eleOrder;
+                        je = eleOrder;
+                        break;
+                    default:
+                        std::cerr << "CRITICAL ERROR in building scattermap! "
+                                     "jj_y was not 0, 1, or 2!"
+                                  << jj_y << std::endl;
+                        exit(1);
+                        break;
+                };
 
-                for (unsigned int k = kb; k <= ke; k++)
-                    for (unsigned int j = jb; j <= je; j++)
+                switch (kk_z) {
+                    case 0:
+                        kb = 0;
+                        ke = 0;
+                        break;
+                    case 1:
+                        kb = 1;
+                        ke = eleOrder - 1;
+                        break;
+                    case 2:
+                        kb = eleOrder;
+                        ke = eleOrder;
+                        break;
+                    default:
+                        std::cerr << "CRITICAL ERROR in building scattermap! "
+                                     "jj_y was not 0, 1, or 2!"
+                                  << jj_y << std::endl;
+                        exit(1);
+                        break;
+                };
+
+                // TODO:
+                // so we need to create a buffer that also stores a reference to
+                // the block sizes!
+
+#ifdef DEBUG_E2N_MAPPING_SM
+                if (m_uiGlobalRank == 0) {
+                    std::cout << " ib " << ib << " ie " << ie << " jb " << jb
+                              << " je " << je << " kb " << kb << " ke " << ke
+                              << std::endl;
+                    std::cout << "Encoded value: "
+                              << static_cast<unsigned int>(encoded_ijk)
+                              << std::endl;
+                }
+#endif
+
+                for (unsigned int k = kb; k <= ke; k++) {
+                    for (unsigned int j = jb; j <= je; j++) {
                         for (unsigned int i = ib; i <= ie; i++) {
-                            sendNodeCount[m]++;
+                            // sendNodeCount[m]++;
                             sendNodeSM.push_back(
                                 e2n_cg[ownerID * nPe_3d + IDXp(i, j, k)]);
                         }
-            }
-        }
+                    }
+                }
+                // we can just add in one go
+                sendNodeCount[m] +=
+                    (ie - ib + 1) * (ke - kb + 1) * (je - jb + 1);
+
+                // append our encoded ijk value here
+                sendNodeConfigCount[m]++;
+                sendNodeBlockConfig.push_back(encoded_ijk);
+            }  // end iterating over current offsets
+            std::cout << m << ": End node count: " << sendNodeCount[m]
+                      << std::endl;
+        }  // end iterating over active processes
 
         // recv SM
         for (unsigned int m = 0; m < m_uiActiveNpes; m++) {
@@ -3500,44 +3593,92 @@ void Mesh::buildE2NWithSM() {
                 n_dg = m_uiCG2DG[m_uiScatterMapActualNodeRecv[n]];
                 dg2eijk(n_dg, ownerID, ii_x, jj_y, kk_z);
 
-                if (ii_x == 0) {
-                    ib = 0;
-                    ie = 0;
-                }
-                if (jj_y == 0) {
-                    jb = 0;
-                    je = 0;
-                }
-                if (kk_z == 0) {
-                    kb = 0;
-                    ke = 0;
-                }
+                // combine the x, y, z into a single integer to reduce
+                // comparisons
+                encoded_ijk = (ii_x << 6) | (jj_y << 3) | kk_z;
 
-                if (ii_x == 1) {
-                    ib = 1;
-                    ie = eleOrder - 1;
-                }
-                if (jj_y == 1) {
-                    jb = 1;
-                    je = eleOrder - 1;
-                }
-                if (kk_z == 1) {
-                    kb = 1;
-                    ke = eleOrder - 1;
-                }
+                switch (ii_x) {
+                    case 0:
+                        ib = 0;
+                        ie = 0;
+                        break;
+                    case 1:
+                        ib = 1;
+                        ie = eleOrder - 1;
+                        break;
+                    case 2:
+                        ib = eleOrder;
+                        ie = eleOrder;
+                        break;
+                    default:
+                        std::cerr << "CRITICAL ERROR in building scattermap! "
+                                     "ii_x was not 0, 1, or 2!"
+                                  << ii_x << std::endl;
+                        exit(1);
+                        break;
+                };
 
-                if (ii_x == 2) {
-                    ib = eleOrder;
-                    ie = eleOrder;
+                switch (jj_y) {
+                    case 0:
+                        jb = 0;
+                        je = 0;
+                        break;
+                    case 1:
+                        jb = 1;
+                        je = eleOrder - 1;
+                        break;
+                    case 2:
+                        jb = eleOrder;
+                        je = eleOrder;
+                        break;
+                    default:
+                        std::cerr << "CRITICAL ERROR in building scattermap! "
+                                     "jj_y was not 0, 1, or 2!"
+                                  << jj_y << std::endl;
+                        exit(1);
+                        break;
+                };
+
+                switch (kk_z) {
+                    case 0:
+                        kb = 0;
+                        ke = 0;
+                        break;
+                    case 1:
+                        kb = 1;
+                        ke = eleOrder - 1;
+                        break;
+                    case 2:
+                        kb = eleOrder;
+                        ke = eleOrder;
+                        break;
+                    default:
+                        std::cerr << "CRITICAL ERROR in building scattermap! "
+                                     "jj_y was not 0, 1, or 2!"
+                                  << jj_y << std::endl;
+                        exit(1);
+                        break;
+                };
+
+                // TODO:
+                // so we need to create a buffer that also stores a reference to
+                // the block sizes!
+
+#ifdef DEBUG_E2N_MAPPING_SM
+                if (m_uiGlobalRank == 0) {
+                    std::cout << " ib " << ib << " ie " << ie << " jb " << jb
+                              << " je " << je << " kb " << kb << " ke " << ke
+                              << std::endl;
+                    std::cout << "Encoded value: "
+                              << static_cast<unsigned int>(encoded_ijk)
+                              << std::endl;
                 }
-                if (jj_y == 2) {
-                    jb = eleOrder;
-                    je = eleOrder;
-                }
-                if (kk_z == 2) {
-                    kb = eleOrder;
-                    ke = eleOrder;
-                }
+#endif
+
+                // reserve space for the number of elements we're going to add
+                // sendNodeSM.reserve(sendNodeSM.size() +
+                //                    (ie - ib) * (ke - kb) * (je - jb));
+                // push_back should honestly be fine on its own
 
                 for (unsigned int k = kb; k <= ke; k++)
                     for (unsigned int j = jb; j <= je; j++)
@@ -3546,7 +3687,30 @@ void Mesh::buildE2NWithSM() {
                             recvNodeSM.push_back(
                                 e2n_cg[ownerID * nPe_3d + IDXp(i, j, k)]);
                         }
+
+                // append our encoded ijk value here
+                recvNodeConfigCount[m]++;
+                recvNodeBlockConfig.push_back(encoded_ijk);
             }
+        }
+
+#ifdef DEBUG_E2N_MAPPING_SM
+        if (m_uiGlobalRank == 0) {
+            std::cout << "Send Node Block Config: ";
+            for (auto &xx : sendNodeBlockConfig) {
+                std::cout << static_cast<unsigned int>(xx) << " ";
+            }
+
+            std::cout << std::endl << "Recv Node Block Config: ";
+            for (auto &xx : recvNodeBlockConfig) {
+                std::cout << static_cast<unsigned int>(xx) << " ";
+            }
+            std::cout << std::endl;
+
+            std::cout << "There are " << sendNodeBlockConfig.size()
+                      << " blocks that need to be sent!" << std::endl;
+            std::cout << "There are " << recvNodeBlockConfig.size()
+                      << " blocks that need to be received!" << std::endl;
         }
 
         // for(unsigned int k=0 ; k < m_uiScatterMapActualNodeSend.size(); k++)
@@ -3562,6 +3726,7 @@ void Mesh::buildE2NWithSM() {
         //     "<<m_uiScatterMapActualNodeRecv[k]<<" "<<recvNodeSM[k]<<"
         //     "<<std::endl;
         // }
+#endif
 
         // up date the scatter maps.
         std::swap(m_uiSendNodeCount, sendNodeCount);
@@ -3577,6 +3742,23 @@ void Mesh::buildE2NWithSM() {
 
         std::swap(m_uiScatterMapActualNodeSend, sendNodeSM);
         std::swap(m_uiScatterMapActualNodeRecv, recvNodeSM);
+
+        // and swap the config mapping
+        std::swap(m_uiScatterMapConfigNodeSend, sendNodeBlockConfig);
+        std::swap(m_uiScatterMapConfigNodeRecv, recvNodeBlockConfig);
+
+        std::swap(m_uiScatterMapConfigCountNodeSend, sendNodeConfigCount);
+        std::swap(m_uiScatterMapConfigCountNodeRecv, recvNodeConfigCount);
+
+        m_uiScatterMapConfigOffsetNodeSend[0] = 0;
+        m_uiScatterMapConfigOffsetNodeRecv[0] = 0;
+
+        omp_par::scan(m_uiScatterMapConfigCountNodeSend.data(),
+                      m_uiScatterMapConfigOffsetNodeSend.data(),
+                      m_uiActiveNpes);
+        omp_par::scan(m_uiScatterMapConfigCountNodeRecv.data(),
+                      m_uiScatterMapConfigOffsetNodeRecv.data(),
+                      m_uiActiveNpes);
     }
 
     // update the nodal bounds.
@@ -3663,7 +3845,8 @@ void Mesh::buildE2NWithSM() {
         m_uiNodePostGhostEnd = m_uiCG2DG.size();  // E2N_DG_Sorted.size();
     }
 
-    if (!m_uiActiveRank) std::cout << "E2N Mapping ended" << std::endl;
+    if (!m_uiActiveRank)
+        std::cout << "[Dendro-MESH] E2N mapping ended" << std::endl;
 }
 
 void Mesh::buildE2NMap() {
@@ -3730,6 +3913,8 @@ void Mesh::buildE2NMap() {
     assert(m_uiNumTotalElements ==
            ((m_uiElementPostGhostEnd - m_uiElementPreGhostBegin)));
 
+    // this is (eleOrder + 1)^ndim * NumTotalElements (so this is all total
+    // points)
     m_uiE2NMapping_CG.resize(m_uiNumTotalElements * m_uiNpE);
     m_uiE2NMapping_DG.resize(m_uiNumTotalElements * m_uiNpE);
 
@@ -3756,7 +3941,10 @@ void Mesh::buildE2NMap() {
         // treeNodesTovtk(invalidatedPostGhost,m_uiActiveRank,"invalidPost");
 #endif
 
-    // 2. Removing the duplicate nodes from the mapping.
+    // -----------
+    // STEP 2:
+    // Remove duplicate nodes from the mapping
+    // -----------
     unsigned int ownerIndexChild;
     unsigned int ownerIndexParent;
 
@@ -3802,12 +3990,17 @@ void Mesh::buildE2NMap() {
     std::vector<unsigned int>
         edgeOwnerIndex;  // indices that are being used for updates. for an edge
 
+    // iterate through all of the elements to find neighbors, parent-child
+    // relationships, and map internal nodes and edges to corresponding nodes
+    // and edges in parent
     for (unsigned int e = m_uiElementPreGhostBegin;
          e < (m_uiElementPostGhostEnd); e++) {
-        // 1. All local nodes for a given element is automatically mapped for a
-        // given element by construction of the DG indexing.
+        // 1. All local nodes for a given element are automatically mapped for a
+        // given thanks to constructed DG indexing.
 
-        // 2. Map internal nodes on each face,  with the corresponding face.
+        // 2. Map internal nodes on each face with the corresponding face.
+
+        // OCT_DIR_LEFT HANDLING
         parentChildLevEqual = false;
         lookUp = m_uiE2EMapping[e * m_uiNumDirections + OCT_DIR_LEFT];
         if (lookUp != LOOK_UP_TABLE_DEFAULT) {
@@ -3828,22 +4021,26 @@ void Mesh::buildE2NMap() {
                 // "<<m_uiActiveRank<<" LEFT ele: "<<e<<std::endl;
                 assert(parent == lookUp);
 
+                // child and parent indices are important for face nodes
                 faceNodesIndex(child, OCT_DIR_LEFT, faceChildIndex, true);
                 faceNodesIndex(parent, OCT_DIR_RIGHT, faceOwnerIndex, true);
 
                 assert(faceChildIndex.size() == faceOwnerIndex.size());
 
+                // map internal nodes on the left face
                 for (unsigned int index = 0; index < faceChildIndex.size();
                      index++)
                     m_uiE2NMapping_CG[faceChildIndex[index]] =
                         m_uiE2NMapping_CG[faceOwnerIndex[index]];
 
+                //
                 OCT_DIR_LEFT_INTERNAL_EDGE_MAP(
                     child, parent, parentChildLevEqual, edgeChildIndex,
                     edgeOwnerIndex);  // maps all the edges in the left face
             }
         }
 
+        // OCT_DIR_RIGHT
         parentChildLevEqual = false;
         lookUp = m_uiE2EMapping[e * m_uiNumDirections + OCT_DIR_RIGHT];
         if (lookUp != LOOK_UP_TABLE_DEFAULT) {
@@ -3879,6 +4076,7 @@ void Mesh::buildE2NMap() {
             }
         }
 
+        // OCT_DIR_DOWN HANDLING
         parentChildLevEqual = false;
         lookUp = m_uiE2EMapping[e * m_uiNumDirections + OCT_DIR_DOWN];
         if (lookUp != LOOK_UP_TABLE_DEFAULT) {
@@ -3914,6 +4112,7 @@ void Mesh::buildE2NMap() {
             }
         }
 
+        // OCT_DIR_UP HANDLING
         parentChildLevEqual = false;
         lookUp = m_uiE2EMapping[e * m_uiNumDirections + OCT_DIR_UP];
         if (lookUp != LOOK_UP_TABLE_DEFAULT) {
@@ -3949,6 +4148,7 @@ void Mesh::buildE2NMap() {
             }
         }
 
+        // OCT_DIR_BACK HANDLING
         parentChildLevEqual = false;
         lookUp = m_uiE2EMapping[e * m_uiNumDirections + OCT_DIR_BACK];
         if (lookUp != LOOK_UP_TABLE_DEFAULT) {
@@ -3984,6 +4184,7 @@ void Mesh::buildE2NMap() {
             }
         }
 
+        // OCT_DIR_FRONT HANDLING
         parentChildLevEqual = false;
         lookUp = m_uiE2EMapping[e * m_uiNumDirections + OCT_DIR_FRONT];
         if (lookUp != LOOK_UP_TABLE_DEFAULT) {
@@ -4021,68 +4222,7 @@ void Mesh::buildE2NMap() {
         }
 
         CORNER_NODE_MAP(e);
-
-        /*if(m_uiActiveRank==0 && e==284)
-        {
-
-            std::vector<ot::TreeNode> cusEleCheck;
-            unsigned int ownerID,ii_x,jj_y,kk_z; // DG index to ownerID and ijk
-        decomposition variable. unsigned int x,y,z,sz;
-            cusEleCheck.push_back(m_uiAllElements[e]);
-            for(unsigned int node=0;node<m_uiNpE;node++)
-            {
-
-                dg2eijk(m_uiE2NMapping_CG[e*m_uiNpE+node],ownerID,ii_x,jj_y,kk_z);
-
-                x=m_uiAllElements[ownerID].getX();
-                y=m_uiAllElements[ownerID].getY();
-                z=m_uiAllElements[ownerID].getZ();
-                sz=1u<<(m_uiMaxDepth-m_uiAllElements[ownerID].getLevel());
-                cusEleCheck.push_back(m_uiAllElements[ownerID]);
-
-                cusEleCheck.push_back(ot::TreeNode((x + ii_x *
-        sz/m_uiElementOrder), (y + jj_y * sz/m_uiElementOrder), (z + kk_z *
-        sz/m_uiElementOrder), m_uiMaxDepth,m_uiDim, m_uiMaxDepth));
-
-            }
-
-            treeNodesTovtk(cusEleCheck,e,"cusE2N_1");
-
-        }*/
     }
-
-    /* for(unsigned int
-     e=m_uiElementPreGhostBegin;e<m_uiElementPostGhostEnd;e++)
-     {
-         if(m_uiActiveRank==0 && e==284)
-         {
-
-                 std::vector<ot::TreeNode> cusEleCheck;
-                 unsigned int ownerID,ii_x,jj_y,kk_z; // DG index to ownerID and
-     ijk decomposition variable. unsigned int x,y,z,sz;
-                 cusEleCheck.push_back(m_uiAllElements[e]);
-                 for(unsigned int node=0;node<m_uiNpE;node++)
-                 {
-
-                     dg2eijk(m_uiE2NMapping_CG[e*m_uiNpE+node],ownerID,ii_x,jj_y,kk_z);
-
-                     x=m_uiAllElements[ownerID].getX();
-                     y=m_uiAllElements[ownerID].getY();
-                     z=m_uiAllElements[ownerID].getZ();
-                     sz=1u<<(m_uiMaxDepth-m_uiAllElements[ownerID].getLevel());
-                     cusEleCheck.push_back(m_uiAllElements[ownerID]);
-
-                     cusEleCheck.push_back(ot::TreeNode((x + ii_x *
-     sz/m_uiElementOrder), (y + jj_y * sz/m_uiElementOrder), (z + kk_z *
-     sz/m_uiElementOrder), m_uiMaxDepth,m_uiDim, m_uiMaxDepth));
-
-                 }
-
-                 treeNodesTovtk(cusEleCheck,e,"cusE2N_2");
-
-         }
-
-     }*/
 
 #ifdef DEBUG_E2N_MAPPING
     MPI_Barrier(MPI_COMM_WORLD);
@@ -4114,7 +4254,10 @@ void Mesh::buildE2NMap() {
     m_uiDG2CG.resize(m_uiAllElements.size() * m_uiNpE, LOOK_UP_TABLE_DEFAULT);
     dg2dg_p.resize(m_uiAllElements.size() * m_uiNpE, LOOK_UP_TABLE_DEFAULT);
 
-    // 3. Update DG indexing with CG indexing.
+    // -----------
+    // STEP 3:
+    // Update DG indexing with the CG indexing
+    // -----------
     std::sort(E2N_DG_Sorted.begin(), E2N_DG_Sorted.end());
     E2N_DG_Sorted.erase(std::unique(E2N_DG_Sorted.begin(), E2N_DG_Sorted.end()),
                         E2N_DG_Sorted.end());
@@ -4141,23 +4284,22 @@ void Mesh::buildE2NMap() {
         assert(owner1 < m_uiAllElements.size());
         nsz = 1u << (m_uiMaxDepth - m_uiAllElements[owner1].getLevel());
         assert(nsz % m_uiElementOrder == 0);
-        hintSKey = skeys_cg.emplace(
-            skeys_cg.end(),
-            SearchKey((m_uiAllElements[owner1].getX()) +
-                          (ii_x1 * nsz / m_uiElementOrder),
-                      (m_uiAllElements[owner1].getY()) +
-                          (jj_y1 * nsz / m_uiElementOrder),
-                      (m_uiAllElements[owner1].getZ()) +
-                          (kk_z1 * nsz / m_uiElementOrder),
-                      m_uiMaxDepth + 1, m_uiDim, m_uiMaxDepth + 1));
-        hintSKey->addOwner(E2N_DG_Sorted[index]);
+        skeys_cg.emplace_back(SearchKey(
+            (m_uiAllElements[owner1].getX()) + (ii_x1 * nsz / m_uiElementOrder),
+            (m_uiAllElements[owner1].getY()) + (jj_y1 * nsz / m_uiElementOrder),
+            (m_uiAllElements[owner1].getZ()) + (kk_z1 * nsz / m_uiElementOrder),
+            m_uiMaxDepth + 1, m_uiDim, m_uiMaxDepth + 1));
+        skeys_cg.back().addOwner(E2N_DG_Sorted[index]);
     }
 
+    // perform the sequential sort on the skeys_cg vector
     SFC::seqSort::SFC_treeSort(&(*(skeys_cg.begin())), skeys_cg.size(),
                                tmpSKeys, tmpSKeys, tmpSKeys, m_uiMaxDepth + 1,
                                m_uiMaxDepth + 1, rootSKey, ROOT_ROTATION, 1,
                                TS_SORT_ONLY);
 
+    // ensure there aren't any duplicates, merge any skeys_cg elements and add
+    // them to cgNodes
     for (unsigned int e = 0; e < skeys_cg.size(); e++) {
         skip    = 1;
         tmpSKey = skeys_cg[e];
@@ -4191,11 +4333,16 @@ void Mesh::buildE2NMap() {
         e += (skip - 1);
     }
 
+    // sort the vector
     std::sort(m_uiCG2DG.begin(), m_uiCG2DG.end());
 
+    // populate the DG2CG vector with the CG2DG vector indices
     for (unsigned int i = 0; i < m_uiCG2DG.size(); i++)
         m_uiDG2CG[m_uiCG2DG[i]] = i;
 
+    // update the DG2CG vector and dg2dg_p arrays based on owner information of
+    // nodes in cgNodes, which establishes the mapping between original indices
+    // and corresponding new indices
     for (unsigned int i = 0; i < cgNodes.size(); i++) {
         ownerList_ptr = cgNodes[i].getOwnerList();
         if (ownerList_ptr->size() > 1) {
@@ -4210,6 +4357,7 @@ void Mesh::buildE2NMap() {
         }
     }
 
+    // fill E2NMapping_CG with the data from dg2dg_p
     for (unsigned int i = 0; i < m_uiE2NMapping_CG.size(); i++)
         if (dg2dg_p[m_uiE2NMapping_CG[i]] != LOOK_UP_TABLE_DEFAULT)
             m_uiE2NMapping_CG[i] = dg2dg_p[m_uiE2NMapping_CG[i]];
@@ -4222,6 +4370,8 @@ void Mesh::buildE2NMap() {
                   << std::endl;
 #endif
 
+    // force the Begin values all to UINT_MAX so we can find where they're
+    // supposed to go
     m_uiNodePreGhostBegin   = UINT_MAX;
     m_uiNodeLocalBegin      = UINT_MAX;
     m_uiNodePostGhostBegin  = UINT_MAX;
@@ -4230,15 +4380,21 @@ void Mesh::buildE2NMap() {
     unsigned int localOwner = UINT_MAX;
     unsigned int postOwner  = UINT_MAX;
 
+    // iterate over **elements**
     for (unsigned int e = m_uiElementPreGhostBegin; e < m_uiElementPostGhostEnd;
          e++) {
         unsigned int tmpIndex;
+        // iterate over the number of nodes per element
         for (unsigned int k = 0; k < m_uiNpE; k++) {
+            // calculate the temporary index
             tmpIndex = (m_uiE2NMapping_CG[e * m_uiNpE + k] / m_uiNpE);
             assert(tmpIndex == (((m_uiE2NMapping_CG[e * m_uiNpE + k]) /
                                  (m_uiElementOrder + 1)) /
                                 (m_uiElementOrder + 1)) /
                                    (m_uiElementOrder + 1));
+            // if we're greater than the PreGhostBegin and less than
+            // PreGhostEnd, and our NodePreGhostBegin is bigger than the
+            // mapping, then we update PreGhostBegin with the current value
             if ((tmpIndex >= m_uiElementPreGhostBegin) &&
                 (tmpIndex < m_uiElementPreGhostEnd) &&
                 /*(preOwner>=(m_uiE2NMapping_CG[e * m_uiNpE + k])/m_uiNpE) &&*/
@@ -4247,6 +4403,8 @@ void Mesh::buildE2NMap() {
                 m_uiNodePreGhostBegin = m_uiE2NMapping_CG[e * m_uiNpE + k];
             }
 
+            // check the same thing for ElementLocalBegin so that we can update
+            // NodeLocalBegin
             if ((tmpIndex >= m_uiElementLocalBegin) &&
                 (tmpIndex < m_uiElementLocalEnd) &&
                 /*(localOwner >=(m_uiE2NMapping_CG[e * m_uiNpE + k])/m_uiNpE)
@@ -4256,6 +4414,8 @@ void Mesh::buildE2NMap() {
                 m_uiNodeLocalBegin = m_uiE2NMapping_CG[e * m_uiNpE + k];
             }
 
+            // check the same thing for ElementPostGhostBegin so that we can
+            // update NodePostGhostBegin
             if ((tmpIndex >= m_uiElementPostGhostBegin) &&
                 (tmpIndex < m_uiElementPostGhostEnd) &&
                 /*(postOwner >=(m_uiE2NMapping_CG[e * m_uiNpE + k])/m_uiNpE)
@@ -4267,16 +4427,34 @@ void Mesh::buildE2NMap() {
         }
     }
 
-    assert(m_uiNodeLocalBegin !=
-           UINT_MAX);  // local node begin should be found.
+#ifdef DEBUG_E2N_MAPPING
+    std::cout << m_uiGlobalRank
+              << ": m_uiNodePreGhostBegin: " << m_uiNodePreGhostBegin
+              << std::endl;
+    std::cout << m_uiGlobalRank
+              << ": m_uiNodeLocalBegin: " << m_uiNodeLocalBegin << std::endl;
+    std::cout << m_uiGlobalRank
+              << ": m_uiNodePostGhostBegin: " << m_uiNodePostGhostBegin
+              << std::endl;
+#endif
+
+    // local node begin should be found
+    assert(m_uiNodeLocalBegin != UINT_MAX);
+    // we should not have the lookup table default at the begin point
     assert(m_uiDG2CG[m_uiNodeLocalBegin] != LOOK_UP_TABLE_DEFAULT);
-    m_uiNodeLocalBegin = m_uiDG2CG
-        [m_uiNodeLocalBegin];  //(std::lower_bound(E2N_DG_Sorted.begin(),E2N_DG_Sorted.end(),m_uiNodeLocalBegin)-E2N_DG_Sorted.begin());
+
+    m_uiNodeLocalBegin = m_uiDG2CG[m_uiNodeLocalBegin];
+    //(std::lower_bound(E2N_DG_Sorted.begin(),E2N_DG_Sorted.end(),m_uiNodeLocalBegin)-E2N_DG_Sorted.begin());
+
+    // if NodePreGhostBegin wasn't found, then we have to make sure
+    // NodeLocalBegin is 0
     if (m_uiNodePreGhostBegin == UINT_MAX) {
         m_uiNodePreGhostBegin = 0;
         m_uiNodePreGhostEnd   = 0;
         assert(m_uiNodeLocalBegin == 0);
     } else {
+        // otherwise, we make sure it was looked at, and then set it to the
+        // DG2CG value at NodePreGhostBegin
         assert(m_uiDG2CG[m_uiNodePreGhostBegin] != LOOK_UP_TABLE_DEFAULT);
         m_uiNodePreGhostBegin = m_uiDG2CG
             [m_uiNodePreGhostBegin];  //(std::lower_bound(E2N_DG_Sorted.begin(),E2N_DG_Sorted.end(),m_uiNodePreGhostBegin)-E2N_DG_Sorted.begin());
@@ -4297,9 +4475,11 @@ void Mesh::buildE2NMap() {
 
     m_uiNumActualNodes = cgNodes.size();
 
+    // overwrite the DG table with the CG table data
     m_uiE2NMapping_DG.assign(m_uiE2NMapping_CG.begin(),
                              m_uiE2NMapping_CG.end());
 
+    // then update CG's data with the DG2CG data
     for (unsigned int i = 0; i < m_uiE2NMapping_CG.size(); i++) {
         assert(m_uiDG2CG[m_uiE2NMapping_CG[i]] != LOOK_UP_TABLE_DEFAULT);
         m_uiE2NMapping_CG[i] = m_uiDG2CG[m_uiE2NMapping_CG[i]];
@@ -4312,63 +4492,6 @@ void Mesh::buildE2NMap() {
     MPI_Barrier(MPI_COMM_WORLD);
     if (m_uiActiveRank) std::cout << " DG to CG index updated " << std::endl;
 #endif
-
-        /*for(unsigned int
-        e=m_uiElementPreGhostBegin;e<m_uiElementPostGhostEnd;e++)
-        {
-            if(m_uiActiveRank==2 && e==28)
-            {
-
-                std::vector<ot::TreeNode> cusEleCheck;
-                unsigned int ownerID,ii_x,jj_y,kk_z; // DG index to ownerID and
-        ijk decomposition variable. unsigned int x,y,z,sz;
-                cusEleCheck.push_back(m_uiAllElements[e]);
-                for(unsigned int node=0;node<m_uiNpE;node++)
-                {
-
-                    dg2eijk(m_uiE2NMapping_DG[e*m_uiNpE+node],ownerID,ii_x,jj_y,kk_z);
-
-                    x=m_uiAllElements[ownerID].getX();
-                    y=m_uiAllElements[ownerID].getY();
-                    z=m_uiAllElements[ownerID].getZ();
-                    sz=1u<<(m_uiMaxDepth-m_uiAllElements[ownerID].getLevel());
-                    cusEleCheck.push_back(m_uiAllElements[ownerID]);
-
-                    cusEleCheck.push_back(ot::TreeNode((x + ii_x *
-        sz/m_uiElementOrder), (y + jj_y * sz/m_uiElementOrder), (z + kk_z *
-        sz/m_uiElementOrder), m_uiMaxDepth,m_uiDim, m_uiMaxDepth));
-
-                }
-
-                treeNodesTovtk(cusEleCheck,e,"cusE2N_3");
-
-            }
-
-        }*/
-
-        /*unsigned int eleIndex;
-        if(!m_uiActiveRank)  std::cout<<"E2N  rank :
-        "<<m_uiActiveRank<<std::endl; if(!m_uiActiveRank) for(unsigned int
-        e=0;e<m_uiAllElements.size();e++)
-            {
-                if(m_uiAllElements[e]==ot::TreeNode(24, 12, 40,
-        4,m_uiDim,m_uiMaxDepth)) { std::cout << "rank: "<<m_uiActiveRank<<"
-        Element : "<<e<<" " << m_uiAllElements[e] << " : Node List :"; for
-        (unsigned int k = 0; k < m_uiNpE; k++) { std::cout << " " <<
-        m_uiE2NMapping_DG[e * m_uiNpE + k];
-                }
-
-                std::cout << std::endl;
-                }
-
-            }*/
-        //--------------------------------------------------------PRINT THE E2N
-        // MAP------------------------------------------------------------------------------------
-        /*for(unsigned int w=0;w<m_uiE2NMapping_CG.size();w++)
-            std::cout<<"w: "<<w<<" -> : "<<m_uiE2NMapping_CG[w]<<std::endl;*/
-
-        //--------------------------------------------------------PRINT THE E2N
-        // MAP------------------------------------------------------------------------------------
 
 #ifdef DEBUG_E2N_MAPPING
     // MPI_Barrier(MPI_COMM_WORLD);
@@ -4403,75 +4526,6 @@ void Mesh::buildE2NMap() {
                   << m_uiElementPostGhostEnd << ")" << std::endl;
 
 #endif
-
-    //---------------------------------------print out the E2N mapping of fake
-    // elements. (This is done for only the fake elements. )
-    //---------------------------------------------------------------------------------
-
-    /* MPI_Barrier(MPI_COMM_WORLD);
-        if(!m_uiActiveRank){
-            std::cout<<"rank: "<<m_uiActiveRank<<"fake element e2n mapping.
-       "<<std::endl; std::cout<<"number of Fake Elements :
-       "<<fakeElements_vec.size()<<std::endl; std::cout<<"number of FakeElement
-       Nodes: "<<m_uiNumFakeNodes<<std::endl; std::cout<<"[Fake ELEMENT] rank:
-       "<<m_uiActiveRank<<" pre ( "<<m_uiFElementPreGhostBegin<<",
-       "<<m_uiFElementPreGhostEnd<<") local ( "<<m_uiFElementLocalBegin<<",
-       "<<m_uiFElementLocalEnd<<")"<<" post ("<<m_uiFElementPostGhostBegin<<" ,
-       "<<m_uiFElementPostGhostEnd<<")"<<std::endl; for(unsigned int
-       e=0;e<fakeElements_vec.size();e++)
-        {
-                std::cout << "Element : "<<e<<" " << fakeElements_vec[e] << " :
-       Node List :"; for (unsigned int k = 0; k < m_uiNpE; k++) {
-
-                    std::cout << " " << fakeElement2Node_CG[e * m_uiNpE + k];
-
-                }
-
-                std::cout << std::endl;
-
-
-        }
-        }
-        MPI_Barrier(MPI_COMM_WORLD);
-        if(m_uiActiveRank==1){
-            std::cout<<"rank: "<<m_uiActiveRank<<"fake element e2n mapping.
-       "<<std::endl; std::cout<<"number of Fake Elements :
-       "<<fakeElements_vec.size()<<std::endl; std::cout<<"number of FakeElement
-       Nodes: "<<m_uiNumFakeNodes<<std::endl; std::cout<<"[Fake ELEMENT] rank:
-       "<<m_uiActiveRank<<" pre ( "<<m_uiFElementPreGhostBegin<<",
-       "<<m_uiFElementPreGhostEnd<<") local ( "<<m_uiFElementLocalBegin<<",
-       "<<m_uiFElementLocalEnd<<")"<<" post ("<<m_uiFElementPostGhostBegin<<" ,
-       "<<m_uiFElementPostGhostEnd<<")"<<std::endl; for(unsigned int
-       e=0;e<fakeElements_vec.size();e++)
-            {
-                std::cout << "Element : "<<e<<" " << fakeElements_vec[e] << " :
-       Node List :"; for (unsigned int k = 0; k < m_uiNpE; k++) {
-
-                    std::cout << " " << fakeElement2Node_CG[e * m_uiNpE + k];
-
-                }
-
-                std::cout << std::endl;
-
-
-            }
-        }
-        MPI_Barrier(MPI_COMM_WORLD);*/
-
-    //-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
-    // 8. Change the size of the original E2N mapping and copy fake element to
-    // node mapping at the end of the actual element to node mapping.
-    // m_uiE2NMapping_CG.resize(m_uiNumTotalElements*m_uiNpE+(m_uiFElementPostGhostEnd-m_uiFElementPreGhostBegin)*m_uiNpE);
-    // memcpy(&(*(m_uiE2NMapping_CG.begin()+(m_uiNumTotalElements*m_uiNpE))),&(*(fakeElement2Node_CG.begin())),sizeof(unsigned
-    // int )*(m_uiFElementPostGhostEnd-m_uiFElementPreGhostBegin)*m_uiNpE);
-
-    //---------------------------------------print out the final e2n mapping of
-    // all, actual and fake element to node
-    // mapping.--------------------------------------------------------------------------
-
-    //----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-    // if(!m_uiActiveRank) std::cout<<"E2N Mapping ended"<<std::endl;
 }
 
 void Mesh::buildFEM_E2N() {
@@ -4656,6 +4710,9 @@ void Mesh::buildE2BlockMap() {
 void Mesh::computeNodalScatterMapDG(MPI_Comm comm) {
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
+
+    std::cout << m_uiGlobalRank << ": " << "In computeNodalScatterMapDG"
+              << std::endl;
 
     int rank, npes;
     MPI_Comm_rank(comm, &rank);
@@ -8546,6 +8603,11 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
+#if DEBUG_SM
+    std::cout << m_uiGlobalRank << ": " << "In computeNodalScatterMap4"
+              << std::endl;
+#endif
+
     int rank, npes;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &npes);
@@ -8591,76 +8653,118 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     m_uiSendNodeOffset.resize(npes);
     m_uiRecvNodeOffset.resize(npes);
 
-// 1. compute the ownership (which processor it belongs to) all the ghost
-// elements.
 #ifdef PROFILE_SM
     t1 = MPI_Wtime();
 #endif
+
+    // -----------
+    // STEP 1:
+    // Compute the ownership of all ghost elements
+    // -----------
 
     std::vector<unsigned int> elementOwner;
     elementOwner.resize(m_uiAllElements.size(), rank);
 
     std::vector<ot::SearchKey> ghostElements;
     std::vector<ot::SearchKey>::iterator itSKey;
+
+    // add the preghost elements as search keys
     for (unsigned int e = m_uiElementPreGhostBegin; e < m_uiElementPreGhostEnd;
          e++) {
-        itSKey = ghostElements.emplace(ghostElements.end(),
-                                       ot::SearchKey(m_uiAllElements[e]));
-        itSKey->addOwner(e);
+        ghostElements.emplace_back(ot::SearchKey(m_uiAllElements[e]));
+        ghostElements.back().addOwner(e);
     }
 
+    // add the postghost elements as search keys
     for (unsigned int e = m_uiElementPostGhostBegin;
          e < m_uiElementPostGhostEnd; e++) {
-        itSKey = ghostElements.emplace(ghostElements.end(),
-                                       ot::SearchKey(m_uiAllElements[e]));
-        itSKey->addOwner(e);
+        ghostElements.emplace_back(ot::SearchKey(m_uiAllElements[e]));
+        ghostElements.back().addOwner(e);
     }
 
+    // then add in the splitter elements for each processor (used to split keys
+    // to the correct nodes)
     for (unsigned int p = 0; p < npes; p++)
-        ghostElements.emplace(
-            ghostElements.end(),
+        ghostElements.emplace_back(
             ot::SearchKey(m_uiLocalSplitterElements[2 * p + 1]));
 
+    // perform a full SFC treesort on the ghostelements
     SFC::seqSort::SFC_treeSort(&(*(ghostElements.begin())),
                                ghostElements.size(), tmpSkeys, tmpSkeys,
                                tmpSkeys, m_uiMaxDepth, m_uiMaxDepth, rootSKey,
                                ROOT_ROTATION, 1, TS_SORT_ONLY);
 
+#ifdef DEBUG_SM
+    // we print X, Y, Z and level
+    std::cout << m_uiGlobalRank << ": " << "m_uiElementPreGhostBegin and End "
+              << m_uiElementPreGhostBegin << " " << m_uiElementPreGhostEnd
+              << " -> real elements: "
+              << m_uiAllElements[m_uiElementPreGhostBegin] << ", "
+              << m_uiAllElements[m_uiElementPreGhostEnd] << std::endl;
+    std::cout << m_uiGlobalRank << ": " << "m_uiElementPostGhostBegin and End "
+              << m_uiElementPostGhostBegin << " " << m_uiElementPostGhostEnd
+              << " -> real elements: "
+              << m_uiAllElements[m_uiElementPostGhostBegin] << ", "
+              << m_uiAllElements[m_uiElementPostGhostEnd] << std::endl;
+
+    std::cout << m_uiGlobalRank << ": " << "Additional elements from p and npes"
+              << " -> real elements: " << m_uiLocalSplitterElements[1] << ", "
+              << m_uiLocalSplitterElements[2 * (npes - 1) + 1] << std::endl;
+#endif
+
     tmpSkeys.clear();
     SearchKey tmpSkey;
     unsigned int skip;
+    // iterate through the newly sorted ghostElements
     for (unsigned int e = 0; e < (ghostElements.size()); e++) {
         skip    = 1;
         tmpSkey = ghostElements[e];
+        // check to see if there are any consecutive elements starting from e
+        // that are equal to ghostElements[e]
         while (((e + skip) < ghostElements.size()) &&
                (ghostElements[e] == ghostElements[e + skip])) {
+            // if getOwner is non-negative, then we update the owner to the
+            // current element
             if (ghostElements[e + skip].getOwner() >= 0)
                 tmpSkey.addOwner(ghostElements[e + skip].getOwner());
             skip++;
         }
+        // then put the tempSKey in the vector
         tmpSkeys.push_back(tmpSkey);
+        // only two duplicates are allowed
         assert(skip <= 2);
+        // increment to skip over the duplicated elements
         e += (skip - 1);
     }
 
+    // replace the ghost elements with the de-duplicated elements
     std::swap(ghostElements, tmpSkeys);
     tmpSkeys.clear();
 
     unsigned int gCount = 0;
+    // go through the number of processes
     for (unsigned int p = 0; p < npes; p++) {
+        // go through all ghost elements and ensure that that the current
+        // element doesn't match the splitter elements
         while (
             gCount < ghostElements.size() &&
             (ghostElements[gCount] != m_uiLocalSplitterElements[2 * p + 1])) {
+            // make sure we assign the owner of the node here in case it wasn't
+            // assigned before!
             if (ghostElements[gCount].getOwner() >= 0)
                 elementOwner[ghostElements[gCount].getOwner()] = p;
 
             gCount++;
         }
 
+        // if we're still within ghost elements bounds and if the current
+        // element *is* the boundary splitter element
         if (gCount < ghostElements.size() &&
             (ghostElements[gCount] == m_uiLocalSplitterElements[2 * p + 1])) {
+            // set the owner if it's negative (unset)
             if (ghostElements[gCount].getOwner() >= 0)
                 elementOwner[ghostElements[gCount].getOwner()] = p;
+
             gCount++;
         }
     }
@@ -8674,88 +8778,143 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
                   << t_stat_g << std::endl;
 #endif
 
+    // 2D vector
     std::vector<unsigned int> *sendIDs = new std::vector<unsigned int>[npes];
 
+#ifdef DEBUG_SM
+    std::cout << m_uiGlobalRank << ": " << "m_uiGhostElementRound1Index: ";
+    for (auto &xxx : m_uiGhostElementRound1Index) std::cout << xxx << ", ";
+    std::cout << std::endl;
+#endif
+
+    // sendIds now gets populated with the m_uiGhostElementRound1Index across
+    // all indices based on the process ID of the "owner"
     for (unsigned int e = 0; e < m_uiGhostElementRound1Index.size(); e++)
         sendIDs[elementOwner[m_uiGhostElementRound1Index[e]]].push_back(
             m_uiGhostElementRound1Index[e]);
 
+#if 0
+    for (unsigned int i = 0; i < npes; ++i) {
+        std::cout << m_uiGlobalRank << ": " << "sendIDs " << i << ": ";
+        for (unsigned int num : sendIDs[i]) {
+            std::cout << num << " ";
+        }
+        std::cout << std::endl;
+    }
+#endif
+
     sendTNElements.clear();
     for (unsigned int p = 0; p < npes; p++) {
+        // iterate over the send IDs and push back sendTNElements with the
+        // **element** at the send IDs
         for (unsigned int e = 0; e < sendIDs[p].size(); e++)
             sendTNElements.push_back(m_uiAllElements[sendIDs[p][e]]);
 
+        // figure out what the send node count is for all of the processes
         m_uiSendNodeCount[p] = sendIDs[p].size();
         sendIDs[p].clear();
     }
 
+#if 0
+    std::cout << m_uiGlobalRank << ": " << "sendTNelements";
+    for (auto &xxx : sendTNElements) {
+        std::cout << xxx << ", ";
+    }
+#endif
+
+    // distribute the send counts, which auto-populates the receive counts, this
+    // is BLOCKING
     par::Mpi_Alltoall(&(*(m_uiSendNodeCount.begin())),
                       &(*(m_uiRecvNodeCount.begin())), 1, comm);
 
     m_uiSendNodeOffset[0] = 0;
     m_uiRecvNodeOffset[0] = 0;
 
+    // now we run a parallel or non parallel prefix scan, this calculates the
+    // offsets used for the data
     omp_par::scan(&(*(m_uiSendNodeCount.begin())),
                   &(*(m_uiSendNodeOffset.begin())), npes);
     omp_par::scan(&(*(m_uiRecvNodeCount.begin())),
                   &(*(m_uiRecvNodeOffset.begin())), npes);
 
+    // resize the recvTN elements, this becomes the last offset + the total
+    // count, so it's **all** data to be received
     recvTNElements.resize(m_uiRecvNodeOffset[npes - 1] +
                           m_uiRecvNodeCount[npes - 1]);
 
+    // send data to all processes, including "displacements"
+    // we send all of the TNElements, then we have the address for the counts,
+    // then we have the address for the nodeoffsets. As for receiving, we have
+    // the receive elements vector to fill, the counts, and the offsets
     par::Mpi_Alltoallv(
         &(*(sendTNElements.begin())), (int *)(&(*(m_uiSendNodeCount.begin()))),
         (int *)(&(*(m_uiSendNodeOffset.begin()))), &(*(recvTNElements.begin())),
         (int *)(&(*(m_uiRecvNodeCount.begin()))),
         (int *)(&(*(m_uiRecvNodeOffset.begin()))), comm);
 
-    // 2. generate recvTNElement keys and send the local nodes to the owner.
+    // -----------
+    // STEP 2:
+    // Generate recvTNElement keys and send the local nodes to the owner
+    // -----------
     std::vector<ot::Key> recvTNElem_keys;
     for (unsigned int p = 0; p < npes; p++) {
         for (unsigned int e = m_uiRecvNodeOffset[p];
              e < (m_uiRecvNodeOffset[p] + m_uiRecvNodeCount[p]); e++) {
-            itKK = recvTNElem_keys.emplace(recvTNElem_keys.end(),
-                                           ot::Key(recvTNElements[e]));
-            itKK->addOwner(p);
+            recvTNElem_keys.emplace_back(ot::Key(recvTNElements[e]));
+            recvTNElem_keys.back().addOwner(p);
         }
     }
 
+    // find the receive elements in the tree for ghost regions
     SFC::seqSearch::SFC_treeSearch(
         &(*(recvTNElem_keys.begin())), &(*(m_uiAllElements.begin())), 0,
         recvTNElem_keys.size(), m_uiElementLocalBegin, m_uiElementLocalEnd,
         m_uiMaxDepth, m_uiMaxDepth, ROOT_ROTATION);
     // local nodes is done.
 
-    // for bdy nodes.
-    // 3. create local bdy nodes.
+    // -----------
+    // STEP 3:
+    // Create local boundary nodes:
+    //
+    // Identify the boundary nodes, then build up search keys, sort in space and
+    // then sort globally to find splitter elements
+    // -----------
     std::vector<ot::Node> localBdy;
     std::vector<ot::SearchKey> localBdy1;  // original local Bdy1.
 
     for (unsigned int e = m_uiNodeLocalBegin; e < m_uiNodeLocalEnd; e++) {
+        // extract the indices for decomposition
         dg2eijk(m_uiCG2DG[e], ownerID, ii_x, jj_y, kk_z);
+        // if the node is not internal, so any type of edge-boundary
         if (getDIROfANode(ii_x, jj_y, kk_z) != OCT_DIR_INTERNAL) {
             x  = m_uiAllElements[ownerID].getX();
             y  = m_uiAllElements[ownerID].getY();
             z  = m_uiAllElements[ownerID].getZ();
             sz = 1u << (m_uiMaxDepth - m_uiAllElements[ownerID].getLevel());
+
+            // the actual size should be easily divisible by m_uiElementOrder
             assert(sz % m_uiElementOrder == 0);
 
-            itSK = localBdy1.emplace(
-                localBdy1.end(),
-                SearchKey((x + ii_x * sz / m_uiElementOrder),
-                          (y + jj_y * sz / m_uiElementOrder),
-                          (z + kk_z * sz / m_uiElementOrder), m_uiMaxDepth + 1,
-                          m_uiDim, m_uiMaxDepth + 1));
-            itSK->addOwner(e);
+            // create the search key based on the x, y, z coordinates to search
+            localBdy1.emplace_back(SearchKey((x + ii_x * sz / m_uiElementOrder),
+                                             (y + jj_y * sz / m_uiElementOrder),
+                                             (z + kk_z * sz / m_uiElementOrder),
+                                             m_uiMaxDepth + 1, m_uiDim,
+                                             m_uiMaxDepth + 1));
+            // ensure the owner is updated
+            localBdy1.back().addOwner(e);
         }
     }
 
     localBdy.resize(localBdy1.size());
+    // move the search keys from localBdy1 to localBdy and set the owner to
+    // current rank!
     for (unsigned int e = 0; e < localBdy1.size(); e++) {
         localBdy[e] = localBdy1[e];
         localBdy[e].setOwner(rank);
     }
 
+    // sorts the local boundry 1 vector based on SFC values
     SFC::seqSort::SFC_treeSort(&(*(localBdy1.begin())), localBdy1.size(),
                                tmpSkeys, tmpSkeys, tmpSkeys, m_uiMaxDepth + 1,
                                m_uiMaxDepth + 1, rootSKey, ROOT_ROTATION, 1,
@@ -8766,6 +8925,8 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     t1 = MPI_Wtime();
 #endif
 
+    // do the same sort but on the localBdy in parallel fashion, as we need
+    // information about the owners
     SFC::parSort::SFC_treeSort(localBdy, tmpNN, tmpNN, tmpNN, 0.1,
                                m_uiMaxDepth + 1, rootNN, ROOT_ROTATION, 1,
                                TS_SORT_ONLY, 2, comm);
@@ -8793,14 +8954,28 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     minMax[0]         = localBdy.front();
     minMax[1]         = localBdy.back();
 
+    // m_uiSplitterNodes now contains a "vector" of all min-max values, so these
+    // are where splits occur
     m_uiSplitterNodes = new ot::TreeNode[2 * npes];
     par::Mpi_Allgather(minMax, m_uiSplitterNodes, 2, comm);
+
+#ifdef DEBUG_SM
+    if (!m_uiGlobalRank) {
+        for (int i = 0; i < 2 * npes; ++i) {
+            std::cout << "m_uiSplitterNodes[" << i
+                      << "]: " << m_uiSplitterNodes[i] << std::endl;
+        }
+    }
+#endif
 
     std::vector<bool> g1Visited;
     g1Visited.resize(m_uiCG2DG.size(), false);
 
-    // 4. Generated allocated nodes with boundary allocation.
-
+    // -----------
+    // STEP 4:
+    // Generate allocated nodes with boundary allocation
+    //
+    // -----------
     std::vector<ot::Node> allocatedBdy;  // allocated nodes where the owner of
                                          // the nodes are undecided.
     std::vector<SearchKey> allocatedNodes;  // actual allocated nodes.
@@ -8809,12 +8984,18 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     t1 = MPI_Wtime();
 #endif
 
+    // go through the ghost elements from round 1, which was filled in E2E map
+    // generation
     for (unsigned int ele = 0; ele < m_uiGhostElementRound1Index.size();
          ele++) {
+        // iterate through the nodes in current ghost element
         for (unsigned int node = 0; node < m_uiNpE; node++) {
             nodeIndex =
                 m_uiE2NMapping_CG[m_uiGhostElementRound1Index[ele] * m_uiNpE +
                                   node];
+
+            // checks if the node is in a different domain owned by another
+            // process or if it's been visited
             if ((!(nodeIndex >= m_uiNodeLocalBegin &&
                    nodeIndex < m_uiNodeLocalEnd)) &&
                 (!g1Visited[nodeIndex])) {
@@ -8825,31 +9006,35 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
                 y        = m_uiAllElements[ownerID].getY();
                 z        = m_uiAllElements[ownerID].getZ();
                 sz = 1u << (m_uiMaxDepth - m_uiAllElements[ownerID].getLevel());
-                itSK = allocatedNodes.emplace(
-                    allocatedNodes.end(),
+                allocatedNodes.emplace_back(
                     SearchKey((x + ii_x * sz / m_uiElementOrder),
                               (y + jj_y * sz / m_uiElementOrder),
                               (z + kk_z * sz / m_uiElementOrder),
                               m_uiMaxDepth + 1, m_uiDim, m_uiMaxDepth + 1));
-                itSK->addOwner(nodeIndex);
+                allocatedNodes.back().addOwner(nodeIndex);
 
+                // if we're not "internal" i.e. on the boundary, we throw it in
+                // the allocated boundary list
                 if (nodeFlag !=
                     OCT_DIR_INTERNAL) {  // for internal nodes we can directly
                                          // determine the ownership.
-                    itNN = allocatedBdy.emplace(
-                        allocatedBdy.end(),
+                    allocatedBdy.emplace_back(
                         SearchKey((x + ii_x * sz / m_uiElementOrder),
                                   (y + jj_y * sz / m_uiElementOrder),
                                   (z + kk_z * sz / m_uiElementOrder),
                                   m_uiMaxDepth + 1, m_uiDim, m_uiMaxDepth + 1));
-                    itNN->setOwner(rank);
+                    allocatedBdy.back().setOwner(rank);
                 }
+                // mark visited
                 g1Visited[nodeIndex] = true;
             }
         }
     }
+    // we should now have neighboring nodes of ghost elements belonging to the
+    // other processes.
 
     const unsigned int totAllocated = allocatedNodes.size();
+    // sort through the allocatedNodes
     SFC::seqSort::SFC_treeSort(&(*(allocatedNodes.begin())),
                                allocatedNodes.size(), tmpSkeys, tmpSkeys,
                                tmpSkeys, m_uiMaxDepth + 1, m_uiMaxDepth + 1,
@@ -8861,9 +9046,11 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     m_uiMaxDepth--;
 #endif
 
+    // put the splitter nodes at the end of allocatedBdy
     for (unsigned int p = 0; p < 2 * npes; p++)
-        allocatedBdy.emplace(allocatedBdy.end(), m_uiSplitterNodes[p]);
+        allocatedBdy.emplace_back(m_uiSplitterNodes[p]);
 
+    // then do a sequential sort
     SFC::seqSort::SFC_treeSort(&(*(allocatedBdy.begin())), allocatedBdy.size(),
                                tmpNN, tmpNN, tmpNN, m_uiMaxDepth + 1,
                                m_uiMaxDepth + 1, rootNN, ROOT_ROTATION, 1,
@@ -8897,6 +9084,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     std::swap(allocatedBdy, tmpNN);
     tmpNN.clear();
 
+    // then run a check to make sure that we're unique and sorted
     m_uiMaxDepth++;
     assert(seq::test::isUniqueAndSorted(allocatedBdy));
     m_uiMaxDepth--;
@@ -8906,6 +9094,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     std::vector<unsigned int> nodeSplitterID;
     nodeSplitterID.resize(2 * npes);
 
+    // create a vector of keys based on the m_uiSplitterNodes
     for (unsigned int p = 0; p < 2 * npes; p++)
         splitterNode_keys[p] = ot::Key(m_uiSplitterNodes[p]);
 
@@ -8913,10 +9102,12 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     assert(seq::test::isUniqueAndSorted(splitterNode_keys));
     m_uiMaxDepth--;
 
+    // perform a search and fill allocatedBdy
     m_uiMaxDepth++;
     searchKeys(splitterNode_keys, allocatedBdy);
     m_uiMaxDepth--;
 
+    // update node splitterIds with the search results
     for (unsigned int p = 0; p < 2 * npes; p++) {
         assert(splitterNode_keys[p].getFlag() & OCT_FOUND);
         assert(allocatedBdy[splitterNode_keys[p].getSearchResult()] ==
@@ -8925,8 +9116,20 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
         assert(nodeSplitterID[p] < allocatedBdy.size());
     }
 
-    // 5. send bdy allocated nodes to the correct processor (this is according
-    // to the par::sort of localBdy).
+#ifdef DEBUG_SM
+    std::cout << m_uiGlobalRank << ": " << "nodeSplitterID: ";
+    for (auto &xxx : nodeSplitterID) {
+        std::cout << xxx << " ";
+    }
+    std::cout << std::endl;
+#endif
+
+    // -----------
+    // STEP 5:
+    // Send boundary allocated notes to the correct processor, according to
+    // par::sort of localBdy
+    //
+    // -----------
     sendNNodal.clear();
     unsigned int sBegin;
     unsigned int sEnd;
@@ -8942,12 +9145,15 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
         }
     }
 
+    // send the send counts to all other processors and receive the node counts
+    // back
     par::Mpi_Alltoall(&(*(m_uiSendNodeCount.begin())),
                       &(*(m_uiRecvNodeCount.begin())), 1, comm);
 
     m_uiSendNodeOffset[0] = 0;
     m_uiRecvNodeOffset[0] = 0;
 
+    // run the prefix sum on the counts to build up the offsets
     omp_par::scan(&(*(m_uiSendNodeCount.begin())),
                   &(*(m_uiSendNodeOffset.begin())), npes);
     omp_par::scan(&(*(m_uiRecvNodeCount.begin())),
@@ -8960,6 +9166,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     t1 = MPI_Wtime();
 #endif
 
+    // communicate the send counts to fill receive counts
     par::Mpi_Alltoallv(
         &(*(sendNNodal.begin())), (int *)(&(*(m_uiSendNodeCount.begin()))),
         (int *)(&(*(m_uiSendNodeOffset.begin()))), &(*(recvNNodal.begin())),
@@ -8975,6 +9182,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
 
     std::vector<ot::Key> recvNodal_keys;
     recvNodal_keys.resize(recvNNodal.size());
+    // iterate through the receiveNNodal array to build up keys
     for (unsigned int e = 0; e < recvNNodal.size(); e++) {
         recvNodal_keys[e] = ot::Key(recvNNodal[e]);
         recvNodal_keys[e].addOwner(e);
@@ -8989,6 +9197,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
 #ifdef PROFILE_SM
     t1 = MPI_Wtime();
 #endif
+    // perform full SFC tree search on the recv keys comparing against localBdy
     SFC::seqSearch::SFC_treeSearch(
         &(*(recvNodal_keys.begin())), &(*(localBdy.begin())), 0,
         recvNodal_keys.size(), 0, localBdy.size(), m_uiMaxDepth + 1,
@@ -9002,6 +9211,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
         std::cout << " R1 seq::search max (s): " << t_stat_g << std::endl;
 #endif
 
+    // clean up the sendNNodal and sendIDs arrays
     sendNNodal.clear();
     unsigned int result;
 
@@ -9012,6 +9222,8 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     std::vector<ot::TreeNode> missingKeys;
 #endif
 
+    // go through the receive nodal keys and make sure they were "found", then
+    // put back the owner id into the sendIDs to know where it should go
     for (unsigned int e = 0; e < recvNodal_keys.size(); e++) {
         if (!(recvNodal_keys[e].getFlag() & OCT_FOUND)) {
 #ifdef DEBUG_SM
@@ -9040,6 +9252,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
         assert(recvNodal_keys[e].getFlag() & OCT_FOUND);
         result  = recvNodal_keys[e].getSearchResult();
         ownerID = recvNodal_keys[e].getOwnerList()->front();
+        // add the result and owner id to the send ids
         sendIDs[localBdy[result].getOwner()].push_back(ownerID);
     }
 
@@ -9059,12 +9272,14 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
         sendIDs[p].clear();
     }
 
+    // send and receive communication counts to and from each processor
     par::Mpi_Alltoall(&(*(m_uiSendNodeCount.begin())),
                       &(*(m_uiRecvNodeCount.begin())), 1, comm);
 
     m_uiSendNodeOffset[0] = 0;
     m_uiRecvNodeOffset[0] = 0;
 
+    // fill send and receive offsets through prefix sum
     omp_par::scan(&(*(m_uiSendNodeCount.begin())),
                   &(*(m_uiSendNodeOffset.begin())), npes);
     omp_par::scan(&(*(m_uiRecvNodeCount.begin())),
@@ -9076,6 +9291,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     t1 = MPI_Wtime();
 #endif
 
+    // send sendNNodal to fill other processors
     par::Mpi_Alltoallv(
         &(*(sendNNodal.begin())), (int *)(&(*(m_uiSendNodeCount.begin()))),
         (int *)(&(*(m_uiSendNodeOffset.begin()))), &(*(recvNNodal.begin())),
@@ -9089,6 +9305,8 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     if (!rank) std::cout << " R2 all2all max (s): " << t_stat_g << std::endl;
 #endif
 
+    // fill recvNodal keys with the receivedNodal to search the tree for the
+    // nodes
     recvNodal_keys.resize(recvNNodal.size());
     for (unsigned int e = 0; e < recvNNodal.size(); e++) {
         recvNodal_keys[e] = ot::Key(recvNNodal[e]);
@@ -9099,6 +9317,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     t1 = MPI_Wtime();
 #endif
 
+    // search the tree for the nodes we need
     SFC::seqSearch::SFC_treeSearch(
         &(*(recvNodal_keys.begin())), &(*(localBdy1.begin())), 0,
         recvNodal_keys.size(), 0, localBdy1.size(), m_uiMaxDepth + 1,
@@ -9114,6 +9333,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
 
     sendNNodal.clear();
 
+    // clear the maps
     m_uiScatterMapActualNodeSend.clear();
     m_uiScatterMapActualNodeRecv.clear();
     sendTNElements.clear();
@@ -9132,6 +9352,8 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
         assert(result >= m_uiElementLocalBegin &&
                result <= m_uiElementLocalEnd);
 
+        // iterate through z, y, and x points to fill the sendIDs with the
+        // proper index based on m_uiE2NMapping
         for (unsigned int k = 1; k < m_uiElementOrder; k++)
             for (unsigned int j = 1; j < m_uiElementOrder; j++)
                 for (unsigned int i = 1; i < m_uiElementOrder; i++)
@@ -9149,6 +9371,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
         ownerID =
             recvNNodal[recvNodal_keys[e].getOwnerList()->front()].getOwner();
         assert(ownerID != rank);
+        // then push back the local boundary ids as well!
         sendIDs[ownerID].push_back(localBdy1[result].getOwner());
     }
 
@@ -9168,15 +9391,17 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
             y  = m_uiAllElements[ownerID].getY();
             z  = m_uiAllElements[ownerID].getZ();
             sz = 1u << (m_uiMaxDepth - m_uiAllElements[ownerID].getLevel());
-            sendTNElements.emplace(
-                sendTNElements.end(),
+            sendTNElements.emplace_back(
                 ot::TreeNode((x + ii_x * sz / m_uiElementOrder),
                              (y + jj_y * sz / m_uiElementOrder),
                              (z + kk_z * sz / m_uiElementOrder),
                              m_uiMaxDepth + 1, m_uiDim, m_uiMaxDepth + 1));
             m_uiScatterMapActualNodeSend.push_back(sendIDs[p][e]);
         }
+        // actualNodeSend should have the list of nodes
+        // and sendTNElements should have TreeNodes based on the coordinates
 
+        // update the send node counts
         m_uiSendNodeCount[p] = sendIDs[p].size();
         sendIDs[p].clear();
     }
@@ -9188,17 +9413,20 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     if (!rank) std::cout << " send sm setup max (s): " << t_stat_g << std::endl;
 #endif
 
+    // update send and receive counts
     par::Mpi_Alltoall(&(*(m_uiSendNodeCount.begin())),
                       &(*(m_uiRecvNodeCount.begin())), 1, comm);
 
     m_uiSendNodeOffset[0] = 0;
     m_uiRecvNodeOffset[0] = 0;
 
+    // once again fill up the send and receive offsets in a prefix sum
     omp_par::scan(&(*(m_uiSendNodeCount.begin())),
                   &(*(m_uiSendNodeOffset.begin())), npes);
     omp_par::scan(&(*(m_uiRecvNodeCount.begin())),
                   &(*(m_uiRecvNodeOffset.begin())), npes);
 
+    // resize TNElements for receiving
     recvTNElements.resize(m_uiRecvNodeOffset[npes - 1] +
                           m_uiRecvNodeCount[npes - 1]);
 
@@ -9206,6 +9434,8 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     t1 = MPI_Wtime();
 #endif
 
+    // communicate the send elements to other processors and get receive
+    // elements
     par::Mpi_Alltoallv(
         &(*(sendTNElements.begin())), (int *)(&(*(m_uiSendNodeCount.begin()))),
         (int *)(&(*(m_uiSendNodeOffset.begin()))), &(*(recvTNElements.begin())),
@@ -9219,6 +9449,8 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     if (!rank) std::cout << " final all2all max (s): " << t_stat_g << std::endl;
 #endif
 
+    // make sure the total allocated is not the same as the receive tnelements
+    // size
     if (totAllocated != recvTNElements.size()) {
         std::cout << "rank: " << rank
                   << "[SM Error]: allocated nodes: " << totAllocated
@@ -9229,6 +9461,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
         exit(0);
     }
 
+    // fill recvNodeSKeys with recvElement IDs for a tree sort
     std::vector<SearchKey> recvNodeSKeys;
     recvNodeSKeys.resize(recvTNElements.size());
     for (unsigned int e = 0; e < recvTNElements.size(); e++) {
@@ -9240,6 +9473,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     t1 = MPI_Wtime();
 #endif
 
+    // sort the keys set above
     SFC::seqSort::SFC_treeSort(&(*(recvNodeSKeys.begin())),
                                recvNodeSKeys.size(), tmpSkeys, tmpSkeys,
                                tmpSkeys, m_uiMaxDepth + 1, m_uiMaxDepth + 1,
@@ -9261,15 +9495,19 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
     t1 = MPI_Wtime();
 #endif
 
+    // now we prepare the actualNodeRecv scattermap
     m_uiScatterMapActualNodeRecv.resize(recvTNElements.size());
     unsigned int alCount = 0;
     for (int e = 0; e < recvNodeSKeys.size(); e++) {
+        // if the owner is negative, we need to decrement the recvNode index, up
+        // the alCount and continue
         if (allocatedNodes[alCount].getOwner() < 0) {
             e--;
             alCount++;
             continue;
         }
 
+        // the allocatedNodes at [alCount] should never be different
         if (allocatedNodes[alCount] != recvNodeSKeys[e]) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
@@ -9277,6 +9515,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
             exit(0);
         }
 
+        // actual receive scatter map gets updated and owner is set properly
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
             allocatedNodes[alCount].getOwner();
         alCount++;

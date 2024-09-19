@@ -6,8 +6,10 @@
  * No padding.
  *
  */
-#ifndef _SVDALGORITHMS_H_
-#define _SVDALGORITHMS_H_
+
+#pragma once
+
+#include "lapac.h"
 
 // Disables Eigen's memory alignment which could lead to extra memory padding.
 #include <cstdint>
@@ -61,7 +63,6 @@ unsigned char* compressMatrix1d(double*& originalMatrix, const int n,
                                 const int cmp_str, int& size);
 double* decompressMatrix1d(unsigned char*& buffer, int bufferSize);
 }  // namespace SVDAlgorithms
-#endif  // _SVDALGORITHMS_H_
 
 /*
   -----------------------------------------------------------------------
@@ -83,9 +84,6 @@ double* decompressMatrix1d(unsigned char*& buffer, int bufferSize);
   fidelity obtainable for geophysical data.
   -----------------------------------------------------------------------
 */
-
-#ifndef _CHEBYSHEVALGORITHMS_H_
-#define _CHEBYSHEVALGORITHMS_H_
 
 // Disables Eigen's memory alignment which could lead to extra memory padding.
 #define EIGEN_DONT_ALIGN
@@ -167,13 +165,109 @@ double* decompressMatrix(const unsigned char* buffer, const int bufferSize);
 void decompressMatrixBuffer(const unsigned char* buffer, const int bufferSize,
                             double* outBuff);
 
+class ChebyshevCompression {
+   public:
+    ChebyshevCompression() {
+        // set default to ele6, out3
+        set_chebyshev_mat_ele6_out2_dim1();
+        set_chebyshev_mat_ele6_out2_dim2();
+        set_chebyshev_mat_ele6_out2_dim3();
+    }
+
+    ChebyshevCompression(const size_t& eleOrder = 6,
+                         const size_t& nReduced = 2) {
+        if (eleOrder == 6) {
+            if (nReduced == 1) {
+                set_chebyshev_mat_ele6_out1_dim1();
+                set_chebyshev_mat_ele6_out1_dim2();
+                set_chebyshev_mat_ele6_out1_dim3();
+            } else if (nReduced == 2) {
+                set_chebyshev_mat_ele6_out2_dim1();
+                set_chebyshev_mat_ele6_out2_dim2();
+                set_chebyshev_mat_ele6_out2_dim3();
+            } else if (nReduced == 3) {
+                set_chebyshev_mat_ele6_out3_dim1();
+                set_chebyshev_mat_ele6_out3_dim2();
+                set_chebyshev_mat_ele6_out3_dim3();
+            } else if (nReduced == 4) {
+                set_chebyshev_mat_ele6_out4_dim1();
+                set_chebyshev_mat_ele6_out4_dim2();
+                set_chebyshev_mat_ele6_out4_dim3();
+            }
+        }
+    }
+
+    ~ChebyshevCompression() {
+        if (A_cheb_dim1 != nullptr) {
+            delete[] A_cheb_dim1;
+            A_cheb_dim1 = nullptr;
+        }
+        if (A_cheb_dim2 != nullptr) {
+            delete[] A_cheb_dim2;
+            A_cheb_dim2 = nullptr;
+        }
+        if (A_cheb_dim3 != nullptr) {
+            delete[] A_cheb_dim3;
+            A_cheb_dim3 = nullptr;
+        }
+    }
+
+    void set_compression_type(const size_t& eleOrder = 6,
+                              const size_t& nReduced = 3);
+
+    void print() {
+        std::cout << "ChebyShev Info: mat3d Dims: " << cheb_dim3_decomp << ", "
+                  << cheb_dim3_comp << " | mat2d Dims: " << cheb_dim2_decomp
+                  << ", " << cheb_dim2_comp
+                  << " | mat1d Dims: " << cheb_dim1_decomp << ", "
+                  << cheb_dim1_comp << std::endl;
+    }
+
+    void do_array_norm(double* array, const size_t count, double& minVal,
+                       double& maxVal);
+    void undo_array_norm(double* array, const size_t count, const double minVal,
+                         const double maxVal);
+
+    size_t do_3d_compression(double* originalMatrix,
+                             unsigned char* outputArray);
+    size_t do_3d_decompression(unsigned char* compressedBuffer,
+                               double* outputArray);
+
+    size_t do_2d_compression(double* originalMatrix,
+                             unsigned char* outputArray);
+    size_t do_2d_decompression(unsigned char* compressedBuffer,
+                               double* outputArray);
+
+    size_t do_1d_compression(double* originalMatrix,
+                             unsigned char* outputArray);
+    size_t do_1d_decompression(unsigned char* compressedBuffer,
+                               double* outputArray);
+
+   private:
+    double* A_cheb_dim1  = nullptr;
+    double* A_cheb_dim2  = nullptr;
+    double* A_cheb_dim3  = nullptr;
+
+    // using ints to avoid casting for dgemm_
+    int cheb_dim1_decomp = 0;
+    int cheb_dim1_comp   = 0;
+    int cheb_dim2_decomp = 0;
+    int cheb_dim2_comp   = 0;
+    int cheb_dim3_decomp = 0;
+    int cheb_dim3_comp   = 0;
+    int single_dim       = 1;
+    double alpha         = 1.0;
+    double beta          = 0.0;
+
+#include "generated/cheb_transform_ele6.inc.h"
+};
+
+// build up an object that we can just use
+extern ChebyshevCompression cheby;
+
 }  // namespace ChebyshevAlgorithms
-#endif  // _CHEBYSHEVALGORITHMS_H_
 
 #if 0
-
-#ifndef FFT_ALGORITHMS_H
-#define FFT_ALGORITHMS_H
 
 #include <fftw3.h>
 
@@ -208,12 +302,7 @@ namespace FFTAlgorithms {
     double* decompressMatrix1D(unsigned char* buffer, int bufferSize);
 }
 
-#endif  // FFT_ALGORITHMS_H
-
 #endif
-
-#ifndef _ZFPALGORITHMS_H_
-#define _ZFPALGORITHMS_H_
 
 #include <fftw3.h>
 #include <zfp.h>
@@ -364,11 +453,6 @@ void decompressMatrix1D_fixedPrecision(unsigned char* buffer, int bufferSize,
                                        double* outBuff);
 }  // namespace ZFPAlgorithms
 
-#endif  // _ZFPALGORITHMS_H_
-
-#ifndef _BLOSCOMPRESSION_H_
-#define _BLOSCCOMPRESSION_H_
-
 #include <blosc.h>
 
 #include <iostream>
@@ -469,4 +553,11 @@ void decompressData(unsigned char* byteStream, int byteStreamSize,
                     double* outBuff);
 }  // namespace BLOSCCompression
 
-#endif  // _BLOSCCOMPRESSION_H_
+namespace dendro_compress {
+
+std::size_t blockwise_compression(
+    double* buffer, unsigned char* compressBuffer, const size_t numBlocks,
+    const std::vector<unsigned char>& blockConfiguration,
+    const size_t blockConfigOffset, const size_t eleorder);
+
+}

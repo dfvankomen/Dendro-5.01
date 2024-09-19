@@ -462,6 +462,15 @@ class Mesh {
     /** Scatter map for the actual nodes, recieving from other processors. */
     std::vector<unsigned int> m_uiScatterMapActualNodeRecv;
 
+    std::vector<unsigned char> m_uiScatterMapConfigNodeSend;
+    std::vector<unsigned char> m_uiScatterMapConfigNodeRecv;
+
+    std::vector<unsigned int> m_uiScatterMapConfigCountNodeSend;
+    std::vector<unsigned int> m_uiScatterMapConfigCountNodeRecv;
+
+    std::vector<unsigned int> m_uiScatterMapConfigOffsetNodeSend;
+    std::vector<unsigned int> m_uiScatterMapConfigOffsetNodeRecv;
+
     // variables to manage loop access over elements.
     /**counter for the current element*/
     unsigned int m_uiEL_i;
@@ -1472,6 +1481,36 @@ class Mesh {
     /**@brief return Scatter map for node send*/
     inline const std::vector<unsigned int> &getRecvNodeSM() const {
         return m_uiScatterMapActualNodeRecv;
+    }
+
+    /**@brief return Scatter map configuration for node send*/
+    inline const std::vector<unsigned char> &getSendNodeSMConfig() const {
+        return m_uiScatterMapConfigNodeSend;
+    }
+
+    /**@brief return Scatter map for node send*/
+    inline const std::vector<unsigned char> &getRecvNodeSMConfig() const {
+        return m_uiScatterMapConfigNodeRecv;
+    }
+
+    /**@brief return Scatter map configuration for node send*/
+    inline const std::vector<unsigned int> &getSendNodeSMConfigCount() const {
+        return m_uiScatterMapConfigCountNodeSend;
+    }
+
+    /**@brief return Scatter map for node send*/
+    inline const std::vector<unsigned int> &getRecvNodeSMConfigCount() const {
+        return m_uiScatterMapConfigCountNodeRecv;
+    }
+
+    /**@brief return Scatter map configuration for node send*/
+    inline const std::vector<unsigned int> &getSendNodeSMConfigOffset() const {
+        return m_uiScatterMapConfigOffsetNodeSend;
+    }
+
+    /**@brief return Scatter map for node send*/
+    inline const std::vector<unsigned int> &getRecvNodeSMConfigOffset() const {
+        return m_uiScatterMapConfigOffsetNodeRecv;
     }
 
     /**@brief returns the cell/element send counts*/

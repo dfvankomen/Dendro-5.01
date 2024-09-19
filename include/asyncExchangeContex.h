@@ -34,7 +34,9 @@ class AsyncExchangeContex {
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
     /** list of the compressed send buffers, compress algos allocate their own
      * mem */
-    std::vector<unsigned char*> m_uiCompSendBuf;
+    std::vector<unsigned char*> m_uiCompSendBufs;
+
+    void* m_uiCompSendBuf = NULL;
 
     /** pointer to the compressed receive buffer */
     void* m_uiCompRecvBuf = NULL;
@@ -113,28 +115,52 @@ class AsyncExchangeContex {
     }
 
     inline void allocateCompressSendBuffers(unsigned int num) {
-        m_uiCompSendBuf.resize(num, NULL);
+        m_uiCompSendBufs.resize(num, NULL);
+    }
+
+    inline void allocateCompressSendBuffer(size_t bytes) {
+        m_uiCompSendBuf = malloc(bytes);
     }
 
     inline std::vector<unsigned char*>& getCompressSendBuffers() {
-        return m_uiCompSendBuf;
+        return m_uiCompSendBufs;
     }
 
     inline void clearCompressSendBuffers() {
         deleteCompressSendBuffers();
-        m_uiCompSendBuf.clear();
+        m_uiCompSendBufs.clear();
     }
 
     inline void deleteCompressSendBuffers() {
-        for (int ii = 0; ii < m_uiCompSendBuf.size(); ii++) {
-            delete[] m_uiCompSendBuf[ii];
-            m_uiCompSendBuf[ii] = NULL;
+        for (int ii = 0; ii < m_uiCompSendBufs.size(); ii++) {
+            delete[] m_uiCompSendBufs[ii];
+            m_uiCompSendBufs[ii] = NULL;
         }
     }
 
     inline void deallocateCompressRecvBuffer() {
         free(m_uiCompRecvBuf);
         m_uiCompRecvBuf = NULL;
+    }
+
+    inline void deallocateCompressSendBuffer() {
+        free(m_uiCompSendBuf);
+        m_uiCompRecvBuf = NULL;
+    }
+
+    inline void reallocateCompressSendBuffer(size_t bytes) {
+        void* temp_ptr = realloc(m_uiCompSendBuf, bytes);
+
+        if (temp_ptr == NULL) {
+            printf(
+                "\nReallocation of compressed recieve buffer failed (see "
+                "asyncExchangeContext.h and mesh.tcc)!\nEXITING!\n");
+            free(m_uiCompSendBuf);
+            exit(0);
+        } else {
+            m_uiCompSendBuf = temp_ptr;
+            temp_ptr        = NULL;
+        }
     }
 
     inline void reallocateCompressRecvBuffer(size_t bytes) {
@@ -152,7 +178,11 @@ class AsyncExchangeContex {
         }
     }
 
+    inline void* getCompressSendBuffer() { return m_uiCompSendBuf; }
+
     inline void* getCompressRecvBuffer() { return m_uiCompRecvBuf; }
+
+    inline void getCompressSendBuffer(void* ptr) { m_uiCompSendBuf = ptr; }
 
     inline void getCompressRecvBuffer(void* ptr) { m_uiCompRecvBuf = ptr; }
 
