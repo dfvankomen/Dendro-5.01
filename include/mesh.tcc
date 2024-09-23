@@ -1081,8 +1081,9 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
 
                 file.write((char*)(&sendCompressCounts[proc_id]),
                            sizeof(sendCompressCounts[proc_id]));
-                file.write((char*)(sendBCompList[proc_id]),
-                           sizeof(unsigned char) * sendCompressCounts[proc_id]);
+                file.write(
+                    (char*)(compressSendB + sendCompressOffsets[proc_id]),
+                    sizeof(unsigned char) * sendCompressCounts[proc_id]);
                 file.close();
 #endif
             }
@@ -1197,8 +1198,8 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
     T* recvB = NULL;
 
     if (this->isActive()) {
-        // std::cout << this->getMPIRank() << ": in read from ghost end" <<
-        // std::endl;
+        // std::cout << this->getMPIRank() << ": in read from ghost end"
+        //           << std::endl;
 
         const std::vector<unsigned int>& nodeSendCount =
             this->getNodalSendCounts();
