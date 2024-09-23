@@ -11,6 +11,7 @@
 #include <cstdint>
 
 #include "compression.h"
+#include "parUtils.h"
 #define ZFP_RATE_USE 20.0
 
 // #define DENDRO_ENABLE_GHOST_COMPRESSION
@@ -727,31 +728,20 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
         const std::vector<unsigned int>& sendNodeSM   = this->getSendNodeSM();
         const std::vector<unsigned int>& recvNodeSM   = this->getRecvNodeSM();
 
-#if 0
+#ifdef __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE_NON_ASYNC
         // dump the scattermaps to see what they look like...
-        std::cout << this->getMPIRank() << "  Dumping a bunch of info"
-                  << std::endl;
 
-        // for (auto& xx : sendNodeSM) {
-        //     std::cout << xx << ", ";
-        // }
-        // std::cout << std::endl;
-
+        // dump the send scatter map
         std::ofstream outfile_send(
             std::to_string(this->getMPIRank()) + "_scattermap_send_dump.bin",
             std::ios::binary);
         size_t size = sendNodeSM.size();
-
-        // write size
         outfile_send.write(reinterpret_cast<const char*>(&size), sizeof(size));
-
-        // write actual data
         outfile_send.write(reinterpret_cast<const char*>(sendNodeSM.data()),
                            size * sizeof(unsigned int));
         outfile_send.close();
 
-        std::cout << this->getMPIRank() << " Dumping recv scattermap"
-                  << std::endl;
+        // dump the receive scatter map
         std::ofstream outfile_recv(
             std::to_string(this->getMPIRank()) + "_scattermap_recv_dump.bin",
             std::ios::binary);
@@ -779,48 +769,34 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             reinterpret_cast<const char*>(sendNodeConfigSM.data()),
             size_config * sizeof(unsigned char));
         outfile_send_config.close();
-        // and then output the information about the data
-        if (!this->getMPIRank()) {
-            std::cout << "config counts: ";
-            for (auto& xx : this->getSendNodeSMConfigCount()) {
-                std::cout << xx << " ";
-            }
-            std::cout << std::endl;
-            std::cout << "config offsets: ";
-            for (auto& xx : this->getSendNodeSMConfigOffset()) {
-                std::cout << xx << " ";
-            }
-            std::cout << std::endl;
-        }
 
-        // dump config map recv
-        std::ofstream outfile_recv_config(
-            std::to_string(this->getMPIRank()) +
-                "_scattermap_config_recv_dump.bin",
+        // and then output the information about the offsets
+        std::ofstream outfile_send_config_counts(
+            std::to_string(this->getMPIRank()) + "_scattermap_counts_dump.bin",
             std::ios::binary);
-        size_t size_config_recv = recvNodeConfigSM.size();
+        size_config = this->getSendNodeSMConfigCount().size();
         // write size
-        outfile_recv_config.write(
-            reinterpret_cast<const char*>(&size_config_recv),
-            sizeof(size_config_recv));
+        outfile_send_config_counts.write(
+            reinterpret_cast<const char*>(&size_config), sizeof(size_config));
         // write actual data
-        outfile_recv_config.write(
-            reinterpret_cast<const char*>(recvNodeConfigSM.data()),
-            size_config_recv * sizeof(unsigned char));
-        outfile_recv_config.close();
-        // and then output the information about the data
-        if (!this->getMPIRank()) {
-            std::cout << "recv config counts: ";
-            for (auto& xx : this->getRecvNodeSMConfigCount()) {
-                std::cout << xx << " ";
-            }
-            std::cout << std::endl;
-            std::cout << "recv config offsets: ";
-            for (auto& xx : this->getRecvNodeSMConfigOffset()) {
-                std::cout << xx << " ";
-            }
-            std::cout << std::endl;
-        }
+        outfile_send_config_counts.write(
+            reinterpret_cast<const char*>(
+                this->getSendNodeSMConfigCount().data()),
+            size_config * sizeof(unsigned int));
+        outfile_send_config_counts.close();
+
+        std::ofstream outfile_send_config_offsets(
+            std::to_string(this->getMPIRank()) + "_scattermap_offsets_dump.bin",
+            std::ios::binary);
+        size_config = this->getSendNodeSMConfigOffset().size();
+        // write size, then data
+        outfile_send_config_offsets.write(
+            reinterpret_cast<const char*>(&size_config), sizeof(size_config));
+        outfile_send_config_offsets.write(
+            reinterpret_cast<const char*>(
+                this->getSendNodeSMConfigOffset().data()),
+            size_config * sizeof(unsigned int));
+        outfile_send_config_offsets.close();
 
 #endif
         const unsigned int activeNpes = this->getMPICommSize();
@@ -844,14 +820,22 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             ctx.getSendCompressCounts();
         std::vector<unsigned int>& receiveCompressCounts =
             ctx.getReceiveCompressCounts();
+        std::vector<unsigned int>& sendCompressOffsets =
+            ctx.getSendCompressOffsets();
+        std::vector<unsigned int>& receiveCompressOffsets =
+            ctx.getReceiveCompressOffsets();
 
         // initialize these vectors to be the same size as our other vectors
         sendCompressCounts.reserve(nodeSendCount.size());
         receiveCompressCounts.reserve(nodeRecvCount.size());
+        sendCompressOffsets.reserve(nodeSendCount.size());
+        receiveCompressOffsets.reserve(nodeRecvCount.size());
 
         for (int ii = 0; ii < nodeSendCount.size(); ii++) {
             sendCompressCounts.push_back(0);
             receiveCompressCounts.push_back(0);
+            sendCompressOffsets.push_back(0);
+            receiveCompressOffsets.push_back(0);
         }
 
         // gather all of the sending data into one place
@@ -866,7 +850,7 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
 
             // old "dof-wise, want to avoid allocating lots of small memory
             // bits"
-            ctx.allocateCompressSendBuffers(nodeSendCount.size());
+            /*ctx.allocateCompressSendBuffers(nodeSendCount.size());*/
 
             std::vector<unsigned char*>& sendBCompList =
                 ctx.getCompressSendBuffers();
@@ -919,12 +903,15 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                             this->getSendNodeSMConfigOffset()[proc_id],
                             m_uiElementOrder);
 
-                    compressToSend[proc_id] = total_bytes_compressed;
+                    // make sure we're updating the total number of compressed
+                    // bytes to send over
+                    sendCompressCounts[proc_id] += total_bytes_compressed;
                     compressOffset += total_bytes_compressed;
                 }
 
+                // printing for compression
                 std::cout << "COMPRESS TO SEND: ";
-                for (auto& xxx : compressToSend) {
+                for (auto& xxx : sendCompressCounts) {
                     std::cout << xxx << ", ";
                 }
                 std::cout << std::endl;
@@ -935,13 +922,9 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                 int currSendCount = dof * nodeSendCount[proc_id];
 
                 // the compress offset, fortunately, is how many bytes to send
-                sendCompressCounts[proc_id] = compressOffset;
+                /*sendCompressCounts[proc_id] = compressOffset;*/
 
                 // send off non-blocking request
-                MPI_Request* req            = new MPI_Request();
-                MPI_Isend(&sendCompressCounts[proc_id], 1, MPI_INT, proc_id,
-                          m_uiCommTag, commActive, req);
-                ctx.getRequestList().push_back(req);
 
                 // these should go in a vector internally!
 #ifdef __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE_NON_ASYNC
@@ -973,30 +956,20 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             }
         }
 
-        if (recvBSz) {
-            // send request for getting the numbers
-            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
-                 recv_p++) {
-                proc_id          = recvProcList[recv_p];
-                MPI_Request* req = new MPI_Request();
-                MPI_Irecv(&receiveCompressCounts[proc_id], 1, MPI_INT, proc_id,
-                          m_uiCommTag, commActive, req);
-                ctx.getRequestList().push_back(req);
-            }
-        }
+        // perform an all-to-all request to get the values
+        par::Mpi_Alltoall(&(*(sendCompressCounts.begin())),
+                          &(*(receiveCompressCounts.begin())), 1, commActive);
+        // NOTE: it might be better to to keep this from being blocking since we
+        // want to start decompressing as soon as we can
 
-        MPI_Status status;
-        // need to wait for the commns to finish ...
-        for (unsigned int i = 0; i < ctx.getRequestList().size(); i++) {
-            MPI_Wait(ctx.getRequestList()[i], &status);
-        }
-
-        // clear the request list
-        for (unsigned int i = 0; i < ctx.getRequestList().size(); i++)
-            delete ctx.getRequestList()[i];
-        ctx.getRequestList().clear();
-
-        m_uiCommTag++;
+        // calculate the offsets for simplicity
+        sendCompressOffsets[0]    = 0;
+        receiveCompressOffsets[0] = 0;
+        omp_par::scan(&(*(sendCompressCounts.begin())),
+                      &(*(sendCompressOffsets.begin())), nodeSendCount.size());
+        omp_par::scan(&(*(receiveCompressCounts.begin())),
+                      &(*(receiveCompressOffsets.begin())),
+                      nodeSendCount.size());
 
 #ifdef __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION
         // TEMP
@@ -1025,41 +998,58 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             std::cout << dof * nodeRecvCount[ii] * sizeof(T) << " ";
         }
         std::cout << std::endl;
+
+        std::cout << this->getMPIRank() << ": Send compress offsets: ";
+        for (int ii = 0; ii < sendCompressOffsets.size(); ii++) {
+            std::cout << sendCompressOffsets[ii] << " ";
+        }
+        std::cout << std::endl;
+
+        std::cout << this->getMPIRank() << ": Receive compress offsets: ";
+        for (int ii = 0; ii < receiveCompressOffsets.size(); ii++) {
+            std::cout << receiveCompressOffsets[ii] << " ";
+        }
+        std::cout << std::endl;
 #endif
 
         if (recvBSz) {
+            // TODO: calculate the buffer size before we get here and cache the
+            // buffer because this function might be called often
+
             // the receive buffer should be pre-allocated since we've got
             // the values calculated
             ctx.allocateRecvBuffer((sizeof(T) * recvBSz * dof));
 
-            unsigned int compressBufferSzTotal = 0;
+            unsigned int compressBufferSzTotal =
+                receiveCompressOffsets.back() + receiveCompressCounts.back();
 
-            for (int ii = 0; ii < receiveCompressCounts.size(); ii++) {
-                compressBufferSzTotal += receiveCompressCounts[ii];
-            }
+            std::cout << this->getMPIRank()
+                      << ": Total receive bytes: " << compressBufferSzTotal
+                      << std::endl;
 
             // the actual incoming compressed buffer needs to be allocated
             // as well
             ctx.allocateCompressRecvBuffer(compressBufferSzTotal);
-            // make sure we get it in bytes! (that's the unsigned char part)
+            // ensure it comes through as unsigned char bytes
             recvB = (unsigned char*)ctx.getCompressRecvBuffer();
 
             // active recv procs
-            unsigned int compressBufferOffset = 0;
             for (unsigned int recv_p = 0; recv_p < recvProcList.size();
                  recv_p++) {
-                proc_id          = recvProcList[recv_p];
+                proc_id = recvProcList[recv_p];
+                std::cout << this->getMPIRank() << " : receiving from "
+                          << proc_id << " a total of "
+                          << receiveCompressCounts[proc_id] << std::endl;
                 MPI_Request* req = new MPI_Request();
-                par::Mpi_Irecv((recvB + compressBufferOffset),
+                par::Mpi_Irecv((recvB + receiveCompressOffsets[proc_id]),
                                receiveCompressCounts[proc_id], proc_id,
                                m_uiCommTag, commActive, req);
 
                 ctx.getRequestList().push_back(req);
-
-                // update the buffer offset
-                compressBufferOffset += receiveCompressCounts[proc_id];
             }
         }
+
+        std::cout << "prepping to send..." << std::endl;
 
         if (sendBSz) {
             std::vector<unsigned char*>& sendBCompList =
@@ -1071,7 +1061,12 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                 proc_id          = sendProcList[send_p];
                 MPI_Request* req = new MPI_Request();
 
-                par::Mpi_Isend((unsigned char*)sendBCompList[proc_id],
+                std::cout << this->getMPIRank() << " : sending to " << proc_id
+                          << " a total of " << sendCompressCounts[proc_id]
+                          << std::endl;
+
+                par::Mpi_Isend((unsigned char*)compressSendB +
+                                   sendCompressOffsets[proc_id],
                                sendCompressCounts[proc_id], proc_id,
                                m_uiCommTag, commActive, req);
 
@@ -1189,9 +1184,6 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
 
 #endif
 
-    // TEMP: watch out!
-    exit(0);
-
     return;
 }
 
@@ -1251,6 +1243,10 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             m_uiMPIContexts[ctxIndex].getSendCompressCounts();
         std::vector<unsigned int>& receiveCompressCounts =
             m_uiMPIContexts[ctxIndex].getReceiveCompressCounts();
+        std::vector<unsigned int>& sendCompressOffsets =
+            m_uiMPIContexts[ctxIndex].getSendCompressOffsets();
+        std::vector<unsigned int>& receiveCompressOffsets =
+            m_uiMPIContexts[ctxIndex].getReceiveCompressOffsets();
 
         MPI_Status status;
         // need to wait for the commns to finish ...
@@ -1272,17 +1268,31 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
                  recv_p++) {
                 proc_id = recvProcList[recv_p];
 
-                // decompress what has come through
-                ZFPAlgorithms::decompressMatrix1D(
-                    recvBComp + compressBufferOffset,
-                    receiveCompressCounts[proc_id],
-                    recvB + dof * nodeRecvOffset[proc_id]);
+                // do the decompression now
+
+                std::cout << this->getMPIRank()
+                          << ": decompressing from : " << proc_id << std::endl;
+
+                for (unsigned int var = 0; var < dof; var++) {
+                    std::cout << this->getMPIRank()
+                              << ": decompressing from : " << proc_id
+                              << " var id " << var << std::endl;
+                    std::size_t temp = dendro_compress::blockwise_decompression(
+                        recvB + dof * (nodeRecvOffset[proc_id]) +
+                            (var * nodeRecvCount[proc_id]),
+                        recvBComp + compressBufferOffset,
+                        this->getRecvNodeSMConfigCount()[proc_id],
+                        this->getRecvNodeSMConfig(),
+                        this->getRecvNodeSMConfigOffset()[proc_id],
+                        m_uiElementOrder);
+                    compressBufferOffset += temp;
+                }
 
                 // std::cout << this->getMPIRank() << ": decomprssing " <<
                 // receiveCompressCounts[recv_p] << " from proc " << proc_id
                 // << std::endl;
 #ifdef __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE_NON_ASYNC
-                std::ofstream file("nlsm_dumped_RECEIVED_to_" +
+                std::ofstream file("NONASYNC_dumped_RECEIVED_to_" +
                                        std::to_string(this->getMPIRank()) +
                                        "_from_" + std::to_string(proc_id) +
                                        ".bin",
@@ -1296,14 +1306,14 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
                 file.close();
 #endif
 
-                compressBufferOffset += receiveCompressCounts[proc_id];
+                /*compressBufferOffset += receiveCompressCounts[proc_id];*/
 
 #ifdef __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE_NON_ASYNC
-                std::ofstream file2("nlsm_uncompressed_dumped_RECEIVED_to_" +
-                                        std::to_string(this->getMPIRank()) +
-                                        "_from_" + std::to_string(proc_id) +
-                                        ".bin",
-                                    std::ios::binary | std::ios::out);
+                std::ofstream file2(
+                    "NONASYNC_uncompressed_dumped_RECEIVED_to_" +
+                        std::to_string(this->getMPIRank()) + "_from_" +
+                        std::to_string(proc_id) + ".bin",
+                    std::ios::binary | std::ios::out);
 
                 unsigned int fullCount = dof * nodeRecvCount[proc_id];
 
@@ -1336,6 +1346,7 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
         // post communication cleanup
         m_uiMPIContexts[ctxIndex].deAllocateSendBuffer();
         m_uiMPIContexts[ctxIndex].deAllocateRecvBuffer();
+        m_uiMPIContexts[ctxIndex].deallocateCompressSendBuffer();
         m_uiMPIContexts[ctxIndex].deallocateCompressRecvBuffer();
         m_uiMPIContexts[ctxIndex].clearCompressSendBuffers();
 
@@ -1440,6 +1451,11 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
 
 #endif
 
+    // TEMP: watch out!
+    std::cout
+        << "Exiting early from read from ghost end to make sure things work..."
+        << std::endl;
+    exit(0);
     return;
 }
 
@@ -1454,8 +1470,9 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
     // std::cout << "Ghost compression enabled" << std::endl;
 
     // send recv buffers.
-    T* sendB             = NULL;
-    unsigned char* recvB = NULL;
+    T* sendB                     = NULL;
+    unsigned char* recvB         = NULL;
+    unsigned char* compressSendB = NULL;
 
     if (this->isActive()) {
         const std::vector<unsigned int>& nodeSendCount =
@@ -1490,6 +1507,10 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
             ctx.getSendCompressCounts();
         std::vector<unsigned int>& receiveCompressCounts =
             ctx.getReceiveCompressCounts();
+        std::vector<unsigned int>& sendCompressOffsets =
+            ctx.getSendCompressOffsets();
+        std::vector<unsigned int>& receiveCompressOffsets =
+            ctx.getReceiveCompressOffsets();
 
         std::vector<unsigned char*>& sendBCompList =
             ctx.getCompressSendBuffers();
@@ -1503,7 +1524,10 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 
         // gather the data that needs to be sent
         if (sendBSz) {
-            sendB = (T*)ctx.getSendBuffer();
+            sendB         = (T*)ctx.getSendBuffer();
+
+            // get the compress send buffer
+            compressSendB = (unsigned char*)ctx.getCompressSendBuffer();
 
             // extract the data that needs to be sent to each process to our
             // big buffer
@@ -1757,7 +1781,7 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
     if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
 
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
-    std::cout << "Ghost compression enabled" << std::endl;
+    /*std::cout << "Ghost compression enabled" << std::endl;*/
 
     // send recv buffers.
     T* sendB = NULL;

@@ -1,4 +1,6 @@
 #include "compression.h"
+
+#include <cstddef>
 // #include "mpi.h"
 
 namespace SVDAlgorithms {
@@ -1482,6 +1484,12 @@ std::size_t single_block_compress_3d(double* buffer, unsigned char* bufferOut,
     return ChebyshevAlgorithms::cheby.do_3d_compression(buffer, bufferOut);
 }
 
+std::size_t single_block_decompress_3d(unsigned char* buffer,
+                                       double* bufferOut) {
+    // chebyshev decompression
+    return ChebyshevAlgorithms::cheby.do_3d_decompression(buffer, bufferOut);
+}
+
 std::size_t single_block_compress_2d(double* buffer, unsigned char* bufferOut,
                                      const size_t points_per_dim) {
     // this is always 2d
@@ -1527,6 +1535,12 @@ std::size_t single_block_compress_2d(double* buffer, unsigned char* bufferOut,
 #endif
 
     return ChebyshevAlgorithms::cheby.do_2d_compression(buffer, bufferOut);
+}
+
+std::size_t single_block_decompress_2d(unsigned char* buffer,
+                                       double* bufferOut) {
+    // chebyshev decompression
+    return ChebyshevAlgorithms::cheby.do_2d_decompression(buffer, bufferOut);
 }
 
 std::size_t single_block_compress_1d(double* buffer, unsigned char* bufferOut,
@@ -1679,6 +1693,70 @@ std::size_t blockwise_compression(
     return comp_offset;
 }
 
+std::size_t blockwise_decompression(
+    double* buffer, unsigned char* compressBuffer, const size_t numBlocks,
+    const std::vector<unsigned char>& blockConfiguration,
+    const size_t blockConfigOffset, const size_t eleorder) {
+    unsigned char config;
+
+    // booleans that store whether or not these dimensions are "active"
+    bool xdim, ydim, zdim;
+    uint32_t ndim;
+    size_t total_n_points        = 0;
+    const size_t points_per_dim  = eleorder - 1;
+    const size_t total_points_0d = 1;
+    const size_t total_points_1d = points_per_dim;
+    const size_t total_points_2d = total_points_1d * points_per_dim;
+    const size_t total_points_3d = total_points_2d * points_per_dim;
+
+    std::size_t comp_offset      = 0;
+    std::size_t orig_offset      = 0;
+
+    for (std::size_t ib = 0; ib < numBlocks; ib++) {
+        config = blockConfiguration[blockConfigOffset + ib];
+
+        xdim   = (((config >> 6) & 7u) == 1);
+        ydim   = (((config >> 3) & 7u) == 1);
+        zdim   = ((config & 7u) == 1);
+
+        // get the "dimensionality" of the block
+        ndim   = xdim + ydim + zdim;
+
+        // now based on the ndim, we will use our decompression methods
+        switch (ndim) {
+            case 0:
+                // no compression on a single point
+                std::memcpy(&buffer[orig_offset], compressBuffer + comp_offset,
+                            sizeof(double));
+                comp_offset += sizeof(double);
+                orig_offset += total_points_0d;
+                break;
+            case 1:
+                comp_offset += single_block_decompress_1d(
+                    compressBuffer + comp_offset, &buffer[orig_offset]);
+                orig_offset += total_points_1d;
+                break;
+            case 2:
+                comp_offset += single_block_decompress_2d(
+                    compressBuffer + comp_offset, &buffer[orig_offset]);
+                orig_offset += total_points_2d;
+                break;
+            case 3:
+                comp_offset += single_block_decompress_3d(
+                    compressBuffer + comp_offset, &buffer[orig_offset]);
+                orig_offset += total_points_3d;
+                break;
+            default:
+                std::cerr << "Invalid number of dimensions found when doing "
+                             "blockwise decompression. Exiting!"
+                          << std::endl;
+                exit(0);
+                break;
+        }
+    }
+    return comp_offset;
+}
+
 }  // namespace dendro_compress
 
 // TODO: move this back inside the functionality above
@@ -1785,7 +1863,7 @@ size_t ChebyshevCompression::do_3d_compression(double* originalMatrix,
 
     // now we're "compressed", and we return the total number of bytes we
     // wrote:
-    return 2 * sizeof(double) + cheb_dim3_comp * sizeof(double);
+    return bytes_3d;
 }
 
 size_t ChebyshevCompression::do_3d_decompression(
@@ -1813,7 +1891,7 @@ size_t ChebyshevCompression::do_3d_decompression(
     undo_array_norm(outputArray, cheb_dim3_decomp, minVal, maxVal);
 
     // total number of doubles coming out
-    return cheb_dim3_decomp;
+    return bytes_3d;
 }
 
 size_t ChebyshevCompression::do_2d_compression(double* originalMatrix,
@@ -1838,7 +1916,7 @@ size_t ChebyshevCompression::do_2d_compression(double* originalMatrix,
            &single_dim);
 
     // total number of bytes that we wrote
-    return 2 * sizeof(double) + cheb_dim2_comp * sizeof(double);
+    return bytes_2d;
 }
 
 size_t ChebyshevCompression::do_2d_decompression(
@@ -1865,8 +1943,9 @@ size_t ChebyshevCompression::do_2d_decompression(
     // undo the array normalization
     undo_array_norm(outputArray, cheb_dim2_decomp, minVal, maxVal);
 
-    // total number of doubles coming out
-    return cheb_dim2_decomp;
+    // total number of compress values coming out, to advance. The doubles we
+    // know are easy
+    return bytes_2d;
 }
 
 size_t ChebyshevCompression::do_1d_compression(double* originalMatrix,
@@ -1975,7 +2054,7 @@ size_t ChebyshevCompression::do_1d_compression(double* originalMatrix,
     delete[] anotherone;
 #endif
 
-    return 2 * sizeof(double) + cheb_dim1_comp * sizeof(double);
+    return bytes_1d;
 }
 
 size_t ChebyshevCompression::do_1d_decompression(
@@ -2003,7 +2082,7 @@ size_t ChebyshevCompression::do_1d_decompression(
     undo_array_norm(outputArray, cheb_dim1_decomp, minVal, maxVal);
 
     // total number of doubles coming out
-    return cheb_dim1_decomp;
+    return bytes_1d;
 }
 
 }  // namespace ChebyshevAlgorithms

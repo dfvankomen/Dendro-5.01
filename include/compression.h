@@ -195,6 +195,13 @@ class ChebyshevCompression {
                 set_chebyshev_mat_ele6_out4_dim3();
             }
         }
+
+        doubles_1d = 2 + cheb_dim1_comp;
+        doubles_2d = 2 + cheb_dim2_comp;
+        doubles_3d = 2 + cheb_dim3_comp;
+        bytes_1d   = doubles_1d * sizeof(double);
+        bytes_2d   = doubles_2d * sizeof(double);
+        bytes_3d   = doubles_3d * sizeof(double);
     }
 
     ~ChebyshevCompression() {
@@ -258,6 +265,14 @@ class ChebyshevCompression {
     int single_dim       = 1;
     double alpha         = 1.0;
     double beta          = 0.0;
+
+    // then know how many total bytes we're going to use
+    unsigned int doubles_1d;
+    unsigned int doubles_2d;
+    unsigned int doubles_3d;
+    unsigned int bytes_1d;
+    unsigned int bytes_2d;
+    unsigned int bytes_3d;
 
 #include "generated/cheb_transform_ele6.inc.h"
 };
@@ -560,4 +575,8 @@ std::size_t blockwise_compression(
     const std::vector<unsigned char>& blockConfiguration,
     const size_t blockConfigOffset, const size_t eleorder);
 
-}
+std::size_t blockwise_decompression(
+    double* buffer, unsigned char* compressBuffer, const size_t numBlocks,
+    const std::vector<unsigned char>& blockConfiguration,
+    const size_t blockConfigOffset, const size_t eleorder);
+}  // namespace dendro_compress

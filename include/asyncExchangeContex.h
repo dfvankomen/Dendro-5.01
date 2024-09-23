@@ -48,6 +48,12 @@ class AsyncExchangeContex {
     /**Receive counts for the compressed data*/
     std::vector<unsigned int> m_uiRecvCompressCounts;
 
+    /** Send offsets for the compressed data */
+    std::vector<unsigned int> m_uiSendCompressOffsets;
+
+    /** Receive offsets for the compressed data */
+    std::vector<unsigned int> m_uiRecvCompressOffsets;
+
 #endif
 
    public:
@@ -57,7 +63,7 @@ class AsyncExchangeContex {
     /**@brief batched requests for recv */
     std::vector<MPI_Request> m_recv_req;
 
-    AsyncExchangeContex() {};
+    AsyncExchangeContex(){};
 
     /**@brief creates an async ghost exchange contex*/
     AsyncExchangeContex(const void* var) {
@@ -70,7 +76,7 @@ class AsyncExchangeContex {
     }
 
     /**@brief : defaut destructor*/
-    ~AsyncExchangeContex() {};
+    ~AsyncExchangeContex(){};
 
     /**@brief allocates send buffer for ghost exchange*/
     inline void allocateSendBuffer(size_t bytes) {
@@ -193,6 +199,15 @@ class AsyncExchangeContex {
     /**@brief returns the receive compress counts*/
     inline std::vector<unsigned int>& getReceiveCompressCounts() {
         return m_uiRecvCompressCounts;
+    }
+
+    /**@brief returns the send compress offsets */
+    inline std::vector<unsigned int>& getSendCompressOffsets() {
+        return m_uiSendCompressOffsets;
+    }
+    /**@brief returns the receive compress counts*/
+    inline std::vector<unsigned int>& getReceiveCompressOffsets() {
+        return m_uiRecvCompressOffsets;
     }
 
 #endif
