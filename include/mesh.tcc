@@ -15,9 +15,9 @@
 #define ZFP_RATE_USE 20.0
 
 // #define DENDRO_ENABLE_GHOST_COMPRESSION
-#define __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE
-#define __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE_NON_ASYNC
-#define __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION
+// #define __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE
+// #define __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE_NON_ASYNC
+// #define __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION
 
 namespace ot {
 template <typename T>
@@ -1243,8 +1243,10 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
 
                 // do the decompression now
 
+#ifdef __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION_SYNC
                 std::cout << this->getMPIRank()
                           << ": decompressing from : " << proc_id << std::endl;
+#endif
 
 #ifdef __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE_NON_ASYNC
                 std::ofstream file("NONASYNC_dumped_RECEIVED_to_" +
@@ -1714,9 +1716,11 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
             for (unsigned int recv_p = 0; recv_p < recvProcList.size();
                  recv_p++) {
                 proc_id = recvProcList[recv_p];
+#ifdef __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION_ASYNC
                 std::cout << this->getMPIRank() << " : receiving from "
                           << proc_id << " a total of "
                           << receiveCompressCounts[proc_id] << std::endl;
+#endif
 
                 par::Mpi_Irecv((recvB + receiveCompressOffsets[proc_id]),
                                receiveCompressCounts[proc_id], proc_id,

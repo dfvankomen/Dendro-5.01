@@ -1439,48 +1439,7 @@ namespace dendro_compress {
 
 std::size_t single_block_compress_3d(double* buffer, unsigned char* bufferOut,
                                      const size_t points_per_dim) {
-    // this is *always* 3D
-
-#if 0
-    double* temp_output = new double[5 * 5 * 5];
-
-    // TEMP: just showing how it actually all works
-    std::size_t outputBytes =
-        ChebyshevAlgorithms::cheby.do_3d_compression(buffer, bufferOut);
-
-    // TEMP: min and max from the bufferOut as doubles
-    double* buffOutCast = (double*)bufferOut;
-
-    if (buffOutCast[0] > 0.005) {
-        std::cout << "MIN AND MAX: " << buffOutCast[0] << " " << buffOutCast[1]
-                  << std::endl;
-
-        std::cout << "normalized array: ";
-        for (size_t i = 0; i < 5 * 5 * 5; i++) {
-            std::cout << buffer[i] << ", ";
-        }
-        std::cout << std::endl;
-
-        std::cout << "OUTPUT COMPRESSED: ";
-        for (size_t i = 2; i < 3 * 3 * 3 + 2; i++) {
-            std::cout << buffOutCast[i] << ", ";
-        }
-        std::cout << std::endl;
-
-        std::size_t decompressedDoubles =
-            ChebyshevAlgorithms::cheby.do_3d_decompression(bufferOut,
-                                                           temp_output);
-
-        std::cout << "output decompressed: ";
-        for (size_t i = 0; i < 5 * 5 * 5; i++) {
-            std::cout << temp_output[i] << ", ";
-        }
-        std::cout << std::endl;
-    }
-
-    delete[] temp_output;
-#endif
-
+    // chebyshev compression
     return ChebyshevAlgorithms::cheby.do_3d_compression(buffer, bufferOut);
 }
 
@@ -1492,48 +1451,7 @@ std::size_t single_block_decompress_3d(unsigned char* buffer,
 
 std::size_t single_block_compress_2d(double* buffer, unsigned char* bufferOut,
                                      const size_t points_per_dim) {
-    // this is always 2d
-
-#if 0
-    double* temp_output = new double[5 * 5];
-
-    // TEMP: just showing how it actually all works
-    std::size_t outputBytes =
-        ChebyshevAlgorithms::cheby.do_2d_compression(buffer, bufferOut);
-
-    // TEMP: min and max from the bufferOut as doubles
-    double* buffOutCast = (double*)bufferOut;
-
-    if (buffOutCast[0] > 0.005) {
-        std::cout << "MIN AND MAX: " << buffOutCast[0] << " " << buffOutCast[1]
-                  << std::endl;
-
-        std::cout << "normalized array: ";
-        for (size_t i = 0; i < 5 * 5; i++) {
-            std::cout << buffer[i] << ", ";
-        }
-        std::cout << std::endl;
-
-        std::cout << "OUTPUT COMPRESSED: ";
-        for (size_t i = 2; i < 3 * 3 + 2; i++) {
-            std::cout << buffOutCast[i] << ", ";
-        }
-        std::cout << std::endl;
-
-        std::size_t decompressedDoubles =
-            ChebyshevAlgorithms::cheby.do_2d_decompression(bufferOut,
-                                                           temp_output);
-
-        std::cout << "output decompressed: ";
-        for (size_t i = 0; i < 5 * 5; i++) {
-            std::cout << temp_output[i] << ", ";
-        }
-        std::cout << std::endl;
-    }
-
-    delete[] temp_output;
-#endif
-
+    // chebyshev compression
     return ChebyshevAlgorithms::cheby.do_2d_compression(buffer, bufferOut);
 }
 
@@ -1545,47 +1463,6 @@ std::size_t single_block_decompress_2d(unsigned char* buffer,
 
 std::size_t single_block_compress_1d(double* buffer, unsigned char* bufferOut,
                                      const size_t points_per_dim) {
-    // this is always 1D
-
-#if 0
-    double* temp_output = new double[5];
-
-    // TEMP: just showing how it actually all works
-    std::size_t outputBytes =
-        ChebyshevAlgorithms::cheby.do_1d_compression(buffer, bufferOut);
-
-    // TEMP: min and max from the bufferOut as doubles
-    double* buffOutCast = (double*)bufferOut;
-
-    if (buffOutCast[0] > 0.005) {
-        std::cout << "MIN AND MAX: " << buffOutCast[0] << " " << buffOutCast[1]
-                  << std::endl;
-
-        std::cout << "normalized array: ";
-        for (size_t i = 0; i < 5; i++) {
-            std::cout << buffer[i] << ", ";
-        }
-        std::cout << std::endl;
-
-        std::cout << "OUTPUT COMPRESSED: ";
-        for (size_t i = 2; i < 3 + 2; i++) {
-            std::cout << buffOutCast[i] << ", ";
-        }
-        std::cout << std::endl;
-    }
-
-    std::size_t decompressedDoubles =
-        ChebyshevAlgorithms::cheby.do_1d_decompression(bufferOut, temp_output);
-
-    if (buffOutCast[0] > 0.005) {
-        std::cout << "output decompressed: ";
-        for (size_t i = 0; i < 5; i++) {
-            std::cout << temp_output[i] << ", ";
-        }
-        std::cout << std::endl;
-    }
-#endif
-
     // chebyshev compression
     return ChebyshevAlgorithms::cheby.do_1d_compression(buffer, bufferOut);
 }
@@ -1612,14 +1489,12 @@ std::size_t blockwise_compression(
     const size_t total_points_2d = total_points_1d * points_per_dim;
     const size_t total_points_3d = total_points_2d * points_per_dim;
 
-    // ChebyshevAlgorithms::cheby.set_compression_type(eleorder, 3);
-    ChebyshevAlgorithms::cheby.print();
+    // TODO: set the compression type elsewhere
+    // ChebyshevAlgorithms::cheby.set_compression_type(eleorder, 2);
+    // ChebyshevAlgorithms::cheby.print();
 
-    std::cout << " numBlocks: " << numBlocks << " offset: " << blockConfigOffset
-              << std::endl;
-
-    std::size_t comp_offset = 0;
-    std::size_t orig_offset = 0;
+    std::size_t comp_offset      = 0;
+    std::size_t orig_offset      = 0;
 
     for (size_t ib = 0; ib < numBlocks; ib++) {
         // decode the value
@@ -1631,15 +1506,6 @@ std::size_t blockwise_compression(
 
         // get the "dimensionality" of the block
         ndim   = xdim + ydim + zdim;
-
-        // total_n_points = pow(points_per_dim, ndim);
-
-        // std::cout << "config: " << static_cast<uint32_t>(config)
-        //           << " | xdim, ydim, zdim: " << xdim << ", " << ydim << ", "
-        //           << zdim << " | npoints: " << total_n_points << std::endl;
-        // std::cout << "address of sending buffers (orig, comp) "
-        //           << &(buffer[orig_offset]) << " "
-        //           << compressBuffer + comp_offset << std::endl;
 
         // now based on the ndim, we will set up our compression methods
         switch (ndim) {
@@ -1675,20 +1541,7 @@ std::size_t blockwise_compression(
                 exit(0);
                 break;
         }
-
-        // orig_offset += total_n_points;
-
-        // then we have our compressed buffer
-
-        // if (ib == 5) break;
-        // std::cout << "main offset is now: " << orig_offset
-        //           << " | compression offset is now: " << comp_offset
-        //           << std::endl;
     }
-
-    std::cout << "Total number of original doubles: " << orig_offset
-              << " Total number of compressed doubles: "
-              << comp_offset / sizeof(double) << std::endl;
 
     return comp_offset;
 }
@@ -1702,6 +1555,10 @@ std::size_t blockwise_decompression(
     // booleans that store whether or not these dimensions are "active"
     bool xdim, ydim, zdim;
     uint32_t ndim;
+
+    // these values are used to define the output side, since we're
+    // decompressing back to our values. All of the decompression methods should
+    // return how many bytes to advance the compression offset.
     size_t total_n_points        = 0;
     const size_t points_per_dim  = eleorder - 1;
     const size_t total_points_0d = 1;
@@ -1784,6 +1641,8 @@ void ChebyshevCompression::set_compression_type(const size_t& eleOrder,
             set_chebyshev_mat_ele6_out4_dim3();
         }
     }
+
+    recalculate_byte_sizes();
 }
 
 void ChebyshevCompression::do_array_norm(double* array, const size_t count,
@@ -1791,48 +1650,42 @@ void ChebyshevCompression::do_array_norm(double* array, const size_t count,
     minVal       = *std::min_element(array, array + count);
     maxVal       = *std::max_element(array, array + count);
     double range = maxVal - minVal;
-    // std::cout << "min max: " << minVal << " " << maxVal << " over " << count
-    //           << " points" << std::endl;
 
-    // TODO: check for if we're already between 0 and 1, don't want to "over
-    // noise" probably
-
-    if (abs(minVal + 1.0) < 0.0000000001 && abs(maxVal - 1.0) < 0.0000000001) {
-        // std::cout
-        //     << "SKIPPING NORMALIZATION BECAUSE IT'S EXACTLY WITHIN -1 AND 1"
-        //     << std::endl;
-        // if they're both zero, then we don't want to do anything...
-        maxVal = 0.0;
-        minVal = 0.0;
-        return;
-    }
-
-    if (minVal > -1.0 && maxVal < 1.0) {
-        // std::cout << "SKIPPING NORMALIZATION BECAUSE WE'RE BETWEEN -1 AND 1"
-        //           << std::endl;
-        maxVal = 0.0;
-        minVal = 0.0;
-        return;
-    }
-
-    for (size_t i = 0; i < count; i++) {
-        // array[i] = ((array[i] - minVal) / range) * 2.0 - 1.0;
-        array[i] = 2.0 * ((array[i] - minVal) / range) - 1.0;
+    if (minVal < -1.0 || maxVal > 1.0) {
+        // if we're outside -1 and or 1, then we need to do full normalization
+        for (size_t i = 0; i < count; i++) {
+            array[i] = 2.0 * ((array[i] - minVal) / range) - 1.0;
+        }
+    } else if (range > 1e-8) {
+        // apply a shift if we're within the vals
+        double shift = -(minVal + maxVal) / 2.0;
+        for (size_t i = 0; i < count; i++) {
+            array[i] += shift;
+        }
+    } else {
+        // otherwise do nothing, we're close to zero or something
     }
 }
 
 void ChebyshevCompression::undo_array_norm(double* array, const size_t count,
                                            const double minVal,
                                            const double maxVal) {
-    // if they're both zero, then we don't undo
-    // if (std::abs(minVal) < 1e-20 && std::abs(maxVal) < 1e-20) {
-    if (minVal == 0.0 && maxVal == 0.0) return;
-
     double range = maxVal - minVal;
 
-    // otherwise, we have to do the denormalization process:
-    for (size_t i = 0; i < count; i++) {
-        array[i] = (range / 2.0) * (array[i] + 1) + minVal;
+    if (minVal < -1.0 || maxVal > 1.0) {
+        // if we're outside -1 and or 1, then we need to do full
+        // denormalization
+        for (size_t i = 0; i < count; i++) {
+            array[i] = ((array[i] + 1.0) / 2.0) * range + minVal;
+        }
+    } else if (range > 1e-8) {
+        // apply a shift if we're within the vals
+        double shift = -(minVal + maxVal) / 2.0;
+        for (size_t i = 0; i < count; i++) {
+            array[i] -= shift;
+        }
+    } else {
+        // otherwise do nothing, we didn't do anything above
     }
 }
 
@@ -1845,17 +1698,15 @@ size_t ChebyshevCompression::do_3d_compression(double* originalMatrix,
     do_array_norm(originalMatrix, cheb_dim3_decomp, minVal, maxVal);
 
     // copy min and max val
-    unsigned char* ptr = outputArray;
-    std::memcpy(ptr, &minVal, sizeof(double) * 1);
-    ptr += sizeof(double);
-    std::memcpy(ptr, &maxVal, sizeof(double) * 1);
-    ptr += sizeof(double);
+    std::memcpy(outputArray, &minVal, sizeof(double));
+    std::memcpy(outputArray + sizeof(double), &maxVal, sizeof(double));
 
     // recast the output array as a double array, since it's just memory
     // that *I* control
-    double* outputCast = reinterpret_cast<double*>(ptr);
+    double* outputCast =
+        reinterpret_cast<double*>(outputArray + 2 * sizeof(double));
 
-    char TRANS         = 'T';
+    char TRANS = 'T';
 
     dgemv_(&TRANS, &cheb_dim3_decomp, &cheb_dim3_comp, &alpha, A_cheb_dim3,
            &cheb_dim3_decomp, originalMatrix, &single_dim, &beta, outputCast,
@@ -1872,16 +1723,13 @@ size_t ChebyshevCompression::do_3d_decompression(
     // so we need to get the min and max value
     double maxVal, minVal;
 
-    unsigned char* ptr = compressedBuffer;
+    std::memcpy(&minVal, compressedBuffer, sizeof(double));
+    std::memcpy(&maxVal, compressedBuffer + sizeof(double), sizeof(double));
 
-    std::memcpy(&minVal, ptr, sizeof(double) * 1);
-    ptr += sizeof(double);
-    std::memcpy(&maxVal, ptr, sizeof(double) * 1);
-    ptr += sizeof(double);
+    double* inputCast =
+        reinterpret_cast<double*>(compressedBuffer + 2 * sizeof(double));
 
-    double* inputCast = (double*)ptr;
-
-    char TRANS        = 'N';
+    char TRANS = 'N';
 
     dgemv_(&TRANS, &cheb_dim3_decomp, &cheb_dim3_comp, &alpha, A_cheb_dim3,
            &cheb_dim3_decomp, inputCast, &single_dim, &beta, outputArray,
@@ -1900,16 +1748,14 @@ size_t ChebyshevCompression::do_2d_compression(double* originalMatrix,
     do_array_norm(originalMatrix, cheb_dim2_decomp, minVal, maxVal);
 
     // copy min and max val
-    unsigned char* ptr = outputArray;
-    std::memcpy(ptr, &minVal, sizeof(double) * 1);
-    ptr += sizeof(double);
-    std::memcpy(ptr, &maxVal, sizeof(double) * 1);
-    ptr += sizeof(double);
+    std::memcpy(outputArray, &minVal, sizeof(double));
+    std::memcpy(outputArray + sizeof(double), &maxVal, sizeof(double));
 
     // recast the output array as a double array, since it's just memory
-    double* outputCast = (double*)ptr;
+    double* outputCast =
+        reinterpret_cast<double*>(outputArray + 2 * sizeof(double));
 
-    char TRANS         = 'T';
+    char TRANS = 'T';
     // now do the matrix-vector multiplication
     dgemv_(&TRANS, &cheb_dim2_decomp, &cheb_dim2_comp, &alpha, A_cheb_dim2,
            &cheb_dim2_decomp, originalMatrix, &single_dim, &beta, outputCast,
@@ -1925,16 +1771,13 @@ size_t ChebyshevCompression::do_2d_decompression(
     // so we need to get the min and max value
     double maxVal, minVal;
 
-    unsigned char* ptr = compressedBuffer;
+    std::memcpy(&minVal, compressedBuffer, sizeof(double));
+    std::memcpy(&maxVal, compressedBuffer + sizeof(double), sizeof(double));
 
-    std::memcpy(&minVal, ptr, sizeof(double) * 1);
-    ptr += sizeof(double);
-    std::memcpy(&maxVal, ptr, sizeof(double) * 1);
-    ptr += sizeof(double);
+    double* inputCast =
+        reinterpret_cast<double*>(compressedBuffer + 2 * sizeof(double));
 
-    double* inputCast = (double*)ptr;
-
-    char TRANS        = 'N';
+    char TRANS = 'N';
 
     dgemv_(&TRANS, &cheb_dim2_decomp, &cheb_dim2_comp, &alpha, A_cheb_dim2,
            &cheb_dim2_decomp, inputCast, &single_dim, &beta, outputArray,
@@ -1952,46 +1795,15 @@ size_t ChebyshevCompression::do_1d_compression(double* originalMatrix,
                                                unsigned char* outputArray) {
     double maxVal, minVal;
 
-#if 0
-    const double testval = 0.005;
-    if (minVal > 0.5) {
-        std::cout << "original array: ";
-        for (size_t i = 0; i < cheb_dim1_decomp; i++) {
-            std::cout << originalMatrix[i] << ", ";
-        }
-        std::cout << std::endl;
-    }
-#endif
-
     do_array_norm(originalMatrix, cheb_dim1_decomp, minVal, maxVal);
 
-#if 0
-    if (minVal > testval) {
-        std::cout << "MIN AND MAX: " << minVal << " " << maxVal << std::endl;
-        std::cout << "cheb dim1 decomp, comp: " << cheb_dim1_decomp << " "
-                  << cheb_dim1_comp << std::endl;
-        std::cout << "alpha: beta: " << alpha << " " << beta << std::endl;
-        // std::cout << "original address:" << originalMatrix
-        //           << " | compressed address: " << (void*)outputArray <<
-        //           std::endl;
-
-        std::cout << "normalized array: ";
-        for (size_t i = 0; i < cheb_dim1_decomp; i++) {
-            std::cout << originalMatrix[i] << ", ";
-        }
-        std::cout << std::endl;
-    }
-#endif
-
     // copy min and max val
-    unsigned char* ptr = outputArray;
-    std::memcpy(ptr, &minVal, sizeof(double) * 1);
-    ptr += sizeof(double);
-    std::memcpy(ptr, &maxVal, sizeof(double) * 1);
-    ptr += sizeof(double);
+    std::memcpy(outputArray, &minVal, sizeof(double));
+    std::memcpy(outputArray + sizeof(double), &maxVal, sizeof(double));
 
     // recast the output array as a double array, since it's just memory
-    double* outputCast  = (double*)ptr;
+    double* outputCast =
+        reinterpret_cast<double*>(outputArray + 2 * sizeof(double));
 
     // do the matrix math
     char TRANSA         = 'T';
@@ -2004,56 +1816,6 @@ size_t ChebyshevCompression::do_1d_compression(double* originalMatrix,
            &cheb_dim1_decomp, originalMatrix, &single_dim, &beta, outputCast,
            &single_dim);
 
-#if 0
-    if (minVal > testval) {
-        std::cout << "ORIGINAL COMPRESSED: ";
-        for (size_t i = 0; i < cheb_dim1_comp + 10; i++) {
-            std::cout << outputCast[i] << ", ";
-        }
-        std::cout << std::endl;
-
-        for (size_t j = 0; j < cheb_dim1_comp; j++) {
-            temp_output[j] = 0.0;
-            for (size_t i = 0; i < cheb_dim1_decomp; i++) {
-                temp_output[j] +=
-                    A_cheb_dim1[j * cheb_dim1_decomp + i] * originalMatrix[i];
-            }
-        }
-
-        std::cout << "OUTPUT COMPRESSED FIXED: ";
-        for (size_t i = 0; i < cheb_dim1_comp; i++) {
-            std::cout << temp_output[i] << ", ";
-        }
-        std::cout << std::endl;
-
-        std::cout << "cheb_dim1 ():";
-        for (size_t j = 0; j < cheb_dim1_comp; j++) {
-            for (size_t i = 0; i < cheb_dim1_decomp; i++) {
-                std::cout << A_cheb_dim1[j * cheb_dim1_decomp + i] << ", ";
-            }
-            std::cout << std::endl;
-        }
-        std::cout << std::endl;
-    }
-
-    // undo
-    double* anotherone = new double[5];
-    dgemv_(&TRANSB, &cheb_dim1_decomp, &cheb_dim1_comp, &alpha, A_cheb_dim1,
-           &cheb_dim1_decomp, temp_output, &single_dim, &beta, anotherone,
-           &single_dim);
-
-    if (minVal > testval) {
-        std::cout << "OUTPUT RESTORED: ";
-        for (size_t i = 0; i < cheb_dim1_decomp; i++) {
-            std::cout << anotherone[i] << ", ";
-        }
-        std::cout << std::endl;
-    }
-
-    delete[] temp_output;
-    delete[] anotherone;
-#endif
-
     return bytes_1d;
 }
 
@@ -2065,14 +1827,19 @@ size_t ChebyshevCompression::do_1d_decompression(
 
     unsigned char* ptr = compressedBuffer;
 
-    std::memcpy(&minVal, ptr, sizeof(double) * 1);
-    ptr += sizeof(double);
-    std::memcpy(&maxVal, ptr, sizeof(double) * 1);
-    ptr += sizeof(double);
+    std::memcpy(&minVal, compressedBuffer, sizeof(double));
+    std::memcpy(&maxVal, compressedBuffer + sizeof(double), sizeof(double));
 
-    double* inputCast = (double*)ptr;
+    // if (minVal > maxVal) {
+    //     std::cout << "Detected minval larger than maxval in 1d decompression!
+    //     "
+    //               << maxVal << " " << minVal << std::endl;
+    // }
 
-    char TRANS        = 'N';
+    double* inputCast =
+        reinterpret_cast<double*>(compressedBuffer + 2 * sizeof(double));
+
+    char TRANS = 'N';
 
     dgemv_(&TRANS, &cheb_dim1_decomp, &cheb_dim1_comp, &alpha, A_cheb_dim1,
            &cheb_dim1_decomp, inputCast, &single_dim, &beta, outputArray,

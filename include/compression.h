@@ -169,13 +169,15 @@ class ChebyshevCompression {
    public:
     ChebyshevCompression() {
         // set default to ele6, out3
-        set_chebyshev_mat_ele6_out2_dim1();
-        set_chebyshev_mat_ele6_out2_dim2();
-        set_chebyshev_mat_ele6_out2_dim3();
+        set_chebyshev_mat_ele6_out3_dim1();
+        set_chebyshev_mat_ele6_out3_dim2();
+        set_chebyshev_mat_ele6_out3_dim3();
+
+        recalculate_byte_sizes();
     }
 
     ChebyshevCompression(const size_t& eleOrder = 6,
-                         const size_t& nReduced = 2) {
+                         const size_t& nReduced = 3) {
         if (eleOrder == 6) {
             if (nReduced == 1) {
                 set_chebyshev_mat_ele6_out1_dim1();
@@ -196,12 +198,7 @@ class ChebyshevCompression {
             }
         }
 
-        doubles_1d = 2 + cheb_dim1_comp;
-        doubles_2d = 2 + cheb_dim2_comp;
-        doubles_3d = 2 + cheb_dim3_comp;
-        bytes_1d   = doubles_1d * sizeof(double);
-        bytes_2d   = doubles_2d * sizeof(double);
-        bytes_3d   = doubles_3d * sizeof(double);
+        recalculate_byte_sizes();
     }
 
     ~ChebyshevCompression() {
@@ -227,7 +224,9 @@ class ChebyshevCompression {
                   << cheb_dim3_comp << " | mat2d Dims: " << cheb_dim2_decomp
                   << ", " << cheb_dim2_comp
                   << " | mat1d Dims: " << cheb_dim1_decomp << ", "
-                  << cheb_dim1_comp << std::endl;
+                  << cheb_dim1_comp
+                  << " with compressed byte sizes (1, 2, 3): " << bytes_1d
+                  << ", " << bytes_2d << ", " << bytes_3d << std::endl;
     }
 
     void do_array_norm(double* array, const size_t count, double& minVal,
@@ -273,6 +272,15 @@ class ChebyshevCompression {
     unsigned int bytes_1d;
     unsigned int bytes_2d;
     unsigned int bytes_3d;
+
+    void recalculate_byte_sizes() {
+        doubles_1d = 2 + cheb_dim1_comp;
+        doubles_2d = 2 + cheb_dim2_comp;
+        doubles_3d = 2 + cheb_dim3_comp;
+        bytes_1d   = doubles_1d * sizeof(double);
+        bytes_2d   = doubles_2d * sizeof(double);
+        bytes_3d   = doubles_3d * sizeof(double);
+    }
 
 #include "generated/cheb_transform_ele6.inc.h"
 };
@@ -390,7 +398,7 @@ int32_t calculateZFPBufferSize3d(T* originalData, int x, int y, int z,
 }
 
 template <typename T>
-int32_t calculateZFPBufferSize(double* originalData, int n, double rate) {
+int32_t calculateZFPBufferSize(T* originalData, int n, double rate) {
     zfp_field* field;
     zfp_stream* zfp = zfp_stream_open(NULL);
 
