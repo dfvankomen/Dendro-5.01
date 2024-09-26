@@ -1,6 +1,12 @@
 #include "compression.h"
 
 #include <cstddef>
+#include <cstdint>
+#include <cstdlib>
+#include <iostream>
+
+#include "zfp.h"
+#include "zfp/bitstream.h"
 // #include "mpi.h"
 
 namespace SVDAlgorithms {
@@ -1005,6 +1011,9 @@ namespace FFTAlgorithms {
 
 namespace ZFPAlgorithms {
 
+// "global" object for ZFP algorithm that can be called by dendro
+ZFPCompression zfpblockwise(6, 5.0);
+
 void compressMatrixBuffer(const double* originalData, const uint32_t x,
                           const uint32_t y, const uint32_t z, double rate,
                           unsigned char* outBuffer, int& size, zfp_field* field,
@@ -1330,6 +1339,192 @@ void decompressMatrix1D_fixedPrecision(unsigned char* buffer, int bufferSize,
     zfp_stream_close(zfp);
 }
 
+size_t ZFPCompression::do_3d_compression(double* originalMatrix,
+                                         unsigned char* outputArray) {
+    // create a field
+    zfp_field_set_pointer(field_3d, originalMatrix);
+
+    // need to calculate the maximum size
+    size_t bufsize    = zfp_stream_maximum_size(zfp3d, field_3d);
+
+    // then we can open the stream, we go one past size_t to store room for the
+    // final size needed in decompression
+    bitstream* stream = stream_open(outputArray + sizeof(size_t), bufsize);
+
+    // associate the bitstream with ZFP stream
+    zfp_stream_set_bit_stream(zfp3d, stream);
+
+    size_t outsize = zfp_compress(zfp3d, field_3d);
+
+    if (!outsize) {
+        std::cerr << "CRITICAL ERROR COMPRESSING DATA IN 3D ZFP STREAM!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // close stream
+    stream_close(stream);
+
+    // make sure we store the number of bytes in our outsize!
+    std::memcpy(outputArray, &outsize, sizeof(outsize));
+
+    return outsize + sizeof(size_t);
+}
+
+size_t ZFPCompression::do_3d_decompression(unsigned char* compressedBuffer,
+                                           double* outputArray) {
+    // first extract out the buffer size
+    size_t bufsize;
+
+    std::memcpy(&bufsize, compressedBuffer, sizeof(size_t));
+
+    bitstream* stream = stream_open(compressedBuffer + sizeof(size_t), bufsize);
+
+    zfp_stream_set_bit_stream(zfp3d, stream);
+
+    zfp_field_set_pointer(field_3d, outputArray);
+
+    // do the decompression
+    size_t outsize = zfp_decompress(zfp3d, field_3d);
+
+    if (!outsize) {
+        std::cerr << "CRITICAL ERROR DECOMPRESSING DATA IN 3D ZFP STREAM!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // make sure stream is closed
+    stream_close(stream);
+
+    // remember, this is for the raw buffer, as it includes that data that we're
+    // working with
+    return bufsize + sizeof(size_t);
+}
+
+size_t ZFPCompression::do_2d_compression(double* originalMatrix,
+                                         unsigned char* outputArray) {
+    // create a field
+    zfp_field_set_pointer(field_2d, originalMatrix);
+
+    // need to calculate the maximum size
+    size_t bufsize    = zfp_stream_maximum_size(zfp2d, field_2d);
+
+    // then we can open the stream, we go one past size_t to store room for the
+    // final size needed in decompression
+    bitstream* stream = stream_open(outputArray + sizeof(size_t), bufsize);
+
+    // associate the bitstream with ZFP stream
+    zfp_stream_set_bit_stream(zfp2d, stream);
+
+    size_t outsize = zfp_compress(zfp2d, field_2d);
+
+    if (!outsize) {
+        std::cerr << "CRITICAL ERROR COMPRESSING DATA IN 2D ZFP STREAM!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // close stream
+    stream_close(stream);
+
+    // make sure we store the number of bytes in our outsize!
+    std::memcpy(outputArray, &outsize, sizeof(outsize));
+
+    return outsize + sizeof(size_t);
+}
+
+size_t ZFPCompression::do_2d_decompression(unsigned char* compressedBuffer,
+                                           double* outputArray) {
+    // first extract out the buffer size
+    size_t bufsize;
+
+    std::memcpy(&bufsize, compressedBuffer, sizeof(size_t));
+
+    bitstream* stream = stream_open(compressedBuffer + sizeof(size_t), bufsize);
+
+    zfp_stream_set_bit_stream(zfp2d, stream);
+
+    zfp_field_set_pointer(field_2d, outputArray);
+
+    // do the decompression
+    size_t outsize = zfp_decompress(zfp2d, field_2d);
+
+    if (!outsize) {
+        std::cerr << "CRITICAL ERROR DECOMPRESSING DATA IN 2D ZFP STREAM!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // make sure stream is closed
+    stream_close(stream);
+
+    // remember, this is for the raw buffer, as it includes that data that we're
+    // working with
+    return bufsize + sizeof(size_t);
+}
+
+size_t ZFPCompression::do_1d_compression(double* originalMatrix,
+                                         unsigned char* outputArray) {
+    // create a field
+    zfp_field_set_pointer(field_1d, originalMatrix);
+
+    // need to calculate the maximum size
+    size_t bufsize    = zfp_stream_maximum_size(zfp1d, field_1d);
+
+    // then we can open the stream, we go one past size_t to store room for the
+    // final size needed in decompression
+    bitstream* stream = stream_open(outputArray + sizeof(size_t), bufsize);
+
+    // associate the bitstream with ZFP stream
+    zfp_stream_set_bit_stream(zfp1d, stream);
+
+    size_t outsize = zfp_compress(zfp1d, field_1d);
+
+    if (!outsize) {
+        std::cerr << "CRITICAL ERROR COMPRESSING DATA IN 1D ZFP STREAM!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // close stream
+    stream_close(stream);
+
+    // make sure we store the number of bytes in our outsize!
+    std::memcpy(outputArray, &outsize, sizeof(outsize));
+
+    return outsize + sizeof(size_t);
+}
+
+size_t ZFPCompression::do_1d_decompression(unsigned char* compressedBuffer,
+                                           double* outputArray) {
+    // first extract out the buffer size
+    size_t bufsize;
+
+    std::memcpy(&bufsize, compressedBuffer, sizeof(size_t));
+
+    bitstream* stream = stream_open(compressedBuffer + sizeof(size_t), bufsize);
+
+    zfp_stream_set_bit_stream(zfp1d, stream);
+
+    zfp_field_set_pointer(field_1d, outputArray);
+
+    // do the decompression
+    size_t outsize = zfp_decompress(zfp1d, field_1d);
+
+    if (!outsize) {
+        std::cerr << "CRITICAL ERROR DECOMPRESSING DATA IN 1D ZFP STREAM!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // make sure stream is closed
+    stream_close(stream);
+
+    // remember, this is for the raw buffer, as it includes that data that we're
+    // working with
+    return bufsize + sizeof(size_t);
+}
+
 }  // namespace ZFPAlgorithms
 
 namespace BLOSCCompression {
@@ -1437,40 +1632,135 @@ void decompressData(unsigned char* byteStream, int byteStreamSize,
 
 namespace dendro_compress {
 
+CompressionType COMPRESSION_OPTION = CompressionType::ZFP;
+
 std::size_t single_block_compress_3d(double* buffer, unsigned char* bufferOut,
                                      const size_t points_per_dim) {
-    // chebyshev compression
-    return ChebyshevAlgorithms::cheby.do_3d_compression(buffer, bufferOut);
+    // check the compression option and do the compression
+    switch (COMPRESSION_OPTION) {
+        case dendro_compress::CompressionType::ZFP:
+            // zfp compression
+            return ZFPAlgorithms::zfpblockwise.do_3d_compression(buffer,
+                                                                 bufferOut);
+            break;
+        case dendro_compress::CompressionType::CHEBYSHEV:
+            // chebyshev compression
+            return ChebyshevAlgorithms::cheby.do_3d_compression(buffer,
+                                                                bufferOut);
+            break;
+        default:
+            std::cerr << "UNKNOWN COMPRESSION OPTION FOUND IN COMPRESS 3D "
+                      << COMPRESSION_OPTION << std::endl;
+            exit(EXIT_FAILURE);
+            break;
+    }
 }
 
 std::size_t single_block_decompress_3d(unsigned char* buffer,
                                        double* bufferOut) {
-    // chebyshev decompression
-    return ChebyshevAlgorithms::cheby.do_3d_decompression(buffer, bufferOut);
+    switch (COMPRESSION_OPTION) {
+        case dendro_compress::CompressionType::ZFP:
+            // zfp decompression
+            return ZFPAlgorithms::zfpblockwise.do_3d_decompression(buffer,
+                                                                   bufferOut);
+            break;
+        case dendro_compress::CompressionType::CHEBYSHEV:
+            // chebyshev decompression
+            return ChebyshevAlgorithms::cheby.do_3d_decompression(buffer,
+                                                                  bufferOut);
+            break;
+        default:
+            std::cerr << "UNKNOWN DECOMPRESSION OPTION FOUND IN DECOMPRESS 3D "
+                      << COMPRESSION_OPTION << std::endl;
+            exit(EXIT_FAILURE);
+            break;
+    }
 }
 
 std::size_t single_block_compress_2d(double* buffer, unsigned char* bufferOut,
                                      const size_t points_per_dim) {
-    // chebyshev compression
-    return ChebyshevAlgorithms::cheby.do_2d_compression(buffer, bufferOut);
+    // check the compression option and do the compression
+    switch (COMPRESSION_OPTION) {
+        case dendro_compress::CompressionType::ZFP:
+            // zfp compression
+            return ZFPAlgorithms::zfpblockwise.do_2d_compression(buffer,
+                                                                 bufferOut);
+            break;
+        case dendro_compress::CompressionType::CHEBYSHEV:
+            // chebyshev compression
+            return ChebyshevAlgorithms::cheby.do_2d_compression(buffer,
+                                                                bufferOut);
+            break;
+        default:
+            std::cerr << "UNKNOWN COMPRESSION OPTION FOUND IN COMPRESS 3D "
+                      << COMPRESSION_OPTION << std::endl;
+            exit(EXIT_FAILURE);
+            break;
+    }
 }
 
 std::size_t single_block_decompress_2d(unsigned char* buffer,
                                        double* bufferOut) {
-    // chebyshev decompression
-    return ChebyshevAlgorithms::cheby.do_2d_decompression(buffer, bufferOut);
+    switch (COMPRESSION_OPTION) {
+        case dendro_compress::CompressionType::ZFP:
+            // zfp decompression
+            return ZFPAlgorithms::zfpblockwise.do_2d_decompression(buffer,
+                                                                   bufferOut);
+            break;
+        case dendro_compress::CompressionType::CHEBYSHEV:
+            // chebyshev decompression
+            return ChebyshevAlgorithms::cheby.do_2d_decompression(buffer,
+                                                                  bufferOut);
+            break;
+        default:
+            std::cerr << "UNKNOWN DECOMPRESSION OPTION FOUND IN DECOMPRESS 3D "
+                      << COMPRESSION_OPTION << std::endl;
+            exit(EXIT_FAILURE);
+            break;
+    }
 }
 
 std::size_t single_block_compress_1d(double* buffer, unsigned char* bufferOut,
                                      const size_t points_per_dim) {
-    // chebyshev compression
-    return ChebyshevAlgorithms::cheby.do_1d_compression(buffer, bufferOut);
+    // check the compression option and do the compression
+    switch (COMPRESSION_OPTION) {
+        case dendro_compress::CompressionType::ZFP:
+            // zfp compression
+            return ZFPAlgorithms::zfpblockwise.do_1d_compression(buffer,
+                                                                 bufferOut);
+            break;
+        case dendro_compress::CompressionType::CHEBYSHEV:
+            // chebyshev compression
+            return ChebyshevAlgorithms::cheby.do_1d_compression(buffer,
+                                                                bufferOut);
+            break;
+        default:
+            std::cerr << "UNKNOWN COMPRESSION OPTION FOUND IN COMPRESS 3D "
+                      << COMPRESSION_OPTION << std::endl;
+            exit(EXIT_FAILURE);
+            break;
+    }
 }
 
 std::size_t single_block_decompress_1d(unsigned char* buffer,
                                        double* bufferOut) {
-    // chebyshev decompression
-    return ChebyshevAlgorithms::cheby.do_1d_decompression(buffer, bufferOut);
+    switch (COMPRESSION_OPTION) {
+        case dendro_compress::CompressionType::ZFP:
+            // zfp decompression
+            return ZFPAlgorithms::zfpblockwise.do_1d_decompression(buffer,
+                                                                   bufferOut);
+            break;
+        case dendro_compress::CompressionType::CHEBYSHEV:
+            // chebyshev decompression
+            return ChebyshevAlgorithms::cheby.do_1d_decompression(buffer,
+                                                                  bufferOut);
+            break;
+        default:
+            std::cerr << "UNKNOWN DECOMPRESSION OPTION FOUND IN DECOMPRESS 3D "
+                      << COMPRESSION_OPTION << std::endl;
+            exit(EXIT_FAILURE);
+            break;
+    }
 }
 
 std::size_t blockwise_compression(

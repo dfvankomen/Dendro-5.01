@@ -13,6 +13,7 @@
 
 // Disables Eigen's memory alignment which could lead to extra memory padding.
 #include <cstdint>
+#include <cstdlib>
 #define EIGEN_DONT_ALIGN
 #include <Eigen/Dense>
 #include <Eigen/SVD>
@@ -474,6 +475,108 @@ unsigned char* compressMatrix1D_fixedPrecision(double* originalData, int n,
 // pre-allocated memory version, fixed precision
 void decompressMatrix1D_fixedPrecision(unsigned char* buffer, int bufferSize,
                                        double* outBuff);
+
+class ZFPCompression {
+   public:
+    ZFPCompression(const size_t& eleOrder = 6, const double rate = 5.0)
+        : eleOrder(eleOrder), rate(rate) {
+        zfp_num_per_dim = eleOrder - 1;
+
+        // TODO: calculate if the rate is too large
+
+        // streams, by default are in set rate mode, this is good for knowing
+        // our size
+        zfp3d           = zfp_stream_open(NULL);
+        zfp_stream_set_rate(zfp3d, rate, zfp_type_double, 3, 0);
+        field_3d = zfp_field_3d(NULL, zfp_type_double, zfp_num_per_dim,
+                                zfp_num_per_dim, zfp_num_per_dim);
+
+        zfp2d    = zfp_stream_open(NULL);
+        zfp_stream_set_rate(zfp2d, rate, zfp_type_double, 2, 0);
+        field_2d = zfp_field_2d(NULL, zfp_type_double, zfp_num_per_dim,
+                                zfp_num_per_dim);
+
+        zfp1d    = zfp_stream_open(NULL);
+        zfp_stream_set_rate(zfp1d, rate, zfp_type_double, 1, 0);
+        field_1d = zfp_field_1d(NULL, zfp_type_double, zfp_num_per_dim);
+
+        // TEMP: accuracy mode
+        set_accuracy_mode(eleOrder, 1e-6);
+    }
+
+    ~ZFPCompression() { close_and_free_all(); }
+
+    void close_and_free_all() {
+        close_all_streams();
+        free_all_fields();
+    }
+
+    void close_all_streams() {
+        zfp_stream_close(zfp3d);
+        zfp_stream_close(zfp1d);
+        zfp_stream_close(zfp1d);
+
+        zfp3d = nullptr;
+        zfp2d = nullptr;
+        zfp1d = nullptr;
+    }
+
+    void free_all_fields() {
+        zfp_field_free(field_3d);
+        zfp_field_free(field_2d);
+        zfp_field_free(field_1d);
+
+        field_3d = nullptr;
+        field_2d = nullptr;
+        field_1d = nullptr;
+    }
+
+    void set_accuracy_mode(const size_t& eleOrder = 6,
+                           const double tolerance = 1e-6) {
+        // re-establish all fields in accuracy-only mode
+        zfp_stream_set_accuracy(zfp3d, tolerance);
+        assert(zfp_stream_compression_mode(zfp3d) == zfp_mode_fixed_accuracy);
+
+        zfp_stream_set_accuracy(zfp2d, tolerance);
+        assert(zfp_stream_compression_mode(zfp2d) == zfp_mode_fixed_accuracy);
+
+        zfp_stream_set_accuracy(zfp1d, tolerance);
+        assert(zfp_stream_compression_mode(zfp1d) == zfp_mode_fixed_accuracy);
+    }
+
+    size_t do_3d_compression(double* originalMatrix,
+                             unsigned char* outputArray);
+    size_t do_3d_decompression(unsigned char* compressedBuffer,
+                               double* outputArray);
+
+    size_t do_2d_compression(double* originalMatrix,
+                             unsigned char* outputArray);
+    size_t do_2d_decompression(unsigned char* compressedBuffer,
+                               double* outputArray);
+
+    size_t do_1d_compression(double* originalMatrix,
+                             unsigned char* outputArray);
+    size_t do_1d_decompression(unsigned char* compressedBuffer,
+                               double* outputArray);
+
+   private:
+    zfp_stream* zfp3d      = nullptr;
+    zfp_stream* zfp2d      = nullptr;
+    zfp_stream* zfp1d      = nullptr;
+    int zfp_dim1_decomp    = 0;
+    int zfp_dim2_decomp    = 0;
+    int zfp_dim3_decomp    = 0;
+    size_t eleOrder        = 0;
+    double rate            = 20.0;
+    size_t zfp_num_per_dim = 0;
+    zfp_field* field_3d    = nullptr;
+    zfp_field* field_2d    = nullptr;
+    zfp_field* field_1d    = nullptr;
+};
+
+// A ZFPCompression object to use "globally"
+extern ZFPCompression zfpblockwise;
+
 }  // namespace ZFPAlgorithms
 
 #include <blosc.h>
@@ -577,6 +680,11 @@ void decompressData(unsigned char* byteStream, int byteStreamSize,
 }  // namespace BLOSCCompression
 
 namespace dendro_compress {
+
+enum CompressionType { ZFP = 0, CHEBYSHEV };
+
+// then the global option
+extern CompressionType COMPRESSION_OPTION;
 
 std::size_t blockwise_compression(
     double* buffer, unsigned char* compressBuffer, const size_t numBlocks,

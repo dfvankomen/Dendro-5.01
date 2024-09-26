@@ -803,10 +803,6 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
         unsigned int proc_id;
 
-        std::cout << this->getMPIRank() << ": "
-                  << "SendBSz, recvBSz: " << sendBSz << " " << recvBSz
-                  << std::endl;
-
         AsyncExchangeContex ctx(vec);
         MPI_Comm commActive = this->getMPICommunicator();
 

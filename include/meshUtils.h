@@ -236,6 +236,11 @@ template <typename T>
 void dealloc_mpi_ctx(const Mesh* pMesh,
                      std::vector<AsyncExchangeContex>& ctx_list, int dof,
                      int async_k) {
+    // TODO: there's a small memory bug here on deallocation/destruction of ctx
+    // objects where this is called after the mesh has actually been properly
+    // deleted. This should probably be called before the mesh is deleted.
+    // Perhaps the mesh deletion should exist inside the destrutor of the ctx
+    // objects.
     if (pMesh->getMPICommSizeGlobal() == 1 || !pMesh->isActive()) return;
 
     const std::vector<unsigned int>& nodeSendCount =
@@ -270,6 +275,7 @@ void dealloc_mpi_ctx(const Mesh* pMesh,
             ctx_list[i].deAllocateSendBuffer();
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
             ctx_list[i].clearCompressSendBuffers();
+            ctx_list[i].deallocateCompressSendBuffer();
 #endif
         }
 
