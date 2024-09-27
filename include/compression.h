@@ -512,9 +512,11 @@ class ZFPCompression {
     }
 
     void close_all_streams() {
-        zfp_stream_close(zfp3d);
-        zfp_stream_close(zfp1d);
-        zfp_stream_close(zfp1d);
+        if (zfp3d != nullptr) zfp_stream_close(zfp3d);
+
+        if (zfp2d != nullptr) zfp_stream_close(zfp2d);
+
+        if (zfp1d != nullptr) zfp_stream_close(zfp1d);
 
         zfp3d = nullptr;
         zfp2d = nullptr;
@@ -522,9 +524,11 @@ class ZFPCompression {
     }
 
     void free_all_fields() {
-        zfp_field_free(field_3d);
-        zfp_field_free(field_2d);
-        zfp_field_free(field_1d);
+        if (field_3d != nullptr) zfp_field_free(field_3d);
+
+        if (field_2d != nullptr) zfp_field_free(field_2d);
+
+        if (field_1d != nullptr) zfp_field_free(field_1d);
 
         field_3d = nullptr;
         field_2d = nullptr;
