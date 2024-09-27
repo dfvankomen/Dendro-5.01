@@ -625,7 +625,7 @@ bytestreamSize); blosc_destroy();
     return 0;
 }
  */
-namespace BLOSCCompression {
+namespace BLOSCAlgorithms {
 
 /**
  * Compresses a block of data using the Blosc library.
@@ -681,11 +681,85 @@ double* decompressData(unsigned char* byteStream, int byteStreamSize);
  */
 void decompressData(unsigned char* byteStream, int byteStreamSize,
                     double* outBuff);
-}  // namespace BLOSCCompression
+
+class BloscCompression {
+   public:
+    BloscCompression(const size_t& eleOrder             = 6,
+                     const std::string& bloscCompressor = "lz4",
+                     const int& clevel = 4, const int& doShuffle = 1)
+        : eleOrder(eleOrder),
+          bloscCompressor(bloscCompressor),
+          clevel(clevel),
+          doShuffle(doShuffle) {
+        // TODO: init shouldn't be called here, it should be in some other
+        // initialization
+        blosc_init();
+        blosc_set_compressor(bloscCompressor.c_str());
+
+        size_t points_1d        = eleOrder - 1;
+
+        // calculate the number of bytes based on the element order
+        blosc_original_bytes_1d = sizeof(double) * points_1d;
+        blosc_original_bytes_2d = points_1d * blosc_original_bytes_1d;
+        blosc_original_bytes_3d = points_1d * blosc_original_bytes_2d;
+
+        // then with the overhead for the maximum possible amount it could take.
+        // This guarantees success, but will basically never take this much.
+        blosc_original_bytes_overhead_1d =
+            blosc_original_bytes_1d + BLOSC_MAX_OVERHEAD;
+        blosc_original_bytes_overhead_2d =
+            blosc_original_bytes_2d + BLOSC_MAX_OVERHEAD;
+        blosc_original_bytes_overhead_3d =
+            blosc_original_bytes_3d + BLOSC_MAX_OVERHEAD;
+    }
+
+    ~BloscCompression() {
+        // TODO: destroy shouldn't be called here, it should be in some other
+        // destruction
+        blosc_destroy();
+    }
+
+    size_t do_3d_compression(double* originalMatrix,
+                             unsigned char* outputArray);
+    size_t do_3d_decompression(unsigned char* compressedBuffer,
+                               double* outputArray);
+
+    size_t do_2d_compression(double* originalMatrix,
+                             unsigned char* outputArray);
+    size_t do_2d_decompression(unsigned char* compressedBuffer,
+                               double* outputArray);
+
+    size_t do_1d_compression(double* originalMatrix,
+                             unsigned char* outputArray);
+    size_t do_1d_decompression(unsigned char* compressedBuffer,
+                               double* outputArray);
+
+   private:
+    size_t eleOrder;
+    // blosc settings
+    std::string bloscCompressor;
+    int clevel;
+    int doShuffle;
+
+    // tracking original sizes
+    size_t blosc_original_bytes_3d;
+    size_t blosc_original_bytes_2d;
+    size_t blosc_original_bytes_1d;
+
+    size_t blosc_original_bytes_overhead_3d;
+    size_t blosc_original_bytes_overhead_2d;
+    size_t blosc_original_bytes_overhead_1d;
+
+    // overhead bytes
+};
+
+extern BloscCompression bloscblockwise;
+
+}  // namespace BLOSCAlgorithms
 
 namespace dendro_compress {
 
-enum CompressionType { ZFP = 0, CHEBYSHEV };
+enum CompressionType { ZFP = 0, CHEBYSHEV, BLOSC };
 
 // then the global option
 extern CompressionType COMPRESSION_OPTION;

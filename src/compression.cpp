@@ -1527,7 +1527,173 @@ size_t ZFPCompression::do_1d_decompression(unsigned char* compressedBuffer,
 
 }  // namespace ZFPAlgorithms
 
-namespace BLOSCCompression {
+namespace BLOSCAlgorithms {
+
+BloscCompression bloscblockwise(6, "lz4", 4, 1);
+
+size_t BloscCompression::do_3d_compression(double* originalMatrix,
+                                           unsigned char* outputArray) {
+    // make sure the output array includes our header
+    // std::cout << "attempting to compress " << blosc_original_bytes_3d
+    //           << std::endl;
+    int compressedSize = blosc_compress(clevel, doShuffle, sizeof(double),
+                                        blosc_original_bytes_3d, originalMatrix,
+                                        outputArray + sizeof(size_t),
+                                        blosc_original_bytes_overhead_3d);
+
+    // TODO: if compressed size is 0, we have to disregard the buffer
+    if (compressedSize < 0) {
+        std::cerr << "Error compressing BLOSC in 3d!" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // loses precision only if compressedSize is less than 0, which we catch
+    // above
+    size_t outSize = (size_t)compressedSize;
+    // store the value properly
+    std::memcpy(outputArray, &outSize, sizeof(size_t));
+
+    return outSize + sizeof(size_t);
+}
+size_t BloscCompression::do_3d_decompression(unsigned char* compressedBuffer,
+                                             double* outputArray) {
+    // start by extracting the outSize
+    size_t outSize;
+    std::memcpy(&outSize, compressedBuffer, sizeof(size_t));
+
+    // then do the decomrpession, we know the destination number of bytes
+    int decompressedData =
+        blosc_decompress(compressedBuffer + sizeof(size_t), outputArray,
+                         blosc_original_bytes_3d);
+
+    if (decompressedData < 0) {
+        std::cerr << "Error decompressing BLOSC in 3d!" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // return the number of bytes to advance the compressed buffer!
+    return outSize + sizeof(size_t);
+}
+
+size_t BloscCompression::do_2d_compression(double* originalMatrix,
+                                           unsigned char* outputArray) {
+    // TODO: need some kind of better metric or way to know if we can compress
+    // or not. Current idea is if it fails, we still do a copy. We attempt to
+    // copy it back out into 32 bits and see if it's garbage? idk
+    if (eleOrder <= 6) {
+        std::memcpy(outputArray, originalMatrix, blosc_original_bytes_2d);
+        return blosc_original_bytes_2d;
+    }
+
+    // make sure the output array includes our header
+    int compressedSize = blosc_compress(clevel, doShuffle, sizeof(double),
+                                        blosc_original_bytes_2d, originalMatrix,
+                                        outputArray + sizeof(size_t),
+                                        blosc_original_bytes_overhead_2d);
+
+    if (compressedSize < 0) {
+        std::cerr << "Error compressing BLOSC in 2d!" << std::endl;
+        exit(EXIT_FAILURE);
+    } else if (compressedSize == blosc_original_bytes_overhead_2d) {
+        // std::cerr << "ERROR: found a block that can't be compressed in 2D!"
+        //           << std::endl;
+        // exit(EXIT_FAILURE);
+        // need some method of handling it a bit better
+    }
+
+    // loses precision only if compressedSize is less than 0, which we catch
+    // above
+    size_t outSize = (size_t)compressedSize;
+    // store the value properly
+    std::memcpy(outputArray, &outSize, sizeof(size_t));
+
+    return outSize + sizeof(size_t);
+}
+size_t BloscCompression::do_2d_decompression(unsigned char* compressedBuffer,
+                                             double* outputArray) {
+    // TODO: see 2d_compression above, this needs to be handled better
+    if (eleOrder <= 6) {
+        std::memcpy(outputArray, compressedBuffer, blosc_original_bytes_2d);
+        return blosc_original_bytes_2d;
+    }
+    // start by extracting the outSize
+    size_t outSize;
+    std::memcpy(&outSize, compressedBuffer, sizeof(size_t));
+
+    // then do the decomrpession, we know the destination number of bytes
+    int decompressedData =
+        blosc_decompress(compressedBuffer + sizeof(size_t), outputArray,
+                         blosc_original_bytes_2d);
+
+    if (decompressedData < 0) {
+        std::cerr << "Error decompressing BLOSC in 2d!" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // return the number of bytes to advance the compressed buffer!
+    return outSize + sizeof(size_t);
+}
+
+size_t BloscCompression::do_1d_compression(double* originalMatrix,
+                                           unsigned char* outputArray) {
+    // TODO: see 1d_compression above, this needs to be handled better
+    if (eleOrder <= 6) {
+        std::memcpy(outputArray, originalMatrix, blosc_original_bytes_1d);
+        return blosc_original_bytes_1d;
+    }
+
+    // make sure the output array includes our header
+    int compressedSize = blosc_compress(
+        clevel, doShuffle, sizeof(double), blosc_original_bytes_1d,
+        originalMatrix, outputArray + sizeof(size_t), blosc_original_bytes_1d);
+
+    if (compressedSize < 0) {
+        std::cerr << "Error compressing BLOSC in 1d!" << std::endl;
+        exit(EXIT_FAILURE);
+    } else if (compressedSize == 0) {
+        // it failed to compress if we're at 0, which means garbage, so we want
+        // to copy in the data
+        std::cout << "FAILED in 1d Case" << std::endl;
+    } else if (compressedSize == blosc_original_bytes_overhead_1d) {
+        // we weren't able to get any compression!
+    } else {
+        // success
+        std::cout << "SUCCCESS! Got a compressed 1d! Hooray!" << std::endl;
+    }
+
+    // loses precision only if compressedSize is less than 0, which we catch
+    // above
+    size_t outSize = (size_t)compressedSize;
+    // store the value properly
+    std::memcpy(outputArray, &outSize, sizeof(size_t));
+
+    return outSize + sizeof(size_t);
+}
+size_t BloscCompression::do_1d_decompression(unsigned char* compressedBuffer,
+                                             double* outputArray) {
+    // TODO: see 1d_compression above, this needs to be handled better
+    if (eleOrder <= 6) {
+        std::memcpy(outputArray, compressedBuffer, blosc_original_bytes_1d);
+        return blosc_original_bytes_1d;
+    }
+
+    // start by extracting the outSize
+    size_t outSize;
+    std::memcpy(&outSize, compressedBuffer, sizeof(size_t));
+
+    // then do the decomrpession, we know the destination number of bytes
+    int decompressedData =
+        blosc_decompress(compressedBuffer + sizeof(size_t), outputArray,
+                         blosc_original_bytes_1d);
+
+    if (decompressedData < 0) {
+        std::cerr << "Error decompressing BLOSC in 1d!" << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // return the number of bytes to advance the compressed buffer!
+    return outSize + sizeof(size_t);
+}
 
 unsigned char* compressData(const char* blosc_compressor, int clevel, int n,
                             double* originalData, int& byteStreamSize) {
@@ -1628,11 +1794,11 @@ void decompressData(unsigned char* byteStream, int byteStreamSize,
         throw std::runtime_error("blosc could not decompress data.");
     }
 }
-}  // namespace BLOSCCompression
+}  // namespace BLOSCAlgorithms
 
 namespace dendro_compress {
 
-CompressionType COMPRESSION_OPTION = CompressionType::ZFP;
+CompressionType COMPRESSION_OPTION = CompressionType::BLOSC;
 
 std::size_t single_block_compress_3d(double* buffer, unsigned char* bufferOut,
                                      const size_t points_per_dim) {
@@ -1647,6 +1813,11 @@ std::size_t single_block_compress_3d(double* buffer, unsigned char* bufferOut,
             // chebyshev compression
             return ChebyshevAlgorithms::cheby.do_3d_compression(buffer,
                                                                 bufferOut);
+            break;
+        case dendro_compress::CompressionType::BLOSC:
+            // zfp compression
+            return BLOSCAlgorithms::bloscblockwise.do_3d_compression(buffer,
+                                                                     bufferOut);
             break;
         default:
             std::cerr << "UNKNOWN COMPRESSION OPTION FOUND IN COMPRESS 3D "
@@ -1668,6 +1839,11 @@ std::size_t single_block_decompress_3d(unsigned char* buffer,
             // chebyshev decompression
             return ChebyshevAlgorithms::cheby.do_3d_decompression(buffer,
                                                                   bufferOut);
+            break;
+        case dendro_compress::CompressionType::BLOSC:
+            // chebyshev decompression
+            return BLOSCAlgorithms::bloscblockwise.do_3d_decompression(
+                buffer, bufferOut);
             break;
         default:
             std::cerr << "UNKNOWN DECOMPRESSION OPTION FOUND IN DECOMPRESS 3D "
@@ -1691,6 +1867,11 @@ std::size_t single_block_compress_2d(double* buffer, unsigned char* bufferOut,
             return ChebyshevAlgorithms::cheby.do_2d_compression(buffer,
                                                                 bufferOut);
             break;
+        case dendro_compress::CompressionType::BLOSC:
+            // zfp compression
+            return BLOSCAlgorithms::bloscblockwise.do_2d_compression(buffer,
+                                                                     bufferOut);
+            break;
         default:
             std::cerr << "UNKNOWN COMPRESSION OPTION FOUND IN COMPRESS 3D "
                       << COMPRESSION_OPTION << std::endl;
@@ -1711,6 +1892,11 @@ std::size_t single_block_decompress_2d(unsigned char* buffer,
             // chebyshev decompression
             return ChebyshevAlgorithms::cheby.do_2d_decompression(buffer,
                                                                   bufferOut);
+            break;
+        case dendro_compress::CompressionType::BLOSC:
+            // zfp compression
+            return BLOSCAlgorithms::bloscblockwise.do_2d_decompression(
+                buffer, bufferOut);
             break;
         default:
             std::cerr << "UNKNOWN DECOMPRESSION OPTION FOUND IN DECOMPRESS 3D "
@@ -1734,6 +1920,11 @@ std::size_t single_block_compress_1d(double* buffer, unsigned char* bufferOut,
             return ChebyshevAlgorithms::cheby.do_1d_compression(buffer,
                                                                 bufferOut);
             break;
+        case dendro_compress::CompressionType::BLOSC:
+            // zfp compression
+            return BLOSCAlgorithms::bloscblockwise.do_1d_compression(buffer,
+                                                                     bufferOut);
+            break;
         default:
             std::cerr << "UNKNOWN COMPRESSION OPTION FOUND IN COMPRESS 3D "
                       << COMPRESSION_OPTION << std::endl;
@@ -1754,6 +1945,11 @@ std::size_t single_block_decompress_1d(unsigned char* buffer,
             // chebyshev decompression
             return ChebyshevAlgorithms::cheby.do_1d_decompression(buffer,
                                                                   bufferOut);
+            break;
+        case dendro_compress::CompressionType::BLOSC:
+            // chebyshev decompression
+            return BLOSCAlgorithms::bloscblockwise.do_1d_decompression(
+                buffer, bufferOut);
             break;
         default:
             std::cerr << "UNKNOWN DECOMPRESSION OPTION FOUND IN DECOMPRESS 3D "
