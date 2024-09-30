@@ -328,7 +328,6 @@ namespace FFTAlgorithms {
 
 #endif
 
-#include <fftw3.h>
 #include <zfp.h>
 
 #include <chrono>
