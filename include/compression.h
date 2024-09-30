@@ -758,7 +758,7 @@ extern BloscCompression bloscblockwise;
 
 namespace dendro_compress {
 
-enum CompressionType { ZFP = 0, CHEBYSHEV, BLOSC };
+enum CompressionType { NONE = 0, ZFP, CHEBYSHEV, BLOSC };
 
 // then the global option
 extern CompressionType COMPRESSION_OPTION;
