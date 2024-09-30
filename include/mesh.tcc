@@ -699,7 +699,8 @@ void Mesh::ghostExchangeRecvSync(T* vec, T* recvNodeBuffer,
 template <typename T>
 void Mesh::readFromGhostBeginWrapper(T* vec, unsigned int dof,
                                      bool use_compression) {
-    if (use_compression) {
+    if (use_compression && (dendro_compress::COMPRESSION_OPTION !=
+                            dendro_compress::CompressionType::NONE)) {
         readFromGhostBeginCompression(vec, dof);
     } else {
         readFromGhostBegin(vec, dof);
@@ -709,7 +710,8 @@ void Mesh::readFromGhostBeginWrapper(T* vec, unsigned int dof,
 template <typename T>
 void Mesh::readFromGhostEndWrapper(T* vec, unsigned int dof,
                                    bool use_compression) {
-    if (use_compression) {
+    if (use_compression && (dendro_compress::COMPRESSION_OPTION !=
+                            dendro_compress::CompressionType::NONE)) {
         readFromGhostEndCompression(vec, dof);
     } else {
         readFromGhostEnd(vec, dof);
@@ -719,7 +721,8 @@ void Mesh::readFromGhostEndWrapper(T* vec, unsigned int dof,
 template <typename T>
 void Mesh::readFromGhostBeginWrapper(AsyncExchangeContex& ctx, T* vec,
                                      unsigned int dof, bool use_compression) {
-    if (use_compression) {
+    if (use_compression && (dendro_compress::COMPRESSION_OPTION !=
+                            dendro_compress::CompressionType::NONE)) {
         readFromGhostBeginCompression(ctx, vec, dof);
     } else {
         readFromGhostBegin(ctx, vec, dof);
@@ -729,7 +732,8 @@ void Mesh::readFromGhostBeginWrapper(AsyncExchangeContex& ctx, T* vec,
 template <typename T>
 void Mesh::readFromGhostEndWrapper(AsyncExchangeContex& ctx, T* vec,
                                    unsigned int dof, bool use_compression) {
-    if (use_compression) {
+    if (use_compression && (dendro_compress::COMPRESSION_OPTION !=
+                            dendro_compress::CompressionType::NONE)) {
         readFromGhostEndCompression(ctx, vec, dof);
     } else {
         readFromGhostEnd(ctx, vec, dof);
