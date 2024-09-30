@@ -418,7 +418,7 @@ class Ctx {
      * @param async_k : async communicator.
      */
     void unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
-               unsigned int async_k = 1);
+               unsigned int async_k = 1, bool use_compression = false);
 
     /**
      * @brief performs zip operation
@@ -522,7 +522,7 @@ class Ctx {
 
 template <typename DerivedCtx, typename T, typename I>
 void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
-                                  unsigned int async_k) {
+                                  unsigned int async_k, bool use_compression) {
     if (!m_uiMesh->isActive()) return;
 
 #ifdef __PROFILE_CTX__
@@ -549,8 +549,9 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
             const unsigned int v_end    = (((i + 1) * dof) / async_k);
             const unsigned int batch_sz = (v_end - v_begin);
 
-            m_uiMesh->readFromGhostBegin(
-                m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+            m_uiMesh->readFromGhostBeginWrapper(
+                m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz,
+                use_compression);
         }
 
         for (unsigned int i = 0; i < async_k; i++) {
@@ -558,8 +559,9 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
             const unsigned int v_end    = (((i + 1) * dof) / async_k);
             const unsigned int batch_sz = (v_end - v_begin);
 
-            m_uiMesh->readFromGhostEnd(
-                m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+            m_uiMesh->readFromGhostEndWrapper(m_mpi_ctx[i],
+                                              in_ptr + v_begin * sz_per_dof_zip,
+                                              batch_sz, use_compression);
 
 #ifdef __PROFILE_CTX__
             m_uiCtxpt[CTXPROFILE::UNZIP].start();

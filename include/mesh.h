@@ -2252,6 +2252,24 @@ class Mesh {
     void ghostExchangeRecvSync(T *vec, T *recvNodeBuffer,
                                MPI_Request *recv_reqs, MPI_Status *recv_sts);
 
+    template <typename T>
+    void readFromGhostBeginWrapper(T *vec, unsigned int dof = 1,
+                                   bool use_compression = false);
+
+    template <typename T>
+    void readFromGhostEndWrapper(T *vec, unsigned int dof = 1,
+                                 bool use_compression = false);
+
+    template <typename T>
+    void readFromGhostBeginWrapper(AsyncExchangeContex &ctx, T *vec,
+                                   unsigned int dof     = 1,
+                                   bool use_compression = false);
+
+    template <typename T>
+    void readFromGhostEndWrapper(AsyncExchangeContex &ctx, T *vec,
+                                 unsigned int dof     = 1,
+                                 bool use_compression = false);
+
     /**
      * @brief : ghost read begin.
      *
@@ -2271,6 +2289,29 @@ class Mesh {
      */
     template <typename T>
     void readFromGhostEnd(T *vec, unsigned int dof = 1);
+
+    /**
+     * @brief:  ghost read end with compression
+     *
+     * @tparam T
+     * @param vec : vector to perform ghost syncronization. (begin)
+     * @param dof : degrees of freedoms
+     */
+    template <typename T>
+    void readFromGhostEndCompression(T *vec, unsigned int dof = 1,
+                                     unsigned int compression_mode = 0);
+
+    /**
+     * @brief : ghost read with compression.
+     *
+     * @tparam T
+     * @param vec : vector to perform ghost syncronization. (begin)
+     * @param dof : degrees of freedoms
+     * @param compression_mode : which mode of compression to use
+     */
+    template <typename T>
+    void readFromGhostBeginCompression(T *vec, unsigned int dof = 1,
+                                       unsigned int compression_mode = 0);
 
     /**
      * @brief Aysnc ghost exchange with Ctx, assumes that ctx bufferes are
@@ -2293,6 +2334,30 @@ class Mesh {
     template <typename T>
     void readFromGhostEnd(AsyncExchangeContex &ctx, T *vec,
                           unsigned int dof = 1);
+
+    /**
+     * @brief Aysnc ghost exchange with Ctx with compression, assumes that ctx
+     * bufferes are already allocated.
+     * @tparam T type of the vector
+     * @param ctx async ctx
+     * @param dof number of dofs to exchange
+     */
+    template <typename T>
+    void readFromGhostBeginCompression(AsyncExchangeContex &ctx, T *vec,
+                                       unsigned int dof              = 1,
+                                       unsigned int compression_mode = 0);
+
+    /**
+     * @brief Aysnc ghost exchange with Ctx with comression, assumes that ctx
+     * bufferes are already allocated.
+     * @tparam T type of the vector
+     * @param ctx async ctx
+     * @param dof number of dofs to exchange
+     */
+    template <typename T>
+    void readFromGhostEndCompression(AsyncExchangeContex &ctx, T *vec,
+                                     unsigned int dof              = 1,
+                                     unsigned int compression_mode = 0);
 
     /**
      * @brief : ghost read begin.

@@ -1798,7 +1798,32 @@ void decompressData(unsigned char* byteStream, int byteStreamSize,
 
 namespace dendro_compress {
 
-CompressionType COMPRESSION_OPTION = CompressionType::BLOSC;
+CompressionType COMPRESSION_OPTION = CompressionType::ZFP;
+
+void set_compression_options(CompressionType compT,
+                             const CompressionOptions& compOpt) {
+    dendro_compress::COMPRESSION_OPTION = compT;
+
+    std::cout << "Set compression option to: "
+              << dendro_compress::COMPRESSION_OPTION << std::endl;
+
+    // then set up the options for all types
+
+    ZFPAlgorithms::zfpblockwise.setEleOrder(compOpt.eleOrder);
+    if (compOpt.zfpMode == "accuracy") {
+        ZFPAlgorithms::zfpblockwise.setAccuracy(compOpt.zfpAccuracyTolerance);
+    } else if (compOpt.zfpMode == "rate") {
+        ZFPAlgorithms::zfpblockwise.setRate(compOpt.zfpRate);
+    }
+
+    // set up for BLOSC
+    BLOSCAlgorithms::bloscblockwise.setEleOrder(compOpt.eleOrder);
+    BLOSCAlgorithms::bloscblockwise.setCompressor(compOpt.bloscCompressor);
+
+    // set up for Chebyshev
+    ChebyshevAlgorithms::cheby.set_compression_type(compOpt.eleOrder,
+                                                    compOpt.chebyNReduced);
+}
 
 std::size_t single_block_compress_3d(double* buffer, unsigned char* bufferOut,
                                      const size_t points_per_dim) {
@@ -2098,6 +2123,20 @@ std::size_t blockwise_decompression(
         }
     }
     return comp_offset;
+}
+
+std::ostream& operator<<(std::ostream& out, const CompressionOptions opts) {
+    return out << "<Compression Options: eleorder " << opts.eleOrder
+               << ", bloscCompressor " << opts.bloscCompressor
+               << ", bloscCLevel " << opts.bloscClevel << ", bloscDoShuffle "
+               << opts.bloscDoShuffle << ", zfpMode " << opts.zfpMode
+               << ", zfpRate " << opts.zfpRate << ", zfpAccuracy "
+               << opts.zfpAccuracyTolerance << ", chebyNReduced "
+               << opts.chebyNReduced << ">";
+}
+
+std::ostream& operator<<(std::ostream& out, const CompressionType t) {
+    return out << "<CompressionType: " << COMPRESSION_TYPE_NAMES[t] << ">";
 }
 
 }  // namespace dendro_compress

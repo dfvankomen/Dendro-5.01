@@ -499,11 +499,85 @@ class ZFPCompression {
         zfp_stream_set_rate(zfp1d, rate, zfp_type_double, 1, 0);
         field_1d = zfp_field_1d(NULL, zfp_type_double, zfp_num_per_dim);
 
-        // TEMP: accuracy mode
-        set_accuracy_mode(eleOrder, 1e-6);
+        mode_set = "rate";
     }
 
     ~ZFPCompression() { close_and_free_all(); }
+
+    void setEleOrder(const size_t& eleOrder_in) {
+        close_and_free_all();
+
+        // then set the new values
+        eleOrder        = eleOrder_in;
+        zfp_num_per_dim = eleOrder - 1;
+
+        // finally open the new streams
+        zfp3d           = zfp_stream_open(NULL);
+        zfp2d           = zfp_stream_open(NULL);
+        zfp1d           = zfp_stream_open(NULL);
+
+        // then the fields
+        field_3d        = zfp_field_3d(NULL, zfp_type_double, zfp_num_per_dim,
+                                       zfp_num_per_dim, zfp_num_per_dim);
+        field_2d        = zfp_field_2d(NULL, zfp_type_double, zfp_num_per_dim,
+                                       zfp_num_per_dim);
+        field_1d        = zfp_field_1d(NULL, zfp_type_double, zfp_num_per_dim);
+
+        std::cout << "ZFP Element Order set to: " << eleOrder << std::endl;
+
+        // NOTE: setting rate and accuracy should always be called after this
+        // function
+    }
+
+    void setRate(const double rate_in) {
+        rate = rate_in;
+
+        if (zfp3d == nullptr)
+            throw std::invalid_argument(
+                "ZFP Wasn't properly initialized for some reason!");
+        if (zfp2d == nullptr)
+            throw std::invalid_argument(
+                "ZFP Wasn't properly initialized for some reason!");
+        if (zfp1d == nullptr)
+            throw std::invalid_argument(
+                "ZFP Wasn't properly initialized for some reason!");
+
+        zfp_stream_set_rate(zfp3d, rate, zfp_type_double, 3, 0);
+        zfp_stream_set_rate(zfp2d, rate, zfp_type_double, 2, 0);
+        zfp_stream_set_rate(zfp1d, rate, zfp_type_double, 1, 0);
+
+        assert(zfp_stream_compression_mode(zfp3d) == zfp_mode_fixed_rate);
+        assert(zfp_stream_compression_mode(zfp2d) == zfp_mode_fixed_rate);
+        assert(zfp_stream_compression_mode(zfp1d) == zfp_mode_fixed_rate);
+
+        mode_set = "rate";
+        std::cout << "ZFP Rate set to: " << rate << std::endl;
+    }
+
+    void setAccuracy(const double tolerance_in) {
+        tolerance = tolerance_in;
+
+        if (zfp3d == nullptr)
+            throw std::invalid_argument(
+                "ZFP Wasn't properly initialized for some reason!");
+        if (zfp2d == nullptr)
+            throw std::invalid_argument(
+                "ZFP Wasn't properly initialized for some reason!");
+        if (zfp1d == nullptr)
+            throw std::invalid_argument(
+                "ZFP Wasn't properly initialized for some reason!");
+
+        zfp_stream_set_accuracy(zfp3d, tolerance);
+        zfp_stream_set_accuracy(zfp2d, tolerance);
+        zfp_stream_set_accuracy(zfp1d, tolerance);
+
+        assert(zfp_stream_compression_mode(zfp3d) == zfp_mode_fixed_accuracy);
+        assert(zfp_stream_compression_mode(zfp2d) == zfp_mode_fixed_accuracy);
+        assert(zfp_stream_compression_mode(zfp1d) == zfp_mode_fixed_accuracy);
+
+        mode_set = "accuracy";
+        std::cout << "ZFP Tolerance set to: " << rate << std::endl;
+    }
 
     void close_and_free_all() {
         close_all_streams();
@@ -534,19 +608,6 @@ class ZFPCompression {
         field_1d = nullptr;
     }
 
-    void set_accuracy_mode(const size_t& eleOrder = 6,
-                           const double tolerance = 1e-6) {
-        // re-establish all fields in accuracy-only mode
-        zfp_stream_set_accuracy(zfp3d, tolerance);
-        assert(zfp_stream_compression_mode(zfp3d) == zfp_mode_fixed_accuracy);
-
-        zfp_stream_set_accuracy(zfp2d, tolerance);
-        assert(zfp_stream_compression_mode(zfp2d) == zfp_mode_fixed_accuracy);
-
-        zfp_stream_set_accuracy(zfp1d, tolerance);
-        assert(zfp_stream_compression_mode(zfp1d) == zfp_mode_fixed_accuracy);
-    }
-
     size_t do_3d_compression(double* originalMatrix,
                              unsigned char* outputArray);
     size_t do_3d_decompression(unsigned char* compressedBuffer,
@@ -566,11 +627,13 @@ class ZFPCompression {
     zfp_stream* zfp3d      = nullptr;
     zfp_stream* zfp2d      = nullptr;
     zfp_stream* zfp1d      = nullptr;
+    std::string mode_set   = "none";
     int zfp_dim1_decomp    = 0;
     int zfp_dim2_decomp    = 0;
     int zfp_dim3_decomp    = 0;
     size_t eleOrder        = 0;
     double rate            = 20.0;
+    double tolerance       = 20.0;
     size_t zfp_num_per_dim = 0;
     zfp_field* field_3d    = nullptr;
     zfp_field* field_2d    = nullptr;
@@ -695,6 +758,28 @@ class BloscCompression {
         blosc_init();
         blosc_set_compressor(bloscCompressor.c_str());
 
+        calculateSizes();
+    }
+
+    ~BloscCompression() {
+        // TODO: destroy shouldn't be called here, it should be in some other
+        // destruction
+        blosc_destroy();
+    }
+
+    void setEleOrder(size_t eleOrder_in) {
+        eleOrder = eleOrder_in;
+
+        calculateSizes();
+    }
+
+    void setCompressor(const std::string& bloscCompressor_in) {
+        bloscCompressor = bloscCompressor_in;
+
+        blosc_set_compressor(bloscCompressor.c_str());
+    }
+
+    void calculateSizes() {
         size_t points_1d        = eleOrder - 1;
 
         // calculate the number of bytes based on the element order
@@ -710,12 +795,6 @@ class BloscCompression {
             blosc_original_bytes_2d + BLOSC_MAX_OVERHEAD;
         blosc_original_bytes_overhead_3d =
             blosc_original_bytes_3d + BLOSC_MAX_OVERHEAD;
-    }
-
-    ~BloscCompression() {
-        // TODO: destroy shouldn't be called here, it should be in some other
-        // destruction
-        blosc_destroy();
     }
 
     size_t do_3d_compression(double* originalMatrix,
@@ -759,9 +838,36 @@ extern BloscCompression bloscblockwise;
 namespace dendro_compress {
 
 enum CompressionType { NONE = 0, ZFP, CHEBYSHEV, BLOSC };
+static const char* COMPRESSION_TYPE_NAMES[] = {"NONE", "ZFP", "CHEBYSHEV",
+                                               "BLOSC"};
 
 // then the global option
 extern CompressionType COMPRESSION_OPTION;
+
+struct CompressionOptions {
+    size_t eleOrder             = 6;
+    // options just for blosc
+    std::string bloscCompressor = "lz4";
+    int bloscClevel             = 5;
+    int bloscDoShuffle          = 1;
+
+    // options just for ZFP
+
+    // Options: accuracy, rate
+    std::string zfpMode         = "accuracy";
+    double zfpRate              = 5.0;
+    double zfpAccuracyTolerance = 1e-6;
+
+    // options for chebyshev
+    size_t chebyNReduced        = 3;
+};
+
+std::ostream& operator<<(std::ostream& out, const CompressionOptions opts);
+
+std::ostream& operator<<(std::ostream& out, const CompressionType t);
+
+void set_compression_options(CompressionType compT,
+                             const CompressionOptions& compOpt);
 
 std::size_t blockwise_compression(
     double* buffer, unsigned char* compressBuffer, const size_t numBlocks,
