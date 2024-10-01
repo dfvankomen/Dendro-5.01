@@ -17,6 +17,8 @@
 #define EIGEN_DONT_ALIGN
 // #include <Eigen/Dense>
 // #include <Eigen/SVD>
+#include <algorithm>
+#include <cassert>
 #include <cmath>
 #include <iostream>
 #include <utility>
