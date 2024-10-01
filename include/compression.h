@@ -15,13 +15,14 @@
 #include <cstdint>
 #include <cstdlib>
 #define EIGEN_DONT_ALIGN
-#include <Eigen/Dense>
-#include <Eigen/SVD>
+// #include <Eigen/Dense>
+// #include <Eigen/SVD>
 #include <cmath>
 #include <iostream>
 #include <utility>
 #include <vector>
 
+#if 0
 namespace SVDAlgorithms {
 
 /**
@@ -65,6 +66,8 @@ unsigned char* compressMatrix1d(double*& originalMatrix, const int n,
 double* decompressMatrix1d(unsigned char*& buffer, int bufferSize);
 }  // namespace SVDAlgorithms
 
+#endif
+
 /*
   -----------------------------------------------------------------------
   Implementation of data compression algorithm based on the following paper:
@@ -95,6 +98,7 @@ double* decompressMatrix1d(unsigned char*& buffer, int bufferSize);
 
 namespace ChebyshevAlgorithms {
 
+#if 0
 /**
  * Struct for using and storing data for Chebyshev computations, it's a touch
  * faster to just memcpy a struct unpack than to
@@ -165,6 +169,7 @@ void compressMatrixBuffer(const double* originalMatrix, const uint32_t x,
 double* decompressMatrix(const unsigned char* buffer, const int bufferSize);
 void decompressMatrixBuffer(const unsigned char* buffer, const int bufferSize,
                             double* outBuff);
+#endif
 
 class ChebyshevCompression {
    public:

@@ -84,8 +84,8 @@ include_directories(${blosc_SOURCE_DIR}/blosc)
 # == END BLOSC LIBRARY BUILD
 
 # Packages needed for the compression algorithms
-find_package(Eigen3 REQUIRED)
-include_directories(${EIGEN3_INCLUDE_DIR})
+# find_package(Eigen3 REQUIRED)
+# include_directories(${EIGEN3_INCLUDE_DIR})
 
 message(STATUS "Now setting the CMake files for the Dendro Library...")
 

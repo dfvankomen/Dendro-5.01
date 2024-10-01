@@ -9,6 +9,7 @@
 #include "zfp/bitstream.h"
 // #include "mpi.h"
 
+#if 0
 namespace SVDAlgorithms {
 unsigned char* compressMatrix(double*& originalMatrix, const int x, const int y,
                               const int z, int k, int& buffer_size) {
@@ -391,12 +392,14 @@ double* decompressMatrix1d(unsigned char*& byteStream, int buffer_size) {
     return decompressedData;
 }
 }  // namespace SVDAlgorithms
+#endif
 
 namespace ChebyshevAlgorithms {
 
 // a "global" object that we can call from pretty much anywhere
 ChebyshevCompression cheby{6, 3};
 
+#if 0
 // Type alias for cache key, where first is the degree n and second is the value
 // x
 using CacheKey = std::pair<int, double>;
@@ -705,6 +708,8 @@ sizeof(double) << "\n"; std::cout << "Size of serialized compressed data
 
 }
 */
+
+#endif
 }  // namespace ChebyshevAlgorithms
 
 #if 0
