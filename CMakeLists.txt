@@ -869,4 +869,3 @@ target_include_directories(testCompDecomp PRIVATE ${GSL_INCLUDE_DIRS})
 target_include_directories(testCompDecomp PUBLIC ${blosc_SOURCE_DIR}/blosc)
 target_link_directories(testCompDecomp PUBLIC ${blosc_BUILD_DIR})
 
-add_subdirectory(NLSigma)
