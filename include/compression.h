@@ -91,7 +91,8 @@ double* decompressMatrix1d(unsigned char*& buffer, int bufferSize);
 
 // Disables Eigen's memory alignment which could lead to extra memory padding.
 #define EIGEN_DONT_ALIGN
-#include <Eigen/Dense>  // Include this header for matrix and vector operations
+// #include <Eigen/Dense>  // Include this header for matrix and vector
+// operations
 #include <iostream>
 #include <unordered_map>
 #include <utility>
