@@ -236,6 +236,12 @@ class Ctx {
      * allocated on the device*/
     std::vector<ot::AsyncExchangeContex> m_mpi_ctx_device;
 
+    std::vector<unsigned int> m_uiTotalBytesSend;
+    std::vector<unsigned int> m_uiTotalBytesRecv;
+    std::vector<unsigned int> m_uiTotalBytesSendCompress;
+    std::vector<unsigned int> m_uiTotalBytesRecvCompress;
+    unsigned int m_uiTotalBytesCounter = 0;
+
    public:
     /**@brief: default constructor*/
     Ctx(){};
@@ -518,6 +524,61 @@ class Ctx {
                                           unsigned int lmax) {
         return DerivedCtx::getBlkTimestepFac(blev, lmin, lmax);
     }
+
+    inline void prepareBytesVectors() {
+        m_uiTotalBytesSend.assign(m_uiMesh->getMPICommSize(), 0);
+        m_uiTotalBytesRecv.assign(m_uiMesh->getMPICommSize(), 0);
+        m_uiTotalBytesSendCompress.assign(m_uiMesh->getMPICommSize(), 0);
+        m_uiTotalBytesRecvCompress.assign(m_uiMesh->getMPICommSize(), 0);
+
+        m_uiTotalBytesCounter = 0;
+    }
+
+    inline void averageBytesVectors() {
+        // assumes we haven't done this yet!
+        for (auto& ele : m_uiTotalBytesSend) {
+            ele /= m_uiTotalBytesCounter;
+        }
+        for (auto& ele : m_uiTotalBytesRecv) {
+            ele /= m_uiTotalBytesCounter;
+        }
+        for (auto& ele : m_uiTotalBytesSendCompress) {
+            ele /= m_uiTotalBytesCounter;
+        }
+        for (auto& ele : m_uiTotalBytesRecvCompress) {
+            ele /= m_uiTotalBytesCounter;
+        }
+    }
+
+    inline std::vector<unsigned int>& getTotalBytesSend() {
+        return m_uiTotalBytesSend;
+    }
+    inline std::vector<unsigned int>& getTotalBytesRecv() {
+        return m_uiTotalBytesRecv;
+    }
+    inline std::vector<unsigned int>& getTotalBytesSendCompress() {
+        return m_uiTotalBytesSendCompress;
+    }
+    inline std::vector<unsigned int>& getTotalBytesRecvCompress() {
+        return m_uiTotalBytesRecvCompress;
+    }
+
+    unsigned int getTotalBytesSendSum() const {
+        return std::accumulate(m_uiTotalBytesSend.begin(),
+                               m_uiTotalBytesSend.end(), 0);
+    }
+    unsigned int getTotalBytesRecvSum() const {
+        return std::accumulate(m_uiTotalBytesRecv.begin(),
+                               m_uiTotalBytesRecv.end(), 0);
+    }
+    unsigned int getTotalBytesSendCompressSum() const {
+        return std::accumulate(m_uiTotalBytesSendCompress.begin(),
+                               m_uiTotalBytesSendCompress.end(), 0);
+    }
+    unsigned int getTotalBytesRecvCompressSum() const {
+        return std::accumulate(m_uiTotalBytesRecvCompress.begin(),
+                               m_uiTotalBytesRecvCompress.end(), 0);
+    }
 };
 
 template <typename DerivedCtx, typename T, typename I>
@@ -574,6 +635,30 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
             m_uiCtxpt[CTXPROFILE::UNZIP].stop();
 #endif
         }
+
+        // now that it's all done, we can gather up from the m_uiMesh unzip:
+        for (unsigned int i = 0; i < async_k; i++) {
+            const unsigned int v_begin  = ((i * dof) / async_k);
+            const unsigned int v_end    = (((i + 1) * dof) / async_k);
+            const unsigned int batch_sz = (v_end - v_begin);
+
+            for (unsigned int j = 0; j < m_uiMesh->getMPICommSize(); j++) {
+                m_uiTotalBytesSend[j] +=
+                    m_uiMesh->getNodalSendCounts()[j] * batch_sz * sizeof(T);
+                m_uiTotalBytesRecv[j] +=
+                    m_uiMesh->getNodalRecvCounts()[j] * batch_sz * sizeof(T);
+                // then the compress amounts, which is the *total* amount not
+                // including batch syze
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+                m_uiTotalBytesSendCompress[j] +=
+                    m_mpi_ctx[i].getSendCompressCounts()[j];
+                m_uiTotalBytesRecvCompress[j] +=
+                    m_mpi_ctx[i].getReceiveCompressCounts()[j];
+#endif
+            }
+        }
+
+        m_uiTotalBytesCounter += 1;
 
     } else if (in.get_loc() == ot::DVEC_LOC::DEVICE) {
 #ifdef __CUDACC__

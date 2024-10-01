@@ -699,45 +699,61 @@ void Mesh::ghostExchangeRecvSync(T* vec, T* recvNodeBuffer,
 template <typename T>
 void Mesh::readFromGhostBeginWrapper(T* vec, unsigned int dof,
                                      bool use_compression) {
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
     if (use_compression && (dendro_compress::COMPRESSION_OPTION !=
                             dendro_compress::CompressionType::NONE)) {
         readFromGhostBeginCompression(vec, dof);
     } else {
         readFromGhostBegin(vec, dof);
     }
+#else
+    readFromGhostBegin(vec, dof);
+#endif
 }
 
 template <typename T>
 void Mesh::readFromGhostEndWrapper(T* vec, unsigned int dof,
                                    bool use_compression) {
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
     if (use_compression && (dendro_compress::COMPRESSION_OPTION !=
                             dendro_compress::CompressionType::NONE)) {
         readFromGhostEndCompression(vec, dof);
     } else {
         readFromGhostEnd(vec, dof);
     }
+#else
+    readFromGhostEnd(vec, dof);
+#endif
 }
 
 template <typename T>
 void Mesh::readFromGhostBeginWrapper(AsyncExchangeContex& ctx, T* vec,
                                      unsigned int dof, bool use_compression) {
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
     if (use_compression && (dendro_compress::COMPRESSION_OPTION !=
                             dendro_compress::CompressionType::NONE)) {
         readFromGhostBeginCompression(ctx, vec, dof);
     } else {
         readFromGhostBegin(ctx, vec, dof);
     }
+#else
+    readFromGhostBegin(ctx, vec, dof);
+#endif
 }
 
 template <typename T>
 void Mesh::readFromGhostEndWrapper(AsyncExchangeContex& ctx, T* vec,
                                    unsigned int dof, bool use_compression) {
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
     if (use_compression && (dendro_compress::COMPRESSION_OPTION !=
                             dendro_compress::CompressionType::NONE)) {
         readFromGhostEndCompression(ctx, vec, dof);
     } else {
         readFromGhostEnd(ctx, vec, dof);
     }
+#else
+    readFromGhostEnd(ctx, vec, dof);
+#endif
 }
 
 template <typename T>
