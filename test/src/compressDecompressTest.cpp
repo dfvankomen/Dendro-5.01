@@ -162,7 +162,7 @@ int main() {
     int x = 50, y = 50, z = 20;  // Dimensions of matrix. Modify as needed.
     int n                     = x * y * z;
     int k                     = 7;
-    double rate               = 64.0;
+    double rate               = 10.0;
 
     int total_points          = x * y * z;
 

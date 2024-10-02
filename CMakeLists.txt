@@ -1,4 +1,4 @@
-# ##############################################################################
+# -------------------
 # CMAKE CONFIGURATION FILE FOR DENDRO DIRECTORY
 #
 # This file in particular contains all of the options that apply specificially
@@ -11,7 +11,6 @@
 # for building, but the options must be propagated to your own solvers and
 # projects.
 #
-# ##############################################################################
 
 cmake_minimum_required(VERSION 3.1)
 project(Dendro-5.0-Library C CXX Fortran)
@@ -88,6 +87,16 @@ include_directories(${blosc_SOURCE_DIR}/blosc)
 # include_directories(${EIGEN3_INCLUDE_DIR})
 
 message(STATUS "Now setting the CMake files for the Dendro Library...")
+
+set(CMAKE_CXX_FLAGS_DEBUG
+    "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover"
+)
+set(CMAKE_C_FLAGS_DEBUG
+    "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover"
+)
+set(CMAKE_EXE_LINKER_FLAGS_DEBUG
+    "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover"
+)
 
 set(DENDRO_INCLUDE_FILES
     include/point.h
@@ -846,26 +855,3 @@ target_include_directories(sfcLaplaceEq
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(sfcLaplaceEq PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(sfcLaplaceEq PRIVATE ${GSL_INCLUDE_DIRS})
-
-set(SOURCE_FILES test/src/compressDecompressTest.cpp)
-add_executable(testCompDecomp ${SOURCE_FILES})
-target_link_libraries(testCompDecomp dendro5 ${LAPACK_LIBRARIES} m)
-target_include_directories(testCompDecomp
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
-target_include_directories(testCompDecomp
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
-target_include_directories(testCompDecomp
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
-target_include_directories(testCompDecomp
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
-target_include_directories(testCompDecomp
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
-target_include_directories(testCompDecomp
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
-target_include_directories(testCompDecomp
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
-target_include_directories(testCompDecomp PRIVATE ${MPI_INCLUDE_PATH})
-target_include_directories(testCompDecomp PRIVATE ${GSL_INCLUDE_DIRS})
-target_include_directories(testCompDecomp PUBLIC ${blosc_SOURCE_DIR}/blosc)
-target_link_directories(testCompDecomp PUBLIC ${blosc_BUILD_DIR})
-
