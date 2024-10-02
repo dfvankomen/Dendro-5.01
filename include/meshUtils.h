@@ -197,6 +197,8 @@ void alloc_mpi_ctx(const Mesh* pMesh,
 
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
                 ctx_list[i].allocateCompressSendBuffers(activeNpes);
+                ctx_list[i].allocateCompressSendBuffer(batch_sz * sendBSz *
+                                                       sizeof(T));
 #endif
             }
 
@@ -204,8 +206,8 @@ void alloc_mpi_ctx(const Mesh* pMesh,
                 ctx_list[i].allocateRecvBuffer(batch_sz * recvBSz * sizeof(T));
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
                 // simple preallocation, both will be reallocated when needed
-                ctx_list[i].allocateCompressRecvBuffer(10 * sizeof(T));
-                ctx_list[i].allocateCompressSendBuffer(10 * sizeof(T));
+                ctx_list[i].allocateCompressRecvBuffer(batch_sz * recvBSz *
+                                                       sizeof(T));
 
 #endif
             }

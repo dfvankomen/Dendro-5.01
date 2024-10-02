@@ -8,6 +8,8 @@
  */
 //
 
+#include <mpi.h>
+
 #include <cstdint>
 
 #include "compression.h"
@@ -1731,11 +1733,11 @@ void Mesh::readFromGhostBeginCompression(AsyncExchangeContex& ctx, T* vec,
 
         // gather the data that needs to be sent
         if (sendBSz) {
-            sendB = (T*)ctx.getSendBuffer();
+            sendB         = (T*)ctx.getSendBuffer();
 
             // get the compress send buffer, reallocate to the current size
             // TODO: can probably initially allocate to something else
-            ctx.reallocateCompressSendBuffer(sizeof(T) * dof * sendBSz);
+            // ctx.reallocateCompressSendBuffer(sizeof(T) * dof * sendBSz);
             compressSendB = (unsigned char*)ctx.getCompressSendBuffer();
 
             std::size_t originalOffset = 0;
@@ -1808,20 +1810,22 @@ void Mesh::readFromGhostBeginCompression(AsyncExchangeContex& ctx, T* vec,
             }
         }
 
-        // perform an all-to-all request to get the values
-        par::Mpi_Alltoall(&(*(sendCompressCounts.begin())),
-                          &(*(receiveCompressCounts.begin())), 1, commActive);
-        // NOTE: it might be better to to keep this from being blocking since we
-        // want to start decompressing as soon as we can
+        // MPI_Request req_sizes;
 
+        // perform an all-to-all request to get the values, non-blocking so we
+        // can set up sending while other processes are waiting
+        // par::Mpi_Alltoall(&(*(sendCompressCounts.begin())),
+        //                   &(*(receiveCompressCounts.begin())), 1,
+        //                   commActive);
+
+        par::Mpi_IAlltoall(&(*(sendCompressCounts.begin())),
+                           &(*(receiveCompressCounts.begin())), 1, commActive,
+                           ctx.getAllToAllRequest());
+        //
         // calculate the offsets for simplicity
-        sendCompressOffsets[0]    = 0;
-        receiveCompressOffsets[0] = 0;
+        sendCompressOffsets[0] = 0;
         omp_par::scan(&(*(sendCompressCounts.begin())),
                       &(*(sendCompressOffsets.begin())), nodeSendCount.size());
-        omp_par::scan(&(*(receiveCompressCounts.begin())),
-                      &(*(receiveCompressOffsets.begin())),
-                      nodeSendCount.size());
 
 #ifdef __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION
         // TEMP
@@ -1831,23 +1835,9 @@ void Mesh::readFromGhostBeginCompression(AsyncExchangeContex& ctx, T* vec,
         }
         std::cout << std::endl;
 
-        // print it out
-        std::cout << this->getMPIRank() << ": ASYNC Receive compress bytes: ";
-        for (int ii = 0; ii < receiveCompressCounts.size(); ii++) {
-            std::cout << receiveCompressCounts[ii] * sizeof(unsigned char)
-                      << " ";
-        }
-        std::cout << std::endl;
-
         std::cout << this->getMPIRank() << ": ASYNC Send original bytes: ";
         for (int ii = 0; ii < nodeSendCount.size(); ii++) {
             std::cout << dof * nodeSendCount[ii] * sizeof(T) << " ";
-        }
-        std::cout << std::endl;
-
-        std::cout << this->getMPIRank() << ": ASYNC Receive original bytes: ";
-        for (int ii = 0; ii < nodeRecvCount.size(); ii++) {
-            std::cout << dof * nodeRecvCount[ii] * sizeof(T) << " ";
         }
         std::cout << std::endl;
 
@@ -1857,40 +1847,7 @@ void Mesh::readFromGhostBeginCompression(AsyncExchangeContex& ctx, T* vec,
         }
         std::cout << std::endl;
 
-        std::cout << this->getMPIRank() << ": Receive compress offsets: ";
-        for (int ii = 0; ii < receiveCompressOffsets.size(); ii++) {
-            std::cout << receiveCompressOffsets[ii] << " ";
-        }
-        std::cout << std::endl;
 #endif
-
-        if (recvBSz) {
-            unsigned int compressBufferSzTotal =
-                receiveCompressOffsets.back() + receiveCompressCounts.back();
-
-            // make sure there's enough memory on the receive end
-            // TODO: this can probably be done earlier
-            ctx.reallocateCompressRecvBuffer(compressBufferSzTotal);
-
-            // ensure it comes through as unsigned char bytes
-            recvB = (unsigned char*)ctx.getCompressRecvBuffer();
-
-            // active recv procs
-            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
-                 recv_p++) {
-                proc_id = recvProcList[recv_p];
-#ifdef __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION_ASYNC
-                std::cout << this->getMPIRank() << " : receiving from "
-                          << proc_id << " a total of "
-                          << receiveCompressCounts[proc_id] << std::endl;
-#endif
-
-                par::Mpi_Irecv((recvB + receiveCompressOffsets[proc_id]),
-                               receiveCompressCounts[proc_id], proc_id,
-                               m_uiCommTag, commActive,
-                               &ctx.m_recv_req[recv_p]);
-            }
-        }
 
         if (sendBSz) {
             // active send procs
@@ -1936,6 +1893,65 @@ void Mesh::readFromGhostBeginCompression(AsyncExchangeContex& ctx, T* vec,
                            sizeof(unsigned char) * sendCompressCounts[proc_id]);
                 file.close();
 #endif
+            }
+        }
+
+        // then wait for the sizes, they should be done by now since it's pretty
+        // small
+        MPI_Wait(ctx.getAllToAllRequest(), MPI_STATUS_IGNORE);
+
+        receiveCompressOffsets[0] = 0;
+        omp_par::scan(&(*(receiveCompressCounts.begin())),
+                      &(*(receiveCompressOffsets.begin())),
+                      nodeSendCount.size());
+
+#ifdef __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION
+        // print it out
+        std::cout << this->getMPIRank() << ": ASYNC Receive compress bytes: ";
+        for (int ii = 0; ii < receiveCompressCounts.size(); ii++) {
+            std::cout << receiveCompressCounts[ii] * sizeof(unsigned char)
+                      << " ";
+        }
+
+        std::cout << std::endl;
+        std::cout << this->getMPIRank() << ": ASYNC Receive original bytes: ";
+        for (int ii = 0; ii < nodeRecvCount.size(); ii++) {
+            std::cout << dof * nodeRecvCount[ii] * sizeof(T) << " ";
+        }
+        std::cout << std::endl;
+
+        std::cout << this->getMPIRank() << ": Receive compress offsets: ";
+        for (int ii = 0; ii < receiveCompressOffsets.size(); ii++) {
+            std::cout << receiveCompressOffsets[ii] << " ";
+        }
+        std::cout << std::endl;
+#endif
+
+        if (recvBSz) {
+            unsigned int compressBufferSzTotal =
+                receiveCompressOffsets.back() + receiveCompressCounts.back();
+
+            // make sure there's enough memory on the receive end
+            // TODO: this can probably be done earlier
+            // ctx.reallocateCompressRecvBuffer(compressBufferSzTotal);
+
+            // ensure it comes through as unsigned char bytes
+            recvB = (unsigned char*)ctx.getCompressRecvBuffer();
+
+            // active recv procs
+            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
+                 recv_p++) {
+                proc_id = recvProcList[recv_p];
+#ifdef __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION_ASYNC
+                std::cout << this->getMPIRank() << " : receiving from "
+                          << proc_id << " a total of "
+                          << receiveCompressCounts[proc_id] << std::endl;
+#endif
+
+                par::Mpi_Irecv((recvB + receiveCompressOffsets[proc_id]),
+                               receiveCompressCounts[proc_id], proc_id,
+                               m_uiCommTag, commActive,
+                               &ctx.m_recv_req[recv_p]);
             }
         }
 

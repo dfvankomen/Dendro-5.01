@@ -54,6 +54,8 @@ class AsyncExchangeContex {
     /** Receive offsets for the compressed data */
     std::vector<unsigned int> m_uiRecvCompressOffsets;
 
+    MPI_Request m_alltoallRequest;
+
 #endif
 
    public:
@@ -115,6 +117,8 @@ class AsyncExchangeContex {
     }
 
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+
+    inline MPI_Request* getAllToAllRequest() { return &m_alltoallRequest; }
 
     inline void allocateCompressRecvBuffer(size_t bytes) {
         m_uiCompRecvBuf = malloc(bytes);
