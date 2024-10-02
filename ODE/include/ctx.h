@@ -526,10 +526,10 @@ class Ctx {
     }
 
     inline void prepareBytesVectors() {
-        m_uiTotalBytesSend.assign(m_uiMesh->getMPICommSize(), 0);
-        m_uiTotalBytesRecv.assign(m_uiMesh->getMPICommSize(), 0);
-        m_uiTotalBytesSendCompress.assign(m_uiMesh->getMPICommSize(), 0);
-        m_uiTotalBytesRecvCompress.assign(m_uiMesh->getMPICommSize(), 0);
+        m_uiTotalBytesSend.assign(m_uiMesh->getMPICommSizeGlobal(), 0);
+        m_uiTotalBytesRecv.assign(m_uiMesh->getMPICommSizeGlobal(), 0);
+        m_uiTotalBytesSendCompress.assign(m_uiMesh->getMPICommSizeGlobal(), 0);
+        m_uiTotalBytesRecvCompress.assign(m_uiMesh->getMPICommSizeGlobal(), 0);
 
         m_uiTotalBytesCounter = 0;
     }

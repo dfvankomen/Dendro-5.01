@@ -723,7 +723,6 @@ void set_compression_options(CompressionType compT,
     //           << dendro_compress::COMPRESSION_OPTION << std::endl;
 
     // then set up the options for all types
-
     ZFPAlgorithms::zfpblockwise.setEleOrder(compOpt.eleOrder);
     if (compOpt.zfpMode == "accuracy") {
         ZFPAlgorithms::zfpblockwise.setAccuracy(compOpt.zfpAccuracyTolerance);

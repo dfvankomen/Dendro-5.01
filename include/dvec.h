@@ -206,13 +206,11 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
 // end DVEC_ZERO_ALLOC
 #endif
         // end __CUDACC__ if
-
     } else if (m_vec_loc == DVEC_LOC::DEVICE) {
 #ifdef __CUDACC__
         // #pragma message("dvec.h compiling with cuda")
         m_data_ptr = GPUDevice::device_malloc<T>(m_size);
 #endif
-
     } else {
         dendro_log(
             " unknown vector allocation location specified, should be HOST (0) "
