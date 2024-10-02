@@ -297,6 +297,7 @@ extern int splitCommEvent;
 #define PROF_PAR_REDUCE_BEGIN          int error_code = MPI_SUCCESS;
 #define PROF_PAR_ALLREDUCE_BEGIN       int error_code = MPI_SUCCESS;
 #define PROF_PAR_ALL2ALL_BEGIN         int error_code = MPI_SUCCESS;
+#define PROF_PAR_IALL2ALL_BEGIN        int error_code = MPI_SUCCESS;
 #define PROF_PAR_ALLGATHERV_BEGIN      int error_code = MPI_SUCCESS;
 #define PROF_PAR_ALLGATHER_BEGIN       int error_code = MPI_SUCCESS;
 #define PROF_PAR_ALL2ALLV_SPARSE_BEGIN int error_code = MPI_SUCCESS;
@@ -351,6 +352,9 @@ extern int splitCommEvent;
     __MPI_CHECK_ERROR__(error_code, comm); \
     return error_code;
 #define PROF_PAR_ALL2ALL_END               \
+    __MPI_CHECK_ERROR__(error_code, comm); \
+    return error_code;
+#define PROF_PAR_IALL2ALL_END              \
     __MPI_CHECK_ERROR__(error_code, comm); \
     return error_code;
 #define PROF_PAR_ALLGATHERV_END            \
@@ -433,6 +437,10 @@ int Mpi_Allreduce(T *sendbuf, T *recvbuf, int count, MPI_Op op, MPI_Comm comm);
 
 template <typename T>
 int Mpi_Alltoall(T *sendbuf, T *recvbuf, int count, MPI_Comm comm);
+
+template <typename T>
+int Mpi_IAlltoall(T *sendbuf, T *recvbuf, int count, MPI_Comm comm,
+                  MPI_Request req);
 
 template <typename T>
 int Mpi_Allgatherv(T *sendbuf, int sendcount, T *recvbuf, int *recvcounts,
