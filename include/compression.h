@@ -57,6 +57,24 @@ class ChebyshevCompression {
                 set_chebyshev_mat_ele6_out4_dim2();
                 set_chebyshev_mat_ele6_out4_dim3();
             }
+        } else if (eleOrder == 8) {
+            if (nReduced == 1) {
+                set_chebyshev_mat_ele8_out1_dim1();
+                set_chebyshev_mat_ele8_out1_dim2();
+                set_chebyshev_mat_ele8_out1_dim3();
+            } else if (nReduced == 2) {
+                set_chebyshev_mat_ele8_out2_dim1();
+                set_chebyshev_mat_ele8_out2_dim2();
+                set_chebyshev_mat_ele8_out2_dim3();
+            } else if (nReduced == 3) {
+                set_chebyshev_mat_ele8_out3_dim1();
+                set_chebyshev_mat_ele8_out3_dim2();
+                set_chebyshev_mat_ele8_out3_dim3();
+            } else if (nReduced == 4) {
+                set_chebyshev_mat_ele8_out4_dim1();
+                set_chebyshev_mat_ele8_out4_dim2();
+                set_chebyshev_mat_ele8_out4_dim3();
+            }
         }
 
         recalculate_byte_sizes();
@@ -144,6 +162,7 @@ class ChebyshevCompression {
     }
 
 #include "generated/cheb_transform_ele6.inc.h"
+#include "generated/cheb_transform_ele8.inc.h"
 };
 
 // build up an object that we can just use
