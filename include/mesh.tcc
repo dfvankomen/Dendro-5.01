@@ -1980,7 +1980,7 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
                 MPI_STATUSES_IGNORE);
     MPI_Waitall(recvProcList.size(), ctx.m_recv_req.data(),
                 MPI_STATUSES_IGNORE);
-    dendro::timer::t_compression_wait_comms.end();
+    dendro::timer::t_compression_wait_comms.stop();
 
     if (recvBSz) {
         // copy the recv data to the vec
