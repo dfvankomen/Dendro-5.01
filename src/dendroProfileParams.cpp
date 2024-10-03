@@ -25,6 +25,13 @@ profiler_t t_unzip_async_internal;
 profiler_t t_unzip_async_external;
 profiler_t t_unzip_async_comm;
 
+profiler_t t_compression_extraction;
+profiler_t t_compression_compress;
+profiler_t t_compression_begin_comms;
+profiler_t t_compression_wait_comms;
+profiler_t t_compression_decompress;
+profiler_t t_compression_unextract;
+
 }  // end of namespace timer
 
 }  // end of namespace dendro

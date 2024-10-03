@@ -33,6 +33,14 @@ extern profiler_t t_unzip_async_internal;
 extern profiler_t t_unzip_async_external;
 extern profiler_t t_unzip_async_comm;
 
+// compression timers
+extern profiler_t t_compression_extraction;
+extern profiler_t t_compression_compress;
+extern profiler_t t_compression_begin_comms;
+extern profiler_t t_compression_wait_comms;
+extern profiler_t t_compression_decompress;
+extern profiler_t t_compression_unextract;
+
 }  // end of namespace timer.
 
 }  // end namespace dendro
