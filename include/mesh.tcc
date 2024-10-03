@@ -1540,6 +1540,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 
     MPI_Comm commActive = this->getMPICommunicator();
 
+    dendro::timer::t_compression_begin_comms.start();
     if (recvBSz) {
         recvB = (T*)ctx.getRecvBuffer();
 
@@ -1551,9 +1552,11 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                            commActive, &ctx.m_recv_req[recv_p]);
         }
     }
+    dendro::timer::t_compression_begin_comms.stop();
 
     if (sendBSz) {
         sendB = (T*)ctx.getSendBuffer();
+        dendro::timer::t_compression_extraction.start();
         for (unsigned int send_p = 0; send_p < sendProcList.size(); send_p++) {
             proc_id = sendProcList[send_p];
 
@@ -1568,7 +1571,9 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                 }
             }
         }
+        dendro::timer::t_compression_extraction.stop();
 
+        dendro::timer::t_compression_begin_comms.start();
         // active send procs
         for (unsigned int send_p = 0; send_p < sendProcList.size(); send_p++) {
             proc_id = sendProcList[send_p];
@@ -1576,6 +1581,8 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                            dof * nodeSendCount[proc_id], proc_id, m_uiCommTag,
                            commActive, &ctx.m_send_req[send_p]);
         }
+
+        dendro::timer::t_compression_begin_comms.stop();
     }
 
     m_uiCommTag++;
@@ -1968,15 +1975,18 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
 
     MPI_Status status;
     // need to wait for the commns to finish ...
+    dendro::timer::t_compression_wait_comms.start();
     MPI_Waitall(sendProcList.size(), ctx.m_send_req.data(),
                 MPI_STATUSES_IGNORE);
     MPI_Waitall(recvProcList.size(), ctx.m_recv_req.data(),
                 MPI_STATUSES_IGNORE);
+    dendro::timer::t_compression_wait_comms.end();
 
     if (recvBSz) {
         // copy the recv data to the vec
         recvB = (T*)ctx.getRecvBuffer();
 
+        dendro::timer::t_compression_unextract.start();
         for (unsigned int recv_p = 0; recv_p < recvProcList.size(); recv_p++) {
             proc_id = recvProcList[recv_p];
 
@@ -1991,6 +2001,7 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
                 }
             }
         }
+        dendro::timer::t_compression_unextract.stop();
     }
 
     return;
