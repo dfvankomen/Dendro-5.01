@@ -31,6 +31,7 @@ profiler_t t_compression_begin_comms;
 profiler_t t_compression_wait_comms;
 profiler_t t_compression_decompress;
 profiler_t t_compression_unextract;
+profiler_t t_compression_uzip_post;
 
 }  // end of namespace timer
 

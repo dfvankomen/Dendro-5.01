@@ -736,6 +736,7 @@ void Mesh::extractFullData(AsyncExchangeContex& ctx, T* vec, unsigned int dof) {
 
     unsigned int proc_id;
 
+    dendro::timer::t_compression_extraction.start();
     if (sendBSz) {
         sendB = (T*)ctx.getSendBuffer();
 
@@ -751,6 +752,7 @@ void Mesh::extractFullData(AsyncExchangeContex& ctx, T* vec, unsigned int dof) {
             }
         }
     }
+    dendro::timer::t_compression_extraction.stop();
 }
 
 template <typename T>
@@ -775,6 +777,7 @@ void Mesh::unextractFullData(AsyncExchangeContex& ctx, T* vec,
 
     unsigned int proc_id;
 
+    dendro::timer::t_compression_unextract.start();
     if (recvBSz) {
         recvB = (T*)ctx.getRecvBuffer();
 
@@ -791,6 +794,7 @@ void Mesh::unextractFullData(AsyncExchangeContex& ctx, T* vec,
             }
         }
     }
+    dendro::timer::t_compression_unextract.stop();
 }
 
 template <typename T>
@@ -814,13 +818,18 @@ void Mesh::unextractSingleProcess(AsyncExchangeContex& ctx, T* vec,
 
     recvB = (T*)ctx.getRecvBuffer();
 
+    dendro::timer::t_compression_unextract.start();
     // just unextract
-    for (unsigned int var = 0; var < dof; var++) {
-        injectSingleDof(recvB + dof * nodeRecvOffset[proc_id] +
-                            var * nodeRecvCount[proc_id],
-                        vec + var * m_uiNumActualNodes, nodeRecvCount[proc_id],
-                        nodeRecvOffset[proc_id], recvNodeSM);
+    if (recvBSz) {
+        for (unsigned int var = 0; var < dof; var++) {
+            injectSingleDof(recvB + dof * nodeRecvOffset[proc_id] +
+                                var * nodeRecvCount[proc_id],
+                            vec + var * m_uiNumActualNodes,
+                            nodeRecvCount[proc_id], nodeRecvOffset[proc_id],
+                            recvNodeSM);
+        }
     }
+    dendro::timer::t_compression_unextract.stop();
 }
 
 template <typename T>
@@ -851,6 +860,7 @@ void Mesh::compressFullData(AsyncExchangeContex& ctx, T* vec,
 
     unsigned int proc_id;
 
+    dendro::timer::t_compression_compress.start();
     if (sendBSz) {
         sendB         = (T*)ctx.getSendBuffer();
         compressSendB = (unsigned char*)ctx.getCompressSendBuffer();
@@ -880,6 +890,7 @@ void Mesh::compressFullData(AsyncExchangeContex& ctx, T* vec,
             }
         }
     }
+    dendro::timer::t_compression_compress.stop();
 }
 
 template <typename T>
@@ -905,6 +916,7 @@ void Mesh::decompressSingleProcess(AsyncExchangeContex& ctx, unsigned int dof,
     unsigned int compressBufferOffset  = receiveCompressOffsets[proc_id];
 
     // now decompress
+    dendro::timer::t_compression_decompress.start();
     for (unsigned int var = 0; var < dof; var++) {
         std::size_t temp = dendro_compress::blockwise_decompression(
             recvB + dof * (nodeRecvOffset[proc_id]) +
@@ -915,6 +927,7 @@ void Mesh::decompressSingleProcess(AsyncExchangeContex& ctx, unsigned int dof,
             this->getRecvNodeSMConfigOffset()[proc_id], m_uiElementOrder);
         compressBufferOffset += temp;
     }
+    dendro::timer::t_compression_decompress.stop();
 }
 
 template <typename T>
@@ -949,12 +962,24 @@ void Mesh::setUpSendRecvRequests(AsyncExchangeContex& ctx, unsigned int dof,
 
     MPI_Comm commActive = this->getMPICommunicator();
 
+    recv_requests.reserve(recv_requests.size() + recvProcList.size());
+    recv_requests_ctx.reserve(recv_requests_ctx.size() + recvProcList.size());
+    send_requests.reserve(send_requests.size() + sendProcList.size());
+    send_requests_ctx.reserve(send_requests_ctx.size() + sendProcList.size());
+
+    dendro::timer::t_compression_begin_comms.start();
     if (recvBSz) {
         recvB = (T*)ctx.getRecvBuffer();
 
+        if (!recvB) {
+            std::cerr << "ERROR: The receive  buffer somehow broke "
+                         "inside setting up send/receive requests!"
+                      << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
         // active recv procs
-        for (unsigned int recv_p = 0; recv_p < recvProcList.size(); recv_p++) {
-            proc_id = recvProcList[recv_p];
+        for (unsigned int proc_id : recvProcList) {
             recv_requests.emplace_back();
             par::Mpi_Irecv((recvB + dof * nodeRecvOffset[proc_id]),
                            dof * nodeRecvCount[proc_id], proc_id, m_uiCommTag,
@@ -966,9 +991,15 @@ void Mesh::setUpSendRecvRequests(AsyncExchangeContex& ctx, unsigned int dof,
     if (sendBSz) {
         sendB = (T*)ctx.getSendBuffer();
 
+        if (!recvB) {
+            std::cerr << "ERROR: The receive  buffer somehow broke "
+                         "inside setting up send/receive requests!"
+                      << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
         // active send procs
-        for (unsigned int send_p = 0; send_p < sendProcList.size(); send_p++) {
-            proc_id = sendProcList[send_p];
+        for (unsigned int proc_id : sendProcList) {
             send_requests.emplace_back();
             par::Mpi_Isend(sendB + dof * nodeSendOffset[proc_id],
                            dof * nodeSendCount[proc_id], proc_id, m_uiCommTag,
@@ -976,6 +1007,7 @@ void Mesh::setUpSendRecvRequests(AsyncExchangeContex& ctx, unsigned int dof,
             send_requests_ctx.push_back(ctx_idx);
         }
     }
+    dendro::timer::t_compression_begin_comms.stop();
 
     m_uiCommTag++;
 }
@@ -1019,6 +1051,7 @@ void Mesh::setUpSendRecvCompressionRequests(
     send_requests.reserve(send_requests.size() + sendProcList.size());
     send_requests_ctx.reserve(send_requests_ctx.size() + sendProcList.size());
 
+    dendro::timer::t_compression_begin_comms.start();
     if (recvBSz) {
         recvB = (unsigned char*)ctx.getCompressRecvBuffer();
 
@@ -1059,6 +1092,7 @@ void Mesh::setUpSendRecvCompressionRequests(
             send_requests_ctx.push_back(ctx_idx);
         }
     }
+    dendro::timer::t_compression_begin_comms.stop();
 
     m_uiCommTag++;
 }

@@ -624,6 +624,7 @@ void Ctx<DerivedCtx, T, I>::process_finished_unzip(
     int outcount = 0;
     if (!send_requests.empty()) {
         // HANDLE completed sends
+        dendro::timer::t_compression_wait_comms.start();
         MPI_Testsome(send_requests.size(), send_requests.data(), &outcount,
                      completed_indices.data(), statuses.data());
 
@@ -632,6 +633,7 @@ void Ctx<DerivedCtx, T, I>::process_finished_unzip(
 
         // if the sends are completed, we can clear them from the request list
         if (outcount > 0) {
+            dendro::timer::t_compression_wait_comms.stop();
             std::vector<int> indices_remove(
                 completed_indices.begin(),
                 completed_indices.begin() + outcount);
@@ -652,38 +654,43 @@ void Ctx<DerivedCtx, T, I>::process_finished_unzip(
                     send_requests_ctx.pop_back();
                 }
             }
+        } else {
+            dendro::timer::t_compression_wait_comms.stop();
         }
     }
 
     outcount = 0;
     if (!recv_requests.empty()) {
         // HANDLE COMPLETED RECEIVES
+        dendro::timer::t_compression_wait_comms.start();
         MPI_Testsome(recv_requests.size(), recv_requests.data(), &outcount,
                      completed_indices.data(), statuses.data());
 
-        for (int i = 0; i < outcount; ++i) {
-            // this handles any completed send requests
-            const unsigned int ctx_idx =
-                recv_requests_ctx[completed_indices[i]];
-
-            const unsigned int v_begin  = (ctx_idx * dof) / async_k;
-            const unsigned int v_end    = ((ctx_idx + 1) * dof) / async_k;
-            const unsigned int batch_sz = v_end - v_begin;
-
-            temp_ptr                    = in_ptr + v_begin * sz_per_dof_zip;
-
-            if (use_compression) {
-                // need to decompress to the recv buffer
-                m_uiMesh->decompressSingleProcess<T>(
-                    m_mpi_ctx[ctx_idx], batch_sz, statuses[i].MPI_SOURCE);
-            }
-
-            m_uiMesh->unextractSingleProcess(m_mpi_ctx[ctx_idx], temp_ptr,
-                                             batch_sz, statuses[i].MPI_SOURCE);
-        }
-        // make sure to remove the values from recv_requests_ctx
-
         if (outcount > 0) {
+            dendro::timer::t_compression_wait_comms.stop();
+            for (int i = 0; i < outcount; ++i) {
+                // this handles any completed send requests
+                const unsigned int ctx_idx =
+                    recv_requests_ctx[completed_indices[i]];
+
+                const unsigned int v_begin  = (ctx_idx * dof) / async_k;
+                const unsigned int v_end    = ((ctx_idx + 1) * dof) / async_k;
+                const unsigned int batch_sz = v_end - v_begin;
+
+                temp_ptr                    = in_ptr + v_begin * sz_per_dof_zip;
+
+                if (use_compression) {
+                    // need to decompress to the recv buffer
+                    m_uiMesh->decompressSingleProcess<T>(
+                        m_mpi_ctx[ctx_idx], batch_sz, statuses[i].MPI_SOURCE);
+                }
+
+                m_uiMesh->unextractSingleProcess(m_mpi_ctx[ctx_idx], temp_ptr,
+                                                 batch_sz,
+                                                 statuses[i].MPI_SOURCE);
+            }
+            // make sure to remove the values from recv_requests_ctx
+
             std::vector<int> indices_remove(
                 completed_indices.begin(),
                 completed_indices.begin() + outcount);
@@ -704,6 +711,8 @@ void Ctx<DerivedCtx, T, I>::process_finished_unzip(
                     recv_requests_ctx.pop_back();
                 }
             }
+        } else {
+            dendro::timer::t_compression_wait_comms.stop();
         }
     }
 }
@@ -730,8 +739,6 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
 
     assert(sz_per_dof_uzip == m_uiMesh->getDegOfFreedomUnZip());
     assert(sz_per_dof_zip == m_uiMesh->getDegOfFreedom());
-
-    // host-only code
 
     std::vector<int> completed_indices;
     std::vector<MPI_Request> send_requests, recv_requests;
@@ -785,7 +792,9 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
 
         if (use_compression) {
             // then get all of the vaules
+            dendro::timer::t_compression_wait_comms.start();
             MPI_Wait(m_mpi_ctx[i].getAllToAllRequest(), MPI_STATUS_IGNORE);
+            dendro::timer::t_compression_wait_comms.stop();
 
             auto& send_compress_counts = m_mpi_ctx[i].getSendCompressCounts();
             auto& recv_compress_counts =
@@ -839,6 +848,7 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
     // TODO: this could probably be thrown in process_finished_unzip, but
     // would need to track completed ctx lists since unzip isn't currently
     // async
+    dendro::timer::t_compression_uzip_post.start();
     for (unsigned int i = 0; i < async_k; i++) {
         const unsigned int v_begin  = ((i * dof) / async_k);
         const unsigned int v_end    = (((i + 1) * dof) / async_k);
@@ -847,6 +857,7 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
         m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
                         out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
     }
+    dendro::timer::t_compression_uzip_post.stop();
 }
 
 template <typename DerivedCtx, typename T, typename I>

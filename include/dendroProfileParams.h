@@ -40,6 +40,7 @@ extern profiler_t t_compression_begin_comms;
 extern profiler_t t_compression_wait_comms;
 extern profiler_t t_compression_decompress;
 extern profiler_t t_compression_unextract;
+extern profiler_t t_compression_uzip_post;
 
 }  // end of namespace timer.
 
