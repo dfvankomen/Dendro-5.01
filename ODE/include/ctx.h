@@ -416,6 +416,21 @@ class Ctx {
                                 double ld_tol         = DENDRO_DEFAULT_LB_TOL,
                                 unsigned int sf_k     = DENDRO_DEFAULT_SF_K);
 
+    void process_finished_unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
+                                unsigned int async_k, bool use_compression,
+                                std::vector<int>& completed_batches,
+                                std::vector<MPI_Request>& send_requests,
+                                std::vector<MPI_Request>& recv_requests,
+                                std::vector<unsigned int>& send_requests_ctx,
+                                std::vector<unsigned int>& recv_requests_ctx,
+                                std::vector<MPI_Status>& statuses);
+
+    void unzip_rewrite(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
+                       unsigned int async_k, bool use_compression);
+
+    void unzip_device(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
+                      unsigned int async_k, bool use_compression);
+
     /**
      * @brief performs unzip operation,
      *
@@ -582,8 +597,317 @@ class Ctx {
 };
 
 template <typename DerivedCtx, typename T, typename I>
+void Ctx<DerivedCtx, T, I>::process_finished_unzip(
+    ot::DVector<T, I>& in, ot::DVector<T, I>& out, unsigned int async_k,
+    bool use_compression, std::vector<int>& completed_indices,
+    std::vector<MPI_Request>& send_requests,
+    std::vector<MPI_Request>& recv_requests,
+    std::vector<unsigned int>& send_requests_ctx,
+    std::vector<unsigned int>& recv_requests_ctx,
+    std::vector<MPI_Status>& statuses) {
+    if (!m_uiMesh->isActive()) return;
+    // NOTE: this function should never be called by the device code
+
+    const unsigned int dof             = in.get_dof();
+    T* in_ptr                          = in.get_vec_ptr();
+    T* out_ptr                         = out.get_vec_ptr();
+
+    const unsigned int sz_per_dof_zip  = in.get_size() / dof;
+    const unsigned int sz_per_dof_uzip = out.get_size() / dof;
+    T* temp_ptr;
+
+    // preallocate the completed indices and statuses to use in both Testsome
+    completed_indices.resize(
+        std::max(send_requests.size(), recv_requests.size()));
+    statuses.resize(completed_indices.size());
+
+    int outcount = 0;
+    if (!send_requests.empty()) {
+        // HANDLE completed sends
+        MPI_Testsome(send_requests.size(), send_requests.data(), &outcount,
+                     completed_indices.data(), statuses.data());
+
+        // NOTE: insert iteration over the completed values if things need to be
+        // done with the send requests
+
+        // if the sends are completed, we can clear them from the request list
+        if (outcount > 0) {
+            std::vector<int> indices_remove(
+                completed_indices.begin(),
+                completed_indices.begin() + outcount);
+
+            std::sort(indices_remove.begin(), indices_remove.end(),
+                      std::greater<int>());
+
+            for (int index : indices_remove) {
+                if (index < send_requests.size()) {
+                    // remove the recv requests by swapping to end, and popping
+                    // back
+                    send_requests[index] = std::move(send_requests.back());
+                    send_requests.pop_back();
+
+                    // then do the same for the ctx vector
+                    send_requests_ctx[index] =
+                        std::move(send_requests_ctx.back());
+                    send_requests_ctx.pop_back();
+                }
+            }
+        }
+    }
+
+    outcount = 0;
+    if (!recv_requests.empty()) {
+        // HANDLE COMPLETED RECEIVES
+        MPI_Testsome(recv_requests.size(), recv_requests.data(), &outcount,
+                     completed_indices.data(), statuses.data());
+
+        for (int i = 0; i < outcount; ++i) {
+            // this handles any completed send requests
+            const unsigned int ctx_idx =
+                recv_requests_ctx[completed_indices[i]];
+
+            const unsigned int v_begin  = (ctx_idx * dof) / async_k;
+            const unsigned int v_end    = ((ctx_idx + 1) * dof) / async_k;
+            const unsigned int batch_sz = v_end - v_begin;
+
+            temp_ptr                    = in_ptr + v_begin * sz_per_dof_zip;
+
+            if (use_compression) {
+                // need to decompress to the recv buffer
+                m_uiMesh->decompressSingleProcess<T>(
+                    m_mpi_ctx[ctx_idx], batch_sz, statuses[i].MPI_SOURCE);
+            }
+
+            m_uiMesh->unextractSingleProcess(m_mpi_ctx[ctx_idx], temp_ptr,
+                                             batch_sz, statuses[i].MPI_SOURCE);
+        }
+        // make sure to remove the values from recv_requests_ctx
+
+        if (outcount > 0) {
+            std::vector<int> indices_remove(
+                completed_indices.begin(),
+                completed_indices.begin() + outcount);
+
+            std::sort(indices_remove.begin(), indices_remove.end(),
+                      std::greater<int>());
+
+            for (int index : indices_remove) {
+                if (index < recv_requests.size()) {
+                    // remove the recv requests by swapping to end, and popping
+                    // back
+                    recv_requests[index] = std::move(recv_requests.back());
+                    recv_requests.pop_back();
+
+                    // then do the same for the ctx vector
+                    recv_requests_ctx[index] =
+                        std::move(recv_requests_ctx.back());
+                    recv_requests_ctx.pop_back();
+                }
+            }
+        }
+    }
+}
+
+template <typename DerivedCtx, typename T, typename I>
 void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                                   unsigned int async_k, bool use_compression) {
+    // ONLY ACTIVE PROCS IN THE MESH INTERACT
+    if (!m_uiMesh->isActive()) return;
+
+    // if we're on the device, we should skip this function and call
+    // unzip_device
+    if (in.get_loc() == ot::DVEC_LOC::DEVICE) {
+        this->unzip_device(in, out, async_k, use_compression);
+        return;
+    }
+
+    const unsigned int dof             = in.get_dof();
+    T* in_ptr                          = in.get_vec_ptr();
+    T* out_ptr                         = out.get_vec_ptr();
+
+    const unsigned int sz_per_dof_zip  = in.get_size() / dof;
+    const unsigned int sz_per_dof_uzip = out.get_size() / dof;
+
+    assert(sz_per_dof_uzip == m_uiMesh->getDegOfFreedomUnZip());
+    assert(sz_per_dof_zip == m_uiMesh->getDegOfFreedom());
+
+    // host-only code
+
+    std::vector<int> completed_indices;
+    std::vector<MPI_Request> send_requests, recv_requests;
+    std::vector<unsigned int> send_requests_ctx, recv_requests_ctx;
+    std::vector<MPI_Status> statuses;
+
+    T *temp_ptr, *temp_ptr_next;
+    const unsigned int THRESHOLD = m_uiMesh->getMPICommSize() * 1;
+
+    for (unsigned int i = 0; i < async_k; i++) {
+        // we need to know where we're at with our variables
+        const unsigned int v_begin  = (i * dof) / async_k;
+        const unsigned int v_end    = ((i + 1) * dof) / async_k;
+        const unsigned int batch_sz = v_end - v_begin;
+
+        temp_ptr                    = in_ptr + v_begin * sz_per_dof_zip;
+
+        // start by extracting the data for this batch
+
+        // only the first one will be extracted on the first iter of the loop,
+        // since we start extracting while waiting for IAlltoAll
+        if (i == 0) m_uiMesh->extractFullData(m_mpi_ctx[i], temp_ptr, batch_sz);
+
+        if (use_compression) {
+            auto& send_compress_counts = m_mpi_ctx[i].getSendCompressCounts();
+            auto& recv_compress_counts =
+                m_mpi_ctx[i].getReceiveCompressCounts();
+            // make sure send compress counts has been reinitialized to 0's
+            std::fill(send_compress_counts.begin(), send_compress_counts.end(),
+                      0);
+            m_uiMesh->compressFullData(m_mpi_ctx[i], temp_ptr, batch_sz);
+
+            // spin up the all-to-all
+            par::Mpi_IAlltoall(&(*(send_compress_counts.begin())),
+                               &(*(recv_compress_counts.begin())), 1,
+                               m_uiMesh->getMPICommunicator(),
+                               m_mpi_ctx[i].getAllToAllRequest());
+        }
+
+        // do some work while we wait for processes to get here..., might as
+        // well start extracting the next chunk, which doesn't take long
+        if (i < async_k - 1) {
+            const unsigned int v_begin_next  = ((i + 1) * dof) / async_k;
+            const unsigned int v_end_next    = ((i + 2) * dof) / async_k;
+            const unsigned int batch_sz_next = v_end_next - v_begin_next;
+
+            temp_ptr_next = in_ptr + v_begin_next * sz_per_dof_zip;
+            m_uiMesh->extractFullData(m_mpi_ctx[i + 1], temp_ptr_next,
+                                      batch_sz_next);
+        }
+
+        if (use_compression) {
+            // then get all of the vaules
+            MPI_Wait(m_mpi_ctx[i].getAllToAllRequest(), MPI_STATUS_IGNORE);
+
+            auto& send_compress_counts = m_mpi_ctx[i].getSendCompressCounts();
+            auto& recv_compress_counts =
+                m_mpi_ctx[i].getReceiveCompressCounts();
+            auto& send_compress_offsets = m_mpi_ctx[i].getSendCompressOffsets();
+            auto& recv_compress_offsets =
+                m_mpi_ctx[i].getReceiveCompressOffsets();
+
+            // calculate the offsets for this particular context
+            send_compress_offsets[0] = 0;
+            recv_compress_offsets[0] = 0;
+            omp_par::scan(&(*(send_compress_counts.begin())),
+                          &(*(send_compress_offsets.begin())),
+                          send_compress_counts.size());
+            omp_par::scan(&(*(recv_compress_counts.begin())),
+                          &(*(recv_compress_offsets.begin())),
+                          recv_compress_counts.size());
+
+            // then we can set up the sends and receives
+            m_uiMesh->setUpSendRecvCompressionRequests<T>(
+                m_mpi_ctx[i], send_requests, recv_requests, send_requests_ctx,
+                recv_requests_ctx, i);
+
+        } else {
+            m_uiMesh->setUpSendRecvRequests<T>(
+                m_mpi_ctx[i], batch_sz, send_requests, recv_requests,
+                send_requests_ctx, recv_requests_ctx, i);
+        }
+
+        // add the list of requests to our send and receive so we can do some
+        // checks
+
+        // then if we have enough, we can start processing some communications,
+        // while others finish
+        if (send_requests.size() + recv_requests.size() > THRESHOLD) {
+            this->process_finished_unzip(in, out, async_k, use_compression,
+                                         completed_indices, send_requests,
+                                         recv_requests, send_requests_ctx,
+                                         recv_requests_ctx, statuses);
+        }
+    }
+
+    // as long as we have active requests, we need to try and clear them out
+    while (!send_requests.empty() || !recv_requests.empty()) {
+        this->process_finished_unzip(
+            in, out, async_k, use_compression, completed_indices, send_requests,
+            recv_requests, send_requests_ctx, recv_requests_ctx, statuses);
+    }
+
+    // now that they're all done, we can have the mesh do its own unzip
+    // TODO: this could probably be thrown in process_finished_unzip, but
+    // would need to track completed ctx lists since unzip isn't currently
+    // async
+    for (unsigned int i = 0; i < async_k; i++) {
+        const unsigned int v_begin  = ((i * dof) / async_k);
+        const unsigned int v_end    = (((i + 1) * dof) / async_k);
+        const unsigned int batch_sz = (v_end - v_begin);
+
+        m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
+                        out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
+    }
+}
+
+template <typename DerivedCtx, typename T, typename I>
+void Ctx<DerivedCtx, T, I>::unzip_device(ot::DVector<T, I>& in,
+                                         ot::DVector<T, I>& out,
+                                         unsigned int async_k,
+                                         bool use_compression) {
+    // assert( (in.IsUnzip() == false) && (in.get_dof()== out.get_dof()) &&
+    // (out.IsUnzip()==true) && (in.IsGhosted()==true) && async_k <=
+    // in.get_dof());
+    const unsigned int dof             = in.get_dof();
+    T* in_ptr                          = in.get_vec_ptr();
+    T* out_ptr                         = out.get_vec_ptr();
+
+    const unsigned int sz_per_dof_zip  = in.get_size() / dof;
+    const unsigned int sz_per_dof_uzip = out.get_size() / dof;
+
+    assert(sz_per_dof_uzip == m_uiMesh->getDegOfFreedomUnZip());
+    assert(sz_per_dof_zip == m_uiMesh->getDegOfFreedom());
+
+#ifdef __CUDACC__
+
+    device::MeshGPU* dptr_mesh = this->get_meshgpu_device_ptr();
+    device::MeshGPU* mesh_gpu  = this->get_meshgpu_host_handle();
+
+    for (unsigned int i = 0; i < async_k; i++) {
+        const unsigned int v_begin  = ((i * dof) / async_k);
+        const unsigned int v_end    = (((i + 1) * dof) / async_k);
+        const unsigned int batch_sz = (v_end - v_begin);
+        mesh_gpu->read_from_ghost_cg_begin<DEVICE_REAL, cudaStream_t>(
+            m_mpi_ctx[i], m_mpi_ctx_device[i], m_uiMesh, dptr_mesh,
+            in_ptr + v_begin * sz_per_dof_zip, batch_sz, 0);
+    }
+
+    for (unsigned int i = 0; i < async_k; i++) {
+        const unsigned int v_begin  = ((i * dof) / async_k);
+        const unsigned int v_end    = (((i + 1) * dof) / async_k);
+        const unsigned int batch_sz = (v_end - v_begin);
+        mesh_gpu->read_from_ghost_cg_end<DEVICE_REAL, cudaStream_t>(
+            m_mpi_ctx[i], m_mpi_ctx_device[i], m_uiMesh, dptr_mesh,
+            in_ptr + v_begin * sz_per_dof_zip, batch_sz, 0);
+
+#ifdef __PROFILE_CTX__
+        m_uiCtxpt[CTXPROFILE::UNZIP].start();
+#endif
+        mesh_gpu->unzip_cg<DEVICE_REAL, cudaStream_t>(
+            m_uiMesh, dptr_mesh, in_ptr + v_begin * sz_per_dof_zip,
+            out_ptr + v_begin * sz_per_dof_uzip, batch_sz, 0);
+        GPUDevice::device_synchronize();
+#ifdef __PROFILE_CTX__
+        m_uiCtxpt[CTXPROFILE::UNZIP].stop();
+#endif
+    }
+#endif
+}
+
+template <typename DerivedCtx, typename T, typename I>
+void Ctx<DerivedCtx, T, I>::unzip_rewrite(ot::DVector<T, I>& in,
+                                          ot::DVector<T, I>& out,
+                                          unsigned int async_k,
+                                          bool use_compression) {
     if (!m_uiMesh->isActive()) return;
 
 #ifdef __PROFILE_CTX__

@@ -186,6 +186,9 @@ class ZFPCompression {
     ZFPCompression(const size_t& eleOrder = 6, const double rate = 5.0)
         : eleOrder(eleOrder), rate(rate) {
         zfp_num_per_dim = eleOrder - 1;
+        zfp_dim1_decomp = zfp_num_per_dim;
+        zfp_dim2_decomp = zfp_dim1_decomp * zfp_num_per_dim;
+        zfp_dim3_decomp = zfp_dim2_decomp * zfp_num_per_dim;
 
         // TODO: calculate if the rate is too large
 
@@ -216,6 +219,9 @@ class ZFPCompression {
         // then set the new values
         eleOrder        = eleOrder_in;
         zfp_num_per_dim = eleOrder - 1;
+        zfp_dim1_decomp = zfp_num_per_dim;
+        zfp_dim2_decomp = zfp_dim1_decomp * zfp_num_per_dim;
+        zfp_dim3_decomp = zfp_dim2_decomp * zfp_num_per_dim;
 
         // finally open the new streams
         zfp3d           = zfp_stream_open(NULL);

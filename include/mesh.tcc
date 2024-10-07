@@ -700,6 +700,370 @@ void Mesh::ghostExchangeRecvSync(T* vec, T* recvNodeBuffer,
 }
 
 template <typename T>
+void inline extractSingleDof(T* inputBuffer, T* outputBuffer, size_t count,
+                             size_t scattermapOffset,
+                             const std::vector<unsigned int>& scatterMap) {
+    for (unsigned int k = 0; k < count; k++) {
+        outputBuffer[k] = inputBuffer[scatterMap[scattermapOffset + k]];
+    }
+}
+
+template <typename T>
+void inline injectSingleDof(T* inputBuffer, T* outputBuffer, size_t count,
+                            size_t scattermapOffset,
+                            const std::vector<unsigned int>& scatterMap) {
+    for (unsigned int k = 0; k < count; k++) {
+        outputBuffer[scatterMap[scattermapOffset + k]] = inputBuffer[k];
+    }
+}
+
+template <typename T>
+void Mesh::extractFullData(AsyncExchangeContex& ctx, T* vec, unsigned int dof) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
+
+    if (!this->isActive()) return;
+
+    T* sendB                      = NULL;
+
+    const unsigned int activeNpes = this->getMPICommSize();
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+    const auto& sendProcList      = this->getSendProcList();
+    const auto& sendNodeSM        = this->getSendNodeSM();
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+
+    unsigned int proc_id;
+
+    if (sendBSz) {
+        sendB = (T*)ctx.getSendBuffer();
+
+        // just extract
+        for (unsigned int send_p = 0; send_p < sendProcList.size(); send_p++) {
+            proc_id = sendProcList[send_p];
+            for (unsigned int var = 0; var < dof; var++) {
+                extractSingleDof(vec + var * m_uiNumActualNodes,
+                                 sendB + dof * nodeSendOffset[proc_id] +
+                                     var * nodeSendCount[proc_id],
+                                 nodeSendCount[proc_id],
+                                 nodeSendOffset[proc_id], sendNodeSM);
+            }
+        }
+    }
+}
+
+template <typename T>
+void Mesh::unextractFullData(AsyncExchangeContex& ctx, T* vec,
+                             unsigned int dof) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
+
+    if (!this->isActive()) return;
+
+    T* sendB                      = NULL;
+    T* recvB                      = NULL;
+
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const auto& nodeRecvCount     = this->getNodalRecvCounts();
+    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
+    const auto& recvProcList      = this->getRecvProcList();
+    const auto& recvNodeSM        = this->getRecvNodeSM();
+
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+
+    unsigned int proc_id;
+
+    if (recvBSz) {
+        recvB = (T*)ctx.getRecvBuffer();
+
+        // just unextract
+        for (unsigned int recv_p = 0; recv_p < recvProcList.size(); recv_p++) {
+            proc_id = recvProcList[recv_p];
+
+            for (unsigned int var = 0; var < dof; var++) {
+                injectSingleDof(recvB + dof * nodeRecvOffset[proc_id] +
+                                    var * nodeRecvCount[proc_id],
+                                vec + var * m_uiNumActualNodes,
+                                nodeRecvCount[proc_id], nodeRecvOffset[proc_id],
+                                recvNodeSM);
+            }
+        }
+    }
+}
+
+template <typename T>
+void Mesh::unextractSingleProcess(AsyncExchangeContex& ctx, T* vec,
+                                  unsigned int dof, unsigned int proc_id) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
+
+    if (!this->isActive()) return;
+
+    T* recvB                      = NULL;
+
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const auto& nodeRecvCount     = this->getNodalRecvCounts();
+    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
+    const auto& recvProcList      = this->getRecvProcList();
+    const auto& recvNodeSM        = this->getRecvNodeSM();
+
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+
+    recvB = (T*)ctx.getRecvBuffer();
+
+    // just unextract
+    for (unsigned int var = 0; var < dof; var++) {
+        injectSingleDof(recvB + dof * nodeRecvOffset[proc_id] +
+                            var * nodeRecvCount[proc_id],
+                        vec + var * m_uiNumActualNodes, nodeRecvCount[proc_id],
+                        nodeRecvOffset[proc_id], recvNodeSM);
+    }
+}
+
+template <typename T>
+void Mesh::compressFullData(AsyncExchangeContex& ctx, T* vec,
+                            unsigned int dof) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
+
+    if (!this->isActive()) return;
+
+    T* sendB                      = NULL;
+    unsigned char* compressSendB  = NULL;
+
+    MPI_Comm commActive           = this->getMPICommunicator();
+
+    const unsigned int activeNpes = this->getMPICommSize();
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+    const auto& sendProcList      = this->getSendProcList();
+    const auto& sendNodeSM        = this->getSendNodeSM();
+    auto& sendCompressCounts      = ctx.getSendCompressCounts();
+    auto& sendCompressOffsets     = ctx.getSendCompressOffsets();
+
+    // make sure sendCompressOffsets' starts at 0
+    sendCompressOffsets[0]        = 0;
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+
+    unsigned int proc_id;
+
+    if (sendBSz) {
+        sendB         = (T*)ctx.getSendBuffer();
+        compressSendB = (unsigned char*)ctx.getCompressSendBuffer();
+
+        std::size_t originalOffset = 0;
+        std::size_t compressOffset = 0;
+
+        // just extract
+        for (unsigned int send_p = 0; send_p < sendProcList.size(); send_p++) {
+            proc_id = sendProcList[send_p];
+            for (unsigned int var = 0; var < dof; var++) {
+                // do compression
+                std::size_t total_bytes_compressed =
+                    dendro_compress::blockwise_compression(
+                        sendB + dof * (nodeSendOffset[proc_id]) +
+                            (var * nodeSendCount[proc_id]),
+                        compressSendB + compressOffset,
+                        this->getSendNodeSMConfigCount()[proc_id],
+                        this->getSendNodeSMConfig(),
+                        this->getSendNodeSMConfigOffset()[proc_id],
+                        m_uiElementOrder);
+
+                // make sure we're updating the total number of compressed
+                // bytes to send over
+                sendCompressCounts[proc_id] += total_bytes_compressed;
+                compressOffset += total_bytes_compressed;
+            }
+        }
+    }
+}
+
+template <typename T>
+void Mesh::decompressSingleProcess(AsyncExchangeContex& ctx, unsigned int dof,
+                                   unsigned int proc_id) {
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const auto& nodeRecvCount     = this->getNodalRecvCounts();
+    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
+    const auto& recvProcList      = this->getRecvProcList();
+    const auto& recvNodeSM        = this->getRecvNodeSM();
+
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+
+    T* recvB                 = (T*)ctx.getRecvBuffer();
+    unsigned char* recvBComp = (unsigned char*)ctx.getCompressRecvBuffer();
+    const auto& receiveCompressCounts  = ctx.getReceiveCompressCounts();
+    const auto& receiveCompressOffsets = ctx.getReceiveCompressOffsets();
+
+    // compress buffer offset is based off of the receive compress stored in
+    // this ctx object
+    unsigned int compressBufferOffset  = receiveCompressOffsets[proc_id];
+
+    // now decompress
+    for (unsigned int var = 0; var < dof; var++) {
+        std::size_t temp = dendro_compress::blockwise_decompression(
+            recvB + dof * (nodeRecvOffset[proc_id]) +
+                (var * nodeRecvCount[proc_id]),
+            recvBComp + compressBufferOffset,
+            this->getRecvNodeSMConfigCount()[proc_id],
+            this->getRecvNodeSMConfig(),
+            this->getRecvNodeSMConfigOffset()[proc_id], m_uiElementOrder);
+        compressBufferOffset += temp;
+    }
+}
+
+template <typename T>
+void Mesh::setUpSendRecvRequests(AsyncExchangeContex& ctx, unsigned int dof,
+                                 std::vector<MPI_Request>& send_requests,
+                                 std::vector<MPI_Request>& recv_requests,
+                                 std::vector<unsigned int>& send_requests_ctx,
+                                 std::vector<unsigned int>& recv_requests_ctx,
+                                 unsigned int ctx_idx) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
+    if (!this->isActive()) return;
+
+    T* sendB                      = NULL;
+    T* recvB                      = NULL;
+
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+    const auto& nodeRecvCount     = this->getNodalRecvCounts();
+    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
+    const auto& sendProcList      = this->getSendProcList();
+    const auto& recvProcList      = this->getRecvProcList();
+    const auto& sendNodeSM        = this->getSendNodeSM();
+    const auto& recvNodeSM        = this->getRecvNodeSM();
+
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+    unsigned int proc_id;
+
+    MPI_Comm commActive = this->getMPICommunicator();
+
+    if (recvBSz) {
+        recvB = (T*)ctx.getRecvBuffer();
+
+        // active recv procs
+        for (unsigned int recv_p = 0; recv_p < recvProcList.size(); recv_p++) {
+            proc_id = recvProcList[recv_p];
+            recv_requests.emplace_back();
+            par::Mpi_Irecv((recvB + dof * nodeRecvOffset[proc_id]),
+                           dof * nodeRecvCount[proc_id], proc_id, m_uiCommTag,
+                           commActive, &recv_requests.back());
+            recv_requests_ctx.push_back(ctx_idx);
+        }
+    }
+
+    if (sendBSz) {
+        sendB = (T*)ctx.getSendBuffer();
+
+        // active send procs
+        for (unsigned int send_p = 0; send_p < sendProcList.size(); send_p++) {
+            proc_id = sendProcList[send_p];
+            send_requests.emplace_back();
+            par::Mpi_Isend(sendB + dof * nodeSendOffset[proc_id],
+                           dof * nodeSendCount[proc_id], proc_id, m_uiCommTag,
+                           commActive, &send_requests.back());
+            send_requests_ctx.push_back(ctx_idx);
+        }
+    }
+
+    m_uiCommTag++;
+}
+
+template <typename T>
+void Mesh::setUpSendRecvCompressionRequests(
+    AsyncExchangeContex& ctx, std::vector<MPI_Request>& send_requests,
+    std::vector<MPI_Request>& recv_requests,
+    std::vector<unsigned int>& send_requests_ctx,
+    std::vector<unsigned int>& recv_requests_ctx, unsigned int ctx_idx) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    unsigned char* compressSendB  = NULL;
+    unsigned char* recvB          = NULL;
+
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+    const auto& nodeRecvCount     = this->getNodalRecvCounts();
+    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
+    const auto& sendProcList      = this->getSendProcList();
+    const auto& recvProcList      = this->getRecvProcList();
+    auto& sendCompressCounts      = ctx.getSendCompressCounts();
+    auto& receiveCompressCounts   = ctx.getReceiveCompressCounts();
+    auto& sendCompressOffsets     = ctx.getSendCompressOffsets();
+    auto& receiveCompressOffsets  = ctx.getReceiveCompressOffsets();
+
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+    unsigned int proc_id;
+
+    MPI_Comm commActive = this->getMPICommunicator();
+
+    recv_requests.reserve(recv_requests.size() + recvProcList.size());
+    recv_requests_ctx.reserve(recv_requests_ctx.size() + recvProcList.size());
+    send_requests.reserve(send_requests.size() + sendProcList.size());
+    send_requests_ctx.reserve(send_requests_ctx.size() + sendProcList.size());
+
+    if (recvBSz) {
+        recvB = (unsigned char*)ctx.getCompressRecvBuffer();
+
+        if (!recvB) {
+            std::cerr << "ERROR: The receive compress buffer somehow broke "
+                         "inside setting up compression requests!"
+                      << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        // active recv procs
+        for (unsigned int proc_id : recvProcList) {
+            recv_requests.emplace_back();
+            par::Mpi_Irecv((recvB + receiveCompressOffsets[proc_id]),
+                           receiveCompressCounts[proc_id], proc_id, m_uiCommTag,
+                           commActive, &recv_requests.back());
+            recv_requests_ctx.push_back(ctx_idx);
+        }
+    }
+
+    if (sendBSz) {
+        compressSendB = (unsigned char*)ctx.getCompressSendBuffer();
+
+        if (!compressSendB) {
+            std::cerr << "ERROR: The send compress buffer somehow broke inside "
+                         "setting up compression requests!"
+                      << std::endl;
+            exit(EXIT_FAILURE);
+        }
+
+        // active send procs
+        for (unsigned int proc_id : sendProcList) {
+            send_requests.emplace_back();
+            par::Mpi_Isend(
+                (unsigned char*)compressSendB + sendCompressOffsets[proc_id],
+                sendCompressCounts[proc_id], proc_id, m_uiCommTag, commActive,
+                &send_requests.back());
+            send_requests_ctx.push_back(ctx_idx);
+        }
+    }
+
+    m_uiCommTag++;
+}
+
+template <typename T>
 void Mesh::readFromGhostBeginWrapper(T* vec, unsigned int dof,
                                      bool use_compression) {
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
@@ -825,14 +1189,11 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                 proc_id = sendProcList[send_p];
 
                 for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeSendOffset[proc_id];
-                         k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
-                         k++) {
-                        sendB[dof * (nodeSendOffset[proc_id]) +
-                              (var * nodeSendCount[proc_id]) +
-                              (k - nodeSendOffset[proc_id])] =
-                            (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
-                    }
+                    extractSingleDof(vec + var * m_uiNumActualNodes,
+                                     sendB + dof * nodeSendOffset[proc_id] +
+                                         var * nodeSendCount[proc_id],
+                                     nodeSendCount[proc_id],
+                                     nodeSendOffset[proc_id], sendNodeSM);
                 }
             }
 
@@ -992,18 +1353,11 @@ void Mesh::readFromGhostBeginCompression(T* vec, unsigned int dof,
             proc_id = sendProcList[send_p];
 
             for (unsigned int var = 0; var < dof; var++) {
-                for (unsigned int k = nodeSendOffset[proc_id];
-                     k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
-                     k++) {
-                    // the send buffer is filled by indexing into the dof *
-                    // send_offset + the variable_id times the node send
-                    // count + the k variable minus the node offset (why?)
-
-                    sendB[dof * (nodeSendOffset[proc_id]) +
-                          (var * nodeSendCount[proc_id]) +
-                          (k - nodeSendOffset[proc_id])] =
-                        (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
-                }
+                extractSingleDof(vec + var * m_uiNumActualNodes,
+                                 sendB + dof * nodeSendOffset[proc_id] +
+                                     var * nodeSendCount[proc_id],
+                                 nodeSendCount[proc_id],
+                                 nodeSendOffset[proc_id], sendNodeSM);
 
                 // NOTE: this is in the ndef because we sometimes do in-place
                 // modification of the send buffer in compression, so to verify
@@ -1286,14 +1640,11 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
                 proc_id = recvProcList[recv_p];
 
                 for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeRecvOffset[proc_id];
-                         k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
-                         k++) {
-                        (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
-                            recvB[dof * (nodeRecvOffset[proc_id]) +
-                                  (var * nodeRecvCount[proc_id]) +
-                                  (k - nodeRecvOffset[proc_id])];
-                    }
+                    injectSingleDof(recvB + dof * nodeRecvOffset[proc_id] +
+                                        var * nodeRecvCount[proc_id],
+                                    vec + var * m_uiNumActualNodes,
+                                    nodeRecvCount[proc_id],
+                                    nodeRecvOffset[proc_id], recvNodeSM);
                 }
             }
         }
@@ -1469,14 +1820,11 @@ void Mesh::readFromGhostEndCompression(T* vec, unsigned int dof,
 
                 // copy the decompressed received data to the vec
                 for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeRecvOffset[proc_id];
-                         k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
-                         k++) {
-                        (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
-                            recvB[dof * (nodeRecvOffset[proc_id]) +
-                                  (var * nodeRecvCount[proc_id]) +
-                                  (k - nodeRecvOffset[proc_id])];
-                    }
+                    injectSingleDof(recvB + dof * nodeRecvOffset[proc_id] +
+                                        var * nodeRecvCount[proc_id],
+                                    vec + var * m_uiNumActualNodes,
+                                    nodeRecvCount[proc_id],
+                                    nodeRecvOffset[proc_id], recvNodeSM);
                 }
             }
         }
@@ -1561,14 +1909,11 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
             proc_id = sendProcList[send_p];
 
             for (unsigned int var = 0; var < dof; var++) {
-                for (unsigned int k = nodeSendOffset[proc_id];
-                     k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
-                     k++) {
-                    sendB[dof * (nodeSendOffset[proc_id]) +
-                          (var * nodeSendCount[proc_id]) +
-                          (k - nodeSendOffset[proc_id])] =
-                        (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
-                }
+                extractSingleDof(vec + var * m_uiNumActualNodes,
+                                 sendB + dof * nodeSendOffset[proc_id] +
+                                     var * nodeSendCount[proc_id],
+                                 nodeSendCount[proc_id],
+                                 nodeSendOffset[proc_id], sendNodeSM);
             }
         }
         dendro::timer::t_compression_extraction.stop();
@@ -1728,14 +2073,11 @@ void Mesh::readFromGhostBeginCompression(AsyncExchangeContex& ctx, T* vec,
             // fill the send buffer properly
             for (unsigned int var = 0; var < dof; var++) {
                 dendro::timer::t_compression_extraction.start();
-                for (unsigned int k = nodeSendOffset[proc_id];
-                     k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
-                     k++) {
-                    sendB[dof * (nodeSendOffset[proc_id]) +
-                          (var * nodeSendCount[proc_id]) +
-                          (k - nodeSendOffset[proc_id])] =
-                        (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
-                }
+                extractSingleDof(vec + var * m_uiNumActualNodes,
+                                 sendB + dof * nodeSendOffset[proc_id] +
+                                     var * nodeSendCount[proc_id],
+                                 nodeSendCount[proc_id],
+                                 nodeSendOffset[proc_id], sendNodeSM);
                 dendro::timer::t_compression_extraction.stop();
 
                 // NOTE: this is in the ndef because we sometimes do in-place
@@ -1991,14 +2333,11 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
             proc_id = recvProcList[recv_p];
 
             for (unsigned int var = 0; var < dof; var++) {
-                for (unsigned int k = nodeRecvOffset[proc_id];
-                     k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
-                     k++) {
-                    (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
-                        recvB[dof * (nodeRecvOffset[proc_id]) +
-                              (var * nodeRecvCount[proc_id]) +
-                              (k - nodeRecvOffset[proc_id])];
-                }
+                injectSingleDof(recvB + dof * nodeRecvOffset[proc_id] +
+                                    var * nodeRecvCount[proc_id],
+                                vec + var * m_uiNumActualNodes,
+                                nodeRecvCount[proc_id], nodeRecvOffset[proc_id],
+                                recvNodeSM);
             }
         }
         dendro::timer::t_compression_unextract.stop();
@@ -2124,14 +2463,11 @@ void Mesh::readFromGhostEndCompression(AsyncExchangeContex& ctx, T* vec,
             proc_id = recvProcList[recv_p];
 
             for (unsigned int var = 0; var < dof; var++) {
-                for (unsigned int k = nodeRecvOffset[proc_id];
-                     k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
-                     k++) {
-                    (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
-                        recvB[dof * (nodeRecvOffset[proc_id]) +
-                              (var * nodeRecvCount[proc_id]) +
-                              (k - nodeRecvOffset[proc_id])];
-                }
+                injectSingleDof(recvB + dof * nodeRecvOffset[proc_id] +
+                                    var * nodeRecvCount[proc_id],
+                                vec + var * m_uiNumActualNodes,
+                                nodeRecvCount[proc_id], nodeRecvOffset[proc_id],
+                                recvNodeSM);
             }
         }
         dendro::timer::t_compression_unextract.stop();

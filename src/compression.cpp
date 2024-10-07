@@ -293,6 +293,14 @@ size_t ZFPCompression::do_3d_compression(double* originalMatrix,
         std::cerr << "CRITICAL ERROR COMPRESSING DATA IN 3D ZFP STREAM!"
                   << std::endl;
         exit(EXIT_FAILURE);
+    } else if (outsize > zfp_dim3_decomp * sizeof(double)) {
+        std::cerr << "CRITICAL ERROR COMPRESSING DATA IN 3D ZFP STREAM! The "
+                     "compressed buffer is larger than the original!"
+                  << std::endl;
+        std::cerr << "Number of points to compress: " << zfp_dim3_decomp
+                  << ", number of bytes in compressed stream: " << outsize
+                  << std::endl;
+        exit(EXIT_FAILURE);
     }
 
     // close stream
@@ -355,6 +363,11 @@ size_t ZFPCompression::do_2d_compression(double* originalMatrix,
         std::cerr << "CRITICAL ERROR COMPRESSING DATA IN 2D ZFP STREAM!"
                   << std::endl;
         exit(EXIT_FAILURE);
+    } else if (outsize > zfp_dim2_decomp * sizeof(double)) {
+        std::cerr << "CRITICAL ERROR COMPRESSING DATA IN 2D ZFP STREAM! The "
+                     "compressed buffer is larger than the original!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
     }
 
     // close stream
@@ -415,6 +428,11 @@ size_t ZFPCompression::do_1d_compression(double* originalMatrix,
 
     if (!outsize) {
         std::cerr << "CRITICAL ERROR COMPRESSING DATA IN 1D ZFP STREAM!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    } else if (outsize > zfp_dim1_decomp * sizeof(double)) {
+        std::cerr << "CRITICAL ERROR COMPRESSING DATA IN 1D ZFP STREAM! The "
+                     "compressed buffer is larger than the original!"
                   << std::endl;
         exit(EXIT_FAILURE);
     }
