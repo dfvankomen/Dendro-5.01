@@ -844,6 +844,33 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
             recv_requests, send_requests_ctx, recv_requests_ctx, statuses);
     }
 
+    // TEMP: this is only to gather information about the
+    // compression/decompression
+    for (unsigned i = 0; i < async_k; i++) {
+        const unsigned int v_begin  = ((i * dof) / async_k);
+        const unsigned int v_end    = (((i + 1) * dof) / async_k);
+        const unsigned int batch_sz = (v_end - v_begin);
+        for (unsigned int j = 0; j < m_uiMesh->getMPICommSize(); j++) {
+            m_uiTotalBytesSend[j] +=
+                m_uiMesh->getNodalSendCounts()[j] * batch_sz * sizeof(T);
+            m_uiTotalBytesRecv[j] +=
+                m_uiMesh->getNodalRecvCounts()[j] * batch_sz * sizeof(T);
+            // then the compress amounts, which is the *total* amount not
+            // including batch syze
+            if (use_compression) {
+                m_uiTotalBytesSendCompress[j] +=
+                    m_mpi_ctx[i].getSendCompressCounts()[j];
+                m_uiTotalBytesRecvCompress[j] +=
+                    m_mpi_ctx[i].getReceiveCompressCounts()[j];
+            } else {
+                m_uiTotalBytesSendCompress[j] +=
+                    m_uiMesh->getNodalSendCounts()[j] * batch_sz * sizeof(T);
+                m_uiTotalBytesRecvCompress[j] +=
+                    m_uiMesh->getNodalRecvCounts()[j] * batch_sz * sizeof(T);
+            }
+        }
+    }
+
     // now that they're all done, we can have the mesh do its own unzip
     // TODO: this could probably be thrown in process_finished_unzip, but
     // would need to track completed ctx lists since unzip isn't currently
