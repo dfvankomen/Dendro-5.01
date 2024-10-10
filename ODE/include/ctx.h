@@ -751,7 +751,7 @@ void Ctx<DerivedCtx, T, I>::unzip_host_compression(ot::DVector<T, I>& in,
     const unsigned int n_recv_proc = m_uiMesh->getRecvProcListSize();
     std::vector<MPI_Request> size_requests(n_send_proc + n_recv_proc);
 
-    T *temp_ptr, *temp_ptr_next;
+    T* temp_ptr_next;
     const unsigned int THRESHOLD = m_uiMesh->getMPICommSize() * 1;
 
     for (unsigned int i = 0; i < async_k; i++) {
@@ -777,7 +777,7 @@ void Ctx<DerivedCtx, T, I>::unzip_host_compression(ot::DVector<T, I>& in,
                                   m_uiMesh->getSendProcList().size());
 
         // IMPORTANT: this is the pointer to the current batch of data!
-        temp_ptr = in_ptr + v_begin * sz_per_dof_zip;
+        T* temp_ptr = in_ptr + v_begin * sz_per_dof_zip;
 
         // make sure send compress counts is filled with zeros!
         std::fill(send_compress_counts.begin(), send_compress_counts.end(), 0);
@@ -793,7 +793,7 @@ void Ctx<DerivedCtx, T, I>::unzip_host_compression(ot::DVector<T, I>& in,
         }
 
         // for each process that needs data, we need to extract the data out
-        for (unsigned int proc_id = 0; proc_id < n_recv_proc; ++proc_id) {
+        for (unsigned int proc_id = 0; proc_id < n_send_proc; ++proc_id) {
             unsigned int send_p_id = m_uiMesh->getSendProcList()[proc_id];
             // extract and then compress the data
             m_uiMesh->extractFullSingleProcess(m_mpi_ctx[i], temp_ptr, batch_sz,

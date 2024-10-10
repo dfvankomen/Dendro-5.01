@@ -721,10 +721,9 @@ void inline injectSingleDof(T* inputBuffer, T* outputBuffer, size_t count,
 template <typename T>
 void Mesh::extractFullSingleProcess(AsyncExchangeContex& ctx, T* vec,
                                     unsigned int dof, unsigned int proc_id) {
-    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
-
-    if (!this->isActive()) return;
-    T* sendB                      = NULL;
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
 
     const unsigned int activeNpes = this->getMPICommSize();
     const auto& nodeSendCount     = this->getNodalSendCounts();
@@ -737,7 +736,7 @@ void Mesh::extractFullSingleProcess(AsyncExchangeContex& ctx, T* vec,
 
     dendro::timer::t_compression_extraction.start();
     if (sendBSz) {
-        sendB = (T*)ctx.getSendBuffer();
+        T* sendB = static_cast<T*>(ctx.getSendBuffer());
 
         // just extract
         for (unsigned int var = 0; var < dof; var++) {
@@ -753,9 +752,9 @@ void Mesh::extractFullSingleProcess(AsyncExchangeContex& ctx, T* vec,
 
 template <typename T>
 void Mesh::extractFullData(AsyncExchangeContex& ctx, T* vec, unsigned int dof) {
-    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
-
-    if (!this->isActive()) return;
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
 
     const unsigned int activeNpes = this->getMPICommSize();
     const auto& nodeSendCount     = this->getNodalSendCounts();
@@ -785,9 +784,6 @@ void Mesh::unextractFullData(AsyncExchangeContex& ctx, T* vec,
 
     if (!this->isActive()) return;
 
-    T* sendB                      = NULL;
-    T* recvB                      = NULL;
-
     const unsigned int activeNpes = this->getMPICommSize();
 
     const auto& nodeRecvCount     = this->getNodalRecvCounts();
@@ -802,7 +798,7 @@ void Mesh::unextractFullData(AsyncExchangeContex& ctx, T* vec,
 
     dendro::timer::t_compression_unextract.start();
     if (recvBSz) {
-        recvB = (T*)ctx.getRecvBuffer();
+        T* recvB = static_cast<T*>(ctx.getRecvBuffer());
 
         // just unextract
         for (unsigned int recv_p = 0; recv_p < recvProcList.size(); recv_p++) {
@@ -823,11 +819,9 @@ void Mesh::unextractFullData(AsyncExchangeContex& ctx, T* vec,
 template <typename T>
 void Mesh::unextractSingleProcess(AsyncExchangeContex& ctx, T* vec,
                                   unsigned int dof, unsigned int proc_id) {
-    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
-
-    if (!this->isActive()) return;
-
-    T* recvB                      = NULL;
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
 
     const unsigned int activeNpes = this->getMPICommSize();
 
@@ -839,11 +833,10 @@ void Mesh::unextractSingleProcess(AsyncExchangeContex& ctx, T* vec,
     const unsigned int recvBSz =
         nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
 
-    recvB = (T*)ctx.getRecvBuffer();
-
     dendro::timer::t_compression_unextract.start();
     // just unextract
     if (recvBSz) {
+        T* recvB = static_cast<T*>(ctx.getRecvBuffer());
         for (unsigned int var = 0; var < dof; var++) {
             injectSingleDof(recvB + dof * nodeRecvOffset[proc_id] +
                                 var * nodeRecvCount[proc_id],
@@ -859,12 +852,9 @@ template <typename T>
 void Mesh::compressSingleProcess(AsyncExchangeContex& ctx, T* vec,
                                  unsigned int dof, unsigned int proc_id,
                                  unsigned int& compressOffset) {
-    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
-
-    if (!this->isActive()) return;
-
-    T* sendB                      = NULL;
-    unsigned char* compressSendB  = NULL;
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
 
     MPI_Comm commActive           = this->getMPICommunicator();
 
@@ -884,8 +874,9 @@ void Mesh::compressSingleProcess(AsyncExchangeContex& ctx, T* vec,
 
     dendro::timer::t_compression_compress.start();
     if (sendBSz) {
-        sendB         = (T*)ctx.getSendBuffer();
-        compressSendB = (unsigned char*)ctx.getCompressSendBuffer();
+        T* sendB = static_cast<T*>(ctx.getSendBuffer());
+        unsigned char* compressSendB =
+            static_cast<unsigned char*>(ctx.getCompressSendBuffer());
 
         std::size_t originalOffset = 0;
 
@@ -914,12 +905,9 @@ void Mesh::compressSingleProcess(AsyncExchangeContex& ctx, T* vec,
 template <typename T>
 void Mesh::compressFullData(AsyncExchangeContex& ctx, T* vec,
                             unsigned int dof) {
-    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
-
-    if (!this->isActive()) return;
-
-    T* sendB                      = NULL;
-    unsigned char* compressSendB  = NULL;
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
 
     MPI_Comm commActive           = this->getMPICommunicator();
 
@@ -941,8 +929,9 @@ void Mesh::compressFullData(AsyncExchangeContex& ctx, T* vec,
 
     dendro::timer::t_compression_compress.start();
     if (sendBSz) {
-        sendB         = (T*)ctx.getSendBuffer();
-        compressSendB = (unsigned char*)ctx.getCompressSendBuffer();
+        T* sendB = static_cast<T*>(ctx.getSendBuffer());
+        unsigned char* compressSendB =
+            static_cast<unsigned char*>(ctx.getCompressSendBuffer());
 
         std::size_t originalOffset = 0;
         std::size_t compressOffset = 0;
@@ -985,8 +974,9 @@ void Mesh::decompressSingleProcess(AsyncExchangeContex& ctx, unsigned int dof,
     const unsigned int recvBSz =
         nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
 
-    T* recvB                 = (T*)ctx.getRecvBuffer();
-    unsigned char* recvBComp = (unsigned char*)ctx.getCompressRecvBuffer();
+    T* recvB = static_cast<T*>(ctx.getRecvBuffer());
+    unsigned char* recvBComp =
+        static_cast<unsigned char*>(ctx.getCompressRecvBuffer());
     const auto& receiveCompressCounts  = ctx.getReceiveCompressCounts();
     const auto& receiveCompressOffsets = ctx.getReceiveCompressOffsets();
 
