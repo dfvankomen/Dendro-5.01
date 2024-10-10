@@ -2253,6 +2253,10 @@ class Mesh {
                                MPI_Request *recv_reqs, MPI_Status *recv_sts);
 
     template <typename T>
+    void extractFullSingleProcess(AsyncExchangeContex &ctx, T *vec,
+                                  unsigned int dof, unsigned int proc_id);
+
+    template <typename T>
     void extractFullData(AsyncExchangeContex &ctx, T *vec, unsigned int dof);
 
     template <typename T>
@@ -2261,6 +2265,11 @@ class Mesh {
     template <typename T>
     void unextractSingleProcess(AsyncExchangeContex &ctx, T *vec,
                                 unsigned int dof, unsigned int recv_p);
+
+    template <typename T>
+    void compressSingleProcess(AsyncExchangeContex &ctx, T *vec,
+                               unsigned int dof, unsigned int proc_id,
+                               unsigned int &compressOffset);
 
     template <typename T>
     void compressFullData(AsyncExchangeContex &ctx, T *vec, unsigned int dof);
@@ -2278,6 +2287,18 @@ class Mesh {
                                std::vector<unsigned int> &send_requests_ctx,
                                std::vector<unsigned int> &recv_requests_ctx,
                                unsigned int ctx_idx);
+
+    template <typename T>
+    void setUpSingleSendRequest(AsyncExchangeContex &ctx, unsigned int dof,
+                                std::vector<MPI_Request> &send_requests,
+                                std::vector<unsigned int> &send_requests_ctx,
+                                unsigned int ctx_idx, unsigned int proc_id);
+
+    template <typename T>
+    void setUpSingleRecvRequest(AsyncExchangeContex &ctx, unsigned int dof,
+                                std::vector<MPI_Request> &recv_requests,
+                                std::vector<unsigned int> &recv_requests_ctx,
+                                unsigned int ctx_idx, unsigned int proc_id);
 
     template <typename T>
     void setUpSendRecvCompressionRequests(

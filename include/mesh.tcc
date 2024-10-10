@@ -12,6 +12,7 @@
 
 #include <cstdint>
 
+#include "asyncExchangeContex.h"
 #include "compression.h"
 #include "dendroProfileParams.h"
 #include "parUtils.h"
@@ -718,11 +719,11 @@ void inline injectSingleDof(T* inputBuffer, T* outputBuffer, size_t count,
 }
 
 template <typename T>
-void Mesh::extractFullData(AsyncExchangeContex& ctx, T* vec, unsigned int dof) {
+void Mesh::extractFullSingleProcess(AsyncExchangeContex& ctx, T* vec,
+                                    unsigned int dof, unsigned int proc_id) {
     if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
 
     if (!this->isActive()) return;
-
     T* sendB                      = NULL;
 
     const unsigned int activeNpes = this->getMPICommSize();
@@ -734,22 +735,44 @@ void Mesh::extractFullData(AsyncExchangeContex& ctx, T* vec, unsigned int dof) {
     const unsigned int sendBSz =
         nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
 
-    unsigned int proc_id;
-
     dendro::timer::t_compression_extraction.start();
     if (sendBSz) {
         sendB = (T*)ctx.getSendBuffer();
 
         // just extract
+        for (unsigned int var = 0; var < dof; var++) {
+            extractSingleDof(vec + var * m_uiNumActualNodes,
+                             sendB + dof * nodeSendOffset[proc_id] +
+                                 var * nodeSendCount[proc_id],
+                             nodeSendCount[proc_id], nodeSendOffset[proc_id],
+                             sendNodeSM);
+        }
+    }
+    dendro::timer::t_compression_extraction.stop();
+}
+
+template <typename T>
+void Mesh::extractFullData(AsyncExchangeContex& ctx, T* vec, unsigned int dof) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
+
+    if (!this->isActive()) return;
+
+    const unsigned int activeNpes = this->getMPICommSize();
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& sendProcList      = this->getSendProcList();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+
+    unsigned int proc_id;
+
+    dendro::timer::t_compression_extraction.start();
+    if (sendBSz) {
+        // iterate through them all, and then call the extraction
         for (unsigned int send_p = 0; send_p < sendProcList.size(); send_p++) {
             proc_id = sendProcList[send_p];
-            for (unsigned int var = 0; var < dof; var++) {
-                extractSingleDof(vec + var * m_uiNumActualNodes,
-                                 sendB + dof * nodeSendOffset[proc_id] +
-                                     var * nodeSendCount[proc_id],
-                                 nodeSendCount[proc_id],
-                                 nodeSendOffset[proc_id], sendNodeSM);
-            }
+            extractFullSingleProcess(ctx, vec, dof, proc_id);
         }
     }
     dendro::timer::t_compression_extraction.stop();
@@ -830,6 +853,62 @@ void Mesh::unextractSingleProcess(AsyncExchangeContex& ctx, T* vec,
         }
     }
     dendro::timer::t_compression_unextract.stop();
+}
+
+template <typename T>
+void Mesh::compressSingleProcess(AsyncExchangeContex& ctx, T* vec,
+                                 unsigned int dof, unsigned int proc_id,
+                                 unsigned int& compressOffset) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
+
+    if (!this->isActive()) return;
+
+    T* sendB                      = NULL;
+    unsigned char* compressSendB  = NULL;
+
+    MPI_Comm commActive           = this->getMPICommunicator();
+
+    const unsigned int activeNpes = this->getMPICommSize();
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+    const auto& sendProcList      = this->getSendProcList();
+    const auto& sendNodeSM        = this->getSendNodeSM();
+    auto& sendCompressCounts      = ctx.getSendCompressCounts();
+    auto& sendCompressOffsets     = ctx.getSendCompressOffsets();
+
+    // make sure sendCompressOffsets' starts at 0
+    sendCompressOffsets[0]        = 0;
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+
+    dendro::timer::t_compression_compress.start();
+    if (sendBSz) {
+        sendB         = (T*)ctx.getSendBuffer();
+        compressSendB = (unsigned char*)ctx.getCompressSendBuffer();
+
+        std::size_t originalOffset = 0;
+
+        // compress over all of the vars in our dof
+        for (unsigned int var = 0; var < dof; var++) {
+            // do compression
+            std::size_t total_bytes_compressed =
+                dendro_compress::blockwise_compression(
+                    sendB + dof * (nodeSendOffset[proc_id]) +
+                        (var * nodeSendCount[proc_id]),
+                    compressSendB + compressOffset,
+                    this->getSendNodeSMConfigCount()[proc_id],
+                    this->getSendNodeSMConfig(),
+                    this->getSendNodeSMConfigOffset()[proc_id],
+                    m_uiElementOrder);
+
+            // make sure we're updating the total number of compressed
+            // bytes to send over
+            sendCompressCounts[proc_id] += total_bytes_compressed;
+            compressOffset += total_bytes_compressed;
+        }
+    }
+    dendro::timer::t_compression_compress.stop();
 }
 
 template <typename T>
@@ -931,14 +1010,93 @@ void Mesh::decompressSingleProcess(AsyncExchangeContex& ctx, unsigned int dof,
 }
 
 template <typename T>
+void Mesh::setUpSingleRecvRequest(AsyncExchangeContex& ctx, unsigned int dof,
+                                  std::vector<MPI_Request>& recv_requests,
+                                  std::vector<unsigned int>& recv_requests_ctx,
+                                  unsigned int ctx_idx, unsigned int proc_id) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    const auto& nodeRecvCount     = this->getNodalRecvCounts();
+    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+
+    if (recvBSz == 0) return;
+
+    MPI_Comm commActive = this->getMPICommunicator();
+
+    dendro::timer::t_compression_begin_comms.start();
+    T* recvB = static_cast<T*>(ctx.getRecvBuffer());
+
+    if (!recvB) {
+        std::cerr << "ERROR: The receive  buffer somehow broke "
+                     "inside setting up single receive request!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // active recv procs
+    recv_requests.emplace_back();
+    par::Mpi_Irecv((recvB + dof * nodeRecvOffset[proc_id]),
+                   dof * nodeRecvCount[proc_id], proc_id, m_uiCommTag,
+                   commActive, &recv_requests.back());
+    recv_requests_ctx.push_back(ctx_idx);
+    dendro::timer::t_compression_begin_comms.stop();
+}
+
+template <typename T>
+void Mesh::setUpSingleSendRequest(AsyncExchangeContex& ctx, unsigned int dof,
+                                  std::vector<MPI_Request>& send_requests,
+                                  std::vector<unsigned int>& send_requests_ctx,
+                                  unsigned int ctx_idx, unsigned int proc_id) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+
+    if (sendBSz == 0) return;
+
+    MPI_Comm commActive = this->getMPICommunicator();
+
+    dendro::timer::t_compression_begin_comms.start();
+    T* sendB = static_cast<T*>(ctx.getSendBuffer());
+
+    if (!sendB) {
+        std::cerr << "ERROR: The send buffer somehow broke "
+                     "inside setting up single receive request!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    // active send procs
+    send_requests.emplace_back();
+    par::Mpi_Isend(sendB + dof * nodeSendOffset[proc_id],
+                   dof * nodeSendCount[proc_id], proc_id, m_uiCommTag,
+                   commActive, &send_requests.back());
+    send_requests_ctx.push_back(ctx_idx);
+    dendro::timer::t_compression_begin_comms.stop();
+}
+
+template <typename T>
 void Mesh::setUpSendRecvRequests(AsyncExchangeContex& ctx, unsigned int dof,
                                  std::vector<MPI_Request>& send_requests,
                                  std::vector<MPI_Request>& recv_requests,
                                  std::vector<unsigned int>& send_requests_ctx,
                                  std::vector<unsigned int>& recv_requests_ctx,
                                  unsigned int ctx_idx) {
-    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
-    if (!this->isActive()) return;
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
 
     T* sendB                      = NULL;
     T* recvB                      = NULL;
@@ -991,7 +1149,7 @@ void Mesh::setUpSendRecvRequests(AsyncExchangeContex& ctx, unsigned int dof,
     if (sendBSz) {
         sendB = (T*)ctx.getSendBuffer();
 
-        if (!recvB) {
+        if (!sendB) {
             std::cerr << "ERROR: The receive  buffer somehow broke "
                          "inside setting up send/receive requests!"
                       << std::endl;
@@ -1022,21 +1180,18 @@ void Mesh::setUpSendRecvCompressionRequests(
         !this->isActive())
         return;
 
-    unsigned char* compressSendB  = NULL;
-    unsigned char* recvB          = NULL;
+    const auto& nodeSendCount          = this->getNodalSendCounts();
+    const auto& nodeSendOffset         = this->getNodalSendOffsets();
+    const auto& nodeRecvCount          = this->getNodalRecvCounts();
+    const auto& nodeRecvOffset         = this->getNodalRecvOffsets();
+    const auto& sendProcList           = this->getSendProcList();
+    const auto& recvProcList           = this->getRecvProcList();
+    const auto& sendCompressCounts     = ctx.getSendCompressCounts();
+    const auto& receiveCompressCounts  = ctx.getReceiveCompressCounts();
+    const auto& sendCompressOffsets    = ctx.getSendCompressOffsets();
+    const auto& receiveCompressOffsets = ctx.getReceiveCompressOffsets();
 
-    const auto& nodeSendCount     = this->getNodalSendCounts();
-    const auto& nodeSendOffset    = this->getNodalSendOffsets();
-    const auto& nodeRecvCount     = this->getNodalRecvCounts();
-    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
-    const auto& sendProcList      = this->getSendProcList();
-    const auto& recvProcList      = this->getRecvProcList();
-    auto& sendCompressCounts      = ctx.getSendCompressCounts();
-    auto& receiveCompressCounts   = ctx.getReceiveCompressCounts();
-    auto& sendCompressOffsets     = ctx.getSendCompressOffsets();
-    auto& receiveCompressOffsets  = ctx.getReceiveCompressOffsets();
-
-    const unsigned int activeNpes = this->getMPICommSize();
+    const unsigned int activeNpes      = this->getMPICommSize();
 
     const unsigned int sendBSz =
         nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
@@ -1053,7 +1208,8 @@ void Mesh::setUpSendRecvCompressionRequests(
 
     dendro::timer::t_compression_begin_comms.start();
     if (recvBSz) {
-        recvB = (unsigned char*)ctx.getCompressRecvBuffer();
+        unsigned char* recvB =
+            static_cast<unsigned char*>(ctx.getCompressRecvBuffer());
 
         if (!recvB) {
             std::cerr << "ERROR: The receive compress buffer somehow broke "
@@ -1073,7 +1229,8 @@ void Mesh::setUpSendRecvCompressionRequests(
     }
 
     if (sendBSz) {
-        compressSendB = (unsigned char*)ctx.getCompressSendBuffer();
+        unsigned char* compressSendB =
+            static_cast<unsigned char*>(ctx.getCompressSendBuffer());
 
         if (!compressSendB) {
             std::cerr << "ERROR: The send compress buffer somehow broke inside "

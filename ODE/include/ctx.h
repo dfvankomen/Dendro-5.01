@@ -10,6 +10,8 @@
  *
  */
 #pragma once
+#include <mpi.h>
+
 #include <functional>
 #include <iostream>
 #include <vector>
@@ -431,6 +433,12 @@ class Ctx {
     void unzip_device(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                       unsigned int async_k, bool use_compression);
 
+    void unzip_host_compression(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
+                                unsigned int async_k);
+
+    void unzip_host_default(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
+                            unsigned int async_k);
+
     /**
      * @brief performs unzip operation,
      *
@@ -718,18 +726,169 @@ void Ctx<DerivedCtx, T, I>::process_finished_unzip(
 }
 
 template <typename DerivedCtx, typename T, typename I>
-void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
-                                  unsigned int async_k, bool use_compression) {
-    // ONLY ACTIVE PROCS IN THE MESH INTERACT
-    if (!m_uiMesh->isActive()) return;
+void Ctx<DerivedCtx, T, I>::unzip_host_compression(ot::DVector<T, I>& in,
+                                                   ot::DVector<T, I>& out,
+                                                   unsigned int async_k) {
+    const unsigned int dof             = in.get_dof();
+    T* in_ptr                          = in.get_vec_ptr();
+    T* out_ptr                         = out.get_vec_ptr();
 
-    // if we're on the device, we should skip this function and call
-    // unzip_device
-    if (in.get_loc() == ot::DVEC_LOC::DEVICE) {
-        this->unzip_device(in, out, async_k, use_compression);
-        return;
+    const unsigned int sz_per_dof_zip  = in.get_size() / dof;
+    const unsigned int sz_per_dof_uzip = out.get_size() / dof;
+
+    assert(sz_per_dof_uzip == m_uiMesh->getDegOfFreedomUnZip());
+    assert(sz_per_dof_zip == m_uiMesh->getDegOfFreedom());
+
+    std::vector<int> completed_indices;
+    std::vector<MPI_Request> send_requests, recv_requests;
+    std::vector<unsigned int> send_requests_ctx, recv_requests_ctx;
+    std::vector<MPI_Status> statuses;
+
+    int mpi_comm_tag_compression   = 5098;
+
+    // a vector of send_requests based on the size we need
+    const unsigned int n_send_proc = m_uiMesh->getSendProcListSize();
+    const unsigned int n_recv_proc = m_uiMesh->getRecvProcListSize();
+    std::vector<MPI_Request> size_requests(n_send_proc + n_recv_proc);
+
+    T *temp_ptr, *temp_ptr_next;
+    const unsigned int THRESHOLD = m_uiMesh->getMPICommSize() * 1;
+
+    for (unsigned int i = 0; i < async_k; i++) {
+        // we need to know where we're at with our variables
+        const unsigned int v_begin  = (i * dof) / async_k;
+        const unsigned int v_end    = ((i + 1) * dof) / async_k;
+        const unsigned int batch_sz = v_end - v_begin;
+        unsigned int compressOffset = 0;
+
+        auto& send_compress_counts  = m_mpi_ctx[i].getSendCompressCounts();
+        auto& recv_compress_counts  = m_mpi_ctx[i].getReceiveCompressCounts();
+        auto& send_compress_offsets = m_mpi_ctx[i].getSendCompressOffsets();
+        auto& recv_compress_offsets = m_mpi_ctx[i].getReceiveCompressOffsets();
+
+        // allocate the recv_requests for size
+        recv_requests.reserve(recv_requests.size() +
+                              m_uiMesh->getRecvProcList().size());
+        recv_requests_ctx.reserve(recv_requests_ctx.size() +
+                                  m_uiMesh->getRecvProcList().size());
+        send_requests.reserve(send_requests.size() +
+                              m_uiMesh->getSendProcList().size());
+        send_requests_ctx.reserve(send_requests_ctx.size() +
+                                  m_uiMesh->getSendProcList().size());
+
+        // IMPORTANT: this is the pointer to the current batch of data!
+        temp_ptr = in_ptr + v_begin * sz_per_dof_zip;
+
+        // make sure send compress counts is filled with zeros!
+        std::fill(send_compress_counts.begin(), send_compress_counts.end(), 0);
+        std::fill(recv_compress_counts.begin(), recv_compress_counts.end(), 0);
+        send_compress_offsets[0] = recv_compress_offsets[0] = 0;
+
+        for (unsigned int proc_id = 0; proc_id < n_recv_proc; ++proc_id) {
+            unsigned int recv_p_id = m_uiMesh->getRecvProcList()[proc_id];
+            par::Mpi_Irecv(&recv_compress_counts[recv_p_id], 1, recv_p_id,
+                           mpi_comm_tag_compression,
+                           m_uiMesh->getMPICommunicator(),
+                           &size_requests[proc_id]);
+        }
+
+        // for each process that needs data, we need to extract the data out
+        for (unsigned int proc_id = 0; proc_id < n_recv_proc; ++proc_id) {
+            unsigned int send_p_id = m_uiMesh->getSendProcList()[proc_id];
+            // extract and then compress the data
+            m_uiMesh->extractFullSingleProcess(m_mpi_ctx[i], temp_ptr, batch_sz,
+                                               send_p_id);
+            m_uiMesh->compressSingleProcess(m_mpi_ctx[i], temp_ptr, batch_sz,
+                                            send_p_id, compressOffset);
+
+            // now we set up the send part of our non-blocking "all-to-all"
+            // NOTE: size_requests is offset by **recv** procid
+            par::Mpi_Isend(&send_compress_counts[send_p_id], 1, send_p_id,
+                           mpi_comm_tag_compression,
+                           m_uiMesh->getMPICommunicator(),
+                           &size_requests[n_recv_proc + proc_id]);
+        }
+
+        // TODO: potentially start extracting the next one
+
+        // compute the offsets for the send values
+        omp_par::scan(&(*(send_compress_counts.begin())),
+                      &(*(send_compress_offsets.begin())),
+                      send_compress_counts.size());
+
+        // now we want to process our send sizes, but we need them all to
+        // finish because we need the proper receive offsets
+        MPI_Waitall(size_requests.size(), size_requests.data(),
+                    MPI_STATUSES_IGNORE);
+
+        // compute the offsets for the recv values
+        omp_par::scan(&(*(recv_compress_counts.begin())),
+                      &(*(recv_compress_offsets.begin())),
+                      recv_compress_counts.size());
+
+        // then we can set up the sends and receives, they can just get started
+        m_uiMesh->setUpSendRecvCompressionRequests<T>(
+            m_mpi_ctx[i], send_requests, recv_requests, send_requests_ctx,
+            recv_requests_ctx, i);
+
+        // then if we have enough, we can start processing some communications,
+        // while others finish
+        if (send_requests.size() + recv_requests.size() > THRESHOLD) {
+            this->process_finished_unzip(
+                in, out, async_k, true, completed_indices, send_requests,
+                recv_requests, send_requests_ctx, recv_requests_ctx, statuses);
+        }
+
+        ++mpi_comm_tag_compression;
     }
 
+    // as long as we have active requests, we need to try and clear them out
+    while (!send_requests.empty() || !recv_requests.empty()) {
+        this->process_finished_unzip(
+            in, out, async_k, true, completed_indices, send_requests,
+            recv_requests, send_requests_ctx, recv_requests_ctx, statuses);
+    }
+
+    // TEMP: this is only to gather information about the
+    // compression/decompression
+    for (unsigned i = 0; i < async_k; i++) {
+        const unsigned int v_begin  = ((i * dof) / async_k);
+        const unsigned int v_end    = (((i + 1) * dof) / async_k);
+        const unsigned int batch_sz = (v_end - v_begin);
+        for (unsigned int j = 0; j < m_uiMesh->getMPICommSize(); j++) {
+            m_uiTotalBytesSend[j] +=
+                m_uiMesh->getNodalSendCounts()[j] * batch_sz * sizeof(T);
+            m_uiTotalBytesRecv[j] +=
+                m_uiMesh->getNodalRecvCounts()[j] * batch_sz * sizeof(T);
+            // then the compress amounts, which is the *total* amount not
+            // including batch syze
+            m_uiTotalBytesSendCompress[j] +=
+                m_mpi_ctx[i].getSendCompressCounts()[j];
+            m_uiTotalBytesRecvCompress[j] +=
+                m_mpi_ctx[i].getReceiveCompressCounts()[j];
+        }
+    }
+
+    // now that they're all done, we can have the mesh do its own unzip
+    // TODO: this could probably be thrown in process_finished_unzip, but
+    // would need to track completed ctx lists since unzip isn't currently
+    // async
+    dendro::timer::t_compression_uzip_post.start();
+    for (unsigned int i = 0; i < async_k; i++) {
+        const unsigned int v_begin  = ((i * dof) / async_k);
+        const unsigned int v_end    = (((i + 1) * dof) / async_k);
+        const unsigned int batch_sz = (v_end - v_begin);
+
+        m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
+                        out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
+    }
+    dendro::timer::t_compression_uzip_post.stop();
+}
+
+template <typename DerivedCtx, typename T, typename I>
+void Ctx<DerivedCtx, T, I>::unzip_host_default(ot::DVector<T, I>& in,
+                                               ot::DVector<T, I>& out,
+                                               unsigned int async_k) {
     const unsigned int dof             = in.get_dof();
     T* in_ptr                          = in.get_vec_ptr();
     T* out_ptr                         = out.get_vec_ptr();
@@ -762,21 +921,9 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
         // since we start extracting while waiting for IAlltoAll
         if (i == 0) m_uiMesh->extractFullData(m_mpi_ctx[i], temp_ptr, batch_sz);
 
-        if (use_compression) {
-            auto& send_compress_counts = m_mpi_ctx[i].getSendCompressCounts();
-            auto& recv_compress_counts =
-                m_mpi_ctx[i].getReceiveCompressCounts();
-            // make sure send compress counts has been reinitialized to 0's
-            std::fill(send_compress_counts.begin(), send_compress_counts.end(),
-                      0);
-            m_uiMesh->compressFullData(m_mpi_ctx[i], temp_ptr, batch_sz);
-
-            // spin up the all-to-all
-            par::Mpi_IAlltoall(&(*(send_compress_counts.begin())),
-                               &(*(recv_compress_counts.begin())), 1,
-                               m_uiMesh->getMPICommunicator(),
-                               m_mpi_ctx[i].getAllToAllRequest());
-        }
+        m_uiMesh->setUpSendRecvRequests<T>(
+            m_mpi_ctx[i], batch_sz, send_requests, recv_requests,
+            send_requests_ctx, recv_requests_ctx, i);
 
         // do some work while we wait for processes to get here..., might as
         // well start extracting the next chunk, which doesn't take long
@@ -790,57 +937,19 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                                       batch_sz_next);
         }
 
-        if (use_compression) {
-            // then get all of the vaules
-            dendro::timer::t_compression_wait_comms.start();
-            MPI_Wait(m_mpi_ctx[i].getAllToAllRequest(), MPI_STATUS_IGNORE);
-            dendro::timer::t_compression_wait_comms.stop();
-
-            auto& send_compress_counts = m_mpi_ctx[i].getSendCompressCounts();
-            auto& recv_compress_counts =
-                m_mpi_ctx[i].getReceiveCompressCounts();
-            auto& send_compress_offsets = m_mpi_ctx[i].getSendCompressOffsets();
-            auto& recv_compress_offsets =
-                m_mpi_ctx[i].getReceiveCompressOffsets();
-
-            // calculate the offsets for this particular context
-            send_compress_offsets[0] = 0;
-            recv_compress_offsets[0] = 0;
-            omp_par::scan(&(*(send_compress_counts.begin())),
-                          &(*(send_compress_offsets.begin())),
-                          send_compress_counts.size());
-            omp_par::scan(&(*(recv_compress_counts.begin())),
-                          &(*(recv_compress_offsets.begin())),
-                          recv_compress_counts.size());
-
-            // then we can set up the sends and receives
-            m_uiMesh->setUpSendRecvCompressionRequests<T>(
-                m_mpi_ctx[i], send_requests, recv_requests, send_requests_ctx,
-                recv_requests_ctx, i);
-
-        } else {
-            m_uiMesh->setUpSendRecvRequests<T>(
-                m_mpi_ctx[i], batch_sz, send_requests, recv_requests,
-                send_requests_ctx, recv_requests_ctx, i);
-        }
-
-        // add the list of requests to our send and receive so we can do some
-        // checks
-
-        // then if we have enough, we can start processing some communications,
-        // while others finish
+        // as long as we have "more than our threshold" we can actually handle
+        // stuff
         if (send_requests.size() + recv_requests.size() > THRESHOLD) {
-            this->process_finished_unzip(in, out, async_k, use_compression,
-                                         completed_indices, send_requests,
-                                         recv_requests, send_requests_ctx,
-                                         recv_requests_ctx, statuses);
+            this->process_finished_unzip(
+                in, out, async_k, false, completed_indices, send_requests,
+                recv_requests, send_requests_ctx, recv_requests_ctx, statuses);
         }
     }
 
     // as long as we have active requests, we need to try and clear them out
     while (!send_requests.empty() || !recv_requests.empty()) {
         this->process_finished_unzip(
-            in, out, async_k, use_compression, completed_indices, send_requests,
+            in, out, async_k, false, completed_indices, send_requests,
             recv_requests, send_requests_ctx, recv_requests_ctx, statuses);
     }
 
@@ -857,19 +966,39 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                 m_uiMesh->getNodalRecvCounts()[j] * batch_sz * sizeof(T);
             // then the compress amounts, which is the *total* amount not
             // including batch syze
-            if (use_compression) {
-                m_uiTotalBytesSendCompress[j] +=
-                    m_mpi_ctx[i].getSendCompressCounts()[j];
-                m_uiTotalBytesRecvCompress[j] +=
-                    m_mpi_ctx[i].getReceiveCompressCounts()[j];
-            } else {
-                m_uiTotalBytesSendCompress[j] +=
-                    m_uiMesh->getNodalSendCounts()[j] * batch_sz * sizeof(T);
-                m_uiTotalBytesRecvCompress[j] +=
-                    m_uiMesh->getNodalRecvCounts()[j] * batch_sz * sizeof(T);
-            }
+            m_uiTotalBytesSendCompress[j] +=
+                m_uiMesh->getNodalSendCounts()[j] * batch_sz * sizeof(T);
+            m_uiTotalBytesRecvCompress[j] +=
+                m_uiMesh->getNodalRecvCounts()[j] * batch_sz * sizeof(T);
         }
     }
+}
+
+template <typename DerivedCtx, typename T, typename I>
+void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
+                                  unsigned int async_k, bool use_compression) {
+    // ONLY ACTIVE PROCS IN THE MESH INTERACT
+    if (!m_uiMesh->isActive()) return;
+
+    // if we're on the device, we should skip this function and call
+    // unzip_device
+    if (in.get_loc() == ot::DVEC_LOC::DEVICE) {
+        this->unzip_device(in, out, async_k, use_compression);
+        return;
+    }
+
+    if (use_compression) {
+        this->unzip_host_compression(in, out, async_k);
+    } else {
+        this->unzip_host_default(in, out, async_k);
+    }
+
+    const unsigned int dof             = in.get_dof();
+    T* in_ptr                          = in.get_vec_ptr();
+    T* out_ptr                         = out.get_vec_ptr();
+
+    const unsigned int sz_per_dof_zip  = in.get_size() / dof;
+    const unsigned int sz_per_dof_uzip = out.get_size() / dof;
 
     // now that they're all done, we can have the mesh do its own unzip
     // TODO: this could probably be thrown in process_finished_unzip, but

@@ -16,6 +16,8 @@ implementations are based on the previous implementation of dendro version 4.0
 
 #include "octUtils.h"
 
+#include "TreeNode.h"
+
 // This will add boundary nodes and will also embed the octree one level higher
 // to enable the addition of the boundary nodes. The positive boundary nodes
 // are also marked as BOUNDARY.
@@ -553,6 +555,8 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
                     }
 
             for (unsigned int cnum = 0; cnum < NUM_CHILDREN; cnum++) {
+                if (elem.getLevel() == m_uiMaxDepth) continue;
+
                 pt_child =
                     Point((pt.x() + (((int)((bool)(cnum & 1u)))
                                      << (m_uiMaxDepth - elem.getLevel() - 1))),
