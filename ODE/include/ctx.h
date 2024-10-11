@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "dendro.h"
+#include "dendroProfileParams.h"
 #include "dvec.h"
 #include "mathUtils.h"
 #include "mesh.h"
@@ -433,11 +434,12 @@ class Ctx {
     void unzip_device(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                       unsigned int async_k, bool use_compression);
 
-    void unzip_host_compression(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
-                                unsigned int async_k);
+    void exchange_host_compression(ot::DVector<T, I>& in,
+                                   ot::DVector<T, I>& out,
+                                   unsigned int async_k);
 
-    void unzip_host_default(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
-                            unsigned int async_k);
+    void exchange_host_default(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
+                               unsigned int async_k);
 
     /**
      * @brief performs unzip operation,
@@ -726,9 +728,9 @@ void Ctx<DerivedCtx, T, I>::process_finished_unzip(
 }
 
 template <typename DerivedCtx, typename T, typename I>
-void Ctx<DerivedCtx, T, I>::unzip_host_compression(ot::DVector<T, I>& in,
-                                                   ot::DVector<T, I>& out,
-                                                   unsigned int async_k) {
+void Ctx<DerivedCtx, T, I>::exchange_host_compression(ot::DVector<T, I>& in,
+                                                      ot::DVector<T, I>& out,
+                                                      unsigned int async_k) {
     const unsigned int dof             = in.get_dof();
     T* in_ptr                          = in.get_vec_ptr();
     T* out_ptr                         = out.get_vec_ptr();
@@ -803,33 +805,43 @@ void Ctx<DerivedCtx, T, I>::unzip_host_compression(ot::DVector<T, I>& in,
 
             // now we set up the send part of our non-blocking "all-to-all"
             // NOTE: size_requests is offset by **recv** procid
+            dendro::timer::t_compression_begin_comms.start();
             par::Mpi_Isend(&send_compress_counts[send_p_id], 1, send_p_id,
                            mpi_comm_tag_compression,
                            m_uiMesh->getMPICommunicator(),
                            &size_requests[n_recv_proc + proc_id]);
+            dendro::timer::t_compression_begin_comms.stop();
         }
 
         // TODO: potentially start extracting the next one
 
+        dendro::timer::t_compression_compress.start();
         // compute the offsets for the send values
         omp_par::scan(&(*(send_compress_counts.begin())),
                       &(*(send_compress_offsets.begin())),
                       send_compress_counts.size());
+        dendro::timer::t_compression_compress.stop();
 
+        dendro::timer::t_compression_wait_comms.start();
         // now we want to process our send sizes, but we need them all to
         // finish because we need the proper receive offsets
         MPI_Waitall(size_requests.size(), size_requests.data(),
                     MPI_STATUSES_IGNORE);
+        dendro::timer::t_compression_wait_comms.stop();
 
+        dendro::timer::t_compression_compress.start();
         // compute the offsets for the recv values
         omp_par::scan(&(*(recv_compress_counts.begin())),
                       &(*(recv_compress_offsets.begin())),
                       recv_compress_counts.size());
+        dendro::timer::t_compression_compress.stop();
 
         // then we can set up the sends and receives, they can just get started
+        dendro::timer::t_compression_begin_comms.start();
         m_uiMesh->setUpSendRecvCompressionRequests<T>(
             m_mpi_ctx[i], send_requests, recv_requests, send_requests_ctx,
             recv_requests_ctx, i);
+        dendro::timer::t_compression_begin_comms.stop();
 
         // then if we have enough, we can start processing some communications,
         // while others finish
@@ -869,26 +881,13 @@ void Ctx<DerivedCtx, T, I>::unzip_host_compression(ot::DVector<T, I>& in,
         }
     }
 
-    // now that they're all done, we can have the mesh do its own unzip
-    // TODO: this could probably be thrown in process_finished_unzip, but
-    // would need to track completed ctx lists since unzip isn't currently
-    // async
-    dendro::timer::t_compression_uzip_post.start();
-    for (unsigned int i = 0; i < async_k; i++) {
-        const unsigned int v_begin  = ((i * dof) / async_k);
-        const unsigned int v_end    = (((i + 1) * dof) / async_k);
-        const unsigned int batch_sz = (v_end - v_begin);
-
-        m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
-                        out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
-    }
-    dendro::timer::t_compression_uzip_post.stop();
+    // then we're finished! We run the unzip back in the outer function
 }
 
 template <typename DerivedCtx, typename T, typename I>
-void Ctx<DerivedCtx, T, I>::unzip_host_default(ot::DVector<T, I>& in,
-                                               ot::DVector<T, I>& out,
-                                               unsigned int async_k) {
+void Ctx<DerivedCtx, T, I>::exchange_host_default(ot::DVector<T, I>& in,
+                                                  ot::DVector<T, I>& out,
+                                                  unsigned int async_k) {
     const unsigned int dof             = in.get_dof();
     T* in_ptr                          = in.get_vec_ptr();
     T* out_ptr                         = out.get_vec_ptr();
@@ -988,9 +987,9 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
     }
 
     if (use_compression) {
-        this->unzip_host_compression(in, out, async_k);
+        this->exchange_host_compression(in, out, async_k);
     } else {
-        this->unzip_host_default(in, out, async_k);
+        this->exchange_host_default(in, out, async_k);
     }
 
     const unsigned int dof             = in.get_dof();
