@@ -1399,6 +1399,8 @@ int Ctx<DerivedCtx, T, I>::remesh_and_gridtransfer(unsigned int grain_sz,
 
     this->grid_transfer(newMesh);
 
+    newMesh->set_dump_tag(m_uiMesh->m_dump_tag);
+
     std::swap(newMesh, m_uiMesh);
     delete newMesh;
 

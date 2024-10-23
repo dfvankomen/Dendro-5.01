@@ -28,7 +28,7 @@ if(DENDRO_ENABLE_GHOST_COMPRESSION)
   add_definitions(-DDENDRO_ENABLE_GHOST_COMPRESSION)
 endif()
 
-add_subdirectory(libs)
+# add_subdirectory(libs)
 
 # we need a lot of other definitions if we are calling cmake directly for this
 # folder.

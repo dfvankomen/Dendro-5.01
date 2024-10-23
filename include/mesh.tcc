@@ -746,6 +746,73 @@ void Mesh::extractFullSingleProcess(AsyncExchangeContex& ctx, T* vec,
                              nodeSendCount[proc_id], nodeSendOffset[proc_id],
                              sendNodeSM);
         }
+#if 0
+        if (m_dump_data_now) {
+            // now that they're extracted, we can just... dump it all, this is
+            // useful for the machine learning side of things
+            std::ostringstream file_prefix;
+            file_prefix << "dump_output/ID" << std::setw(8) << std::setfill('0')
+                        << m_dump_tag << "_" << std::setw(4)
+                        << std::setfill('0') << this->getMPIRank() << "--"
+                        << std::setw(4) << std::setfill('0') << proc_id;
+
+            // dump the scattermap
+            std::ofstream outfile_scattermap(
+                file_prefix.str() + "_scattermap_send_dump.bin",
+                std::ios::binary);
+            size_t size = sendNodeSM.size();
+            outfile_scattermap.write(reinterpret_cast<const char*>(&size),
+                                     sizeof(size));
+            outfile_scattermap.write(
+                reinterpret_cast<const char*>(sendNodeSM.data()),
+                size * sizeof(unsigned int));
+            outfile_scattermap.close();
+
+            // dump the scattermap details, for understanding how it all fits
+            std::ofstream outfile_send_config(
+                file_prefix.str() + "_scattermap_config_send_dump.bin",
+                std::ios::binary);
+            size_t size_config = this->getSendNodeSMConfig().size();
+            outfile_send_config.write(
+                reinterpret_cast<const char*>(&size_config),
+                sizeof(size_config));
+            outfile_send_config.write(reinterpret_cast<const char*>(
+                                          this->getSendNodeSMConfig().data()),
+                                      size_config * sizeof(unsigned char));
+            outfile_send_config.close();
+
+            // and the offsets
+            std::ofstream outfile_send_config_counts(
+                file_prefix.str() + "_scattermap_counts_dump.bin",
+                std::ios::binary);
+            size_config = this->getSendNodeSMConfigCount().size();
+            // write size
+            outfile_send_config_counts.write(
+                reinterpret_cast<const char*>(&size_config),
+                sizeof(size_config));
+            // write actual data
+            outfile_send_config_counts.write(
+                reinterpret_cast<const char*>(
+                    this->getSendNodeSMConfigCount().data()),
+                size_config * sizeof(unsigned int));
+            outfile_send_config_counts.close();
+
+            // dump extracted data
+            std::ofstream outfile_extracted(
+                file_prefix.str() + "_extracted_dump.bin", std::ios::binary);
+            size_t send_count = nodeSendCount[proc_id] * dof;
+            outfile_extracted.write(reinterpret_cast<const char*>(&send_count),
+                                    sizeof(size));
+            outfile_extracted.write(reinterpret_cast<const char*>(sendB),
+                                    send_count * sizeof(unsigned int));
+            outfile_extracted.close();
+
+            // increment the dump tag, only dump when "reset", which will be at
+            // the beginning of time step
+            m_dump_tag++;
+            m_dump_data_now = false;
+        }
+#endif
     }
     dendro::timer::t_compression_extraction.stop();
 }

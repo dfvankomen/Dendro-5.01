@@ -50,6 +50,8 @@
 #include "compression.h"
 #endif
 
+#define __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE_INDIVIDUAL
+
 extern double t_e2e;  // e2e map generation time
 extern double t_e2n;  // e2n map generation time
 extern double t_sm;   // sm map generation time
@@ -1188,6 +1190,46 @@ class Mesh {
     // --- 3rd point exchange function end.
 
    public:
+#ifdef __DEBUG__DUMP_COMPRESSION_STUFF_TO_FILE_INDIVIDUAL
+
+    // a tag that gets incremented every time we dump something, note that this
+    // should be **copied** if possible
+    size_t m_dump_tag = 0;
+
+    void set_dump_tag(size_t dump_tag_in) { m_dump_tag = dump_tag_in; }
+
+    bool m_dump_data_now = false;
+
+    void set_dump_data_now(bool dump_data) { m_dump_data_now = dump_data; }
+
+    void print_information_about_sending_and_receiving() {
+        if (!m_uiIsActive) return;
+
+        std::cout << this->getMPIRank()
+                  << ": Send original counts per variable: ";
+        unsigned int total = 0;
+        for (auto &xx : this->getNodalSendCounts()) {
+            std::cout << xx << " ";
+            total += xx;
+        }
+        std::cout << std::endl;
+        std::cout << this->getMPIRank() << ": Total send counts: " << total
+                  << std::endl;
+
+        std::cout << this->getMPIRank()
+                  << ": Receive original counts per variable: ";
+        total = 0;
+        for (auto &xx : this->getNodalRecvCounts()) {
+            std::cout << xx << " ";
+            total += xx;
+        }
+        std::cout << std::endl;
+        std::cout << this->getMPIRank() << ": Total recv counts: " << total
+                  << std::endl;
+    }
+
+#endif
+
     /**@brief parallel mesh constructor
      * @param[in] in: complete sorted 2:1 balanced octree to generate mesh
      * @param[in] k_s: how many neighbours to check on each direction (used =1)
