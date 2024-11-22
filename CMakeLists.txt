@@ -1,23 +1,21 @@
-# ##############################################################################
 # CMAKE CONFIGURATION FILE FOR DENDRO DIRECTORY
 #
 # This file in particular contains all of the options that apply specificially
 # to the Dendro directory as it is compiled. This includes the example solvers
 # as well as the library itself.
 #
-# NOTE: there is a CMakeLists-NonLibraryDefs.txt file which contains more options.
+# [!] there is a CMakeLists-NonLibraryDefs.txt file which contains more options.
 # The options in there must be included in the root directory of your project
-# that you are using this library with. This will configure everything for building,
-# but the options must be propagated to your own solvers and projects.
-# 
-# ##############################################################################
+# that you are using this library with. This will configure everything for
+# building, but the options must be propagated to your own solvers and projects.
+
 
 cmake_minimum_required(VERSION 3.1)
 project(Dendro-5.0-Library C CXX Fortran)
 
 option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
 
-# we need a lot of other definitions if we are calling cmake directly for this folder.
+# require definitions from other file if dendrolib is not a library
 if(DENDROLIB_ISOLATED_DIR)
   include("CMakeLists-NonLibraryDefs.txt")
 endif()
@@ -82,7 +80,18 @@ set(DENDRO_INCLUDE_FILES
     test/include/testUtils.tcc
     test/include/meshTestUtils.h
     include/launcher.h
-    include/device.h)
+    include/device.h
+    include/derivatives.h
+    include/derivatives/derivs_explicit.h
+    include/derivatives/derivs_compact.h
+    include/derivatives/derivs_banded.h
+    include/derivatives/derivs_utils.h
+    include/derivatives/derivs_factory.h
+    include/derivatives/impl_explicitmatrix.h
+    include/derivatives/impl_byuderivs.h
+    include/derivatives/impl_kimderivs.h
+    include/derivatives/impl_jonathantyler.h
+)
 
 set(DENDRO_SOURCE_FILES
     src/dendro.cpp
@@ -105,7 +114,18 @@ set(DENDRO_SOURCE_FILES
     src/sub_oda.cpp
     src/meshUtils.cpp
     src/waveletRefEl.cpp
-    test/src/meshTestUtils.cpp)
+    test/src/meshTestUtils.cpp
+    src/derivatives.cpp
+    src/derivatives/derivs_explicit.cpp
+    src/derivatives/derivs_compact.cpp
+    src/derivatives/derivs_matrixonly.cpp
+    src/derivatives/derivs_banded.cpp
+    src/derivatives/derivs_utils.cpp
+    src/derivatives/impl_explicitmatrix.cpp
+    src/derivatives/impl_byuderivs.cpp
+    src/derivatives/impl_kimderivs.cpp
+    src/derivatives/impl_jonathantyler.cpp
+)
 
 set(FEM_INC
     FEM/include/basis.h
@@ -294,7 +314,7 @@ if(WITH_CUDA)
   target_include_directories(run_meshgpu_tests PUBLIC ${MPI_INCLUDE_PATH})
   target_include_directories(run_meshgpu_tests PUBLIC ${CUDA_INCLUDE_DIRS})
   target_link_libraries(run_meshgpu_tests dendro5 dendro5_cuda)
-endif(WITH_CUDA)
+endif()
 
 set(SOURCE_FILES Hilbert/src/genHTables.cpp include/radix.h)
 add_executable(genHtables ${SOURCE_FILES})
