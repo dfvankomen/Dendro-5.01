@@ -16,8 +16,8 @@ MatrixDiagonalEntries* createJTT6DiagonalsSecondOrder();
 class JonathanTyler_JTT4_FirstOrder : public MatrixCompactDerivs<1> {
    public:
     template <typename... Args>
-    JonathanTyler_JTT4_FirstOrder(unsigned int n, unsigned int pw, Args&&...)
-        : MatrixCompactDerivs{n, pw} {
+    JonathanTyler_JTT4_FirstOrder(unsigned int ele_order, Args&&...)
+        : MatrixCompactDerivs{ele_order} {
         diagEntries = createJTT4DiagonalsFirstOrder();
 
         this->init();
@@ -41,9 +41,8 @@ class JonathanTyler_JTT4_FirstOrder : public MatrixCompactDerivs<1> {
 class JonathanTyler_JTT4_FirstOrder_Banded : public BandedCompactDerivs {
    public:
     template <typename... Args>
-    JonathanTyler_JTT4_FirstOrder_Banded(unsigned int n, unsigned int pw,
-                                         Args&&...)
-        : BandedCompactDerivs{n, pw} {
+    JonathanTyler_JTT4_FirstOrder_Banded(unsigned int ele_order, Args&&...)
+        : BandedCompactDerivs{ele_order} {
 #ifdef DEBUG
         std::cout << "entered JTT4 constructor" << std::endl;
 #endif
@@ -85,8 +84,8 @@ class JonathanTyler_JTT4_FirstOrder_Banded : public BandedCompactDerivs {
 class JonathanTyler_JTT4_SecondOrder : public MatrixCompactDerivs<2> {
    public:
     template <typename... Args>
-    JonathanTyler_JTT4_SecondOrder(unsigned int n, unsigned int pw, Args&&...)
-        : MatrixCompactDerivs{n, pw} {
+    JonathanTyler_JTT4_SecondOrder(unsigned int ele_order, Args&&...)
+        : MatrixCompactDerivs{ele_order} {
         diagEntries = createJTT4DiagonalsSecondOrder();
 
         this->init();
@@ -110,9 +109,8 @@ class JonathanTyler_JTT4_SecondOrder : public MatrixCompactDerivs<2> {
 class JonathanTyler_JTT4_SecondOrder_Banded : public BandedCompactDerivs {
    public:
     template <typename... Args>
-    JonathanTyler_JTT4_SecondOrder_Banded(unsigned int n, unsigned int pw,
-                                          Args&&...)
-        : BandedCompactDerivs{n, pw} {
+    JonathanTyler_JTT4_SecondOrder_Banded(unsigned int ele_order, Args&&...)
+        : BandedCompactDerivs{ele_order} {
 #ifdef DEBUG
         std::cout << "entered JTT4 constructor" << std::endl;
 #endif
@@ -155,8 +153,8 @@ class JonathanTyler_JTT4_SecondOrder_Banded : public BandedCompactDerivs {
 class JonathanTyler_JTT6_FirstOrder : public MatrixCompactDerivs<1> {
    public:
     template <typename... Args>
-    JonathanTyler_JTT6_FirstOrder(unsigned int n, unsigned int pw, Args&&...)
-        : MatrixCompactDerivs{n, pw} {
+    JonathanTyler_JTT6_FirstOrder(unsigned int ele_order, Args&&...)
+        : MatrixCompactDerivs{ele_order} {
         diagEntries = createJTT6DiagonalsFirstOrder();
 
         this->init();
@@ -180,9 +178,8 @@ class JonathanTyler_JTT6_FirstOrder : public MatrixCompactDerivs<1> {
 class JonathanTyler_JTT6_FirstOrder_Banded : public BandedCompactDerivs {
    public:
     template <typename... Args>
-    JonathanTyler_JTT6_FirstOrder_Banded(unsigned int n, unsigned int pw,
-                                         Args&&...)
-        : BandedCompactDerivs{n, pw} {
+    JonathanTyler_JTT6_FirstOrder_Banded(unsigned int ele_order, Args&&...)
+        : BandedCompactDerivs{ele_order} {
 #ifdef DEBUG
         std::cout << "entered JTT4 constructor" << std::endl;
 #endif
@@ -225,8 +222,8 @@ class JonathanTyler_JTT6_FirstOrder_Banded : public BandedCompactDerivs {
 class JonathanTyler_JTT6_SecondOrder : public MatrixCompactDerivs<2> {
    public:
     template <typename... Args>
-    JonathanTyler_JTT6_SecondOrder(unsigned int n, unsigned int pw, Args&&...)
-        : MatrixCompactDerivs{n, pw} {
+    JonathanTyler_JTT6_SecondOrder(unsigned int ele_order, Args&&...)
+        : MatrixCompactDerivs{ele_order} {
         diagEntries = createJTT6DiagonalsSecondOrder();
 
         this->init();
@@ -249,9 +246,8 @@ class JonathanTyler_JTT6_SecondOrder : public MatrixCompactDerivs<2> {
 class JonathanTyler_JTT6_SecondOrder_Banded : public BandedCompactDerivs {
    public:
     template <typename... Args>
-    JonathanTyler_JTT6_SecondOrder_Banded(unsigned int n, unsigned int pw,
-                                          Args&&...)
-        : BandedCompactDerivs{n, pw} {
+    JonathanTyler_JTT6_SecondOrder_Banded(unsigned int ele_order, Args&&...)
+        : BandedCompactDerivs{ele_order} {
 #ifdef DEBUG
         std::cout << "entered JTT4 constructor" << std::endl;
 #endif

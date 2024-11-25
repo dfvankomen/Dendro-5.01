@@ -11,13 +11,9 @@ MatrixDiagonalEntries* createE4DiagonalsSecondOrder();
 class ExplicitDerivsO4_Matrix_FirstOrder : public MatrixCompactDerivs<1> {
    public:
     template <typename... Args>
-    ExplicitDerivsO4_Matrix_FirstOrder(unsigned int n, unsigned int pw,
-                                       Args&&...)
-        : MatrixCompactDerivs{n, pw} {
-        MatrixDiagonalEntries* diagEntries = createE4DiagonalsFirstOrder();
-
-        P_ = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_ = create_Q_from_diagonals(*diagEntries, n, -1.0);
+    ExplicitDerivsO4_Matrix_FirstOrder(unsigned int ele_order, Args&&...)
+        : MatrixCompactDerivs{ele_order} {
+        diagEntries = createE4DiagonalsFirstOrder();
 
         this->init();
 
@@ -40,13 +36,9 @@ class ExplicitDerivsO4_Matrix_FirstOrder : public MatrixCompactDerivs<1> {
 class ExplicitDerivsO4_Matrix_SecondOrder : public MatrixCompactDerivs<2> {
    public:
     template <typename... Args>
-    ExplicitDerivsO4_Matrix_SecondOrder(unsigned int n, unsigned int pw,
-                                        Args&&...)
-        : MatrixCompactDerivs{n, pw} {
-        MatrixDiagonalEntries* diagEntries = createE4DiagonalsSecondOrder();
-
-        P_ = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_ = create_Q_from_diagonals(*diagEntries, n, 1.0);
+    ExplicitDerivsO4_Matrix_SecondOrder(unsigned int ele_order, Args&&...)
+        : MatrixCompactDerivs{ele_order} {
+        diagEntries = createE4DiagonalsSecondOrder();
 
         this->init();
 

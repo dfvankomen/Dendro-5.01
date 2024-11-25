@@ -48,9 +48,9 @@ class BYUDerivsT4_R3_FirstOrder : public MatrixCompactDerivs<1> {
 
    public:
     BYUDerivsT4_R3_FirstOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
 
         D_coeffs_ =
@@ -80,9 +80,9 @@ class BYUDerivsT4_R3_SecondOrder : public MatrixCompactDerivs<2> {
 
    public:
     BYUDerivsT4_R3_SecondOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT4_R3_SecondOrder::n_D_coeffs_);
@@ -111,9 +111,9 @@ class BYUDerivsT6_R3_FirstOrder : public MatrixCompactDerivs<1> {
 
    public:
     BYUDerivsT6_R3_FirstOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R3_FirstOrder::n_D_coeffs_);
@@ -143,9 +143,9 @@ class BYUDerivsT6_R3_SecondOrder : public MatrixCompactDerivs<2> {
 
    public:
     BYUDerivsT6_R3_SecondOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R3_SecondOrder::n_D_coeffs_);
@@ -175,9 +175,9 @@ class BYUDerivsT6_R4_FirstOrder : public MatrixCompactDerivs<1> {
 
    public:
     BYUDerivsT6_R4_FirstOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R4_FirstOrder::n_D_coeffs_);
@@ -207,9 +207,9 @@ class BYUDerivsT6_R4_SecondOrder : public MatrixCompactDerivs<2> {
 
    public:
     BYUDerivsT6_R4_SecondOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R4_SecondOrder::n_D_coeffs_);
@@ -315,9 +315,9 @@ class BYUDerivsP6_R3_FirstOrder : public MatrixCompactDerivs<1> {
 
    public:
     BYUDerivsP6_R3_FirstOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP6_R3_FirstOrder::n_D_coeffs_);
@@ -347,9 +347,9 @@ class BYUDerivsP6_R3_SecondOrder : public MatrixCompactDerivs<2> {
 
    public:
     BYUDerivsP6_R3_SecondOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP6_R3_SecondOrder::n_D_coeffs_);
@@ -446,9 +446,9 @@ class BYUDerivsP8_R4_FirstOrder : public MatrixCompactDerivs<1> {
 
    public:
     BYUDerivsP8_R4_FirstOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP8_R4_FirstOrder::n_D_coeffs_);
@@ -478,9 +478,9 @@ class BYUDerivsP8_R4_SecondOrder : public MatrixCompactDerivs<2> {
 
    public:
     BYUDerivsP8_R4_SecondOrder(
-        unsigned int n, unsigned int pw,
+        unsigned int ele_order,
         const std::vector<double>& coeffs_in = std::vector<double>())
-        : MatrixCompactDerivs{n, pw} {
+        : MatrixCompactDerivs{ele_order} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP8_R4_SecondOrder::n_D_coeffs_);

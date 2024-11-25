@@ -1,5 +1,7 @@
 #pragma once
 
+#include <string>
+
 #include "derivatives.h"
 
 namespace dendroderivs {
@@ -78,27 +80,28 @@ class ExplicitDerivsO4_DX : public Derivs {
 
    public:
     template <typename... Args>
-    ExplicitDerivsO4_DX(unsigned int n, unsigned int pw, Args &&...)
-        : Derivs(n, pw) {
-        if (pw == 2) {
+    ExplicitDerivsO4_DX(unsigned int ele_order, Args &&...)
+        : Derivs(ele_order) {
+        if (p_pw == 2) {
             gradx_func = &deriv42_x<2>;
             grady_func = &deriv42_y<2>;
             gradz_func = &deriv42_z<2>;
-        } else if (pw == 3) {
+        } else if (p_pw == 3) {
             gradx_func = &deriv42_x<3>;
             grady_func = &deriv42_y<3>;
             gradz_func = &deriv42_z<3>;
-        } else if (pw == 4) {
+        } else if (p_pw == 4) {
             gradx_func = &deriv42_x<4>;
             grady_func = &deriv42_y<4>;
             gradz_func = &deriv42_z<4>;
-        } else if (pw == 5) {
+        } else if (p_pw == 5) {
             gradx_func = &deriv42_x<5>;
             grady_func = &deriv42_y<5>;
             gradz_func = &deriv42_z<5>;
         } else {
             throw std::invalid_argument(
-                "Explicit DerivsO4 DX requires a padding width of 2 to 5!");
+                "Explicit DerivsO4 DX requires a padding width of 2 to 5! pw=" +
+                std::to_string(p_ele_order));
         }
     }
 
@@ -139,21 +142,21 @@ class ExplicitDerivsO4_DXX : public Derivs {
 
    public:
     template <typename... Args>
-    ExplicitDerivsO4_DXX(unsigned int n, unsigned int pw, Args &&...)
-        : Derivs(n, pw) {
-        if (pw == 2) {
+    ExplicitDerivsO4_DXX(unsigned int ele_order, Args &&...)
+        : Derivs(ele_order) {
+        if (p_pw == 2) {
             gradx_func = &deriv42_xx<2>;
             grady_func = &deriv42_yy<2>;
             gradz_func = &deriv42_zz<2>;
-        } else if (pw == 3) {
+        } else if (p_pw == 3) {
             gradx_func = &deriv42_xx<3>;
             grady_func = &deriv42_yy<3>;
             gradz_func = &deriv42_zz<3>;
-        } else if (pw == 4) {
+        } else if (p_pw == 4) {
             gradx_func = &deriv42_xx<4>;
             grady_func = &deriv42_yy<4>;
             gradz_func = &deriv42_zz<4>;
-        } else if (pw == 5) {
+        } else if (p_pw == 5) {
             gradx_func = &deriv42_xx<5>;
             grady_func = &deriv42_yy<5>;
             gradz_func = &deriv42_zz<5>;
@@ -200,17 +203,17 @@ class ExplicitDerivsO6_DX : public Derivs {
 
    public:
     template <typename... Args>
-    ExplicitDerivsO6_DX(unsigned int n, unsigned int pw, Args &&...)
-        : Derivs(n, pw) {
-        if (pw == 3) {
+    ExplicitDerivsO6_DX(unsigned int ele_order, Args &&...)
+        : Derivs(ele_order) {
+        if (p_pw == 3) {
             gradx_func = &deriv644_x<3>;
             grady_func = &deriv644_y<3>;
             gradz_func = &deriv644_z<3>;
-        } else if (pw == 4) {
+        } else if (p_pw == 4) {
             gradx_func = &deriv644_x<4>;
             grady_func = &deriv644_y<4>;
             gradz_func = &deriv644_z<4>;
-        } else if (pw == 5) {
+        } else if (p_pw == 5) {
             gradx_func = &deriv644_x<5>;
             grady_func = &deriv644_y<5>;
             gradz_func = &deriv644_z<5>;
@@ -257,17 +260,17 @@ class ExplicitDerivsO6_DXX : public Derivs {
 
    public:
     template <typename... Args>
-    ExplicitDerivsO6_DXX(unsigned int n, unsigned int pw, Args &&...)
-        : Derivs(n, pw) {
-        if (pw == 3) {
+    ExplicitDerivsO6_DXX(unsigned int ele_order, Args &&...)
+        : Derivs(ele_order) {
+        if (p_pw == 3) {
             gradx_func = &deriv644_xx<3>;
             grady_func = &deriv644_yy<3>;
             gradz_func = &deriv644_zz<3>;
-        } else if (pw == 4) {
+        } else if (p_pw == 4) {
             gradx_func = &deriv644_xx<4>;
             grady_func = &deriv644_yy<4>;
             gradz_func = &deriv644_zz<4>;
-        } else if (pw == 5) {
+        } else if (p_pw == 5) {
             gradx_func = &deriv644_xx<5>;
             grady_func = &deriv644_yy<5>;
             gradz_func = &deriv644_zz<5>;
@@ -314,13 +317,13 @@ class ExplicitDerivsO8_DX : public Derivs {
 
    public:
     template <typename... Args>
-    ExplicitDerivsO8_DX(unsigned int n, unsigned int pw, Args &&...)
-        : Derivs(n, pw) {
-        if (pw == 4) {
+    ExplicitDerivsO8_DX(unsigned int ele_order, Args &&...)
+        : Derivs(ele_order) {
+        if (p_pw == 4) {
             gradx_func = &deriv644_x<4>;
             grady_func = &deriv644_y<4>;
             gradz_func = &deriv644_z<4>;
-        } else if (pw == 5) {
+        } else if (p_pw == 5) {
             gradx_func = &deriv644_x<5>;
             grady_func = &deriv644_y<5>;
             gradz_func = &deriv644_z<5>;
@@ -367,13 +370,13 @@ class ExplicitDerivsO8_DXX : public Derivs {
 
    public:
     template <typename... Args>
-    ExplicitDerivsO8_DXX(unsigned int n, unsigned int pw, Args &&...)
-        : Derivs(n, pw) {
-        if (pw == 4) {
+    ExplicitDerivsO8_DXX(unsigned int ele_order, Args &&...)
+        : Derivs(ele_order) {
+        if (p_pw == 4) {
             gradx_func = &deriv644_xx<4>;
             grady_func = &deriv644_yy<4>;
             gradz_func = &deriv644_zz<4>;
-        } else if (pw == 5) {
+        } else if (p_pw == 5) {
             gradx_func = &deriv644_xx<5>;
             grady_func = &deriv644_yy<5>;
             gradz_func = &deriv644_zz<5>;

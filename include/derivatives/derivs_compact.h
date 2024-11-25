@@ -58,7 +58,7 @@ class CompactDerivs : public Derivs {
     std::vector<double> Q_;  ///< Q matrix deriv
 
     // protected as this class should ONLY be inherited, never instantiated!
-    CompactDerivs(unsigned int n, unsigned int pw) : Derivs{n, pw} {}
+    CompactDerivs(unsigned int ele_order) : Derivs{ele_order} {}
 
     /**
      * we implement a copy constructor just to print when it's called;

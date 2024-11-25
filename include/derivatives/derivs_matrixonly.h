@@ -17,18 +17,17 @@ class MatrixCompactDerivs : public CompactDerivs {
     MatrixDiagonalEntries *diagEntries = nullptr;
 
    public:
-    MatrixCompactDerivs(unsigned int n, unsigned int pw)
-        : CompactDerivs{n, pw} {
-        unsigned int nsq       = n * n;  // n squared
-        D_                     = std::vector<double>(n * n, 0.0);
-        workspace_             = std::vector<double>(n * n * n, 0.0);
+    MatrixCompactDerivs(unsigned int ele_order) : CompactDerivs{ele_order} {
+        unsigned int nsq       = p_n * p_n;  // n squared
+        D_                     = std::vector<double>(nsq, 0.0);
+        workspace_             = std::vector<double>(nsq * p_n, 0.0);
         D_storage              = new DerivMatrixStorage;
 
         // then allocate the DerivMatrixStorage
-        D_storage->D_original  = std::vector<double>(n * n, 0.0);
-        D_storage->D_left      = std::vector<double>(n * n, 0.0);
-        D_storage->D_right     = std::vector<double>(n * n, 0.0);
-        D_storage->D_leftright = std::vector<double>(n * n, 0.0);
+        D_storage->D_original  = std::vector<double>(nsq, 0.0);
+        D_storage->D_left      = std::vector<double>(nsq, 0.0);
+        D_storage->D_right     = std::vector<double>(nsq, 0.0);
+        D_storage->D_leftright = std::vector<double>(nsq, 0.0);
     }
     /**
      * we implement a copy constructor just to print when it's called;
@@ -46,7 +45,7 @@ class MatrixCompactDerivs : public CompactDerivs {
         std::cout << "in MatrixCompactDerivs deconstructor" << std::endl;
 #endif
         // if (D_ != nullptr) delete[] D_;
-        if (diagEntries != nullptr) delete diagEntries;
+        delete diagEntries;
         delete D_storage;
     }
 

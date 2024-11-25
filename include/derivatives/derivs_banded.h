@@ -37,8 +37,7 @@ class BandedCompactDerivs : public CompactDerivs {
     // this constructor will NOT allocate needed information!
     // when you create your own BandedCompactDerivs derived
     //  class implementation, you MUST call the method init()!!!!
-    BandedCompactDerivs(unsigned int n, unsigned int pw)
-        : CompactDerivs{n, pw} {};
+    BandedCompactDerivs(unsigned int ele_order) : CompactDerivs{ele_order} {};
     /**
      * we implement a copy constructor just to print when it's called;
      * we would like to avoid accidental shallow copies

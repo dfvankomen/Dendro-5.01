@@ -14,8 +14,8 @@ MatrixDiagonalEntries* createKimDiagonals();
 class KimBoundO4_FirstOrder : public MatrixCompactDerivs<1> {
    public:
     template <typename... Args>
-    KimBoundO4_FirstOrder(unsigned int n, unsigned int pw, Args&&...)
-        : MatrixCompactDerivs<1>{n, pw} {
+    KimBoundO4_FirstOrder(unsigned int ele_order, Args&&...)
+        : MatrixCompactDerivs<1>{ele_order} {
         diagEntries = createKimDiagonals();
 
         this->init();
@@ -39,8 +39,8 @@ class KimBoundO4_FirstOrder : public MatrixCompactDerivs<1> {
 class KimBoundO4_FirstOrder_Banded : public BandedCompactDerivs {
    public:
     template <typename... Args>
-    KimBoundO4_FirstOrder_Banded(unsigned int n, unsigned int pw, Args&&...)
-        : BandedCompactDerivs{n, pw} {
+    KimBoundO4_FirstOrder_Banded(unsigned int ele_order, Args&&...)
+        : BandedCompactDerivs{ele_order} {
         kVals = new BandedMatrixDiagonalWidths{
             2,  // p1kl
             2,  // p1ku
@@ -54,14 +54,14 @@ class KimBoundO4_FirstOrder_Banded : public BandedCompactDerivs {
         this->init(kVals, diagEntries);
 
         std::vector<double> tempP =
-            create_P_from_diagonals(*diagEntries, n, -1.0);
+            create_P_from_diagonals(*diagEntries, p_n, -1.0);
 
-        printArray_2D_transpose(tempP.data(), n, n);
+        printArray_2D_transpose(tempP.data(), p_n, p_n);
 
         std::vector<double> tempQ =
-            create_Q_from_diagonals(*diagEntries, n, -1.0);
+            create_Q_from_diagonals(*diagEntries, p_n, 0.0);
 
-        printArray_2D_transpose(tempQ.data(), n, n);
+        printArray_2D_transpose(tempQ.data(), p_n, p_n);
     }
     ~KimBoundO4_FirstOrder_Banded() {
 #ifdef DEBUG
@@ -84,8 +84,8 @@ class KimBoundO4_FirstOrder_Banded : public BandedCompactDerivs {
 class KimBoundO4_SecondOrder : public BandedCompactDerivs {
    public:
     template <typename... Args>
-    KimBoundO4_SecondOrder(unsigned int n, unsigned int pw)
-        : BandedCompactDerivs{n, pw} {
+    KimBoundO4_SecondOrder(unsigned int ele_order)
+        : BandedCompactDerivs{ele_order} {
         kVals = new BandedMatrixDiagonalWidths{
             1,  // p2kl -- no 2nd deriv
             1,  // p2ku -- FIXME no 2nd deriv

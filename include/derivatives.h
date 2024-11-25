@@ -59,8 +59,9 @@ enum DerivOrder { D_FIRST_ORDER = 0, D_SECOND_ORDER };
  */
 class Derivs {
    protected:
-    unsigned int p_n;   ///< Size of the derivative calculation
-    unsigned int p_pw;  ///< Size of the padding width
+    unsigned int p_n;          ///< Size of the derivative calculation
+    unsigned int p_pw;         ///< Size of the padding width
+    unsigned int p_ele_order;  ///< Element order for the computations
 
     /**
      * @brief Protected constructor to initialize a Derivs object.
@@ -72,7 +73,10 @@ class Derivs {
      * to implement anything. Additionally, do_grad should check the size of
      * stored n vs incoming n to avoid any errors.
      */
-    Derivs(unsigned int n, unsigned int pw) : p_n{n}, p_pw{pw} {}
+    Derivs(unsigned int ele_order) : p_ele_order{ele_order} {
+        p_n  = p_ele_order * 2 + 1;
+        p_pw = p_ele_order / 2;
+    }
 
     /**
      * @brief Copy constructor.
@@ -147,8 +151,7 @@ class DendroDerivatives {
    public:
     DendroDerivatives(
         const std::string derivType_1 = "E4",
-        const std::string derivType_2 = "E4", unsigned int n = 13,
-        unsigned int pw                        = 3,
+        const std::string derivType_2 = "E4", const unsigned int ele_order = 13,
         const std::vector<double> &coeffs_in_1 = std::vector<double>(),
         const std::vector<double> &coeffs_in_2 = std::vector<double>());
 
