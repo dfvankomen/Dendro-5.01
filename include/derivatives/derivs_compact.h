@@ -26,7 +26,7 @@ struct MatrixDiagonalEntries {
 /**
  * @brief Check to see if the size of the matrix is sufficient for boundaries
  */
-bool check_size_and_boundary_terms(
+inline bool check_size_and_boundary_terms(
     const std::vector<std::vector<double>> &diag_boundary, const unsigned n) {
     for (const auto &interior : diag_boundary) {
         if (interior.size() > n) return false;
