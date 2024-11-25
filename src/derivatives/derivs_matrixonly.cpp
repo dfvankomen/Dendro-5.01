@@ -25,9 +25,20 @@ void MatrixCompactDerivs<DerivOrder>::init() {
     const float Q_parity =
         this->getDerivOrder() == DerivOrder::D_SECOND_ORDER ? 1.0 : -1.0;
 
+    constexpr bool skip_leftright = true;
+
     for (BoundaryType b :
          {BoundaryType::NO_BOUNDARY, BoundaryType::LEFT_BOUNDARY,
           BoundaryType::RIGHT_BOUNDARY, BoundaryType::LEFTRIGHT_BOUNDARY}) {
+        // FIXME: this is an interesting problem, we have to assume that Dendro
+        // blocks will only potentially have LEFTRIGHT boundary in weird
+        // instances where the mesh is super unrefined or we have more than 1
+        // block "fused" together. So, there's really only a need to compute
+        // LEFTRIGHT for blocks > 1, but it's still so rare. Left-right
+        // corresponds to the cases where the boundary on both sides are "hard"
+        // boundaries.
+        if (b == BoundaryType::LEFTRIGHT_BOUNDARY && skip_leftright) continue;
+
         unsigned int boundary_top    = 0;
         unsigned int boundary_bottom = 0;
 

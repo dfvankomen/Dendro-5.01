@@ -121,6 +121,23 @@ std::vector<double> createMatrix(
     const unsigned int n_fill = n - boundary_top - boundary_bottom;
 
     // TODO: quick checks to make sure we can fit everything in here
+    if (!check_size_and_boundary_terms(diag_boundary, n_fill)) {
+        throw std::runtime_error(
+            "Error, there aren't enough spaces in the matrix to fit the "
+            "boundaries! Either increase N or use a different scheme!");
+    }
+
+    if (diag_boundary.size() * 2 >= n_fill) {
+        throw std::runtime_error(
+            "Error: Cannot fill any rows with interior points with this input "
+            "size and scheme!");
+    }
+
+    if (diag_interior.size() > n_fill) {
+        throw std::runtime_error(
+            "Error: the number of points the diagonal terms wants isn't large "
+            "enough!");
+    }
 
     std::vector<double> outmat(n_fill * n_fill, 0.0);
 
