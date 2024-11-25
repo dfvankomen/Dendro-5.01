@@ -442,7 +442,7 @@ class BYUDerivsP8_R4_FirstOrder : public MatrixCompactDerivs<1> {
    private:
     std::vector<double> D_coeffs_;
 
-    static constexpr unsigned int n_D_coeffs_ = 7;
+    static constexpr unsigned int n_D_coeffs_ = 9;
 
    public:
     BYUDerivsP8_R4_FirstOrder(
@@ -460,7 +460,7 @@ class BYUDerivsP8_R4_FirstOrder : public MatrixCompactDerivs<1> {
 
     ~BYUDerivsP8_R4_FirstOrder() {}
 
-    DerivType getDerivType() const override { return DerivType::D_BYUT8; }
+    DerivType getDerivType() const override { return DerivType::D_BYUP8; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
     }
@@ -474,7 +474,7 @@ class BYUDerivsP8_R4_SecondOrder : public MatrixCompactDerivs<2> {
    private:
     std::vector<double> D_coeffs_;
 
-    static constexpr unsigned int n_D_coeffs_ = 7;
+    static constexpr unsigned int n_D_coeffs_ = 9;
 
    public:
     BYUDerivsP8_R4_SecondOrder(
@@ -492,7 +492,7 @@ class BYUDerivsP8_R4_SecondOrder : public MatrixCompactDerivs<2> {
 
     ~BYUDerivsP8_R4_SecondOrder() {}
 
-    DerivType getDerivType() const override { return DerivType::D_BYUT8; }
+    DerivType getDerivType() const override { return DerivType::D_BYUP8; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_SECOND_ORDER;
     }
