@@ -1,11 +1,13 @@
 #pragma once
 
+#include <cstdint>
 #include <cstring>
 #include <iostream>
 #include <vector>
 
 #include "dendro.h"
 #include "lapac.h"
+#include "refel.h"
 
 // NOTE: lapac.h stores all BLAS/LAPACK routine references and generic versions
 // and wrappers
@@ -50,6 +52,110 @@ void dgbsvx_(char *fact, char *trans, int *n, int *kl, int *ku, int *nrhs,
 #endif
 
 namespace dendroderivs {
+
+/**
+ * Matrix storage struct for our different boundary types.
+ *
+ */
+struct DerivMatrixStorage {
+    std::vector<double> D_original;  ///< Storage for matrix with no boundary
+    std::vector<double> D_left;      ///< Storage for matrix with left boundary
+    std::vector<double> D_right;     ///< Storage for matrix with right boundary
+    std::vector<double> D_leftright;  ///< Storage for matrix left and right
+    uint32_t dim_size = 13;
+
+    // Destructor to self-clean
+    ~DerivMatrixStorage() {}
+
+    void print() {
+        std::cout << "::::::::::::::::::::::" << std::endl;
+        std::cout << "::DerivMatrixStorage::" << std::endl;
+        std::cout << "Original: " << std::endl;
+        printArray_2D_transpose(D_original.data(), dim_size, dim_size);
+        std::cout << "Left: " << std::endl;
+        printArray_2D_transpose(D_left.data(), dim_size, dim_size);
+        std::cout << "Right: " << std::endl;
+        printArray_2D_transpose(D_right.data(), dim_size, dim_size);
+        std::cout << "LeftRight: " << std::endl;
+        printArray_2D_transpose(D_leftright.data(), dim_size, dim_size);
+        std::cout << "::::::::::::::::::::::" << std::endl;
+    }
+};
+
+enum BoundaryType {
+    NO_BOUNDARY = 0,
+    LEFT_BOUNDARY,
+    RIGHT_BOUNDARY,
+    LEFTRIGHT_BOUNDARY
+};
+
+inline std::vector<double> *const get_deriv_mat_by_boundary(
+    DerivMatrixStorage *dmat, const BoundaryType &b) {
+    switch (b) {
+        case BoundaryType::NO_BOUNDARY:
+            return &dmat->D_original;
+            break;
+        case BoundaryType::LEFT_BOUNDARY:
+            return &dmat->D_left;
+            break;
+        case BoundaryType::RIGHT_BOUNDARY:
+            return &dmat->D_right;
+            break;
+        case BoundaryType::LEFTRIGHT_BOUNDARY:
+            return &dmat->D_leftright;
+            break;
+        default:
+            throw std::runtime_error(
+                "Somehow we're trying to build the matrix, but this should "
+                "never be hit!");
+            break;
+    }
+}
+
+inline std::vector<double> *const get_deriv_mat_by_bflag_x(
+    DerivMatrixStorage *dmat, const unsigned int &bflag) {
+    if (!(bflag & (1u << OCT_DIR_LEFT)) && !(bflag & (1u << OCT_DIR_RIGHT))) {
+        return &dmat->D_original;
+    } else if ((bflag & (1u << OCT_DIR_LEFT)) &&
+               !(bflag & (1u << OCT_DIR_RIGHT))) {
+        return &dmat->D_left;
+    } else if (!(bflag & (1u << OCT_DIR_LEFT)) &&
+               (bflag & (1u << OCT_DIR_RIGHT))) {
+        return &dmat->D_right;
+    } else {
+        return &dmat->D_leftright;
+    }
+}
+
+inline std::vector<double> *const get_deriv_mat_by_bflag_y(
+    DerivMatrixStorage *dmat, const unsigned int &bflag) {
+    if (!(bflag & (1u << OCT_DIR_DOWN)) && !(bflag & (1u << OCT_DIR_UP))) {
+        return &dmat->D_original;
+    } else if ((bflag & (1u << OCT_DIR_DOWN)) &&
+               !(bflag & (1u << OCT_DIR_UP))) {
+        return &dmat->D_left;
+    } else if (!(bflag & (1u << OCT_DIR_DOWN)) &&
+               (bflag & (1u << OCT_DIR_UP))) {
+        return &dmat->D_right;
+    } else {
+        return &dmat->D_leftright;
+    }
+}
+
+inline std::vector<double> *const get_deriv_mat_by_bflag_z(
+    DerivMatrixStorage *dmat, const unsigned int &bflag) {
+    if (!(bflag & (1u << OCT_DIR_BACK)) && !(bflag & (1u << OCT_DIR_FRONT))) {
+        return &dmat->D_original;
+    } else if ((bflag & (1u << OCT_DIR_BACK)) &&
+               !(bflag & (1u << OCT_DIR_FRONT))) {
+        return &dmat->D_left;
+    } else if (!(bflag & (1u << OCT_DIR_BACK)) &&
+               (bflag & (1u << OCT_DIR_FRONT))) {
+        return &dmat->D_right;
+    } else {
+        return &dmat->D_leftright;
+    }
+}
 
 /**
  * Here are defined all the variables needed for calling the

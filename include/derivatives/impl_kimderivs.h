@@ -16,15 +16,9 @@ class KimBoundO4_FirstOrder : public MatrixCompactDerivs<1> {
     template <typename... Args>
     KimBoundO4_FirstOrder(unsigned int n, unsigned int pw, Args&&...)
         : MatrixCompactDerivs<1>{n, pw} {
-        MatrixDiagonalEntries* diagEntries = createKimDiagonals();
-
-        P_ = create_P_from_diagonals(*diagEntries, n);
-        Q_ = create_Q_from_diagonals(*diagEntries, n);
+        diagEntries = createKimDiagonals();
 
         this->init();
-
-        // don't need the diagonal entries anymore
-        delete diagEntries;
     }
     ~KimBoundO4_FirstOrder() {
 #ifdef DEBUG

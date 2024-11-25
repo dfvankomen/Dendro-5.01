@@ -1,6 +1,9 @@
 #include "derivatives/derivs_compact.h"
 
 #include <cstddef>
+#include <stdexcept>
+
+#include "refel.h"
 
 namespace dendroderivs {
 
@@ -103,14 +106,27 @@ CompactDerivs::~CompactDerivs() {
 };
 
 std::vector<double> createMatrix(
-    std::vector<std::vector<double>> &diag_boundary,
-    std::vector<double> &diag_interior, const unsigned int n, double parity) {
-    // initialize the matrix
-    std::vector<double> outmat(n * n, 0.0);
+    const std::vector<std::vector<double>> &diag_boundary,
+    const std::vector<double> &diag_interior, const unsigned int n,
+    const double parity, const unsigned int boundary_top,
+    const unsigned int boundary_bottom) {
+    // initialize the matrix, which needs to have top and bottom corners removed
+    // depending
+
+    if ((int)n - (int)boundary_top - (int)boundary_bottom <= 0) {
+        throw std::invalid_argument(
+            "Boundary top and bottom are causing matrix to be too small!");
+    }
+
+    const unsigned int n_fill = n - boundary_top - boundary_bottom;
+
+    // TODO: quick checks to make sure we can fit everything in here
+
+    std::vector<double> outmat(n_fill * n_fill, 0.0);
 
     // boundaries
     const size_t last_row = diag_boundary.size() - 1;
-    const size_t last_col = n - 1;
+    const size_t last_col = n_fill - 1;
     for (int row = 0; row <= last_row; row++) {
         size_t top_i         = row;
         size_t bottom_i      = last_col - row;
@@ -118,15 +134,16 @@ std::vector<double> createMatrix(
         size_t n_cols        = curr_row.size();
 
         for (int col = 0; col < n_cols; col++) {
-            size_t top_j                  = col;
-            size_t bottom_j               = last_col - col;
+            size_t top_j                       = col;
+            size_t bottom_j                    = last_col - col;
 
             // top boundary
-            outmat[IDXN(top_i, top_j, n)] = curr_row[col];
+            outmat[IDXN(top_i, top_j, n_fill)] = curr_row[col];
 
             // bottom boundary
             if (top_i != bottom_i || top_j != bottom_j) {
-                outmat[IDXN(bottom_i, bottom_j, n)] = parity * curr_row[col];
+                outmat[IDXN(bottom_i, bottom_j, n_fill)] =
+                    parity * curr_row[col];
             }
         }
     }
@@ -136,28 +153,55 @@ std::vector<double> createMatrix(
     size_t boundary_size = diag_boundary.size();
     size_t interior_size = diag_interior.size();
 
-    for (size_t i = boundary_size; i < n - boundary_size; i++) {
+    for (size_t i = boundary_size; i < n_fill - boundary_size; i++) {
         for (size_t j = 0; j < interior_size; j++) {
-            size_t col              = i - ku + j;
+            size_t col                   = i - ku + j;
 
             // the index we want to work with is i - ku + j
-            outmat[IDXN(i, col, n)] = diag_interior[j];
+            outmat[IDXN(i, col, n_fill)] = diag_interior[j];
         }
     }
 
-    return outmat;
+    // if there was no boundary to worrry about, we just return
+    if (boundary_top + boundary_bottom == 0) return outmat;
+
+    // otherwise we need our "true" matrix
+    std::vector<double> true_mat(n * n, 0.0);
+
+    for (int i = 0; i < n_fill; ++i) {
+        for (int j = 0; j < n_fill; ++j) {
+            true_mat[IDXN(i + boundary_top, j + boundary_top, n)] =
+                outmat[IDXN(i, j, n_fill)];
+        }
+    }
+
+    for (int i = 0; i < boundary_top; ++i) {
+        true_mat[IDXN(i, i, n)] = 1.0;
+    }
+
+    for (int i = 0; i < boundary_bottom; ++i) {
+        true_mat[IDXN(n - i - 1, n - i - 1, n)] = 1.0;
+    }
+
+    return true_mat;
 }
 
 std::vector<double> create_P_from_diagonals(
-    MatrixDiagonalEntries &matrixDiagonals, unsigned int n, double parity) {
+    const MatrixDiagonalEntries &matrixDiagonals, const unsigned int n,
+    const double parity, const unsigned int boundary_top,
+    const unsigned int boundary_bottom) {
     return createMatrix(matrixDiagonals.PDiagBoundary,
-                        matrixDiagonals.PDiagInterior, n, parity);
+                        matrixDiagonals.PDiagInterior, n, parity, boundary_top,
+                        boundary_bottom);
 }
 
 std::vector<double> create_Q_from_diagonals(
-    MatrixDiagonalEntries &matrixDiagonals, unsigned int n, double parity) {
+    const MatrixDiagonalEntries &matrixDiagonals, const unsigned int n,
+    const double parity, const unsigned int boundary_top,
+    const unsigned int boundary_bottom) {
     return createMatrix(matrixDiagonals.QDiagBoundary,
-                        matrixDiagonals.QDiagInterior, n, parity);
+                        matrixDiagonals.QDiagInterior, n, parity, boundary_top,
+                        boundary_bottom);
 }
 
 }  // namespace dendroderivs

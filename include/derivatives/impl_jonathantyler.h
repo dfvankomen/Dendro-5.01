@@ -18,15 +18,9 @@ class JonathanTyler_JTT4_FirstOrder : public MatrixCompactDerivs<1> {
     template <typename... Args>
     JonathanTyler_JTT4_FirstOrder(unsigned int n, unsigned int pw, Args&&...)
         : MatrixCompactDerivs{n, pw} {
-        MatrixDiagonalEntries* diagEntries = createJTT4DiagonalsFirstOrder();
-
-        P_ = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_ = create_Q_from_diagonals(*diagEntries, n, -1.0);
+        diagEntries = createJTT4DiagonalsFirstOrder();
 
         this->init();
-
-        // don't need the diagonal entries anymore
-        delete diagEntries;
     }
 
     ~JonathanTyler_JTT4_FirstOrder() {}
@@ -93,15 +87,9 @@ class JonathanTyler_JTT4_SecondOrder : public MatrixCompactDerivs<2> {
     template <typename... Args>
     JonathanTyler_JTT4_SecondOrder(unsigned int n, unsigned int pw, Args&&...)
         : MatrixCompactDerivs{n, pw} {
-        MatrixDiagonalEntries* diagEntries = createJTT4DiagonalsSecondOrder();
-
-        P_ = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_ = create_Q_from_diagonals(*diagEntries, n, 1.0);
+        diagEntries = createJTT4DiagonalsSecondOrder();
 
         this->init();
-
-        // don't need the diagonal entries anymore
-        delete diagEntries;
     }
 
     ~JonathanTyler_JTT4_SecondOrder() {}
@@ -169,15 +157,9 @@ class JonathanTyler_JTT6_FirstOrder : public MatrixCompactDerivs<1> {
     template <typename... Args>
     JonathanTyler_JTT6_FirstOrder(unsigned int n, unsigned int pw, Args&&...)
         : MatrixCompactDerivs{n, pw} {
-        MatrixDiagonalEntries* diagEntries = createJTT6DiagonalsFirstOrder();
-
-        P_ = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_ = create_Q_from_diagonals(*diagEntries, n, -1.0);
+        diagEntries = createJTT6DiagonalsFirstOrder();
 
         this->init();
-
-        // don't need the diagonal entries anymore
-        delete diagEntries;
     }
 
     ~JonathanTyler_JTT6_FirstOrder() {}
@@ -245,15 +227,9 @@ class JonathanTyler_JTT6_SecondOrder : public MatrixCompactDerivs<2> {
     template <typename... Args>
     JonathanTyler_JTT6_SecondOrder(unsigned int n, unsigned int pw, Args&&...)
         : MatrixCompactDerivs{n, pw} {
-        MatrixDiagonalEntries* diagEntries = createJTT6DiagonalsSecondOrder();
-
-        P_ = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_ = create_Q_from_diagonals(*diagEntries, n, 1.0);
+        diagEntries = createJTT6DiagonalsSecondOrder();
 
         this->init();
-
-        // don't need the diagonal entries anymore
-        delete diagEntries;
     }
     ~JonathanTyler_JTT6_SecondOrder() {}
 

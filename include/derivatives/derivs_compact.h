@@ -27,22 +27,26 @@ struct MatrixDiagonalEntries {
  * @brief Convert a diagonal boundary and interior into a col-major matrix
  */
 std::vector<double> createMatrix(
-    std::vector<std::vector<double>> &diag_boundary,
-    std::vector<double> &diag_interior, const unsigned int n, double parity);
+    const std::vector<std::vector<double>> &diag_boundary,
+    const std::vector<double> &diag_interior, const unsigned int n,
+    const double parity, const unsigned int boundary_top = 0,
+    const unsigned int boundary_bottom = 0);
 
 /**
  * @brief Create just the P matrix from the diagonal object
  */
 std::vector<double> create_P_from_diagonals(
-    MatrixDiagonalEntries &matrixDiagonals, unsigned int n,
-    double parity = 1.0);
+    const MatrixDiagonalEntries &matrixDiagonals, const unsigned int n,
+    const double parity, const unsigned int boundary_top = 0,
+    const unsigned int boundary_bottom = 0);
 
 /**
  * @brief Create just the Q matrix from the diagonal object
  */
 std::vector<double> create_Q_from_diagonals(
-    MatrixDiagonalEntries &matrixDiagonals, unsigned int n,
-    double parity = -1.0);
+    const MatrixDiagonalEntries &matrixDiagonals, const unsigned int n,
+    const double parity = -1.0, const unsigned int boundary_top = 0,
+    const unsigned int boundary_bottom = 0);
 
 // this class works for both first and second order derivatives
 class CompactDerivs : public Derivs {

@@ -114,6 +114,33 @@ inline void lapack_DGESV(int n, int nrhs, const double* A, int lda, double* B,
     return;
 }
 
+// both are transposed
+inline void lapack_DGESV_T(int n, int nrhs, double* A, int lda, double* B,
+                           double* X, int ldb, int info) {
+    int* ipiv      = new int[n];
+
+    double* A_copy = new double[n * n];
+
+    // copy A into a matrix to retain original values
+    std::memcpy(A_copy, A, sizeof(double) * n * n);
+    // copy B into X
+    std::memcpy(X, B, sizeof(double) * n * n);
+
+    // Call LAPACK's dgesv function directly on the input arrays
+    dgesv_(&n, &nrhs, A_copy, &lda, ipiv, X, &ldb, &info);
+
+    if (info > 0) {
+        printf("The diagonal element of the triangular factor of A,\n");
+        printf("U(%i,%i) is zero, so that A is singular;\n", info, info);
+        printf("the solution could not be computed.\n");
+    } else if (info < 0) {
+        printf("LAPACK linear solve failed. Error at argument %d.\n", -info);
+    }
+
+    delete[] ipiv;
+    delete[] A_copy;
+}
+
 /**
  *  @brief: Wrapper for LAPACK DGESV compute eigen values of a square matrix of
  * A. Parameters are given below.

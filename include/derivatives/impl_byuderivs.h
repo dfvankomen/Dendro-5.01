@@ -58,9 +58,6 @@ class BYUDerivsT4_R3_FirstOrder : public MatrixCompactDerivs<1> {
 
         diagEntries = BYUDerivsT4R3DiagonalsFirstOrder(D_coeffs_);
 
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, -1.0);
-
         this->init();
     }
     ~BYUDerivsT4_R3_FirstOrder() {}
@@ -87,14 +84,10 @@ class BYUDerivsT4_R3_SecondOrder : public MatrixCompactDerivs<2> {
         const std::vector<double>& coeffs_in = std::vector<double>())
         : MatrixCompactDerivs{n, pw} {
         // check the coefficients
-
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT4_R3_SecondOrder::n_D_coeffs_);
 
         diagEntries = BYUDerivsT4R3DiagonalsSecondOrder(D_coeffs_);
-
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, 1.0);
 
         this->init();
     }
@@ -122,14 +115,10 @@ class BYUDerivsT6_R3_FirstOrder : public MatrixCompactDerivs<1> {
         const std::vector<double>& coeffs_in = std::vector<double>())
         : MatrixCompactDerivs{n, pw} {
         // check the coefficients
-
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R3_FirstOrder::n_D_coeffs_);
 
         diagEntries = BYUDerivsT6R3DiagonalsFirstOrder(D_coeffs_);
-
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, -1.0);
 
         this->init();
     }
@@ -158,14 +147,10 @@ class BYUDerivsT6_R3_SecondOrder : public MatrixCompactDerivs<2> {
         const std::vector<double>& coeffs_in = std::vector<double>())
         : MatrixCompactDerivs{n, pw} {
         // check the coefficients
-
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R3_SecondOrder::n_D_coeffs_);
 
         diagEntries = BYUDerivsT6R3DiagonalsSecondOrder(D_coeffs_);
-
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, 1.0);
 
         this->init();
     }
@@ -194,14 +179,10 @@ class BYUDerivsT6_R4_FirstOrder : public MatrixCompactDerivs<1> {
         const std::vector<double>& coeffs_in = std::vector<double>())
         : MatrixCompactDerivs{n, pw} {
         // check the coefficients
-
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R4_FirstOrder::n_D_coeffs_);
 
         diagEntries = BYUDerivsT6R4DiagonalsFirstOrder(D_coeffs_);
-
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, -1.0);
 
         this->init();
     }
@@ -230,14 +211,10 @@ class BYUDerivsT6_R4_SecondOrder : public MatrixCompactDerivs<2> {
         const std::vector<double>& coeffs_in = std::vector<double>())
         : MatrixCompactDerivs{n, pw} {
         // check the coefficients
-
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R4_SecondOrder::n_D_coeffs_);
 
         diagEntries = BYUDerivsT6R4DiagonalsSecondOrder(D_coeffs_);
-
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, 1.0);
 
         this->init();
     }
@@ -342,14 +319,10 @@ class BYUDerivsP6_R3_FirstOrder : public MatrixCompactDerivs<1> {
         const std::vector<double>& coeffs_in = std::vector<double>())
         : MatrixCompactDerivs{n, pw} {
         // check the coefficients
-
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP6_R3_FirstOrder::n_D_coeffs_);
 
         diagEntries = BYUDerivsP6R3DiagonalsFirstOrder(D_coeffs_);
-
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, -1.0);
 
         this->init();
     }
@@ -378,14 +351,10 @@ class BYUDerivsP6_R3_SecondOrder : public MatrixCompactDerivs<2> {
         const std::vector<double>& coeffs_in = std::vector<double>())
         : MatrixCompactDerivs{n, pw} {
         // check the coefficients
-
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP6_R3_SecondOrder::n_D_coeffs_);
 
         diagEntries = BYUDerivsP6R3DiagonalsSecondOrder(D_coeffs_);
-
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, 1.0);
 
         this->init();
     }
@@ -481,14 +450,10 @@ class BYUDerivsP8_R4_FirstOrder : public MatrixCompactDerivs<1> {
         const std::vector<double>& coeffs_in = std::vector<double>())
         : MatrixCompactDerivs{n, pw} {
         // check the coefficients
-
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP8_R4_FirstOrder::n_D_coeffs_);
 
         diagEntries = BYUDerivsP8R4DiagonalsFirstOrder(D_coeffs_);
-
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, -1.0);
 
         this->init();
     }
@@ -517,14 +482,10 @@ class BYUDerivsP8_R4_SecondOrder : public MatrixCompactDerivs<2> {
         const std::vector<double>& coeffs_in = std::vector<double>())
         : MatrixCompactDerivs{n, pw} {
         // check the coefficients
-
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP8_R4_SecondOrder::n_D_coeffs_);
 
         diagEntries = BYUDerivsP8R4DiagonalsSecondOrder(D_coeffs_);
-
-        P_          = create_P_from_diagonals(*diagEntries, n, 1.0);
-        Q_          = create_Q_from_diagonals(*diagEntries, n, 1.0);
 
         this->init();
     }
