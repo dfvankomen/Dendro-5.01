@@ -1,33 +1,38 @@
 
 #pragma once
 
+#include <unordered_map>
+
 #include "derivatives/derivs_compact.h"
 #include "derivatives/derivs_utils.h"
+
+#define DDERIVS_MAX_BLOCKS_INIT 4
 
 namespace dendroderivs {
 
 template <unsigned int DerivOrder>
+std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
+    const unsigned int pw, const unsigned int n,
+    const MatrixDiagonalEntries *diagEntries,
+    const bool skip_leftright = false);
+
+template <unsigned int DerivOrder>
 class MatrixCompactDerivs : public CompactDerivs {
    protected:
-    std::vector<double> D_;  // D = P^{-1} * Q for derivative
-    DerivMatrixStorage *D_storage = nullptr;
     std::vector<double> workspace_;
+
+    std::unordered_map<unsigned int, std::unique_ptr<DerivMatrixStorage> >
+        D_storage_map_;
 
     // interior and bounded entries for each P and Q matrix
     MatrixDiagonalEntries *diagEntries = nullptr;
 
    public:
     MatrixCompactDerivs(unsigned int ele_order) : CompactDerivs{ele_order} {
-        unsigned int nsq       = p_n * p_n;  // n squared
-        D_                     = std::vector<double>(nsq, 0.0);
-        workspace_             = std::vector<double>(nsq * p_n, 0.0);
-        D_storage              = new DerivMatrixStorage;
+        unsigned int nsq = p_n * p_n;  // n squared
 
-        // then allocate the DerivMatrixStorage
-        D_storage->D_original  = std::vector<double>(nsq, 0.0);
-        D_storage->D_left      = std::vector<double>(nsq, 0.0);
-        D_storage->D_right     = std::vector<double>(nsq, 0.0);
-        D_storage->D_leftright = std::vector<double>(nsq, 0.0);
+        // establish workspace to be as large as our largest
+        workspace_       = std::vector<double>(nsq * p_n, 0.0);
     }
     /**
      * we implement a copy constructor just to print when it's called;
@@ -46,7 +51,6 @@ class MatrixCompactDerivs : public CompactDerivs {
 #endif
         // if (D_ != nullptr) delete[] D_;
         delete diagEntries;
-        delete D_storage;
     }
 
     /**
@@ -59,8 +63,23 @@ class MatrixCompactDerivs : public CompactDerivs {
      */
     void do_grad_x(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) {
-        const std::vector<double> *D_use =
-            get_deriv_mat_by_bflag_x(D_storage, bflag);
+        // get a pointer to the vector we're using
+        std::vector<double> *D_use;
+
+        // check to make sure that the data is available
+        if (D_storage_map_.find(sz[0]) != D_storage_map_.end()) {
+            // size exists
+            D_use =
+                get_deriv_mat_by_bflag_x(D_storage_map_[sz[0]].get(), bflag);
+        } else {
+            // if it isn't, then we just have to create a new one for this size
+            D_storage_map_.emplace(sz[0],
+                                   createMatrixSystemForSingleSize<DerivOrder>(
+                                       p_pw, sz[0], diagEntries, false));
+            // then get it
+            D_use =
+                get_deriv_mat_by_bflag_x(D_storage_map_[sz[0]].get(), bflag);
+        }
 
         if constexpr (DerivOrder == 1) {
             matmul_x_dim(D_use->data(), du, u, 1.0 / dx, sz);
@@ -71,8 +90,23 @@ class MatrixCompactDerivs : public CompactDerivs {
 
     void do_grad_y(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) {
-        const std::vector<double> *D_use =
-            get_deriv_mat_by_bflag_x(D_storage, bflag);
+        // get a pointer to the vector we're using
+        std::vector<double> *D_use;
+
+        // check to make sure that the data is available
+        if (D_storage_map_.find(sz[1]) != D_storage_map_.end()) {
+            // size exists
+            D_use =
+                get_deriv_mat_by_bflag_y(D_storage_map_[sz[1]].get(), bflag);
+        } else {
+            // if it isn't, then we just have to create a new one for this size
+            D_storage_map_.emplace(sz[1],
+                                   createMatrixSystemForSingleSize<DerivOrder>(
+                                       p_pw, sz[1], diagEntries, false));
+            // then get it
+            D_use =
+                get_deriv_mat_by_bflag_y(D_storage_map_[sz[1]].get(), bflag);
+        }
 
         if constexpr (DerivOrder == 1) {
             matmul_y_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data());
@@ -84,8 +118,23 @@ class MatrixCompactDerivs : public CompactDerivs {
 
     void do_grad_z(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) {
-        const std::vector<double> *D_use =
-            get_deriv_mat_by_bflag_x(D_storage, bflag);
+        // get a pointer to the vector we're using
+        std::vector<double> *D_use;
+
+        // check to make sure that the data is available
+        if (D_storage_map_.find(sz[2]) != D_storage_map_.end()) {
+            // size exists
+            D_use =
+                get_deriv_mat_by_bflag_z(D_storage_map_[sz[2]].get(), bflag);
+        } else {
+            // if it isn't, then we just have to create a new one for this size
+            D_storage_map_.emplace(sz[2],
+                                   createMatrixSystemForSingleSize<DerivOrder>(
+                                       p_pw, sz[2], diagEntries, false));
+            // then get it
+            D_use =
+                get_deriv_mat_by_bflag_z(D_storage_map_[sz[2]].get(), bflag);
+        }
 
         if constexpr (DerivOrder == 1) {
             matmul_z_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data());
@@ -94,8 +143,6 @@ class MatrixCompactDerivs : public CompactDerivs {
                          workspace_.data());
         }
     }
-
-    inline const double *getD() const { return D_.data(); }
 
     void init();
 };

@@ -246,9 +246,9 @@ void matmul_x_dim(const double *const R, double *const Dxu,
 
         // for the x_der case, m = k = nx
 #ifdef SOLVER_ENABLE_MERGED_BLOCKS
-        (*kernel)(R_mat_use, u_curr_chunk, du_curr_chunk);
+        (*kernel)(R, u_curr_chunk, du_curr_chunk);
 #else
-        (*m_kernel_x)(R_mat_use, u_curr_chunk, du_curr_chunk);
+        (*m_kernel_x)(R, u_curr_chunk, du_curr_chunk);
 #endif
 
 #else
@@ -305,9 +305,9 @@ void matmul_y_dim(const double *const R, double *const Dyu,
         // so we can just grab the "matrix" of ny x nx for this one
 
 #ifdef SOLVER_ENABLE_MERGED_BLOCKS
-        (*kernel)(R_mat_use, u_slice, workspace);
+        (*kernel)(R, u_slice, workspace);
 #else
-        (*m_kernel_y)(R_mat_use, u_slice, workspace);
+        (*m_kernel_y)(R, u_slice, workspace);
 #endif
 
 #else
@@ -363,28 +363,22 @@ void matmul_z_dim(const double *const R, double *const Dzu,
 #endif
 #endif
 
-    double const *workspace_offset = workspace + ny * nz;
+    double const *workspace_offset = workspace + nx * nz;
 
     for (unsigned int j = 0; j < ny; j++) {
-        // #pragma omp simd collapse(2)
-        for (unsigned int i = 0; i < nx; i++) {
-            for (unsigned int k = 0; k < nz; k++) {
+#pragma omp simd collapse(2)
+        for (unsigned int k = 0; k < nz; k++) {
+            for (unsigned int i = 0; i < nx; i++) {
                 workspace[k * nx + i] = u[INDEX_3D(i, j, k)];
             }
         }
 
-        // for (unsigned int k = 0; k < nz; k++) {
-        //     // copy the slice of X values over
-        //     std::copy_n(&u[INDEX_3D(0, j, k)], nx,
-        //                 &workspace[INDEX_N2D(0, k, nx)]);
-        // }
-
 #ifdef USE_XSMM_MAT_MUL
 #ifdef SOLVER_ENABLE_MERGED_BLOCKS
-        (*kernel)(R_mat_use, workspace, workspace_offset);
+        (*kernel)(R, workspace, workspace_offset);
 #else
         // now do the faster math multiplcation
-        (*m_kernel_z)(R_mat_use, workspace, workspace_offset);
+        (*m_kernel_z)(R, workspace, workspace_offset);
 #endif
 
 #else
@@ -395,7 +389,7 @@ void matmul_z_dim(const double *const R, double *const Dzu,
 
 #endif
 
-        // #pragma omp simd collapse(2)
+#pragma omp simd collapse(2)
         for (unsigned int i = 0; i < nx; i++) {
             for (unsigned int k = 0; k < nz; k++) {
                 Dzu[INDEX_3D(i, j, k)] = workspace_offset[k + i * nz];
