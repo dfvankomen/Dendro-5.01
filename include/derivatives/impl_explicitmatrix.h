@@ -23,6 +23,10 @@ class ExplicitDerivsO4_Matrix_FirstOrder : public MatrixCompactDerivs<1> {
 
     ~ExplicitDerivsO4_Matrix_FirstOrder() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<ExplicitDerivsO4_Matrix_FirstOrder>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_E4; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -46,6 +50,10 @@ class ExplicitDerivsO4_Matrix_SecondOrder : public MatrixCompactDerivs<2> {
         delete diagEntries;
     }
     ~ExplicitDerivsO4_Matrix_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<ExplicitDerivsO4_Matrix_SecondOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_E4; }
     DerivOrder getDerivOrder() const override {

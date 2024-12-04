@@ -93,6 +93,8 @@ class Derivs {
      */
     virtual ~Derivs(){};
 
+    virtual std::unique_ptr<Derivs> clone() const    = 0;
+
     /**
      * @brief Pure virtual function to calculate the derivative.
      * @param du Pointer to where calculated derivative will be stored.
@@ -157,6 +159,53 @@ class DendroDerivatives {
 
     ~DendroDerivatives() = default;
 
+    // Copy constructor
+    DendroDerivatives(const DendroDerivatives &other)
+        : _first_deriv(other._first_deriv ? other._first_deriv->clone()
+                                          : nullptr),
+          _second_deriv(other._second_deriv ? other._second_deriv->clone()
+                                            : nullptr),
+          _n_points_deriv_space(other._n_points_deriv_space),
+          _n_vars_deriv_space(other._n_vars_deriv_space) {
+        // if the incoming copy has data in derivative space, we need to copy it
+        if (other._derivative_space) {
+            _derivative_space = std::make_unique<double[]>(
+                _n_points_deriv_space * _n_vars_deriv_space);
+
+            std::copy(other._derivative_space.get(),
+                      other._derivative_space.get() +
+                          _n_points_deriv_space * _n_vars_deriv_space,
+                      _derivative_space.get());
+        }
+    }
+
+    // Copy assignment operator
+    DendroDerivatives &operator=(const DendroDerivatives &other) {
+        if (this != &other) {
+            _first_deriv =
+                other._first_deriv ? other._first_deriv->clone() : nullptr;
+            _second_deriv =
+                other._second_deriv ? other._second_deriv->clone() : nullptr;
+
+            _n_points_deriv_space = other._n_points_deriv_space;
+            _n_vars_deriv_space   = other._n_vars_deriv_space;
+
+            if (other._derivative_space) {
+                _derivative_space = std::make_unique<double[]>(
+                    _n_points_deriv_space * _n_vars_deriv_space);
+
+                std::copy(
+                    other._derivative_space.get(),
+                    other._derivative_space.get() +
+                        other._n_points_deriv_space * other._n_vars_deriv_space,
+                    _derivative_space.get());
+            } else {
+                _derivative_space.reset();
+            }
+        }
+        return *this;
+    }
+
     void allocate_derivative_space(const unsigned int n_points,
                                    const unsigned int n_var) {
         if (_derivative_space) {
@@ -174,27 +223,27 @@ class DendroDerivatives {
         return _derivative_space.get() + var_no * _n_points_deriv_space;
     }
 
-    void grad_x(double *du, double *u, double dx, const unsigned int *sz,
+    void grad_x(double *du, const double *u, double dx, const unsigned int *sz,
                 unsigned int bflag) {
         _first_deriv->do_grad_x(du, u, dx, sz, bflag);
     }
-    void grad_y(double *du, double *u, double dx, const unsigned int *sz,
+    void grad_y(double *du, const double *u, double dx, const unsigned int *sz,
                 unsigned int bflag) {
         _first_deriv->do_grad_y(du, u, dx, sz, bflag);
     }
-    void grad_z(double *du, double *u, double dx, const unsigned int *sz,
+    void grad_z(double *du, const double *u, double dx, const unsigned int *sz,
                 unsigned int bflag) {
         _first_deriv->do_grad_z(du, u, dx, sz, bflag);
     }
-    void grad_xx(double *du, double *u, double dx, const unsigned int *sz,
+    void grad_xx(double *du, const double *u, double dx, const unsigned int *sz,
                  unsigned int bflag) {
         _second_deriv->do_grad_x(du, u, dx, sz, bflag);
     }
-    void grad_yy(double *du, double *u, double dx, const unsigned int *sz,
+    void grad_yy(double *du, const double *u, double dx, const unsigned int *sz,
                  unsigned int bflag) {
         _second_deriv->do_grad_y(du, u, dx, sz, bflag);
     }
-    void grad_zz(double *du, double *u, double dx, const unsigned int *sz,
+    void grad_zz(double *du, const double *u, double dx, const unsigned int *sz,
                  unsigned int bflag) {
         _second_deriv->do_grad_z(du, u, dx, sz, bflag);
     }

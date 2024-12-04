@@ -62,13 +62,17 @@ class BYUDerivsT4_R3_FirstOrder : public MatrixCompactDerivs<1> {
     }
     ~BYUDerivsT4_R3_FirstOrder() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsT4_R3_FirstOrder>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_BYUT4; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
     }
 
     std::string toString() const override {
-        return "BYUDerivsT4_R3_SecondOrder";
+        return "BYUDerivsT4_R3_FirstOrder";
     }
 };
 
@@ -92,6 +96,10 @@ class BYUDerivsT4_R3_SecondOrder : public MatrixCompactDerivs<2> {
         this->init();
     }
     ~BYUDerivsT4_R3_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsT4_R3_SecondOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_BYUT4; }
     DerivOrder getDerivOrder() const override {
@@ -125,6 +133,10 @@ class BYUDerivsT6_R3_FirstOrder : public MatrixCompactDerivs<1> {
 
     ~BYUDerivsT6_R3_FirstOrder() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsT6_R3_FirstOrder>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_BYUT6R3; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -156,6 +168,10 @@ class BYUDerivsT6_R3_SecondOrder : public MatrixCompactDerivs<2> {
     }
 
     ~BYUDerivsT6_R3_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsT6_R3_SecondOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_BYUT6R3; }
     DerivOrder getDerivOrder() const override {
@@ -189,6 +205,10 @@ class BYUDerivsT6_R4_FirstOrder : public MatrixCompactDerivs<1> {
 
     ~BYUDerivsT6_R4_FirstOrder() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsT6_R4_FirstOrder>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_BYUT6; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -220,6 +240,10 @@ class BYUDerivsT6_R4_SecondOrder : public MatrixCompactDerivs<2> {
     }
 
     ~BYUDerivsT6_R4_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsT6_R4_SecondOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_BYUT6; }
     DerivOrder getDerivOrder() const override {
@@ -329,6 +353,10 @@ class BYUDerivsP6_R3_FirstOrder : public MatrixCompactDerivs<1> {
 
     ~BYUDerivsP6_R3_FirstOrder() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsP6_R3_FirstOrder>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_BYUT6; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -360,6 +388,10 @@ class BYUDerivsP6_R3_SecondOrder : public MatrixCompactDerivs<2> {
     }
 
     ~BYUDerivsP6_R3_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsP6_R3_SecondOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_BYUT6; }
     DerivOrder getDerivOrder() const override {
@@ -460,6 +492,10 @@ class BYUDerivsP8_R4_FirstOrder : public MatrixCompactDerivs<1> {
 
     ~BYUDerivsP8_R4_FirstOrder() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsP8_R4_FirstOrder>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_BYUP8; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -491,6 +527,10 @@ class BYUDerivsP8_R4_SecondOrder : public MatrixCompactDerivs<2> {
     }
 
     ~BYUDerivsP8_R4_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsP8_R4_SecondOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_BYUP8; }
     DerivOrder getDerivOrder() const override {

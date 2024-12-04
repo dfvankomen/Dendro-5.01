@@ -25,6 +25,10 @@ class JonathanTyler_JTT4_FirstOrder : public MatrixCompactDerivs<1> {
 
     ~JonathanTyler_JTT4_FirstOrder() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTT4_FirstOrder>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_JTT4; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -68,6 +72,10 @@ class JonathanTyler_JTT4_FirstOrder_Banded : public BandedCompactDerivs {
     }
     ~JonathanTyler_JTT4_FirstOrder_Banded() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTT4_FirstOrder_Banded>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_JTT4; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -92,6 +100,10 @@ class JonathanTyler_JTT4_SecondOrder : public MatrixCompactDerivs<2> {
     }
 
     ~JonathanTyler_JTT4_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTT4_SecondOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_JTT4; }
     DerivOrder getDerivOrder() const override {
@@ -137,6 +149,10 @@ class JonathanTyler_JTT4_SecondOrder_Banded : public BandedCompactDerivs {
 
     ~JonathanTyler_JTT4_SecondOrder_Banded() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTT4_SecondOrder_Banded>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_JTT4; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_SECOND_ORDER;
@@ -161,6 +177,10 @@ class JonathanTyler_JTT6_FirstOrder : public MatrixCompactDerivs<1> {
     }
 
     ~JonathanTyler_JTT6_FirstOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTT6_FirstOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_JTT6; }
     DerivOrder getDerivOrder() const override {
@@ -206,6 +226,10 @@ class JonathanTyler_JTT6_FirstOrder_Banded : public BandedCompactDerivs {
 
     ~JonathanTyler_JTT6_FirstOrder_Banded() {}
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTT6_FirstOrder_Banded>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_JTT6; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -229,6 +253,10 @@ class JonathanTyler_JTT6_SecondOrder : public MatrixCompactDerivs<2> {
         this->init();
     }
     ~JonathanTyler_JTT6_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTT6_SecondOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_JTT6; }
     DerivOrder getDerivOrder() const override {
@@ -273,6 +301,10 @@ class JonathanTyler_JTT6_SecondOrder_Banded : public BandedCompactDerivs {
     }
 
     ~JonathanTyler_JTT6_SecondOrder_Banded() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTT6_SecondOrder_Banded>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_JTT6; }
     DerivOrder getDerivOrder() const override {

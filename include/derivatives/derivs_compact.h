@@ -96,6 +96,7 @@ class CompactDerivs : public Derivs {
      * (defined outside of class declaration so GCC will make the vtable)
      */
     virtual ~CompactDerivs();
+
     /**
      * @brief Pure virtual function to calculate the derivative.
      * @param du Pointer to where calculated derivative will be stored.

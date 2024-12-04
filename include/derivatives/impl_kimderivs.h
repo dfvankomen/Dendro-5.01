@@ -27,6 +27,10 @@ class KimBoundO4_FirstOrder : public MatrixCompactDerivs<1> {
 #endif
     };
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<KimBoundO4_FirstOrder>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_K4; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -70,6 +74,10 @@ class KimBoundO4_FirstOrder_Banded : public BandedCompactDerivs {
 #endif
     };
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<KimBoundO4_FirstOrder_Banded>(*this);
+    }
+
     DerivType getDerivType() const override { return DerivType::D_K4; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
@@ -99,6 +107,10 @@ class KimBoundO4_SecondOrder : public BandedCompactDerivs {
                   << std::endl;
 #endif
     };
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<KimBoundO4_SecondOrder>(*this);
+    }
 
     DerivType getDerivType() const override { return DerivType::D_K4; }
     DerivOrder getDerivOrder() const override {

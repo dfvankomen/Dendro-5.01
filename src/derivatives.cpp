@@ -10,7 +10,10 @@ DendroDerivatives::DendroDerivatives(const std::string derivType_1,
                                      const std::string derivType_2,
                                      const unsigned int ele_order,
                                      const std::vector<double> &coeffs_in_1,
-                                     const std::vector<double> &coeffs_in_2) {
+                                     const std::vector<double> &coeffs_in_2)
+    : _n_points_deriv_space(0),
+      _n_vars_deriv_space(0),
+      _derivative_space(nullptr) {
     std::cout << "Attempting to create first order derivatives: " << derivType_1
               << std::endl;
     _first_deriv =

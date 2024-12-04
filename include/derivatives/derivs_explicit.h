@@ -105,6 +105,10 @@ class ExplicitDerivsO4_DX : public Derivs {
         }
     }
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<ExplicitDerivsO4_DX>(*this);
+    }
+
     void do_grad_x(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) override {
         gradx_func(du, u, dx, sz, bflag);
@@ -166,6 +170,10 @@ class ExplicitDerivsO4_DXX : public Derivs {
         }
     }
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<ExplicitDerivsO4_DXX>(*this);
+    }
+
     void do_grad_x(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) override {
         gradx_func(du, u, dx, sz, bflag);
@@ -221,6 +229,10 @@ class ExplicitDerivsO6_DX : public Derivs {
             throw std::invalid_argument(
                 "Explicit DerivsO4 DX requires a padding width of 2 to 5!");
         }
+    }
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<ExplicitDerivsO6_DX>(*this);
     }
 
     void do_grad_x(double *const du, const double *const u, const double dx,
@@ -280,6 +292,10 @@ class ExplicitDerivsO6_DXX : public Derivs {
         }
     }
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<ExplicitDerivsO6_DXX>(*this);
+    }
+
     void do_grad_x(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) override {
         gradx_func(du, u, dx, sz, bflag);
@@ -333,6 +349,10 @@ class ExplicitDerivsO8_DX : public Derivs {
         }
     }
 
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<ExplicitDerivsO8_DX>(*this);
+    }
+
     void do_grad_x(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) override {
         gradx_func(du, u, dx, sz, bflag);
@@ -384,6 +404,10 @@ class ExplicitDerivsO8_DXX : public Derivs {
             throw std::invalid_argument(
                 "Explicit DerivsO4 DXX requires a padding width of 2 to 5!");
         }
+    }
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<ExplicitDerivsO8_DXX>(*this);
     }
 
     void do_grad_x(double *const du, const double *const u, const double dx,
