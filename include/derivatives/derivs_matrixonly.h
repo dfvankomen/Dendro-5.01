@@ -21,7 +21,7 @@ class MatrixCompactDerivs : public CompactDerivs {
    protected:
     std::vector<double> workspace_;
 
-    std::unordered_map<unsigned int, std::unique_ptr<DerivMatrixStorage> >
+    std::unordered_map<unsigned int, std::unique_ptr<DerivMatrixStorage>>
         D_storage_map_;
 
     // interior and bounded entries for each P and Q matrix
@@ -35,8 +35,8 @@ class MatrixCompactDerivs : public CompactDerivs {
         workspace_       = std::vector<double>(nsq * p_n, 0.0);
     }
     /**
-     * we implement a copy constructor just to print when it's called;
-     * we would like to avoid accidental shallow copies
+     * Based on the crazy things that are being stored across all of these
+     * MatrixCompactDerivs, things need to be properly copied if it's moved!
      */
     MatrixCompactDerivs(const MatrixCompactDerivs &obj) : CompactDerivs(obj) {
 #ifdef DEBUG
@@ -44,6 +44,23 @@ class MatrixCompactDerivs : public CompactDerivs {
                   << "this is a mistake as there is no implementation]"
                   << std::endl;
 #endif
+        if (obj.diagEntries) {
+            diagEntries = new MatrixDiagonalEntries{
+                obj.diagEntries->PDiagInterior, obj.diagEntries->PDiagBoundary,
+                obj.diagEntries->QDiagInterior, obj.diagEntries->QDiagBoundary};
+        } else {
+            diagEntries = nullptr;
+        }
+
+        // make sure to copy over workspace
+        workspace_ = obj.workspace_;
+
+        // and then make sure to copy over D_storage_map
+        for (const auto &pair : obj.D_storage_map_) {
+            D_storage_map_[pair.first] =
+                pair.second ? std::make_unique<DerivMatrixStorage>(*pair.second)
+                            : nullptr;
+        }
     };
     virtual ~MatrixCompactDerivs() {
 #ifdef DEBUG

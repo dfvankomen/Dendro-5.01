@@ -56,7 +56,7 @@ void deriv42_x(double *const Dxu, const double *const u, const double dx,
                     (-3.0 * u[IDX(ib, j, k)] + 4.0 * u[IDX(ib + 1, j, k)] -
                      u[IDX(ib + 2, j, k)]) *
                     idx_by_2;
-                Dxu[IDX(4, j, k)] =
+                Dxu[IDX(ib + 1, j, k)] =
                     (-u[IDX(ib, j, k)] + u[IDX(ib + 2, j, k)]) * idx_by_2;
             }
         }
@@ -563,7 +563,7 @@ void deriv42_zz(double *const DzDzu, const double *const u, const double dz,
             for (int i = ib; i < ie; i++) {
                 DzDzu[IDX(i, j, kb)] =
                     (2.0 * u[IDX(i, j, kb)] - 5.0 * u[IDX(i, j, kb + 1)] +
-                     4.0 * u[IDX(i, j, kb + 2)] - u[IDX(i, j, 6)]) *
+                     4.0 * u[IDX(i, j, kb + 2)] - u[IDX(i, j, kb + 3)]) *
                     idz_sqrd;
 
                 DzDzu[IDX(i, j, kb + 1)] =
