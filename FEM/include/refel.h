@@ -55,7 +55,8 @@ template <typename T>
 void printArray_2D(const T *a, int length1, int length2) {
     for (int i = 0; i < length1; i++) {
         for (int j = 0; j < length2; j++) {
-            std::cout << a[i * length2 + j] << " ";
+            std::cout << std::scientific << std::setprecision(4)
+                      << std::setw(12) << a[i * length2 + j] << " ";
         }
         std::cout << std::endl;
     }
@@ -66,7 +67,8 @@ template <typename T>
 void printArray_2D_transpose(const T *a, int length1, int length2) {
     for (int i = 0; i < length1; i++) {
         for (int j = 0; j < length2; j++) {
-            std::cout << a[j * length2 + i] << " ";
+            std::cout << std::scientific << std::setprecision(4)
+                      << std::setw(12) << a[j * length2 + i] << " ";
         }
         std::cout << std::endl;
     }

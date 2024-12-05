@@ -18,7 +18,6 @@ class DerivsFactory {
     template <typename... Args>
     static std::unique_ptr<Derivs> create_first_order(const std::string &name,
                                                       Args &&...args) {
-        std::cout << "NAME: " << name << std::endl;
         if (name == "E4") {
             return std::unique_ptr<Derivs>(
                 new ExplicitDerivsO4_DX(std::forward<Args>(args)...));

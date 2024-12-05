@@ -343,14 +343,16 @@ inline void dgemm_cpp_safe(const char *TRANSA, const char *TRANSB, const int *m,
 
 void matmul_x_dim(const double *const R, double *const Dxu,
                   const double *const u, const double alpha,
-                  const unsigned int *sz);
+                  const unsigned int *sz, const unsigned int bflag);
 
 void matmul_y_dim(const double *const R, double *const Dyu,
                   const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace);
+                  const unsigned int *sz, double *const workspace,
+                  const unsigned int bflag);
 
 void matmul_z_dim(const double *const R, double *const Dzu,
                   const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace);
+                  const unsigned int *sz, double *const workspace,
+                  const unsigned int bflag);
 
 }  // namespace dendroderivs

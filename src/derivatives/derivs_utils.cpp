@@ -1,6 +1,12 @@
 #include "derivatives/derivs_utils.h"
 
 #include <algorithm>
+#include <bitset>
+
+#include "derivatives.h"
+#include "refel.h"
+
+// #define DEBUG_COMPACT_DERIVS
 
 namespace dendroderivs {
 
@@ -210,10 +216,46 @@ void print_delta_coeffs(std::string prefix1, std::vector<double> &delta1,
 
 void matmul_x_dim(const double *const R, double *const Dxu,
                   const double *const u, const double alpha,
-                  const unsigned int *sz) {
-    const unsigned int nx    = sz[0];
-    const unsigned int ny    = sz[1];
-    const unsigned int nz    = sz[2];
+                  const unsigned int *sz, const unsigned int bflag) {
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
+
+#ifdef DEBUG_COMPACT_DERIVS
+    const unsigned int xstart =
+        (bflag & (1u << OCT_DIR_LEFT)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const unsigned int ystart =
+        (bflag & (1u << OCT_DIR_DOWN)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const unsigned int zstart =
+        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const unsigned int xend =
+        nx -
+        ((bflag & (1u << OCT_DIR_RIGHT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
+    const unsigned int yend =
+        ny -
+        ((bflag & (1u << OCT_DIR_UP)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
+    const unsigned int zend =
+        nz -
+        ((bflag & (1u << OCT_DIR_FRONT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
+
+    // check for nans
+    for (int k = zstart; k < zend; k++) {
+        for (int j = ystart; j < yend; j++) {
+            for (int i = xstart; i < xend; i++) {
+                const int pp = INDEX_3D(i, j, k);
+                if (std::isnan(u[pp])) {
+                    std::cout << "NAN detected IN INPUT - function " << __func__
+                              << " file: " << __FILE__ << " line: " << __LINE__
+                              << " (i, j, k): (" << i << ", " << j << ", " << k
+                              << ") bflag: " << std::bitset<8>(bflag)
+                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
+                              << nz << ")" << std::endl;
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+            }
+        }
+    }
+#endif
 
     static const char TRANSA = 'N';
     static const char TRANSB = 'N';
@@ -231,7 +273,15 @@ void matmul_x_dim(const double *const R, double *const Dxu,
 #endif
 #endif
 
-    for (unsigned int k = 0; k < nz; k++) {
+    // calculate z start and end based on bflag, saves a good amount of time if
+    // we're at a Z boundary
+    const int z_start =
+        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const int z_end = (bflag & (1u << OCT_DIR_FRONT))
+                          ? nz - dendroderivs::DENDRO_DERIVS_PW
+                          : nz;
+
+    for (unsigned int k = z_start; k < z_end; k++) {
         // avoid pointer arithmitic, use direct pointer location for compiler
         // optimization
         const double *u_slice  = u + k * nx * ny;
@@ -265,14 +315,101 @@ void matmul_x_dim(const double *const R, double *const Dxu,
         Dxu[ii] *= alpha;
     }
 #endif
+
+#ifdef DEBUG_COMPACT_DERIVS
+    // check for nans
+    for (int k = zstart; k < zend; k++) {
+        for (int j = ystart; j < yend; j++) {
+            for (int i = xstart; i < xend; i++) {
+                const int pp = INDEX_3D(i, j, k);
+                if (std::isnan(Dxu[pp])) {
+                    std::cout << "NAN detected IN DERIVATIVE OUTPUT - function "
+                              << __func__ << " file: " << __FILE__
+                              << " line: " << __LINE__ << " (i, j, k): (" << i
+                              << ", " << j << ", " << k
+                              << ") bflag: " << std::bitset<8>(bflag)
+                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
+                              << nz << ")" << std::endl;
+
+                    // then dump the original input matrix!
+                    double *u_curr_chunk = (double *)u;
+
+                    std::cout << "U Matrix: ====" << std::endl;
+                    for (unsigned int k = 0; k < nz; k++) {
+                        std::cout << "k = " << k << std::endl;
+
+                        printArray_2D(u_curr_chunk, ny, nx);
+
+                        u_curr_chunk += nx * ny;
+                    }
+
+                    // then dump the output matrices!
+                    double *du_curr_chunk = (double *)Dxu;
+
+                    std::cout << "Derivative Matrix: ====" << std::endl;
+                    for (unsigned int k = 0; k < nz; k++) {
+                        std::cout << "k = " << k << std::endl;
+
+                        printArray_2D(du_curr_chunk, ny, nx);
+
+                        du_curr_chunk += nx * ny;
+                    }
+
+                    // and then the R matrix
+                    std::cout << "R Matrix: ===" << std::endl;
+                    printArray_2D_transpose(R, nx, nx);
+
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+            }
+        }
+    }
+#endif
 }
 
 void matmul_y_dim(const double *const R, double *const Dyu,
                   const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace) {
-    const unsigned int nx               = sz[0];
-    const unsigned int ny               = sz[1];
-    const unsigned int nz               = sz[2];
+                  const unsigned int *sz, double *const workspace,
+                  const unsigned int bflag) {
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
+
+#ifdef DEBUG_COMPACT_DERIVS
+    const unsigned int xstart =
+        (bflag & (1u << OCT_DIR_LEFT)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const unsigned int ystart =
+        (bflag & (1u << OCT_DIR_DOWN)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const unsigned int zstart =
+        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const unsigned int xend =
+        nx -
+        ((bflag & (1u << OCT_DIR_RIGHT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
+    const unsigned int yend =
+        ny -
+        ((bflag & (1u << OCT_DIR_UP)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
+    const unsigned int zend =
+        nz -
+        ((bflag & (1u << OCT_DIR_FRONT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
+
+    // check for nans
+    for (int k = zstart; k < zend; k++) {
+        for (int j = ystart; j < yend; j++) {
+            for (int i = xstart; i < xend; i++) {
+                const int pp = INDEX_3D(i, j, k);
+                if (std::isnan(u[pp])) {
+                    std::cout << "NAN detected IN INPUT - function " << __func__
+                              << " file: " << __FILE__ << " line: " << __LINE__
+                              << " (i, j, k): (" << i << ", " << j << ", " << k
+                              << ") bflag: " << std::bitset<8>(bflag)
+                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
+                              << nz << ")" << std::endl;
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+            }
+        }
+    }
+#endif
 
     static const char TRANSA            = 'N';
     static const char TRANSB            = 'T';
@@ -294,7 +431,15 @@ void matmul_y_dim(const double *const R, double *const Dyu,
 
     const unsigned int slice_size = nx * ny;
 
-    for (unsigned int k = 0; k < nz; k++) {
+    // calculate z start and end based on bflag, saves a good amount of time if
+    // we're at a Z boundary
+    const int z_start =
+        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const int z_end = (bflag & (1u << OCT_DIR_FRONT))
+                          ? nz - dendroderivs::DENDRO_DERIVS_PW
+                          : nz;
+
+    for (unsigned int k = z_start; k < z_end; k++) {
         // avoid pointer arithmitic, use direct pointer location for compiler
         // optimization
         const double *u_slice = u + k * slice_size;
@@ -341,15 +486,101 @@ void matmul_y_dim(const double *const R, double *const Dyu,
         Dyu[ii] *= alpha;
     }
 #endif
+
+#ifdef DEBUG_COMPACT_DERIVS
+    // check for nans
+    for (int k = zstart; k < zend; k++) {
+        for (int j = ystart; j < yend; j++) {
+            for (int i = xstart; i < xend; i++) {
+                const int pp = INDEX_3D(i, j, k);
+                if (std::isnan(Dyu[pp])) {
+                    std::cout << "NAN detected IN DERIVATIVE OUTPUT - function "
+                              << __func__ << " file: " << __FILE__
+                              << " line: " << __LINE__ << " (i, j, k): (" << i
+                              << ", " << j << ", " << k
+                              << ") bflag: " << std::bitset<8>(bflag)
+                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
+                              << nz << ")" << std::endl;
+
+                    // then dump the original input matrix!
+                    double *u_curr_chunk = (double *)u;
+
+                    std::cout << "U Matrix: ====" << std::endl;
+                    for (unsigned int k = 0; k < nz; k++) {
+                        std::cout << "k = " << k << std::endl;
+
+                        printArray_2D(u_curr_chunk, ny, nx);
+
+                        u_curr_chunk += nx * ny;
+                    }
+
+                    // then dump the output matrices!
+                    double *du_curr_chunk = (double *)Dyu;
+
+                    std::cout << "Derivative Matrix: ====" << std::endl;
+                    for (unsigned int k = 0; k < nz; k++) {
+                        std::cout << "k = " << k << std::endl;
+
+                        printArray_2D(du_curr_chunk, ny, nx);
+
+                        du_curr_chunk += nx * ny;
+                    }
+
+                    // and then the R matrix
+                    std::cout << "R Matrix: ===" << std::endl;
+                    printArray_2D_transpose(R, ny, ny);
+
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+            }
+        }
+    }
+#endif
 }
 
 void matmul_z_dim(const double *const R, double *const Dzu,
                   const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace) {
-    const unsigned int nx    = sz[0];
-    const unsigned int ny    = sz[1];
-    const unsigned int nz    = sz[2];
+                  const unsigned int *sz, double *const workspace,
+                  const unsigned int bflag) {
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
 
+#ifdef DEBUG_COMPACT_DERIVS
+    const unsigned int xstart =
+        (bflag & (1u << OCT_DIR_LEFT)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const unsigned int ystart =
+        (bflag & (1u << OCT_DIR_DOWN)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const unsigned int zstart =
+        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const unsigned int xend =
+        nx -
+        ((bflag & (1u << OCT_DIR_RIGHT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
+    const unsigned int yend =
+        ny -
+        ((bflag & (1u << OCT_DIR_UP)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
+    const unsigned int zend =
+        nz -
+        ((bflag & (1u << OCT_DIR_FRONT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
+
+    // check for nans
+    for (int k = zstart; k < zend; k++) {
+        for (int j = ystart; j < yend; j++) {
+            for (int i = xstart; i < xend; i++) {
+                const int pp = INDEX_3D(i, j, k);
+                if (std::isnan(u[pp])) {
+                    std::cout << "NAN detected IN INPUT - function " << __func__
+                              << " file: " << __FILE__ << " line: " << __LINE__
+                              << " (i, j, k): (" << i << ", " << j << ", " << k
+                              << ") bflag: " << std::bitset<8>(bflag)
+                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
+                              << nz << ")" << std::endl;
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+            }
+        }
+    }
+#endif
     static const char TRANSA = 'N';
     static const char TRANSB = 'T';
     const int M              = nz;
@@ -365,7 +596,15 @@ void matmul_z_dim(const double *const R, double *const Dzu,
 
     double const *workspace_offset = workspace + nx * nz;
 
-    for (unsigned int j = 0; j < ny; j++) {
+    // NOTE: due to how derivatives are called, and thanks to the padding width,
+    // we can actually skip both padding regions of j, they'll never be needed
+    // on the z derivative, because z is always called last on 2nd order mixed
+    // derivatives
+
+    const unsigned int y_start     = dendroderivs::DENDRO_DERIVS_PW;
+    const unsigned int y_end       = ny - dendroderivs::DENDRO_DERIVS_PW;
+
+    for (unsigned int j = y_start; j < y_end; j++) {
 #pragma omp simd collapse(2)
         for (unsigned int k = 0; k < nz; k++) {
             for (unsigned int i = 0; i < nx; i++) {
@@ -402,6 +641,56 @@ void matmul_z_dim(const double *const R, double *const Dzu,
 #ifdef USE_XSMM_MAT_MUL
     for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
         Dzu[ii] *= alpha;
+    }
+#endif
+
+#ifdef DEBUG_COMPACT_DERIVS
+    // check for nans
+    for (int k = zstart; k < zend; k++) {
+        for (int j = ystart; j < yend; j++) {
+            for (int i = xstart; i < xend; i++) {
+                const int pp = INDEX_3D(i, j, k);
+                if (std::isnan(Dzu[pp])) {
+                    std::cout << "NAN detected IN DERIVATIVE OUTPUT - function "
+                              << __func__ << " file: " << __FILE__
+                              << " line: " << __LINE__ << " (i, j, k): (" << i
+                              << ", " << j << ", " << k
+                              << ") bflag: " << std::bitset<8>(bflag)
+                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
+                              << nz << ")" << std::endl;
+
+                    // then dump the original input matrix!
+                    double *u_curr_chunk = (double *)u;
+
+                    std::cout << "U Matrix: ====" << std::endl;
+                    for (unsigned int k = 0; k < nz; k++) {
+                        std::cout << "k = " << k << std::endl;
+
+                        printArray_2D(u_curr_chunk, ny, nx);
+
+                        u_curr_chunk += nx * ny;
+                    }
+
+                    // then dump the output matrices!
+                    double *du_curr_chunk = (double *)Dzu;
+
+                    std::cout << "Derivative Matrix: ====" << std::endl;
+                    for (unsigned int k = 0; k < nz; k++) {
+                        std::cout << "k = " << k << std::endl;
+
+                        printArray_2D(du_curr_chunk, ny, nx);
+
+                        du_curr_chunk += nx * ny;
+                    }
+
+                    // and then the R matrix
+                    std::cout << "R Matrix: ===" << std::endl;
+                    printArray_2D_transpose(R, nz, nz);
+
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+            }
+        }
     }
 #endif
 }

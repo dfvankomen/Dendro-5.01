@@ -9,7 +9,6 @@
 #include "derivatives/derivs_utils.h"
 #include "lapac.h"
 #include "mathUtils.h"
-#include "refel.h"
 
 #define _DENDRODERIV_USE_INV_METHOD 0
 
@@ -123,6 +122,9 @@ void MatrixCompactDerivs<DerivOrder>::init() {
     for (unsigned int i = 1; i <= DDERIVS_MAX_BLOCKS_INIT; i++) {
         // calculate the size based on the element order
         const unsigned int n = (i + 1) * p_ele_order + 1;
+
+        // std::cout << "Creating for n blocks: " << i
+        //           << " , which is of size: " << n << std::endl;
 
         // because we're using smart pointers, just store the result immediately
         // std::cout << " n = " << n << " and i==1:" << (i == 1) << std::endl;

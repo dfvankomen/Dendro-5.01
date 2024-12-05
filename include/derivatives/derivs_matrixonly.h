@@ -99,9 +99,9 @@ class MatrixCompactDerivs : public CompactDerivs {
         }
 
         if constexpr (DerivOrder == 1) {
-            matmul_x_dim(D_use->data(), du, u, 1.0 / dx, sz);
+            matmul_x_dim(D_use->data(), du, u, 1.0 / dx, sz, bflag);
         } else {
-            matmul_x_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz);
+            matmul_x_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz, bflag);
         }
     }
 
@@ -126,10 +126,11 @@ class MatrixCompactDerivs : public CompactDerivs {
         }
 
         if constexpr (DerivOrder == 1) {
-            matmul_y_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data());
+            matmul_y_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data(),
+                         bflag);
         } else {
             matmul_y_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz,
-                         workspace_.data());
+                         workspace_.data(), bflag);
         }
     }
 
@@ -154,10 +155,11 @@ class MatrixCompactDerivs : public CompactDerivs {
         }
 
         if constexpr (DerivOrder == 1) {
-            matmul_z_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data());
+            matmul_z_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data(),
+                         bflag);
         } else {
             matmul_z_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz,
-                         workspace_.data());
+                         workspace_.data(), bflag);
         }
     }
 

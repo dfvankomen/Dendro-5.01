@@ -12,6 +12,11 @@
 
 namespace dendroderivs {
 
+// A global check for the derivatives padding width, should be the same as
+// Derivatives' pw used in the matrix multiplication routines to know the PW
+// without having to pass it through
+extern unsigned int DENDRO_DERIVS_PW;
+
 enum DerivType {
     // default, does nothing, should return an error if anything is
     D_NONE = 0,
