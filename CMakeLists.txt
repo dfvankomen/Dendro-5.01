@@ -787,3 +787,68 @@ target_include_directories(sfcLaplaceEq
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(sfcLaplaceEq PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(sfcLaplaceEq PRIVATE ${GSL_INCLUDE_DIRS})
+
+
+
+
+set(SOURCE_FILES test/src/testMatMul.cpp)
+add_executable(testMatrixMul ${SOURCE_FILES})
+target_link_libraries(testMatrixMul dendro5 ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
+                      m)
+target_include_directories(testMatrixMul
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(testMatrixMul
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/derivatives)
+target_include_directories(testMatrixMul
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(testMatrixMul
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(testMatrixMul
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(testMatrixMul
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(testMatrixMul
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(testMatrixMul
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(testMatrixMul
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(testMatrixMul PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(testMatrixMul PRIVATE ${GSL_INCLUDE_DIRS})
+
+include(FetchContent)
+FetchContent_Declare(
+  toml11
+  GIT_REPOSITORY https://github.com/ToruNiina/toml11.git
+  GIT_TAG        v4.1.0
+)
+FetchContent_MakeAvailable(toml11)
+
+
+
+
+set(SOURCE_FILES test/src/testCompactDerivs.cpp)
+add_executable(testCompactDerivs ${SOURCE_FILES})
+target_link_libraries(testCompactDerivs dendro5 ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
+                      m toml11::toml11)
+target_include_directories(testCompactDerivs
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(testCompactDerivs
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/derivatives)
+target_include_directories(testCompactDerivs
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(testCompactDerivs
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(testCompactDerivs
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(testCompactDerivs
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(testCompactDerivs
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(testCompactDerivs
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(testCompactDerivs
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(testCompactDerivs PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(testCompactDerivs PRIVATE ${GSL_INCLUDE_DIRS})
+
