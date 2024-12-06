@@ -4,21 +4,6 @@
 
 namespace dendroderivs {
 
-std::vector<double> clean_coeffs(const std::vector<double>& coeffs_in,
-                                 unsigned int max_coeffs) {
-    std::vector<double> coeffs_out(max_coeffs, 0.0);
-
-    // std::cout << "Applying coefficients: ";
-    // // as soon as one of these breaks, we exit, no need to check sizes
-    // for (unsigned int i = 0; i < max_coeffs && i < coeffs_in.size(); i++) {
-    //     coeffs_out[i] = coeffs_in[i];
-    //     std::cout << coeffs_in[i] << " ";
-    // }
-    // std::cout << std::endl;
-
-    return coeffs_out;
-}
-
 MatrixDiagonalEntries* BYUDerivsT4R3DiagonalsFirstOrder(
     const std::vector<double>& D_coeffs) {
     double alpha0  = 1.0 / 4.0;
@@ -76,6 +61,11 @@ MatrixDiagonalEntries* BYUDerivsT4R3DiagonalsFirstOrder(
         -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0
     };
     // clang-format on
+
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P1DiagBoundary);
+    check_end_of_boundaries(Q1DiagBoundary);
 
     // now we can build up the values
 
@@ -144,6 +134,11 @@ MatrixDiagonalEntries* BYUDerivsT4R3DiagonalsSecondOrder(
         a2/4.0, a1, t1, a1, a2/4.0
     };
     // clang-format on
+
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P2DiagBoundary);
+    check_end_of_boundaries(Q2DiagBoundary);
 
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
         P2DiagInterior, P2DiagBoundary, Q2DiagInterior, Q2DiagBoundary};
@@ -215,6 +210,11 @@ MatrixDiagonalEntries* BYUDerivsT6R3DiagonalsFirstOrder(
         -a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
     };
     // clang-format on
+
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P1DiagBoundary);
+    check_end_of_boundaries(Q1DiagBoundary);
 
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
         P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary};
@@ -292,6 +292,11 @@ MatrixDiagonalEntries* BYUDerivsT6R3DiagonalsSecondOrder(
         a3/9.0, a2/4.0, a1, t1, a1, a2/4.0, a3/9.0
     };
     // clang-format on
+
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P2DiagBoundary);
+    check_end_of_boundaries(Q2DiagBoundary);
 
     // store the entries for matrix creation
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
@@ -375,6 +380,11 @@ MatrixDiagonalEntries* BYUDerivsT6R4DiagonalsFirstOrder(
         -a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
     };
     // clang-format on
+
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P1DiagBoundary);
+    check_end_of_boundaries(Q1DiagBoundary);
 
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
         P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary};
@@ -463,6 +473,11 @@ MatrixDiagonalEntries* BYUDerivsT6R4DiagonalsSecondOrder(
     };
     // clang-format on
 
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P2DiagBoundary);
+    check_end_of_boundaries(Q2DiagBoundary);
+
     // store the entries for matrix creation
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
         P2DiagInterior, P2DiagBoundary, Q2DiagInterior, Q2DiagBoundary};
@@ -537,6 +552,11 @@ MatrixDiagonalEntries* BYUDerivsP6R3DiagonalsFirstOrder(
         -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0
     };
     // clang-format on
+
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P1DiagBoundary);
+    check_end_of_boundaries(Q1DiagBoundary);
 
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
         P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary};
@@ -618,6 +638,11 @@ MatrixDiagonalEntries* BYUDerivsP6R3DiagonalsSecondOrder(
         a2/4.0, a1, t1, a1, a2/4.0
     };
     // clang-format on
+
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P2DiagBoundary);
+    check_end_of_boundaries(Q2DiagBoundary);
 
     // store the entries for matrix creation
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
@@ -716,6 +741,11 @@ MatrixDiagonalEntries* BYUDerivsP8R4DiagonalsFirstOrder(
         -a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
     };
     // clang-format on
+
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P1DiagBoundary);
+    check_end_of_boundaries(Q1DiagBoundary);
 
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
         P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary};
@@ -874,6 +904,11 @@ MatrixDiagonalEntries* BYUDerivsP8R4DiagonalsSecondOrder(
         a3/9.0, a2/4.0, a1, t1, a1, a2/4.0, a3/9.0
     };
     // clang-format on
+
+    // pass the diagonal entries throuh the check function that could
+    // potentially remove them
+    check_end_of_boundaries(P2DiagBoundary);
+    check_end_of_boundaries(Q2DiagBoundary);
 
     // store the entries for matrix creation
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{

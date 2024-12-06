@@ -21,6 +21,32 @@ struct MatrixDiagonalEntries {
     std::vector<std::vector<double>> PDiagBoundary;
     std::vector<double> QDiagInterior;
     std::vector<std::vector<double>> QDiagBoundary;
+
+    void toStdOut() {
+        std::cout << "PDiagInterior: ";
+        for (auto &a : PDiagInterior) {
+            std::cout << a << " ";
+        }
+        std::cout << std::endl << "PDiagBoundary: ";
+        for (auto &a : PDiagBoundary) {
+            std::cout << std::endl;
+            for (auto &b : a) {
+                std::cout << b << " ";
+            }
+        }
+        std::cout << std::endl << "QDiagInterior: ";
+        for (auto &a : QDiagInterior) {
+            std::cout << a << " ";
+        }
+        std::cout << std::endl << "QDiagBoundary: ";
+        for (auto &a : QDiagBoundary) {
+            std::cout << std::endl;
+            for (auto &b : a) {
+                std::cout << b << " ";
+            }
+        }
+        std::cout << std::endl;
+    }
 };
 
 /**
