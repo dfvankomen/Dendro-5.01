@@ -5,8 +5,34 @@
 
 namespace dendroderivs {
 
-std::vector<double> clean_coeffs(const std::vector<double>& coeffs_in,
-                                 unsigned int max_coeffs = 3);
+std::vector<double> inline clean_coeffs(const std::vector<double>& coeffs_in,
+                                        unsigned int max_coeffs) {
+    std::vector<double> coeffs_out(max_coeffs, 0.0);
+
+    // std::cout << "Applying coefficients: ";
+    // as soon as one of these breaks, we exit, no need to check sizes
+    for (unsigned int i = 0; i < max_coeffs && i < coeffs_in.size(); i++) {
+        coeffs_out[i] = coeffs_in[i];
+        // std::cout << coeffs_in[i] << " ";
+    }
+    // std::cout << std::endl;
+
+    return coeffs_out;
+}
+
+void inline check_end_of_boundaries(std::vector<std::vector<double>>& coeff_in,
+                                    const double threshold = 1e-10) {
+    // we should only chekc the DIAGs and remove any values that are extremely
+    // close to or equal to zero
+
+    for (auto& vec : coeff_in) {
+        // check the last value, if it's "bad" pop it back, otherwise it should
+        // end
+        while (!vec.empty() && std::abs(vec.back()) < threshold) {
+            vec.pop_back();
+        }
+    }
+}
 
 MatrixDiagonalEntries* BYUDerivsT4R3DiagonalsFirstOrder(
     const std::vector<double>& D_coeffs);
