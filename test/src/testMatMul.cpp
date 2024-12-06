@@ -84,7 +84,7 @@ bool test_correctness_x() {
     print_3d_mat(fullBlock, nx, ny, nz);
 #endif
 
-    dendroderivs::matmul_x_dim(matrix_x, results, fullBlock, 1.0, sz);
+    dendroderivs::matmul_x_dim(matrix_x, results, fullBlock, 1.0, sz, 0);
 
 #if 0
     std::cout << "RESULTS" << std::endl;
@@ -157,8 +157,8 @@ bool test_correctness_y() {
     print_3d_mat(fullBlock, nx, ny, nz);
 #endif
 
-    dendroderivs::matmul_y_dim(matrix_y, results, fullBlock, 1.0, sz,
-                               workspace);
+    dendroderivs::matmul_y_dim(matrix_y, results, fullBlock, 1.0, sz, workspace,
+                               0);
 
 #if 0
     std::cout << "RESULTS" << std::endl;
@@ -231,8 +231,8 @@ bool test_correctness_z() {
     print_3d_mat(fullBlock, nx, ny, nz);
 #endif
 
-    dendroderivs::matmul_z_dim(matrix_z, results, fullBlock, 1.0, sz,
-                               workspace);
+    dendroderivs::matmul_z_dim(matrix_z, results, fullBlock, 1.0, sz, workspace,
+                               0);
 
 #if 0
     std::cout << "RESULTS" << std::endl;
@@ -320,7 +320,8 @@ double test_speed_x(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
 
     double time          = test_runner(
         [&]() {
-            dendroderivs::matmul_x_dim(matrix_x, results, fullBlock, 1.0, sz);
+            dendroderivs::matmul_x_dim(matrix_x, results, fullBlock, 1.0, sz,
+                                                0);
         },
         n_startups, n_runs);
 
@@ -344,7 +345,7 @@ double test_speed_y(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
     double time          = test_runner(
         [&]() {
             dendroderivs::matmul_y_dim(matrix_y, results, fullBlock, 1.0, sz,
-                                                workspace);
+                                                workspace, 0);
         },
         n_startups, n_runs);
 
@@ -369,7 +370,7 @@ double test_speed_z(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
     double time          = test_runner(
         [&]() {
             dendroderivs::matmul_z_dim(matrix_z, results, fullBlock, 1.0, sz,
-                                                workspace);
+                                                workspace, 0);
         },
         n_startups, n_runs);
 
