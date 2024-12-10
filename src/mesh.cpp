@@ -4376,30 +4376,30 @@ void Mesh::buildE2NMap() {
         std::cout << "[NODE] rank:  " << m_uiActiveRank << " pre ( "
                   << m_uiNodePreGhostBegin << ", " << m_uiNodePreGhostEnd
                   << ") local ( " << m_uiNodeLocalBegin << ", "
-                  << m_uiNodeLocalEnd << ")"
-                  << " post (" << m_uiNodePostGhostBegin << " , "
-                  << m_uiNodePostGhostEnd << ")" << std::endl;
+                  << m_uiNodeLocalEnd << ")" << " post ("
+                  << m_uiNodePostGhostBegin << " , " << m_uiNodePostGhostEnd
+                  << ")" << std::endl;
     if (!m_uiActiveRank)
         std::cout << "[ELEMENT] rank:  " << m_uiActiveRank << " pre ( "
                   << m_uiElementPreGhostBegin << ", " << m_uiElementPreGhostEnd
                   << ") local ( " << m_uiElementLocalBegin << ", "
-                  << m_uiElementLocalEnd << ")"
-                  << " post (" << m_uiElementPostGhostBegin << " , "
+                  << m_uiElementLocalEnd << ")" << " post ("
+                  << m_uiElementPostGhostBegin << " , "
                   << m_uiElementPostGhostEnd << ")" << std::endl;
 
     if (m_uiActiveRank)
         std::cout << "[NODE] rank:  " << m_uiActiveRank << " pre ( "
                   << m_uiNodePreGhostBegin << ", " << m_uiNodePreGhostEnd
                   << ") local ( " << m_uiNodeLocalBegin << ", "
-                  << m_uiNodeLocalEnd << ")"
-                  << " post (" << m_uiNodePostGhostBegin << " , "
-                  << m_uiNodePostGhostEnd << ")" << std::endl;
+                  << m_uiNodeLocalEnd << ")" << " post ("
+                  << m_uiNodePostGhostBegin << " , " << m_uiNodePostGhostEnd
+                  << ")" << std::endl;
     if (m_uiActiveRank)
         std::cout << "[ELEMENT] rank:  " << m_uiActiveRank << " pre ( "
                   << m_uiElementPreGhostBegin << ", " << m_uiElementPreGhostEnd
                   << ") local ( " << m_uiElementLocalBegin << ", "
-                  << m_uiElementLocalEnd << ")"
-                  << " post (" << m_uiElementPostGhostBegin << " , "
+                  << m_uiElementLocalEnd << ")" << " post ("
+                  << m_uiElementPostGhostBegin << " , "
                   << m_uiElementPostGhostEnd << ")" << std::endl;
 
 #endif
@@ -6069,8 +6069,7 @@ void Mesh::computeNodeScatterMaps(MPI_Comm comm) {
 #endif
     if ((m_uiRecvNodeOffset[npes - 1] + m_uiRecvNodeCount[npes - 1]) !=
         allocatedGhostNodes.size()) {
-        std::cout << RED << "[Error]"
-                  << " m_uiActiveRank: " << m_uiActiveRank
+        std::cout << RED << "[Error]" << " m_uiActiveRank: " << m_uiActiveRank
                   << " Total Ghost Elements allocated: "
                   << allocatedGhostNodes.size()
                   << " Number of elements will get recieved: "
@@ -6098,10 +6097,11 @@ void Mesh::computeNodeScatterMaps(MPI_Comm comm) {
     assert(allocatedGhostNodes.size() == recvNodeKeys.size());
     for (unsigned int k = 0; k < allocatedGhostNodes.size(); k++) {
         if (allocatedGhostNodes[k] != recvNodeKeys[k]) {
-            std::cout << RED << "[ERROR]: "
-                      << "m_uiActiveRank : " << m_uiActiveRank << " allocated ["
-                      << k << "]: " << allocatedGhostNodes[k] << " recieved["
-                      << k << "]: " << recvNodeKeys[k] << std::endl;
+            std::cout << RED
+                      << "[ERROR]: " << "m_uiActiveRank : " << m_uiActiveRank
+                      << " allocated [" << k << "]: " << allocatedGhostNodes[k]
+                      << " recieved[" << k << "]: " << recvNodeKeys[k]
+                      << std::endl;
             assert(false);
         }
 
