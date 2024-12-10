@@ -5886,7 +5886,12 @@ void Mesh::computeNodeScatterMaps(MPI_Comm comm) {
                 tmpKey = ot::Key(tmpElement);
                 tmpKey.addOwner(p);
                 tmpKey.setFlag(tmpElement.getFlag());
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+
                 ghostElementChained.push_back(tmpKey);
+#pragma GCC diagnostic pop
             }
         }
     }
