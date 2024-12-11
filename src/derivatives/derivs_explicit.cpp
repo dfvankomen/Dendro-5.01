@@ -2395,4 +2395,26 @@ void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
 #endif
 }
 
+// Explicit instiation for P = 4 and 5 for deriv866_[dim]
+template void deriv8666_xx<4>(double *const Dxu, const double *const u,
+                              const double dx, const unsigned int *sz,
+                              unsigned bflag);
+template void deriv8666_xx<5>(double *const Dxu, const double *const u,
+                              const double dx, const unsigned int *sz,
+                              unsigned bflag);
+
+template void deriv8666_yy<4>(double *const Dyu, const double *const u,
+                              const double dy, const unsigned int *sz,
+                              unsigned bflag);
+template void deriv8666_yy<5>(double *const Dyu, const double *const u,
+                              const double dy, const unsigned int *sz,
+                              unsigned bflag);
+
+template void deriv8666_zz<4>(double *const Dzu, const double *const u,
+                              const double dz, const unsigned int *sz,
+                              unsigned bflag);
+template void deriv8666_zz<5>(double *const Dzu, const double *const u,
+                              const double dz, const unsigned int *sz,
+                              unsigned bflag);
+
 }  // namespace dendroderivs
