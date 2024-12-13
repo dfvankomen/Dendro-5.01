@@ -65,6 +65,69 @@ MatrixDiagonalEntries* createJTT4DiagonalsSecondOrder() {
     return diagEntries;
 }
 
+// penta diagonal first order
+MatrixDiagonalEntries* createJTP6DiagonalsFirstOrder() {
+    // D_x coeffs
+    // row 1
+    const double alpha = 17.0 / 57.0;
+    const double beta  = -1.0 / 114.0;
+
+    // NOTE: the JT thesis doesn't have boundary of idx 1 (node #2) for this
+    // scheme, we opted to use JTT6's second rows
+
+    // boundary elements for P matrix for 1st derivative
+    std::vector<std::vector<double>> P1DiagBoundary{
+        // {1.0, 8.0, 6.0},
+        {1.0, 5.0},
+        {1.0 / 8.0, 1.0, 3.0 / 4.0}};
+    // diagonal elements for P matrix for 1st derivative
+    std::vector<double> P1DiagInterior{beta, alpha, 1.0, alpha, beta};
+    // boundary elements for Q matrix for 1st derivative
+    std::vector<std::vector<double>> Q1DiagBoundary{
+        // {a1, b1, c1, d1, e1},
+        // {-43.0 / 12.0, -20.0 / 3.0, 9.0, 4.0 / 3.0, -1.0 / 12.0},
+        {-197.0 / 60.0, -5.0 / 12.0, 5.0, -5.0 / 3.0, 5.0 / 12.0, -1.0 / 20.0},
+        {-43.0 / 96.0, -5.0 / 6.0, 9.0 / 8.0, 1.0 / 6.0, -1.0 / 96.0, 0.0}};
+    // diagonal elements for Q matrix for 1st derivative
+    std::vector<double> Q1DiagInterior{-15.0 / 19.0, 0.0, 15.0 / 19.0};
+
+    MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
+        P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary};
+
+    return diagEntries;
+}
+
+MatrixDiagonalEntries* createJTP6DiagonalsSecondOrder() {
+    // D_x coeffs
+    // row 1
+    const double alpha = 12.0 / 97.0;
+    const double beta  = -1.0 / 194.0;
+    const double a     = 120.0 / 97.0;
+
+    // Q boundary terms, slot 1
+    const double a1    = 177.0 / 16.0;
+    const double b1    = -507.0 / 8.0;
+    const double c1    = 783.0 / 8.0;
+    const double d1    = -201.0 / 4.0;
+    const double e1    = 81.0 / 16.0;
+    const double f1    = -3.0 / 8.0;
+
+    // boundary elements for P matrix for 1st derivative
+    std::vector<std::vector<double>> P1DiagBoundary{{11.0 / 2.0, -131.0 / 4.0},
+                                                    {alpha, 1.0, alpha, beta}};
+    // diagonal elements for P matrix for 1st derivative
+    std::vector<double> P1DiagInterior{beta, alpha, 1.0, alpha, beta};
+    // boundary elements for Q matrix for 1st derivative
+    std::vector<std::vector<double>> Q1DiagBoundary{{a1, b1, c1, d1, e1, f1}};
+    // diagonal elements for Q matrix for 1st derivative
+    std::vector<double> Q1DiagInterior{a / 2.0, 0.0, a / 2.0};
+
+    MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
+        P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary};
+
+    return diagEntries;
+}
+
 MatrixDiagonalEntries* createJTT6DiagonalsFirstOrder() {
     // boundary elements for P matrix for 1st derivative
     std::vector<std::vector<double>> P1DiagBoundary{
