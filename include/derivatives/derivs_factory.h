@@ -31,6 +31,10 @@ class DerivsFactory {
             return std::unique_ptr<Derivs>(
                 new ExplicitDerivsO4_Matrix_FirstOrder(
                     std::forward<Args>(args)...));
+        } else if (name == "E6Matrix") {
+            return std::unique_ptr<Derivs>(
+                new ExplicitDerivsO6_Matrix_FirstOrder(
+                    std::forward<Args>(args)...));
         } else if (name == "KIM4") {
             return std::unique_ptr<Derivs>(
                 new KimBoundO4_FirstOrder(std::forward<Args>(args)...));
@@ -40,6 +44,9 @@ class DerivsFactory {
         } else if (name == "JTT6") {
             return std::unique_ptr<Derivs>(
                 new JonathanTyler_JTT6_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "JTP6") {
+            return std::unique_ptr<Derivs>(
+                new JonathanTyler_JTP6_FirstOrder(std::forward<Args>(args)...));
         } else if (name == "BYUT4") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsT4_R3_FirstOrder(std::forward<Args>(args)...));
@@ -75,6 +82,10 @@ class DerivsFactory {
             return std::unique_ptr<Derivs>(
                 new ExplicitDerivsO4_Matrix_SecondOrder(
                     std::forward<Args>(args)...));
+        } else if (name == "E6Matrix") {
+            return std::unique_ptr<Derivs>(
+                new ExplicitDerivsO6_Matrix_SecondOrder(
+                    std::forward<Args>(args)...));
         } else if (name == "KIM4") {
             throw std::runtime_error("There is no second order KIM4!");
         } else if (name == "JTT4") {
@@ -82,6 +93,9 @@ class DerivsFactory {
                 std::forward<Args>(args)...));
         } else if (name == "JTT6") {
             return std::unique_ptr<Derivs>(new JonathanTyler_JTT6_SecondOrder(
+                std::forward<Args>(args)...));
+        } else if (name == "JTP6") {
+            return std::unique_ptr<Derivs>(new JonathanTyler_JTP6_SecondOrder(
                 std::forward<Args>(args)...));
         } else if (name == "BYUT4") {
             return std::unique_ptr<Derivs>(

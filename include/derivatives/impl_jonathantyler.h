@@ -9,6 +9,8 @@ MatrixDiagonalEntries* createJTT4DiagonalsFirstOrder();
 MatrixDiagonalEntries* createJTT4DiagonalsSecondOrder();
 MatrixDiagonalEntries* createJTT6DiagonalsFirstOrder();
 MatrixDiagonalEntries* createJTT6DiagonalsSecondOrder();
+MatrixDiagonalEntries* createJTP6DiagonalsFirstOrder();
+MatrixDiagonalEntries* createJTP6DiagonalsSecondOrder();
 
 /**
  *  Tridiagonal, 4th-order compact derivative from the thesis of Jonathan Tyler.
@@ -313,6 +315,64 @@ class JonathanTyler_JTT6_SecondOrder_Banded : public BandedCompactDerivs {
 
     std::string toString() const override {
         return "JonathanTyler_JTT4_SecondOrder_Banded";
+    }
+};
+
+/**
+ *  Tridiagonal, 6th-order compact derivative from the thesis of Jonathan Tyler,
+ * penta 6
+ */
+class JonathanTyler_JTP6_FirstOrder : public MatrixCompactDerivs<1> {
+   public:
+    template <typename... Args>
+    JonathanTyler_JTP6_FirstOrder(unsigned int ele_order, Args&&...)
+        : MatrixCompactDerivs{ele_order} {
+        diagEntries = createJTP6DiagonalsFirstOrder();
+
+        this->init();
+    }
+
+    ~JonathanTyler_JTP6_FirstOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTP6_FirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_JTP6; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override {
+        return "JonathanTyler_JTP6_FirstOrder";
+    }
+};
+
+/**
+ *  Tridiagonal, 6th-order compact derivative from the thesis of Jonathan Tyler.
+ */
+class JonathanTyler_JTP6_SecondOrder : public MatrixCompactDerivs<2> {
+   public:
+    template <typename... Args>
+    JonathanTyler_JTP6_SecondOrder(unsigned int ele_order, Args&&...)
+        : MatrixCompactDerivs{ele_order} {
+        diagEntries = createJTP6DiagonalsSecondOrder();
+
+        this->init();
+    }
+    ~JonathanTyler_JTP6_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTP6_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_JTP6; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_SECOND_ORDER;
+    }
+
+    std::string toString() const override {
+        return "JonathanTyler_JTP6_SecondOrder";
     }
 };
 
