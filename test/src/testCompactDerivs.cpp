@@ -12,13 +12,14 @@
 #include "derivatives/derivs_explicit.h"
 #include "profiler.h"
 
-#define RED "\e[1;31m"
-#define BLU "\e[2;34m"
-#define GRN "\e[0;32m"
-#define YLW "\e[0;33m"
-#define MAG "\e[0;35m"
-#define CYN "\e[0;36m"
-#define NRM "\e[0m"
+#define RED  "\e[1;31m"
+#define BLU  "\e[2;34m"
+#define GRN  "\e[0;32m"
+#define YLW  "\e[0;33m"
+#define MAG  "\e[0;35m"
+#define CYN  "\e[0;36m"
+#define NRM  "\e[0m"
+#define BOLD "\e[1m"
 
 #define UNIFORM_RAND_0_TO_X(X) ((double_t)rand() / (double_t)RAND_MAX * X)
 
@@ -798,6 +799,55 @@ std::tuple<double_t, double_t, double_t> calculate_rmse(
     return std::make_tuple(sqrt(rmse), min_err, max_err);
 }
 
+std::tuple<double_t, double_t, double_t> calculate_mae(
+    const double_t *const x, const double_t *const y, const uint32_t *sz,
+    bool skip_pading = true) {
+    // required for IDX function...
+    const unsigned int nx  = sz[0];
+    const unsigned int ny  = sz[1];
+    const unsigned int nz  = sz[2];
+
+    double_t max_err       = 0.0;
+    double_t min_err       = __DBL_MAX__;
+    double_t rmse          = 0.0;
+
+    const uint32_t i_start = skip_pading ? helpers::padding : 0;
+    const uint32_t j_start = skip_pading ? helpers::padding : 0;
+    const uint32_t k_start = skip_pading ? helpers::padding : 0;
+
+    const uint32_t i_end   = skip_pading ? sz[0] - helpers::padding : sz[0];
+    const uint32_t j_end   = skip_pading ? sz[1] - helpers::padding : sz[1];
+    const uint32_t k_end   = skip_pading ? sz[2] - helpers::padding : sz[2];
+
+    // std::cout << i_start << " " << i_end << std::endl;
+
+    const uint32_t total_points =
+        (i_end - i_start) * (j_end - j_start) * (k_end - k_start);
+
+    // std::cout << total_points << std::endl;
+
+    for (uint16_t k = k_start; k < k_end; k++) {
+        for (uint16_t j = j_start; j < j_end; j++) {
+            for (uint16_t i = i_start; i < i_end; i++) {
+                double_t temp = std::abs(x[IDX(i, j, k)] - y[IDX(i, j, k)]);
+
+                if (temp > max_err) {
+                    max_err = temp;
+                }
+                if (temp < min_err) {
+                    min_err = temp;
+                }
+
+                rmse += temp;
+            }
+        }
+    }
+
+    rmse /= (total_points);
+
+    return std::make_tuple(sqrt(rmse), min_err, max_err);
+}
+
 double_t calc_l2_norm(double_t *const u_var, double_t *const v_var,
                       const uint32_t n) {
     double_t sum = 0.0;
@@ -853,6 +903,15 @@ void calculate_all_derivs(double_t *const u_var, const uint32_t *sz,
     derivs->grad_xx(derivxx, u_var, deltas[0], sz, bflag);
     derivs->grad_yy(derivyy, u_var, deltas[1], sz, bflag);
     derivs->grad_zz(derivzz, u_var, deltas[2], sz, bflag);
+}
+
+void print_rmse_mae_results(double rmse_min, double rmse_max, double rmse,
+                            double mae_min, double mae_max, double mae,
+                            std::string dim) {
+    std::cout << "   " << dim << "-dim: rmse (min, max) - " << BOLD << BLU
+              << rmse << NRM << " (" << rmse_min << ", " << rmse_max
+              << ") | mae (min, max) - " << BOLD << BLU << mae << NRM << " ("
+              << mae_min << ", " << mae_max << ")" << std::endl;
 }
 
 void test_cfd_with_original_stencil(
@@ -935,39 +994,8 @@ void test_cfd_with_original_stencil(
 
     // then compute the "error" difference between the two
     double_t min_x, max_x, rmse_x, min_y, max_y, rmse_y, min_z, max_z, rmse_z;
-    std::tie(rmse_x, min_x, max_x) =
-        calculate_rmse(derivx_stencil, derivx_cfd, sz);
-    std::tie(rmse_y, min_y, max_y) =
-        calculate_rmse(derivy_stencil, derivy_cfd, sz);
-    std::tie(rmse_z, min_z, max_z) =
-        calculate_rmse(derivz_stencil, derivz_cfd, sz);
-
-    std::cout << std::endl
-              << GRN << "===COMPARING CFD TO STENCIL TEST RESULTS===" << NRM
-              << std::endl;
-    std::cout << "   deriv_x : rmse = \t" << rmse_x << "\tmin_err = \t" << min_x
-              << "\tmax_err = \t" << max_x << std::endl;
-    std::cout << "   deriv_y : rmse = \t" << rmse_y << "\tmin_err = \t" << min_y
-              << "\tmax_err = \t" << max_y << std::endl;
-    std::cout << "   deriv_z : rmse = \t" << rmse_z << "\tmin_err = \t" << min_z
-              << "\tmax_err = \t" << max_z << std::endl;
-
-    std::tie(rmse_x, min_x, max_x) =
-        calculate_rmse(derivxx_stencil, derivxx_cfd, sz);
-    std::tie(rmse_y, min_y, max_y) =
-        calculate_rmse(derivyy_stencil, derivyy_cfd, sz);
-    std::tie(rmse_z, min_z, max_z) =
-        calculate_rmse(derivzz_stencil, derivzz_cfd, sz);
-    std::cout << std::endl
-              << GRN
-              << "===COMPARING CFD TO STENCIL TEST RESULTS - 2ND ORDER==="
-              << NRM << std::endl;
-    std::cout << "   deriv_xx : rmse = \t" << rmse_x << "\tmin_err = \t"
-              << min_x << "\tmax_err = \t" << max_x << std::endl;
-    std::cout << "   deriv_yy : rmse = \t" << rmse_y << "\tmin_err = \t"
-              << min_y << "\tmax_err = \t" << max_y << std::endl;
-    std::cout << "   deriv_zz : rmse = \t" << rmse_z << "\tmin_err = \t"
-              << min_z << "\tmax_err = \t" << max_z << std::endl;
+    double_t mae_min_x, mae_max_x, mae_x, mae_min_y, mae_max_y, mae_y,
+        mae_min_z, mae_max_z, mae_z;
 
     if (u_dx != nullptr && u_dy != nullptr && u_dz != nullptr) {
         // then compute the "error" difference between the two
@@ -977,31 +1005,42 @@ void test_cfd_with_original_stencil(
             calculate_rmse(derivy_stencil, u_dy, sz);
         std::tie(rmse_z, min_z, max_z) =
             calculate_rmse(derivz_stencil, u_dz, sz);
+        std::tie(mae_x, mae_min_x, mae_max_x) =
+            calculate_mae(derivx_stencil, u_dx, sz);
+        std::tie(mae_y, mae_min_y, mae_max_y) =
+            calculate_mae(derivy_stencil, u_dy, sz);
+        std::tie(mae_z, mae_min_z, mae_max_z) =
+            calculate_mae(derivz_stencil, u_dz, sz);
 
         std::cout << std::endl
-                  << GRN << "===COMPARING STENCIL TO TRUTH RESULTS===" << NRM
+                  << GRN << "===STENCIL TO TRUTH RESULTS===" << NRM
                   << std::endl;
-        std::cout << "   deriv_x : rmse = \t" << rmse_x << "\tmin_err = \t"
-                  << min_x << "\tmax_err = \t" << max_x << std::endl;
-        std::cout << "   deriv_y : rmse = \t" << rmse_y << "\tmin_err = \t"
-                  << min_y << "\tmax_err = \t" << max_y << std::endl;
-        std::cout << "   deriv_z : rmse = \t" << rmse_z << "\tmin_err = \t"
-                  << min_z << "\tmax_err = \t" << max_z << std::endl;
+        print_rmse_mae_results(min_x, max_x, rmse_x, mae_min_x, mae_max_x,
+                               mae_x, "x");
+        print_rmse_mae_results(min_y, max_y, rmse_y, mae_min_y, mae_max_y,
+                               mae_y, "y");
+        print_rmse_mae_results(min_z, max_z, rmse_z, mae_min_z, mae_max_z,
+                               mae_z, "z");
 
         // then compute the "error" difference between the two
         std::tie(rmse_x, min_x, max_x) = calculate_rmse(derivx_cfd, u_dx, sz);
         std::tie(rmse_y, min_y, max_y) = calculate_rmse(derivy_cfd, u_dy, sz);
         std::tie(rmse_z, min_z, max_z) = calculate_rmse(derivz_cfd, u_dz, sz);
+        std::tie(mae_x, mae_min_x, mae_max_x) =
+            calculate_mae(derivx_cfd, u_dx, sz);
+        std::tie(mae_y, mae_min_y, mae_max_y) =
+            calculate_mae(derivy_cfd, u_dy, sz);
+        std::tie(mae_z, mae_min_z, mae_max_z) =
+            calculate_mae(derivz_cfd, u_dz, sz);
 
         std::cout << std::endl
-                  << GRN << "===COMPARING CFD TO TRUTH RESULTS===" << NRM
-                  << std::endl;
-        std::cout << "   deriv_x : rmse = \t" << rmse_x << "\tmin_err = \t"
-                  << min_x << "\tmax_err = \t" << max_x << std::endl;
-        std::cout << "   deriv_y : rmse = \t" << rmse_y << "\tmin_err = \t"
-                  << min_y << "\tmax_err = \t" << max_y << std::endl;
-        std::cout << "   deriv_z : rmse = \t" << rmse_z << "\tmin_err = \t"
-                  << min_z << "\tmax_err = \t" << max_z << std::endl;
+                  << GRN << "===CFD TO TRUTH RESULTS===" << NRM << std::endl;
+        print_rmse_mae_results(min_x, max_x, rmse_x, mae_min_x, mae_max_x,
+                               mae_x, "x");
+        print_rmse_mae_results(min_y, max_y, rmse_y, mae_min_y, mae_max_y,
+                               mae_y, "y");
+        print_rmse_mae_results(min_z, max_z, rmse_z, mae_min_z, mae_max_z,
+                               mae_z, "z");
     }
 
     if (u_dxx != nullptr && u_dyy != nullptr && u_dzz != nullptr) {
@@ -1012,34 +1051,89 @@ void test_cfd_with_original_stencil(
             calculate_rmse(derivyy_stencil, u_dyy, sz);
         std::tie(rmse_z, min_z, max_z) =
             calculate_rmse(derivzz_stencil, u_dzz, sz);
+        std::tie(mae_x, mae_min_x, mae_max_x) =
+            calculate_mae(derivxx_stencil, u_dxx, sz);
+        std::tie(mae_y, mae_min_y, mae_max_y) =
+            calculate_mae(derivyy_stencil, u_dyy, sz);
+        std::tie(mae_z, mae_min_z, mae_max_z) =
+            calculate_mae(derivzz_stencil, u_dzz, sz);
 
         std::cout << std::endl
-                  << GRN
-                  << "===COMPARING STENCIL TO TRUTH RESULTS - 2ND ORDER==="
-                  << NRM << std::endl;
-        std::cout << "   deriv_xx : rmse = \t" << rmse_x << "\tmin_err = \t"
-                  << min_x << "\tmax_err = \t" << max_x << std::endl;
-        std::cout << "   deriv_yy : rmse = \t" << rmse_y << "\tmin_err = \t"
-                  << min_y << "\tmax_err = \t" << max_y << std::endl;
-        std::cout << "   deriv_zz : rmse = \t" << rmse_z << "\tmin_err = \t"
-                  << min_z << "\tmax_err = \t" << max_z << std::endl;
+                  << GRN << "===STENCIL TO TRUTH RESULTS - 2ND ORDER===" << NRM
+                  << std::endl;
+        print_rmse_mae_results(min_x, max_x, rmse_x, mae_min_x, mae_max_x,
+                               mae_x, "x");
+        print_rmse_mae_results(min_y, max_y, rmse_y, mae_min_y, mae_max_y,
+                               mae_y, "y");
+        print_rmse_mae_results(min_z, max_z, rmse_z, mae_min_z, mae_max_z,
+                               mae_z, "z");
 
         // then compute the "error" difference between the two
         std::tie(rmse_x, min_x, max_x) = calculate_rmse(derivxx_cfd, u_dxx, sz);
         std::tie(rmse_y, min_y, max_y) = calculate_rmse(derivyy_cfd, u_dyy, sz);
         std::tie(rmse_z, min_z, max_z) = calculate_rmse(derivzz_cfd, u_dzz, sz);
+        std::tie(mae_x, mae_min_x, mae_max_x) =
+            calculate_mae(derivxx_cfd, u_dxx, sz);
+        std::tie(mae_y, mae_min_y, mae_max_y) =
+            calculate_mae(derivyy_cfd, u_dyy, sz);
+        std::tie(mae_z, mae_min_z, mae_max_z) =
+            calculate_mae(derivzz_cfd, u_dzz, sz);
 
         std::cout << std::endl
-                  << GRN
-                  << "===COMPARING CFD TO TRUTH RESULTS - 2ND ORDER===" << NRM
+                  << GRN << "===CFD TO TRUTH RESULTS - 2ND ORDER===" << NRM
                   << std::endl;
-        std::cout << "   deriv_xx : rmse = \t" << rmse_x << "\tmin_err = \t"
-                  << min_x << "\tmax_err = \t" << max_x << std::endl;
-        std::cout << "   deriv_yy : rmse = \t" << rmse_y << "\tmin_err = \t"
-                  << min_y << "\tmax_err = \t" << max_y << std::endl;
-        std::cout << "   deriv_zz : rmse = \t" << rmse_z << "\tmin_err = \t"
-                  << min_z << "\tmax_err = \t" << max_z << std::endl;
+        print_rmse_mae_results(min_x, max_x, rmse_x, mae_min_x, mae_max_x,
+                               mae_x, "x");
+        print_rmse_mae_results(min_y, max_y, rmse_y, mae_min_y, mae_max_y,
+                               mae_y, "y");
+        print_rmse_mae_results(min_z, max_z, rmse_z, mae_min_z, mae_max_z,
+                               mae_z, "z");
     }
+
+    // calculate error for CFD to truth first
+    std::tie(rmse_x, min_x, max_x) =
+        calculate_rmse(derivx_stencil, derivx_cfd, sz);
+    std::tie(rmse_y, min_y, max_y) =
+        calculate_rmse(derivy_stencil, derivy_cfd, sz);
+    std::tie(rmse_z, min_z, max_z) =
+        calculate_rmse(derivz_stencil, derivz_cfd, sz);
+    std::tie(mae_x, mae_min_x, mae_max_x) =
+        calculate_mae(derivx_stencil, derivx_cfd, sz);
+    std::tie(mae_y, mae_min_y, mae_max_y) =
+        calculate_mae(derivy_stencil, derivy_cfd, sz);
+    std::tie(mae_z, mae_min_z, mae_max_z) =
+        calculate_mae(derivz_stencil, derivz_cfd, sz);
+
+    std::cout << std::endl
+              << GRN << "===CFD TO STENCIL TEST RESULTS===" << NRM << std::endl;
+    print_rmse_mae_results(min_x, max_x, rmse_x, mae_min_x, mae_max_x, mae_x,
+                           "x");
+    print_rmse_mae_results(min_y, max_y, rmse_y, mae_min_y, mae_max_y, mae_y,
+                           "y");
+    print_rmse_mae_results(min_z, max_z, rmse_z, mae_min_z, mae_max_z, mae_z,
+                           "z");
+
+    std::tie(rmse_x, min_x, max_x) =
+        calculate_rmse(derivxx_stencil, derivxx_cfd, sz);
+    std::tie(rmse_y, min_y, max_y) =
+        calculate_rmse(derivyy_stencil, derivyy_cfd, sz);
+    std::tie(rmse_z, min_z, max_z) =
+        calculate_rmse(derivzz_stencil, derivzz_cfd, sz);
+    std::tie(mae_x, mae_min_x, mae_max_x) =
+        calculate_mae(derivxx_stencil, derivxx_cfd, sz);
+    std::tie(mae_y, mae_min_y, mae_max_y) =
+        calculate_mae(derivyy_stencil, derivyy_cfd, sz);
+    std::tie(mae_z, mae_min_z, mae_max_z) =
+        calculate_mae(derivzz_stencil, derivzz_cfd, sz);
+    std::cout << std::endl
+              << GRN << "===CFD TO STENCIL TEST RESULTS - 2ND ORDER===" << NRM
+              << std::endl;
+    print_rmse_mae_results(min_x, max_x, rmse_x, mae_min_x, mae_max_x, mae_x,
+                           "x");
+    print_rmse_mae_results(min_y, max_y, rmse_y, mae_min_y, mae_max_y, mae_y,
+                           "y");
+    print_rmse_mae_results(min_z, max_z, rmse_z, mae_min_z, mae_max_z, mae_z,
+                           "z");
 
 #if 0
     // dump for visaliztaion
