@@ -19,7 +19,6 @@ int main(int argc, char *argv[]) {
     for (auto &coeff : coeffs) {
         std::cout << coeff << ", ";
     }
-
     std::cout << std::endl;
 
     auto coeffs_bdy =
@@ -33,6 +32,15 @@ int main(int argc, char *argv[]) {
         std::cout << std::endl;
     }
 
+    std::cout << std::endl;
+
+    auto coeffs_again =
+        dendroderivs::nova::create_continuous_nova<double>(13, 4, 7, 1);
+
+    std::cout << "COEFFS: AGAIN: ";
+    for (auto &coeff : coeffs_again) {
+        std::cout << coeff << ", ";
+    }
     std::cout << std::endl;
 
     return 0;
