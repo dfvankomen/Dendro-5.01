@@ -9,7 +9,7 @@ MatrixDiagonalEntries* createE4DiagonalsFirstOrder() {
     // D_x coeffs
     // row 1
     // boundary elements for P matrix for 1st derivative
-    std::vector<std::vector<double>> P1DiagBoundary{{1.0}};
+    std::vector<std::vector<double>> P1DiagBoundary{{1.0, 0.0}, {0.0, 1.0}};
     // diagonal elements for P matrix for 1st derivative
     std::vector<double> P1DiagInterior{1.0};
     // boundary elements for Q matrix for 1st derivative
@@ -29,7 +29,7 @@ MatrixDiagonalEntries* createE4DiagonalsSecondOrder() {
     // D_x coeffs
     // row 1
     // boundary elements for P matrix for 1st derivative
-    std::vector<std::vector<double>> P1DiagBoundary{{1.0}};
+    std::vector<std::vector<double>> P1DiagBoundary{{1.0, 0.0}, {0.0, 1.0}};
     // diagonal elements for P matrix for 1st derivative
     std::vector<double> P1DiagInterior{1.0};
     // boundary elements for Q matrix for 1st derivative
@@ -51,7 +51,8 @@ MatrixDiagonalEntries* createE6DiagonalsFirstOrder() {
     // D_x coeffs
     // row 1
     // boundary elements for P matrix for 1st derivative
-    std::vector<std::vector<double>> P1DiagBoundary{{1.0}};
+    std::vector<std::vector<double>> P1DiagBoundary{
+        {1.0, 0.0, 0.0}, {0.0, 1.0, 0.0}, {0.0, 0.0, 1.0}};
     // diagonal elements for P matrix for 1st derivative
     std::vector<double> P1DiagInterior{1.0};
     // boundary elements for Q matrix for 1st derivative
@@ -75,7 +76,8 @@ MatrixDiagonalEntries* createE6DiagonalsSecondOrder() {
     // D_x coeffs
     // row 1
     // boundary elements for P matrix for 1st derivative
-    std::vector<std::vector<double>> P1DiagBoundary{{1.0}};
+    std::vector<std::vector<double>> P1DiagBoundary{
+        {1.0}, {0.0, 1.0}, {0.0, 0.0, 1.0}};
     // diagonal elements for P matrix for 1st derivative
     std::vector<double> P1DiagInterior{1.0};
     // boundary elements for Q matrix for 1st derivative

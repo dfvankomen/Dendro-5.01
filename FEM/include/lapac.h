@@ -19,9 +19,12 @@
 #include <cstring>
 #include <iomanip>
 #include <iostream>
+#include <vector>
 
 // #include "lapacke.h"
 
+extern "C" void sgesv_(int* n, int* nrhs, double* a, int* lda, int* ipiv,
+                       double* b, int* ldb, int* info);
 extern "C" void dgesv_(int* n, int* nrhs, double* a, int* lda, int* ipiv,
                        double* b, int* ldb, int* info);
 extern "C" void dsyev_(char* jobz, char* uplo, int* n, double* a, int* lda,
@@ -208,6 +211,61 @@ inline void lapack_DSYEV(int n, const double* A, int lda, double* wr,
     delete[] L;
     if (info != 0) std::cout << "lapack eigen solve failed. " << std::endl;
     return;
+}
+
+// vector implementation of solving a linear system
+template <typename T>
+inline std::vector<T> solveLinearSystem(const std::vector<T>& A,
+                                        std::vector<T>& B, int n, int nrhs,
+                                        bool A_COL_ORDER = true,
+                                        bool B_COL_ORDER = true) {
+    // copy A
+    std::vector<T> L = A;
+    // copy B
+    std::vector<T> X = B;
+
+    std::vector<int> ipiv(n);
+
+    if (!A_COL_ORDER) {
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                L[i * n + j] = A[j * n + i];
+            }
+        }
+    }
+
+    if (!B_COL_ORDER) {
+        for (int i = 0; i < nrhs; i++) {
+            for (int j = 0; j < n; j++) {
+                X[i * n + j] = B[j * nrhs + i];
+            }
+        }
+    }
+
+    // then call sgesv or dgesv
+    int info;
+
+    if constexpr (std::is_same_v<T, float>) {
+        sgesv_(&n, &nrhs, L.data(), &n, ipiv.data(), X.data(), &n, &info);
+    } else if constexpr (std::is_same_v<T, double>) {
+        dgesv_(&n, &nrhs, L.data(), &n, ipiv.data(), X.data(), &n, &info);
+    } else {
+        static_assert(std::is_same_v<T, float> || std::is_same_v<T, double>,
+                      "Type must be either float or double!");
+    }
+
+    if (info > 0) {
+        std::cerr << "The diagonal element of the triangular factor of A,\n";
+        std::cerr << "U(" << info << "," << info
+                  << ") is zero; A is singular;\n";
+        std::cerr << "the solution could not be computed.\n";
+        return X;
+    } else if (info < 0) {
+        std::cerr << "LAPACK DGESV failed with error code: " << info << "\n";
+        return X;
+    }
+
+    return X;
 }
 
 /**
