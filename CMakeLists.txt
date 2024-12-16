@@ -832,7 +832,7 @@ FetchContent_MakeAvailable(toml11)
 
 set(SOURCE_FILES test/src/testCompactDerivs.cpp)
 add_executable(testCompactDerivs ${SOURCE_FILES})
-target_link_libraries(testCompactDerivs dendro5 ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
+target_link_libraries(testCompactDerivs dendro5 -llapacke ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
                       m toml11::toml11)
 target_include_directories(testCompactDerivs
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -855,3 +855,28 @@ target_include_directories(testCompactDerivs
 target_include_directories(testCompactDerivs PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(testCompactDerivs PRIVATE ${GSL_INCLUDE_DIRS})
 
+
+set(SOURCE_FILES test/src/testNova.cpp)
+add_executable(testNOVA ${SOURCE_FILES})
+target_link_libraries(testNOVA dendro5 ${BLAS_LIBRARIES} -llapacke ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
+                      m toml11::toml11)
+target_include_directories(testNOVA
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(testNOVA
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/derivatives)
+target_include_directories(testNOVA
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(testNOVA
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(testNOVA
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(testNOVA
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(testNOVA
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(testNOVA
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(testNOVA
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(testNOVA PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(testNOVA PRIVATE ${GSL_INCLUDE_DIRS})

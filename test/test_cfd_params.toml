@@ -1,7 +1,7 @@
 "eleorder" = 6
-"deriv_type" = "BYUP8"
-# "deriv_type_2nd" = "E6"
-"deriv_type_2nd" = "BYUP8"
+# "deriv_type" = "EXPERIMENTAL"
+"deriv_type" = "E6"
+"deriv_type_2nd" = "E6"
 # "filter_type" = 7
 
 # this is the "order" that should be used for the regular derivatives
