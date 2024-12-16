@@ -9,6 +9,7 @@
 #include "derivatives/derivs_utils.h"
 #include "lapac.h"
 #include "mathUtils.h"
+#include "refel.h"
 
 #define _DENDRODERIV_USE_INV_METHOD 0
 
@@ -64,6 +65,17 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
         std::vector<double> Q_temp = create_Q_from_diagonals(
             *diagEntries, n, Q_parity, boundary_top, boundary_bottom);
 
+#if 0
+        if (n == pw * 6 + 1) {
+            std::cout << "P MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(P_temp.data(), n, n);
+
+            std::cout << "Q MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(Q_temp.data(), n, n);
+            std::cout << std::endl;
+        }
+#endif
+
         std::vector<double>* const D_ptr =
             get_deriv_mat_by_boundary(derivMatrixPtr.get(), b);
 
@@ -104,6 +116,14 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
             // this should directly solve for the matrix inverse
         }
 
+#if 1
+        if (n == pw * 4 + 1) {
+            std::cout << "D MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(D_ptr->data(), n, n);
+            std::cout << std::endl << std::endl << std::endl;
+        }
+#endif
+
         // std::cout << "P is: " << std::endl;
         // printArray_2D_transpose(P_temp.data(), n, n);
         // std::cout << "Q is: " << std::endl;
@@ -130,6 +150,20 @@ void MatrixCompactDerivs<DerivOrder>::init() {
         // std::cout << " n = " << n << " and i==1:" << (i == 1) << std::endl;
         D_storage_map_.emplace(n, createMatrixSystemForSingleSize<DerivOrder>(
                                       p_pw, n, diagEntries, i == 1));
+
+#if 0
+        if (i == 1) {
+            // print out the matrix:
+            std::cout << "NORMAL D MATRIX:" << std::endl;
+            printArray_2D_transpose(D_storage_map_[n]->D_original.data(), n, n);
+
+            std::cout << std::endl << "LEFT D MATRIX:" << std::endl;
+            printArray_2D_transpose(D_storage_map_[n]->D_left.data(), n, n);
+
+            std::cout << std::endl << "RIGHT D MATRIX:" << std::endl;
+            printArray_2D_transpose(D_storage_map_[n]->D_right.data(), n, n);
+        }
+#endif
     }
 }
 
