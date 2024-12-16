@@ -91,6 +91,7 @@ set(DENDRO_INCLUDE_FILES
     include/derivatives/impl_byuderivs.h
     include/derivatives/impl_kimderivs.h
     include/derivatives/impl_jonathantyler.h
+    include/derivatives/impl_hybrid_approaches.h
     include/derivatives/filt_kodiss_explicit.h
 )
 
@@ -126,6 +127,7 @@ set(DENDRO_SOURCE_FILES
     src/derivatives/impl_byuderivs.cpp
     src/derivatives/impl_kimderivs.cpp
     src/derivatives/impl_jonathantyler.cpp
+    src/derivatives/impl_hybrid_approaches.cpp
     src/derivatives/filt_kodiss_explicit.cpp
 )
 
