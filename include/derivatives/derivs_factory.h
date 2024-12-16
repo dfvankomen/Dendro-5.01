@@ -1,11 +1,13 @@
 #pragma once
 
+#include <memory>
 #include <stdexcept>
 
 #include "derivatives.h"
 #include "derivatives/derivs_explicit.h"
 #include "derivatives/impl_byuderivs.h"
 #include "derivatives/impl_explicitmatrix.h"
+#include "derivatives/impl_hybrid_approaches.h"
 #include "derivatives/impl_jonathantyler.h"
 #include "derivatives/impl_kimderivs.h"
 
@@ -62,7 +64,12 @@ class DerivsFactory {
         } else if (name == "BYUP8") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsP8_R4_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "EXPERIMENTAL") {
+            return std::unique_ptr<Derivs>(
+                new TestingHybridDerivatives_FirstOrder(
+                    std::forward<Args>(args)...));
         }
+
         return nullptr;
     }
 
