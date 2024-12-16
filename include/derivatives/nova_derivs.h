@@ -4,8 +4,6 @@
 #include <cmath>
 #include <complex>
 #include <cstdint>
-#include <iomanip>
-#include <iostream>
 #include <numeric>
 #include <stdexcept>
 #include <type_traits>
@@ -15,7 +13,7 @@
 
 /**
  * NOVA Derivatives taken from William Kevin Black's repository:
- * 
+ *
  * https://bitbucket.org/wkblack/nova_alpha/src/master/
  *
  */
@@ -127,8 +125,6 @@ std::vector<T> generate_coeffs(std::vector<int32_t> j, size_t k, size_t p = 1,
                                bool use_analytic = true, double eps = 1e-12) {
     size_t N = j.size();
 
-    std::cout << N << ", " << k << ", " << p << std::endl;
-
     // check the corner cases
     if (k < p + 1) {
         throw std::invalid_argument(
@@ -219,8 +215,8 @@ std::vector<T> generate_coeffs(std::vector<int32_t> j, size_t k, size_t p = 1,
     // B vector
     std::vector<T> b(k, 0.0);
 
-    uint64_t p_bang = factorial(p);
-    b[p]            = -2.0 * T(p_bang);
+    uint64_t p_bang      = factorial(p);
+    b[p]                 = -2.0 * T(p_bang);
 
     // solve for the lambda values
     std::vector<T> lambs = lapack::solveLinearSystem(M, b, k, 1);
@@ -268,6 +264,18 @@ std::vector<T> generate_coeffs(std::vector<int32_t> j, size_t k, size_t p = 1,
     return c;
 }
 
+/**
+ * @brief Creates the vector-of-vectors for boundary conditions
+ *
+ * @tparam The type the output vector should be in
+ * @param n The number of points you have available for the stencil
+ * @param nb The number of boundaries to create
+ * @param k The "accuracy" of derivative + 1, (i.e. for 6th, enter 7)
+ * @param p The derivative order
+ * @param eps Epsilon for computation checks
+ *
+ * @note This is honestly a glorified wrapper for generate_coeffs
+ */
 template <typename T>
 inline std::vector<std::vector<T>> create_nova_boundaries(size_t n, size_t nb,
                                                           size_t k, size_t p,
@@ -285,11 +293,25 @@ inline std::vector<std::vector<T>> create_nova_boundaries(size_t n, size_t nb,
             j[jj] = jj - ii;
         }
 
-        coeffs.push_back(generate_coeffs(j, k, p, true, true, eps));
+        coeffs.push_back(generate_coeffs<T>(j, k, p, true, true, eps));
     }
 
-    // TODO: this is wrong
     return coeffs;
+}
+
+template <typename T>
+inline std::vector<T> create_continuous_nova(size_t n, int32_t zero_idx,
+                                             size_t k, size_t p,
+                                             double eps = 1e-3) {
+    // vector of points to feed into the generate_coeffs function
+    std::vector<int32_t> j(n);
+
+    // then fill the j point
+    for (int32_t idx = 0; idx < n; ++idx) {
+        j[idx] = idx - zero_idx;
+    }
+
+    return generate_coeffs<T>(j, k, p, true, true, eps);
 }
 
 }  // namespace nova
