@@ -117,13 +117,22 @@ add_definitions(-DOCT2BLK_COARSEST_LEV=${OCT2BLK_COARSEST_LEV})
 
 if(WITH_BLAS_LAPACK)
   add_definitions(-DWITH_BLAS_LAPACK)
+
+  # Find BLAS and LAPACK
   find_package(BLAS REQUIRED)
   find_package(LAPACK REQUIRED)
-  set(LAPACK_LINKER_FLAGS -llapacke -llapack -lblas -lgfortran -lquadmath)
-  set(LAPACKE_DIR $ENV{LAPACK}/LAPACKE)
-  set(LINK_FLAGS "${LINK_FLAGS} ${LAPACK_LINKER_FLAGS}")
-  set(LAPACK_LIBRARIES ${LAPACK_LIBRARIES} ${LAPACKE_LIB})
-  message(STATUS ${LAPACK_LIBRARIES})
+
+  # check if LAPACKE is available
+  find_package(LAPACK REQUIRED)
+
+  message(STATUS "BLAS libraries: ${BLAS_LIBRARIES}")
+  message(STATUS "LAPACK libraries: ${LAPACK_LIBRARIES}")
+
+#  set(LAPACK_LINKER_FLAGS -llapacke -llapack -lblas -lgfortran -lquadmath)
+#  set(LAPACKE_DIR $ENV{LAPACK}/LAPACKE)
+#  set(LINK_FLAGS "${LINK_FLAGS} ${LAPACK_LINKER_FLAGS}")
+#  set(LAPACK_LIBRARIES ${LAPACK_LIBRARIES} ${LAPACKE_LIB})
+#  message(STATUS ${LAPACK_LIBRARIES})
 
   if(CMAKE_CXX_COMPILER_ID STREQUAL "Intel")
     message(
