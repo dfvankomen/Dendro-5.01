@@ -19,8 +19,24 @@ namespace dendroderivs {
 struct MatrixDiagonalEntries {
     std::vector<double> PDiagInterior;
     std::vector<std::vector<double>> PDiagBoundary;
+    std::vector<std::vector<double>> PDiagBoundaryLower;
     std::vector<double> QDiagInterior;
     std::vector<std::vector<double>> QDiagBoundary;
+    std::vector<std::vector<double>> QDiagBoundaryLower;
+
+    MatrixDiagonalEntries(std::vector<double> PDiagInterior,
+                          std::vector<std::vector<double>> PDiagBoundary,
+                          std::vector<double> QDiagInterior,
+                          std::vector<std::vector<double>> QDiagBoundary)
+        : PDiagInterior{PDiagInterior},
+          PDiagBoundary{PDiagBoundary},
+          QDiagInterior{QDiagInterior},
+          QDiagBoundary{QDiagBoundary} {
+        // by default we need to make sure the diag boundaries are equal, unless
+        // they're all sent in!
+        PDiagBoundaryLower = PDiagBoundary;
+        QDiagBoundaryLower = QDiagBoundary;
+    }
 
     void toStdOut() {
         std::cout << "PDiagInterior: ";
@@ -34,12 +50,26 @@ struct MatrixDiagonalEntries {
                 std::cout << b << " ";
             }
         }
+        std::cout << std::endl << "PDiagBoundaryLower: ";
+        for (auto &a : PDiagBoundaryLower) {
+            std::cout << std::endl;
+            for (auto &b : a) {
+                std::cout << b << " ";
+            }
+        }
         std::cout << std::endl << "QDiagInterior: ";
         for (auto &a : QDiagInterior) {
             std::cout << a << " ";
         }
         std::cout << std::endl << "QDiagBoundary: ";
         for (auto &a : QDiagBoundary) {
+            std::cout << std::endl;
+            for (auto &b : a) {
+                std::cout << b << " ";
+            }
+        }
+        std::cout << std::endl << "QDiagBoundaryLower: ";
+        for (auto &a : QDiagBoundaryLower) {
             std::cout << std::endl;
             for (auto &b : a) {
                 std::cout << b << " ";
@@ -66,6 +96,7 @@ inline bool check_size_and_boundary_terms(
  */
 std::vector<double> createMatrix(
     const std::vector<std::vector<double>> &diag_boundary,
+    const std::vector<std::vector<double>> &diag_boundary_btm,
     const std::vector<double> &diag_interior, const unsigned int n,
     const double parity, const unsigned int boundary_top = 0,
     const unsigned int boundary_bottom = 0);

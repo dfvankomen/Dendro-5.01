@@ -107,6 +107,7 @@ CompactDerivs::~CompactDerivs() {
 
 std::vector<double> createMatrix(
     const std::vector<std::vector<double>> &diag_boundary,
+    const std::vector<std::vector<double>> &diag_boundary_btm,
     const std::vector<double> &diag_interior, const unsigned int n,
     const double parity, const unsigned int boundary_top,
     const unsigned int boundary_bottom) {
@@ -122,6 +123,11 @@ std::vector<double> createMatrix(
 
     // TODO: quick checks to make sure we can fit everything in here
     if (!check_size_and_boundary_terms(diag_boundary, n_fill)) {
+        throw std::runtime_error(
+            "Error, there aren't enough spaces in the matrix to fit the "
+            "boundaries! Either increase N or use a different scheme!");
+    }
+    if (!check_size_and_boundary_terms(diag_boundary_btm, n_fill)) {
         throw std::runtime_error(
             "Error, there aren't enough spaces in the matrix to fit the "
             "boundaries! Either increase N or use a different scheme!");
@@ -156,21 +162,31 @@ std::vector<double> createMatrix(
 
             // top boundary
             outmat[IDXN(top_i, top_j, n_fill)] = curr_row[col];
+        }
+    }
 
-            // bottom boundary
-            if (top_i != bottom_i || top_j != bottom_j) {
-                outmat[IDXN(bottom_i, bottom_j, n_fill)] =
-                    parity * curr_row[col];
-            }
+    const size_t last_row_btm = diag_boundary_btm.size() - 1;
+    const size_t last_col_btm = n_fill - 1;
+    for (int row = 0; row <= last_row_btm; row++) {
+        size_t bottom_i      = last_col - row;
+        const auto &curr_row = diag_boundary_btm[row];
+        size_t n_cols        = curr_row.size();
+
+        for (int col = 0; col < n_cols; col++) {
+            size_t bottom_j                          = last_col - col;
+
+            // bottom boundary, it overwrites anything potential done by top
+            outmat[IDXN(bottom_i, bottom_j, n_fill)] = parity * curr_row[col];
         }
     }
 
     // then we build the number of rows for interior
-    size_t ku            = (diag_interior.size() - 1u) / 2u;
-    size_t boundary_size = diag_boundary.size();
-    size_t interior_size = diag_interior.size();
+    size_t ku                = (diag_interior.size() - 1u) / 2u;
+    size_t boundary_size     = diag_boundary.size();
+    size_t boundary_size_btm = diag_boundary_btm.size();
+    size_t interior_size     = diag_interior.size();
 
-    for (size_t i = boundary_size; i < n_fill - boundary_size; i++) {
+    for (size_t i = boundary_size; i < n_fill - boundary_size_btm; i++) {
         for (size_t j = 0; j < interior_size; j++) {
             size_t col                   = i - ku + j;
 
@@ -208,6 +224,7 @@ std::vector<double> create_P_from_diagonals(
     const double parity, const unsigned int boundary_top,
     const unsigned int boundary_bottom) {
     return createMatrix(matrixDiagonals.PDiagBoundary,
+                        matrixDiagonals.PDiagBoundaryLower,
                         matrixDiagonals.PDiagInterior, n, parity, boundary_top,
                         boundary_bottom);
 }
@@ -217,6 +234,7 @@ std::vector<double> create_Q_from_diagonals(
     const double parity, const unsigned int boundary_top,
     const unsigned int boundary_bottom) {
     return createMatrix(matrixDiagonals.QDiagBoundary,
+                        matrixDiagonals.QDiagBoundaryLower,
                         matrixDiagonals.QDiagInterior, n, parity, boundary_top,
                         boundary_bottom);
 }

@@ -17,6 +17,16 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
     const bool skip_leftright = false);
 
 template <unsigned int DerivOrder>
+std::unique_ptr<DerivMatrixStorage>
+createMatrixSystemForSingleSizeAllUniqueDiags(
+    const unsigned int pw, const unsigned int n,
+    const MatrixDiagonalEntries *diagEntries,
+    const MatrixDiagonalEntries *diagEntriesLeft,
+    const MatrixDiagonalEntries *diagEntriesRight,
+    const MatrixDiagonalEntries *diagEntriesLeftRight,
+    const bool skip_leftright = false);
+
+template <unsigned int DerivOrder>
 class MatrixCompactDerivs : public CompactDerivs {
    protected:
     std::vector<double> workspace_;
