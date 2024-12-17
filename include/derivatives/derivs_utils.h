@@ -355,4 +355,17 @@ void matmul_z_dim(const double *const R, double *const Dzu,
                   const unsigned int *sz, double *const workspace,
                   const unsigned int bflag);
 
+std::vector<std::vector<double>> inline generate_identity_bdys(size_t nbdry) {
+    std::vector<std::vector<double>> bdry_coeffs;
+
+    for (size_t i = 0; i < nbdry; ++i) {
+        std::vector<double> temp(i + 1, 0);
+        temp[i] = 1.0;
+
+        bdry_coeffs.push_back(temp);
+    }
+
+    return bdry_coeffs;
+}
+
 }  // namespace dendroderivs
