@@ -4,8 +4,10 @@
 
 #include "derivatives/derivs_compact.h"
 #include "derivatives/derivs_matrixonly.h"
+#include "derivatives/derivs_utils.h"
 #include "derivatives/impl_explicitmatrix.h"
 #include "derivatives/impl_jonathantyler.h"
+#include "derivatives/nova_derivs.h"
 
 namespace dendroderivs {
 
@@ -31,32 +33,32 @@ class TestingHybridDerivatives_FirstOrder : public MatrixCompactDerivs<1> {
         // let's slot in E6's boundary terms'
         MatrixDiagonalEntries* temp_entries = createE6DiagonalsFirstOrder();
 
-        diagEntriesLeft->PDiagBoundaryLower = temp_entries->PDiagBoundaryLower;
-        diagEntriesLeft->QDiagBoundaryLower = temp_entries->QDiagBoundaryLower;
+        auto nova_bdys_normal =
+            nova::create_nova_boundaries<double>(10, 3, 9, 1);
+        auto nova_bdys_smaller =
+            nova::create_nova_boundaries<double>(10, 3, 9, 1);
 
-        diagEntriesRight->PDiagBoundary     = temp_entries->PDiagBoundary;
-        diagEntriesRight->QDiagBoundary     = temp_entries->QDiagBoundary;
+        auto p_bdrys_replace                     = generate_identity_bdys(3);
 
-        diagEntriesLeftRight->PDiagBoundary = temp_entries->PDiagBoundary;
-        diagEntriesLeftRight->QDiagBoundary = temp_entries->QDiagBoundary;
-        diagEntriesLeftRight->PDiagBoundaryLower =
-            temp_entries->PDiagBoundaryLower;
-        diagEntriesLeftRight->QDiagBoundaryLower =
-            temp_entries->QDiagBoundaryLower;
+        diagEntriesLeft->PDiagBoundaryLower      = p_bdrys_replace;
+        diagEntriesLeft->QDiagBoundaryLower      = nova_bdys_smaller;
+
+        diagEntriesRight->PDiagBoundary          = p_bdrys_replace;
+        diagEntriesRight->QDiagBoundary          = nova_bdys_smaller;
+
+        diagEntriesLeftRight->PDiagBoundary      = p_bdrys_replace;
+        diagEntriesLeftRight->QDiagBoundary      = nova_bdys_smaller;
+        diagEntriesLeftRight->PDiagBoundaryLower = p_bdrys_replace;
+        diagEntriesLeftRight->QDiagBoundaryLower = nova_bdys_smaller;
 
         // TEMP:
-        diagEntriesLeft->PDiagBoundary       = temp_entries->PDiagBoundary;
-        diagEntriesLeft->QDiagBoundary       = temp_entries->QDiagBoundary;
-        diagEntriesLeft->PDiagBoundaryLower  = temp_entries->PDiagBoundaryLower;
-        diagEntriesLeft->QDiagBoundaryLower  = temp_entries->QDiagBoundaryLower;
-        diagEntriesRight->PDiagBoundary      = temp_entries->PDiagBoundary;
-        diagEntriesRight->QDiagBoundary      = temp_entries->QDiagBoundary;
-        diagEntriesRight->PDiagBoundaryLower = temp_entries->PDiagBoundaryLower;
-        diagEntriesRight->QDiagBoundaryLower = temp_entries->QDiagBoundaryLower;
-        diagEntries->PDiagBoundary           = temp_entries->PDiagBoundary;
-        diagEntries->QDiagBoundary           = temp_entries->QDiagBoundary;
-        diagEntries->PDiagBoundaryLower      = temp_entries->PDiagBoundaryLower;
-        diagEntries->QDiagBoundaryLower      = temp_entries->QDiagBoundaryLower;
+
+        // modify the "main" boundaries
+        diagEntries->PDiagBoundary               = p_bdrys_replace;
+        diagEntries->QDiagBoundary               = nova_bdys_normal;
+        diagEntries->PDiagBoundaryLower          = p_bdrys_replace;
+        diagEntries->QDiagBoundaryLower          = nova_bdys_normal;
+
 
         delete temp_entries;
 
