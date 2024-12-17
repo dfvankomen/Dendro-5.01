@@ -35,7 +35,7 @@ int main(int argc, char *argv[]) {
     std::cout << std::endl;
 
     auto coeffs_again =
-        dendroderivs::nova::create_continuous_nova<double>(13, 4, 7, 1);
+        dendroderivs::nova::create_continuous_nova<double>(13, 6, 7, 1);
 
     std::cout << "COEFFS: AGAIN: ";
     for (auto &coeff : coeffs_again) {
