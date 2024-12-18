@@ -299,6 +299,40 @@ inline std::vector<std::vector<T>> create_nova_boundaries(size_t n, size_t nb,
     return coeffs;
 }
 
+/**
+ * @brief Creates the vector-of-vectors for "right" boundary conditions
+ *
+ * @tparam The type the output vector should be in
+ * @param n The number of points you have available for the stencil
+ * @param nb The number of boundaries to create
+ * @param k The "accuracy" of derivative + 1, (i.e. for 6th, enter 7)
+ * @param p The derivative order
+ * @param eps Epsilon for computation checks
+ *
+ * @note This is honestly a glorified wrapper for generate_coeffs
+ */
+template <typename T>
+inline std::vector<std::vector<T>> create_nova_boundaries_btm(
+    size_t n, size_t nb, size_t k, size_t p, double eps = 1e-3) {
+    // vector of points to feed into the generate_coeffs function
+    std::vector<int32_t> j(n);
+
+    std::vector<std::vector<T>> coeffs;
+
+    int start = -(n - 1);
+
+    // we'll only generate "boundary" coefficients, another function should be
+    // called for internal points
+    for (int32_t ii = 0; ii < nb; ++ii) {
+        // refill the j vector with the "offset" integers
+        std::iota(j.begin(), j.end(), start + ii);
+
+        coeffs.push_back(generate_coeffs<T>(j, k, p, true, true, eps));
+    }
+
+    return coeffs;
+}
+
 template <typename T>
 inline std::vector<T> create_continuous_nova(size_t n, int32_t zero_idx,
                                              size_t k, size_t p,
