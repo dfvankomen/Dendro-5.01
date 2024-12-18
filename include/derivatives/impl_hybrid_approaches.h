@@ -59,7 +59,6 @@ class TestingHybridDerivatives_FirstOrder : public MatrixCompactDerivs<1> {
         diagEntries->PDiagBoundaryLower          = p_bdrys_replace;
         diagEntries->QDiagBoundaryLower          = nova_bdys_normal;
 
-
         delete temp_entries;
 
         init_true();
@@ -86,7 +85,6 @@ class TestingHybridDerivatives_FirstOrder : public MatrixCompactDerivs<1> {
     }
 
     void init_true() {
-        std::cout << "INSIDE MY INIT" << std::endl;
         for (unsigned int i = 1; i <= 5; i++) {
             // calculate the size based on the element order
             const unsigned int n = (i + 1) * p_ele_order + 1;
@@ -96,6 +94,7 @@ class TestingHybridDerivatives_FirstOrder : public MatrixCompactDerivs<1> {
                        p_pw, n, diagEntries, diagEntriesLeft, diagEntriesRight,
                        diagEntriesLeftRight, i == 1));
 
+#if 0
             if (i == 1) {
                 // print out the matrix:
                 std::cout << "NORMAL D MATRIX:" << std::endl;
@@ -109,8 +108,8 @@ class TestingHybridDerivatives_FirstOrder : public MatrixCompactDerivs<1> {
                 printArray_2D_transpose(D_storage_map_[n]->D_right.data(), n,
                                         n);
             }
+#endif
         }
-        std::cout << "FINISHED MY INIT" << std::endl;
     }
 };
 
