@@ -227,7 +227,7 @@ class ExplicitDerivsO6_DX : public Derivs {
             gradz_func = &deriv644_z<5>;
         } else {
             throw std::invalid_argument(
-                "Explicit DerivsO4 DX requires a padding width of 2 to 5!");
+                "Explicit DerivsO6 DX requires a padding width of 2 to 5!");
         }
     }
 
@@ -254,7 +254,7 @@ class ExplicitDerivsO6_DX : public Derivs {
     }
 
     std::string toString() const override {
-        return "ExplicitDerivsO4_FirstOrder";
+        return "ExplicitDerivsO6_FirstOrder";
     };
 };
 
@@ -288,7 +288,7 @@ class ExplicitDerivsO6_DXX : public Derivs {
             gradz_func = &deriv644_zz<5>;
         } else {
             throw std::invalid_argument(
-                "Explicit DerivsO4 DXX requires a padding width of 2 to 5!");
+                "Explicit DerivsO6 DXX requires a padding width of 2 to 5!");
         }
     }
 
@@ -315,7 +315,7 @@ class ExplicitDerivsO6_DXX : public Derivs {
     }
 
     std::string toString() const override {
-        return "ExplicitDerivsO4_SecondOrder";
+        return "ExplicitDerivsO6_SecondOrder";
     };
 };
 
@@ -345,7 +345,7 @@ class ExplicitDerivsO8_DX : public Derivs {
             gradz_func = &deriv644_z<5>;
         } else {
             throw std::invalid_argument(
-                "Explicit DerivsO4 DX requires a padding width of 2 to 5!");
+                "Explicit DerivsO8 DX requires a padding width of 2 to 5!");
         }
     }
 
@@ -372,7 +372,7 @@ class ExplicitDerivsO8_DX : public Derivs {
     }
 
     std::string toString() const override {
-        return "ExplicitDerivsO4_FirstOrder";
+        return "ExplicitDerivsO8_FirstOrder";
     };
 };
 
@@ -402,7 +402,7 @@ class ExplicitDerivsO8_DXX : public Derivs {
             gradz_func = &deriv644_zz<5>;
         } else {
             throw std::invalid_argument(
-                "Explicit DerivsO4 DXX requires a padding width of 2 to 5!");
+                "Explicit DerivsO8 DXX requires a padding width of 2 to 5!");
         }
     }
 
@@ -429,7 +429,7 @@ class ExplicitDerivsO8_DXX : public Derivs {
     }
 
     std::string toString() const override {
-        return "ExplicitDerivsO4_SecondOrder";
+        return "ExplicitDerivsO8_SecondOrder";
     };
 };
 
