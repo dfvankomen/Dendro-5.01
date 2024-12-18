@@ -880,3 +880,30 @@ target_include_directories(testNOVA
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(testNOVA PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(testNOVA PRIVATE ${GSL_INCLUDE_DIRS})
+
+
+
+set(SOURCE_FILES test/src/derivativeConvergence.cpp test/src/derivativeCtx.cpp)
+add_executable(testDerivOnGrid ${SOURCE_FILES})
+target_link_libraries(testDerivOnGrid dendro5 ${BLAS_LIBRARIES} -llapacke ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
+                      m toml11::toml11)
+target_include_directories(testDerivOnGrid
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(testDerivOnGrid
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/derivatives)
+target_include_directories(testDerivOnGrid
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(testDerivOnGrid
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(testDerivOnGrid
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(testDerivOnGrid
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(testDerivOnGrid
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(testDerivOnGrid
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(testDerivOnGrid
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(testDerivOnGrid PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(testDerivOnGrid PRIVATE ${GSL_INCLUDE_DIRS})

@@ -116,7 +116,7 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
             // this should directly solve for the matrix inverse
         }
 
-#if 1
+#if 0
         if (n == pw * 4 + 1) {
             std::cout << "D MATRIX for n=" << n << std::endl;
             printArray_2D_transpose(D_ptr->data(), n, n);
@@ -200,7 +200,7 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
         std::vector<double> Q_temp = create_Q_from_diagonals(
             *tempDiagEntries, n, Q_parity, boundary_top, boundary_bottom);
 
-#if 1
+#if 0
         if (n == pw * 6 + 1) {
             std::cout << "P MATRIX for n=" << n << std::endl;
             printArray_2D_transpose(P_temp.data(), n, n);
@@ -251,7 +251,7 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
             // this should directly solve for the matrix inverse
         }
 
-#if 1
+#if 0
         if (n == pw * 6 + 1) {
             std::cout << "D MATRIX for n=" << n << " boundary type: " << b
                       << std::endl;
