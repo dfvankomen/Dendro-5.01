@@ -441,6 +441,10 @@ void DerivTestCtx::doDerivCalculation() {
     if (!(m_uiMesh->getMPIRankGlobal())) {
         std::cout << BLU << "[DERIV_TEST] - Finished computing DERIVATIVES!"
                   << NRM << std::endl;
+
+        std::cout << YLW
+                  << "[DERIV_TEST] - Now computing analytical derivatives..."
+                  << NRM << std::endl;
     }
 
     // then compute the analytical deriv solution
@@ -501,6 +505,12 @@ void DerivTestCtx::doDerivCalculation() {
                 }
     }
 
+    if (!(m_uiMesh->getMPIRank())) {
+        std::cout << YLW
+                  << "[DERIV_TEST] - Finished analytical, now syncing owners..."
+                  << NRM << std::endl;
+    }
+
     // NOTE: not sure if I need to actually do the communication here or
     // not I think BSSN did it simply because of the extraction step for
     // grav waves
@@ -514,8 +524,10 @@ void DerivTestCtx::doDerivCalculation() {
                                m_analytic_deriv_diff.get_dof());
 
     if (!(m_uiMesh->getMPIRank())) {
-        std::cout << "\t\tFinished computation of analytical derivs!"
-                  << std::endl;
+        std::cout
+            << BLU
+            << "[DERIV_TEST] - Success! Finished full test of derivatives!"
+            << NRM << std::endl;
     }
 }
 
