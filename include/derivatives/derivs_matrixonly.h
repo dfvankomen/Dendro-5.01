@@ -30,6 +30,7 @@ template <unsigned int DerivOrder>
 class MatrixCompactDerivs : public CompactDerivs {
    protected:
     std::vector<double> workspace_;
+    unsigned int workspace_dim_;
 
     std::unordered_map<unsigned int, std::unique_ptr<DerivMatrixStorage>>
         D_storage_map_;
@@ -43,6 +44,7 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         // establish workspace to be as large as our largest
         workspace_       = std::vector<double>(nsq * p_n, 0.0);
+        workspace_dim_   = p_n;
     }
     /**
      * Based on the crazy things that are being stored across all of these
@@ -71,8 +73,6 @@ class MatrixCompactDerivs : public CompactDerivs {
                 pair.second ? std::make_unique<DerivMatrixStorage>(*pair.second)
                             : nullptr;
         }
-    };
-    virtual ~MatrixCompactDerivs() {
 #ifdef DEBUG
         std::cout << "in MatrixCompactDerivs deconstructor" << std::endl;
 #endif
@@ -99,10 +99,24 @@ class MatrixCompactDerivs : public CompactDerivs {
             D_use =
                 get_deriv_mat_by_bflag_x(D_storage_map_[sz[0]].get(), bflag);
         } else {
+#ifdef DEBUG_MODE
+            std::cout << "[matonly:grad_x]: Matrix Size for " << sz[0]
+                      << " DOES NOT EXIST for deriv " << this->toString()
+                      << ", creating..." << std::endl;
+#endif
             // if it isn't, then we just have to create a new one for this size
             D_storage_map_.emplace(sz[0],
                                    createMatrixSystemForSingleSize<DerivOrder>(
                                        p_pw, sz[0], diagEntries, false));
+
+            // workspace_ also needs to be at least as large as this block
+            // TODO: consider setting workspace_ to being like 3 * largest_dim
+            if (sz[0] > workspace_dim_) {
+                workspace_dim_ = sz[0];
+                workspace_     = std::vector<double>(
+                    workspace_dim_ * workspace_dim_ * workspace_dim_);
+            }
+
             // then get it
             D_use =
                 get_deriv_mat_by_bflag_x(D_storage_map_[sz[0]].get(), bflag);
@@ -126,10 +140,22 @@ class MatrixCompactDerivs : public CompactDerivs {
             D_use =
                 get_deriv_mat_by_bflag_y(D_storage_map_[sz[1]].get(), bflag);
         } else {
+#ifdef DEBUG_MODE
+            std::cout << "[matonly:grad_y]: Matrix Size for " << sz[1]
+                      << " DOES NOT EXIST for deriv " << this->toString()
+                      << ", creating..." << std::endl;
+#endif
             // if it isn't, then we just have to create a new one for this size
             D_storage_map_.emplace(sz[1],
                                    createMatrixSystemForSingleSize<DerivOrder>(
                                        p_pw, sz[1], diagEntries, false));
+
+            if (sz[1] > workspace_dim_) {
+                workspace_dim_ = sz[1];
+                workspace_     = std::vector<double>(
+                    workspace_dim_ * workspace_dim_ * workspace_dim_);
+            }
+
             // then get it
             D_use =
                 get_deriv_mat_by_bflag_y(D_storage_map_[sz[1]].get(), bflag);
@@ -155,10 +181,22 @@ class MatrixCompactDerivs : public CompactDerivs {
             D_use =
                 get_deriv_mat_by_bflag_z(D_storage_map_[sz[2]].get(), bflag);
         } else {
+#ifdef DEBUG_MODE
+            std::cout << "[matonly:grad_z]: Matrix Size for " << sz[2]
+                      << " DOES NOT EXIST for deriv " << this->toString()
+                      << ", creating..." << std::endl;
+#endif
             // if it isn't, then we just have to create a new one for this size
             D_storage_map_.emplace(sz[2],
                                    createMatrixSystemForSingleSize<DerivOrder>(
                                        p_pw, sz[2], diagEntries, false));
+
+            if (sz[2] > workspace_dim_) {
+                workspace_dim_ = sz[1];
+                workspace_     = std::vector<double>(
+                    workspace_dim_ * workspace_dim_ * workspace_dim_);
+            }
+
             // then get it
             D_use =
                 get_deriv_mat_by_bflag_z(D_storage_map_[sz[2]].get(), bflag);
