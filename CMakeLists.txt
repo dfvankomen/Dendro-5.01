@@ -20,6 +20,36 @@ if(DENDROLIB_ISOLATED_DIR)
   include("CMakeLists-NonLibraryDefs.txt")
 endif()
 
+# configure third party libraries:
+
+include(FetchContent)
+# libxsmm configuration
+FetchContent_Declare(
+  xsmm
+  GIT_REPOSITORY https://github.com/libxsmm/libxsmm.git
+  # GIT_TAG        1.17
+  # older tag that I used in another project
+  # GIT_TAG 03f1da20478a43fca64d0a14f1afa9f687d0f070
+  # recent tag
+  GIT_TAG ffabf6eaa7547a46a2b191c2bf170470a3fd2c4a
+)
+
+FetchContent_GetProperties(xsmm)
+if(NOT xsmm_POPULATED)
+  FetchContent_Populate(xsmm)
+endif()
+set(LIBXSMMROOT ${xsmm_SOURCE_DIR})
+file(GLOB _GLOB_XSMM_SRCS LIST_DIRECTORIES false CONFIGURE_DEPENDS ${LIBXSMMROOT}/src/*.c)
+list(REMOVE_ITEM _GLOB_XSMM_SRCS ${LIBXSMMROOT}/src/libxsmm_generator_gemm_driver.c)
+set(XSMM_INCLUDE_DIRS ${LIBXSMMROOT}/include)
+add_library(xsmm STATIC ${_GLOB_XSMM_SRCS})
+target_include_directories(xsmm PUBLIC ${XSMM_INCLUDE_DIRS})
+target_compile_definitions(xsmm PUBLIC LIBXSMM_DEFAULT_CONFIG)
+target_compile_definitions(xsmm PRIVATE __BLAS=0)
+target_compile_definitions(xsmm PRIVATE _GNU_SOURCE)
+target_compile_definitions(xsmm PRIVATE STATIC=0)
+
+
 message(STATUS "Now setting the CMake files for the Dendro Library...")
 
 set(DENDRO_INCLUDE_FILES
@@ -290,6 +320,9 @@ if(BUILD_WITH_PETSC)
   target_include_directories(dendro5 PUBLIC ${PETSC_INCLUDES})
   target_link_libraries(dendro5 PUBLIC ${PETSC_LIBRARIES})
 endif()
+
+# link libxsmm
+target_link_libraries(dendro5 PUBLIC xsmm)
 
 # =======================
 # =======================

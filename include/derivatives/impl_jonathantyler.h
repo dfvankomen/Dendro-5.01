@@ -2,6 +2,7 @@
 
 #include "derivatives/derivs_banded.h"
 #include "derivatives/derivs_matrixonly.h"
+#include "derivatives/derivs_utils.h"
 
 namespace dendroderivs {
 
@@ -348,6 +349,39 @@ class JonathanTyler_JTP6_FirstOrder : public MatrixCompactDerivs<1> {
     }
 };
 
+class JonathanTyler_JTP6_FirstOrder_Banded : public BandedCompactDerivs {
+   public:
+    template <typename... Args>
+    JonathanTyler_JTP6_FirstOrder_Banded(unsigned int ele_order, Args&&...)
+        : BandedCompactDerivs(ele_order) {  // create kvals
+        kVals = new BandedMatrixDiagonalWidths{
+            1,  // p1kl
+            1,  // p1ku
+            3,  // q1kl
+            3,  // q1ku
+        };
+
+        diagEntries = createJTP6DiagonalsFirstOrder();
+
+        this->init(kVals, diagEntries);
+    }
+
+    ~JonathanTyler_JTP6_FirstOrder_Banded() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTP6_FirstOrder_Banded>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_JTP6; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override {
+        return "JonathanTyler_JTP6_FirstOrder_Banded";
+    }
+};
+
 /**
  *  Tridiagonal, 6th-order compact derivative from the thesis of Jonathan Tyler.
  */
@@ -373,6 +407,38 @@ class JonathanTyler_JTP6_SecondOrder : public MatrixCompactDerivs<2> {
 
     std::string toString() const override {
         return "JonathanTyler_JTP6_SecondOrder";
+    }
+};
+
+class JonathanTyler_JTP6_SecondOrder_Banded : public BandedCompactDerivs {
+   public:
+    template <typename... Args>
+    JonathanTyler_JTP6_SecondOrder_Banded(unsigned int ele_order, Args&&...)
+        : BandedCompactDerivs{ele_order} {
+        kVals = new BandedMatrixDiagonalWidths{
+            1,  // p2kl
+            1,  // p2ku
+            6,  // q2kl
+            6   // q2ku
+        };
+
+        diagEntries = createJTP6DiagonalsSecondOrder();
+
+        this->init(kVals, diagEntries);
+    }
+    ~JonathanTyler_JTP6_SecondOrder_Banded() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<JonathanTyler_JTP6_SecondOrder_Banded>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_JTP6; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_SECOND_ORDER;
+    }
+
+    std::string toString() const override {
+        return "JonathanTyler_JTP6_SecondOrder_Banded";
     }
 };
 

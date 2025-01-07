@@ -37,6 +37,10 @@ class DerivsFactory {
             return std::unique_ptr<Derivs>(
                 new ExplicitDerivsO6_Matrix_FirstOrder(
                     std::forward<Args>(args)...));
+        } else if (name == "E8Matrix") {
+            return std::unique_ptr<Derivs>(
+                new ExplicitDerivsO8_Matrix_FirstOrder(
+                    std::forward<Args>(args)...));
         } else if (name == "KIM4") {
             return std::unique_ptr<Derivs>(
                 new KimBoundO4_FirstOrder(std::forward<Args>(args)...));
@@ -68,6 +72,18 @@ class DerivsFactory {
             return std::unique_ptr<Derivs>(
                 new TestingHybridDerivatives_FirstOrder(
                     std::forward<Args>(args)...));
+        } else if (name == "JTT4Banded") {
+            return std::unique_ptr<Derivs>(
+                new JonathanTyler_JTT4_FirstOrder_Banded(
+                    std::forward<Args>(args)...));
+        } else if (name == "JTT6Banded") {
+            return std::unique_ptr<Derivs>(
+                new JonathanTyler_JTT6_FirstOrder_Banded(
+                    std::forward<Args>(args)...));
+        } else if (name == "JTP6Banded") {
+            return std::unique_ptr<Derivs>(
+                new JonathanTyler_JTP6_FirstOrder_Banded(
+                    std::forward<Args>(args)...));
         }
 
         return nullptr;
@@ -92,6 +108,10 @@ class DerivsFactory {
         } else if (name == "E6Matrix") {
             return std::unique_ptr<Derivs>(
                 new ExplicitDerivsO6_Matrix_SecondOrder(
+                    std::forward<Args>(args)...));
+        } else if (name == "E8Matrix") {
+            return std::unique_ptr<Derivs>(
+                new ExplicitDerivsO8_Matrix_SecondOrder(
                     std::forward<Args>(args)...));
         } else if (name == "KIM4") {
             throw std::runtime_error("There is no second order KIM4!");
@@ -119,6 +139,18 @@ class DerivsFactory {
         } else if (name == "BYUP8") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsP8_R4_SecondOrder(std::forward<Args>(args)...));
+        } else if (name == "JTT4Banded") {
+            return std::unique_ptr<Derivs>(
+                new JonathanTyler_JTT4_SecondOrder_Banded(
+                    std::forward<Args>(args)...));
+        } else if (name == "JTT6Banded") {
+            return std::unique_ptr<Derivs>(
+                new JonathanTyler_JTT6_SecondOrder_Banded(
+                    std::forward<Args>(args)...));
+        } else if (name == "JTP6Banded") {
+            return std::unique_ptr<Derivs>(
+                new JonathanTyler_JTP6_SecondOrder_Banded(
+                    std::forward<Args>(args)...));
         }
 
         return nullptr;

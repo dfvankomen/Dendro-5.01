@@ -3,10 +3,13 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <unordered_map>
 #include <vector>
 
 #include "dendro.h"
 #include "lapac.h"
+#include "libxsmm.h"
+#include "libxsmm_typedefs.h"
 #include "refel.h"
 
 // NOTE: lapac.h stores all BLAS/LAPACK routine references and generic versions
@@ -355,6 +358,20 @@ void matmul_z_dim(const double *const R, double *const Dzu,
                   const unsigned int *sz, double *const workspace,
                   const unsigned int bflag);
 
+void matmul_x_dim_old(const double *const R, double *const Dxu,
+                      const double *const u, const double alpha,
+                      const unsigned int *sz, const unsigned int bflag);
+
+void matmul_y_dim_old(const double *const R, double *const Dyu,
+                      const double *const u, const double alpha,
+                      const unsigned int *sz, double *const workspace,
+                      const unsigned int bflag);
+
+void matmul_z_dim_old(const double *const R, double *const Dzu,
+                      const double *const u, const double alpha,
+                      const unsigned int *sz, double *const workspace,
+                      const unsigned int bflag);
+
 std::vector<std::vector<double>> inline generate_identity_bdys(size_t nbdry) {
     std::vector<std::vector<double>> bdry_coeffs;
 
@@ -366,6 +383,64 @@ std::vector<std::vector<double>> inline generate_identity_bdys(size_t nbdry) {
     }
 
     return bdry_coeffs;
+}
+
+// libxsmm stuff
+struct KernelDimensions {
+    int M, N, K;
+    bool operator==(const KernelDimensions &other) const {
+        return M == other.M && N == other.N && K == other.K;
+    }
+};
+
+struct KernelDimensionsHash {
+    std::size_t operator()(const KernelDimensions &k) const {
+        return ((std::hash<int>()(k.M) ^ (std::hash<int>()(k.N) << 1)) >> 1) ^
+               (std::hash<int>()(k.K) << 1);
+    }
+};
+
+using KernelType = libxsmm_mmfunction<double>;
+
+extern std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
+    kernel_cache_x;
+extern std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
+    kernel_cache_yz;
+
+inline KernelType get_or_create_kernel_x(int M, int N, int K) {
+    KernelDimensions dims{M, N, K};
+    auto it = kernel_cache_x.find(dims);
+    if (it != kernel_cache_x.end()) {
+        return it->second;
+    }
+
+    KernelType new_kernel(LIBXSMM_GEMM_FLAG_NONE, M, N, K, 1.0, 0.0);
+    if (!new_kernel) {
+        std::cout << "FAILED TO BUILD A KERNEL in X!" << std::endl;
+        kernel_cache_x[dims] = KernelType();
+        return KernelType();
+    }
+    kernel_cache_x[dims] = new_kernel;
+    return new_kernel;
+}
+
+inline KernelType get_or_create_kernel_yz(int M, int N, int K) {
+    KernelDimensions dims{M, N, K};
+    auto it = kernel_cache_yz.find(dims);
+    if (it != kernel_cache_yz.end()) {
+        return it->second;
+    }
+
+    KernelType new_kernel(LIBXSMM_GEMM_FLAG_TRANS_B, M, N, K, M, N, M, 1.0,
+                          0.0);
+    std::cout << "KERNEL: " << new_kernel << std::endl;
+    if (!new_kernel) {
+        std::cout << "FAILED TO BUILD A KERNEL in YZ!" << std::endl;
+        kernel_cache_yz[dims] = KernelType();
+        return KernelType();
+    }
+    kernel_cache_yz[dims] = new_kernel;
+    return new_kernel;
 }
 
 }  // namespace dendroderivs

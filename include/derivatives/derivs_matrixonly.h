@@ -30,7 +30,7 @@ template <unsigned int DerivOrder>
 class MatrixCompactDerivs : public CompactDerivs {
    protected:
     std::vector<double> workspace_;
-    unsigned int workspace_dim_;
+    unsigned int workspace_tot_;
 
     std::unordered_map<unsigned int, std::unique_ptr<DerivMatrixStorage>>
         D_storage_map_;
@@ -44,8 +44,14 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         // establish workspace to be as large as our largest
         workspace_       = std::vector<double>(nsq * p_n, 0.0);
-        workspace_dim_   = p_n;
+        workspace_tot_   = nsq * p_n;
     }
+
+    ~MatrixCompactDerivs() {
+        // make sure diagEntries is properly deleted to avoid memory leak
+        delete diagEntries;
+    }
+
     /**
      * Based on the crazy things that are being stored across all of these
      * MatrixCompactDerivs, things need to be properly copied if it's moved!
@@ -77,7 +83,7 @@ class MatrixCompactDerivs : public CompactDerivs {
         std::cout << "in MatrixCompactDerivs deconstructor" << std::endl;
 #endif
         // if (D_ != nullptr) delete[] D_;
-        delete diagEntries;
+        // delete diagEntries;
     }
 
     /**
@@ -111,10 +117,10 @@ class MatrixCompactDerivs : public CompactDerivs {
 
             // workspace_ also needs to be at least as large as this block
             // TODO: consider setting workspace_ to being like 3 * largest_dim
-            if (sz[0] > workspace_dim_) {
-                workspace_dim_ = sz[0];
-                workspace_     = std::vector<double>(
-                    workspace_dim_ * workspace_dim_ * workspace_dim_);
+            if ((sz[0] * sz[1] * sz[2]) > workspace_tot_) {
+                workspace_tot_ = sz[0] * sz[1] * sz[2];
+                // resize vector to this new size
+                workspace_.resize(workspace_tot_);
             }
 
             // then get it
@@ -150,10 +156,10 @@ class MatrixCompactDerivs : public CompactDerivs {
                                    createMatrixSystemForSingleSize<DerivOrder>(
                                        p_pw, sz[1], diagEntries, false));
 
-            if (sz[1] > workspace_dim_) {
-                workspace_dim_ = sz[1];
-                workspace_     = std::vector<double>(
-                    workspace_dim_ * workspace_dim_ * workspace_dim_);
+            if ((sz[0] * sz[1] * sz[2]) > workspace_tot_) {
+                workspace_tot_ = sz[0] * sz[1] * sz[2];
+                // resize vector to this new size
+                workspace_.resize(workspace_tot_);
             }
 
             // then get it
@@ -191,10 +197,10 @@ class MatrixCompactDerivs : public CompactDerivs {
                                    createMatrixSystemForSingleSize<DerivOrder>(
                                        p_pw, sz[2], diagEntries, false));
 
-            if (sz[2] > workspace_dim_) {
-                workspace_dim_ = sz[1];
-                workspace_     = std::vector<double>(
-                    workspace_dim_ * workspace_dim_ * workspace_dim_);
+            if ((sz[0] * sz[1] * sz[2]) > workspace_tot_) {
+                workspace_tot_ = sz[0] * sz[1] * sz[2];
+                // resize vector to this new size
+                workspace_.resize(workspace_tot_);
             }
 
             // then get it
