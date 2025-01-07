@@ -789,43 +789,61 @@ void matmul_y_dim(const double *const R, double *const Dyu,
     // we're at a Z boundary
     const int z_start =
         (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const int z_end      = (bflag & (1u << OCT_DIR_FRONT))
-                               ? nz - dendroderivs::DENDRO_DERIVS_PW
-                               : nz;
+    const int z_end             = (bflag & (1u << OCT_DIR_FRONT))
+                                      ? nz - dendroderivs::DENDRO_DERIVS_PW
+                                      : nz;
 
-    double alpha_replace = 1.0;
+    const double *workspace_out = workspace + nx * ny * nz;
 
+    double alpha_replace        = 1.0;
+
+    // start by doing all of the calculations right away, but by putting the
+    // data in the correct spot on the workspace
     for (unsigned int k = z_start; k < z_end; k++) {
         // avoid pointer arithmitic, use direct pointer location for compiler
         // optimization
-        const double *u_slice = u + k * slice_size;
-        double *du_slice      = Dyu + k * slice_size;
+        const double *u_slice   = u + k * slice_size;
+        double *du_slice        = Dyu + k * slice_size;
+        double *workspace_slice = workspace + k * slice_size;
 
-        kernel(R, u_slice, workspace);
+        kernel(R, u_slice, workspace_slice);
 
 #ifdef __INTEL_MKL__
         // copy back out from workspace using domatcopy if using intel mkl
         mkl_domatcopy('C', 'T', ny, nx, alpha_domatcopy, workspace, ny,
                       du_slice, nx);
 #else
+        // #pragma omp simd collapse(2)
+        //         for (unsigned int i = 0; i < nx; i++) {
+        //             for (unsigned int j = 0; j < ny; j++) {
+        //                 du_slice[INDEX_N2D(i, j, nx)] =
+        //                     workspace_slice[j + i * ny] * alpha;
+        //             }
+        //         }
+#endif
         // TODO: see if there's a faster way to copy (i.e. SSE?)
         // the data is transposed so it's much harder to just copy all at
         // once
+    }
 
+    // then transpose the data back in
+    for (unsigned int k = z_start; k < z_end; k++) {
+        double *du_slice              = Dyu + k * slice_size;
+        const double *workspace_slice = workspace + k * slice_size;
 #pragma omp simd collapse(2)
         for (unsigned int i = 0; i < nx; i++) {
             for (unsigned int j = 0; j < ny; j++) {
-                du_slice[INDEX_N2D(i, j, nx)] = workspace[j + i * ny];
+                du_slice[INDEX_N2D(i, j, nx)] =
+                    workspace_slice[j + i * ny] * alpha;
             }
         }
-#endif
     }
 
     // NOTE: it is currently faster for these derivatives if we calculate
     // them
-    for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
-        Dyu[ii] *= alpha;
-    }
+    // for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
+    //     Dyu[ii] *= alpha;
+    // }
 }
 
 void matmul_z_dim(const double *const R, double *const Dzu,
@@ -849,41 +867,55 @@ void matmul_z_dim(const double *const R, double *const Dzu,
         return matmul_z_dim_old(R, Dzu, u, alpha, sz, workspace, bflag);
     }
 
-    double *workspace_offset   = workspace + nx * nz;
+    const double *workspace_out   = workspace + nx * ny * nz;
 
-    double alpha_replace       = 1.0;
+    double alpha_replace          = 1.0;
 
     // NOTE: due to how derivatives are called, and thanks to the padding width,
     // we can actually skip both padding regions of j, they'll never be needed
     // on the z derivative, because z is always called last on 2nd order mixed
     // derivatives
 
-    const unsigned int y_start = dendroderivs::DENDRO_DERIVS_PW;
-    const unsigned int y_end   = ny - dendroderivs::DENDRO_DERIVS_PW;
+    const unsigned int y_start    = dendroderivs::DENDRO_DERIVS_PW;
+    const unsigned int y_end      = ny - dendroderivs::DENDRO_DERIVS_PW;
 
+    const unsigned int slice_size = nx * nz;
+
+    // start by transposing out everything *first*, noting that workspace is
+    // guaranteed to be double the size!
     for (unsigned int j = y_start; j < y_end; j++) {
-#pragma omp simd collapse(2)
         for (unsigned int k = 0; k < nz; k++) {
             for (unsigned int i = 0; i < nx; i++) {
-                workspace[k * nx + i] = u[INDEX_3D(i, j, k)];
-            }
-        }
-
-        kernel(R, workspace, workspace_offset);
-
-#pragma omp simd collapse(2)
-        for (unsigned int i = 0; i < nx; i++) {
-            for (unsigned int k = 0; k < nz; k++) {
-                Dzu[INDEX_3D(i, j, k)] = workspace_offset[k + i * nz];
+                // double *u_slice     = workspace + j * slice_size;
+                // u_slice[k * nx + i] = u[INDEX_3D(i, j, k)];
+                workspace[j * slice_size + k * nx + i] = u[INDEX_3D(i, j, k)];
             }
         }
     }
 
+    for (unsigned int j = y_start; j < y_end; j++) {
+        const double *u_slice = workspace + j * slice_size;
+        double *du_slice      = (double *)workspace_out + j * slice_size;
+
+        kernel(R, u_slice, du_slice);
+    }
+
+    // transpose everything back out
+    for (unsigned int j = y_start; j < y_end; j++) {
+        for (unsigned int k = 0; k < nz; k++) {
+            for (unsigned int i = 0; i < nx; i++) {
+                // const double *du_slice = workspace_out + j * slice_size;
+                // Dzu[INDEX_3D(i, j, k)] = du_slice[k + i * nz] * alpha;
+                Dzu[INDEX_3D(i, j, k)] =
+                    workspace_out[j * slice_size + k + i * nz] * alpha;
+            }
+        }
+    }
     // NOTE: it is currently faster for these derivatives if we calculate
     // them
-    for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
-        Dzu[ii] *= alpha;
-    }
+    // for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
+    //     Dzu[ii] *= alpha;
+    // }
 }
 
 }  // namespace dendroderivs

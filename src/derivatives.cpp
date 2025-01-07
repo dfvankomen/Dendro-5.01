@@ -6,8 +6,6 @@ namespace dendroderivs {
 
 unsigned int DENDRO_DERIVS_PW = 0;
 
-void initialize_derivatives() { return; }
-
 DendroDerivatives::DendroDerivatives(const std::string derivType_1,
                                      const std::string derivType_2,
                                      const unsigned int ele_order,

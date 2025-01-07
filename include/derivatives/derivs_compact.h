@@ -147,6 +147,8 @@ class CompactDerivs : public Derivs {
                      std::vector<std::vector<double>> &bound, double parity,
                      unsigned int n);
 
+    virtual void set_maximum_block_size(size_t block_size) = 0;
+
    public:
     /**
      * nothing to delete, I think
