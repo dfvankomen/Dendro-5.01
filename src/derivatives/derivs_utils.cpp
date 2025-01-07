@@ -4,11 +4,19 @@
 #include <bitset>
 
 #include "derivatives.h"
+#include "libxsmm.h"
 #include "refel.h"
 
 // #define DEBUG_COMPACT_DERIVS
 
 namespace dendroderivs {
+
+using KernelType = libxsmm_mmfunction<double>;
+
+std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
+    kernel_cache_x;
+std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
+    kernel_cache_yz;
 
 void mulMM(double *C, double *A, double *B, int na, int nb) {
     /*  M = number of rows of A and C
@@ -214,9 +222,9 @@ void print_delta_coeffs(std::string prefix1, std::vector<double> &delta1,
 // Routines that actually compute the derivatives given the right matrices, not
 // "dependent" on particular values
 
-void matmul_x_dim(const double *const R, double *const Dxu,
-                  const double *const u, const double alpha,
-                  const unsigned int *sz, const unsigned int bflag) {
+void matmul_x_dim_old(const double *const R, double *const Dxu,
+                      const double *const u, const double alpha,
+                      const unsigned int *sz, const unsigned int bflag) {
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
     const unsigned int nz = sz[2];
@@ -367,10 +375,10 @@ void matmul_x_dim(const double *const R, double *const Dxu,
 #endif
 }
 
-void matmul_y_dim(const double *const R, double *const Dyu,
-                  const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace,
-                  const unsigned int bflag) {
+void matmul_y_dim_old(const double *const R, double *const Dyu,
+                      const double *const u, const double alpha,
+                      const unsigned int *sz, double *const workspace,
+                      const unsigned int bflag) {
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
     const unsigned int nz = sz[2];
@@ -538,10 +546,10 @@ void matmul_y_dim(const double *const R, double *const Dyu,
 #endif
 }
 
-void matmul_z_dim(const double *const R, double *const Dzu,
-                  const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace,
-                  const unsigned int bflag) {
+void matmul_z_dim_old(const double *const R, double *const Dzu,
+                      const double *const u, const double alpha,
+                      const unsigned int *sz, double *const workspace,
+                      const unsigned int bflag) {
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
     const unsigned int nz = sz[2];
@@ -693,6 +701,189 @@ void matmul_z_dim(const double *const R, double *const Dzu,
         }
     }
 #endif
+}
+
+void matmul_x_dim(const double *const R, double *const Dxu,
+                  const double *const u, const double alpha,
+                  const unsigned int *sz, const unsigned int bflag) {
+    // this one generates a kernel as it needs it
+    const unsigned int nx    = sz[0];
+    const unsigned int ny    = sz[1];
+    const unsigned int nz    = sz[2];
+
+    static const char TRANSA = 'N';
+    static const char TRANSB = 'N';
+
+    const int M              = nx;
+    const int N              = ny;
+    const int K              = nx;
+    // NOTE: LDA = M, LDB = K, and LDC = M
+
+    static const double beta = 0.0;
+
+    // build kernel
+    auto kernel              = get_or_create_kernel_x(M, N, K);
+
+    if (!kernel) {
+        std::cout << "FALLING BACK TO MATMUL X DIM" << std::endl;
+        return matmul_x_dim_old(R, Dxu, u, alpha, sz, bflag);
+    }
+
+    // calculate z start and end based on bflag, saves a good amount of time if
+    // we're at a Z boundary
+    const int z_start =
+        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const int z_end = (bflag & (1u << OCT_DIR_FRONT))
+                          ? nz - dendroderivs::DENDRO_DERIVS_PW
+                          : nz;
+
+    for (unsigned int k = z_start; k < z_end; k++) {
+        // avoid pointer arithmitic, use direct pointer location for compiler
+        // optimization
+        const double *u_slice = u + k * nx * ny;
+        double *du_slice      = Dxu + k * nx * ny;
+
+        kernel(R, u_slice, du_slice);
+    }
+
+    // NOTE: libxsmm only allows kernels to have an alpha of 1.0, since that
+    // allows generated kernels to be possible
+
+    // additionally, seems that omp simd makes it slower (on my machine)
+    // #pragma omp simd
+    for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
+        Dxu[ii] *= alpha;
+    }
+}
+
+void matmul_y_dim(const double *const R, double *const Dyu,
+                  const double *const u, const double alpha,
+                  const unsigned int *sz, double *const workspace,
+                  const unsigned int bflag) {
+    const unsigned int nx               = sz[0];
+    const unsigned int ny               = sz[1];
+    const unsigned int nz               = sz[2];
+
+    static const char TRANSA            = 'N';
+    static const char TRANSB            = 'T';
+    const int M                         = ny;
+    const int N                         = nx;
+    const int K                         = ny;
+    // NOTE: LDA = M, LDB = N, and LDC = M
+    // LDB is N because in memory, Y is transposed!
+
+    static const double beta            = 0.0;
+
+    static const double alpha_domatcopy = 1.0;
+
+    auto kernel                         = get_or_create_kernel_yz(M, N, K);
+
+    if (!kernel) {
+        std::cout << "FALLING BACK TO MATMUL Y DIM" << std::endl;
+        return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag);
+    }
+
+    const unsigned int slice_size = nx * ny;
+
+    // calculate z start and end based on bflag, saves a good amount of time if
+    // we're at a Z boundary
+    const int z_start =
+        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
+    const int z_end      = (bflag & (1u << OCT_DIR_FRONT))
+                               ? nz - dendroderivs::DENDRO_DERIVS_PW
+                               : nz;
+
+    double alpha_replace = 1.0;
+
+    for (unsigned int k = z_start; k < z_end; k++) {
+        // avoid pointer arithmitic, use direct pointer location for compiler
+        // optimization
+        const double *u_slice = u + k * slice_size;
+        double *du_slice      = Dyu + k * slice_size;
+
+        kernel(R, u_slice, workspace);
+
+#ifdef __INTEL_MKL__
+        // copy back out from workspace using domatcopy if using intel mkl
+        mkl_domatcopy('C', 'T', ny, nx, alpha_domatcopy, workspace, ny,
+                      du_slice, nx);
+#else
+        // TODO: see if there's a faster way to copy (i.e. SSE?)
+        // the data is transposed so it's much harder to just copy all at
+        // once
+
+#pragma omp simd collapse(2)
+        for (unsigned int i = 0; i < nx; i++) {
+            for (unsigned int j = 0; j < ny; j++) {
+                du_slice[INDEX_N2D(i, j, nx)] = workspace[j + i * ny];
+            }
+        }
+#endif
+    }
+
+    // NOTE: it is currently faster for these derivatives if we calculate
+    // them
+    for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
+        Dyu[ii] *= alpha;
+    }
+}
+
+void matmul_z_dim(const double *const R, double *const Dzu,
+                  const double *const u, const double alpha,
+                  const unsigned int *sz, double *const workspace,
+                  const unsigned int bflag) {
+    const int nx             = sz[0];
+    const int ny             = sz[1];
+    const int nz             = sz[2];
+
+    static const char TRANSA = 'N';
+    static const char TRANSB = 'T';
+    const int M              = nz;
+    const int N              = nx;
+    const int K              = nz;
+    static const double beta = 0.0;
+
+    auto kernel              = get_or_create_kernel_yz(M, N, K);
+
+    if (!kernel) {
+        return matmul_z_dim_old(R, Dzu, u, alpha, sz, workspace, bflag);
+    }
+
+    double *workspace_offset   = workspace + nx * nz;
+
+    double alpha_replace       = 1.0;
+
+    // NOTE: due to how derivatives are called, and thanks to the padding width,
+    // we can actually skip both padding regions of j, they'll never be needed
+    // on the z derivative, because z is always called last on 2nd order mixed
+    // derivatives
+
+    const unsigned int y_start = dendroderivs::DENDRO_DERIVS_PW;
+    const unsigned int y_end   = ny - dendroderivs::DENDRO_DERIVS_PW;
+
+    for (unsigned int j = y_start; j < y_end; j++) {
+#pragma omp simd collapse(2)
+        for (unsigned int k = 0; k < nz; k++) {
+            for (unsigned int i = 0; i < nx; i++) {
+                workspace[k * nx + i] = u[INDEX_3D(i, j, k)];
+            }
+        }
+
+        kernel(R, workspace, workspace_offset);
+
+#pragma omp simd collapse(2)
+        for (unsigned int i = 0; i < nx; i++) {
+            for (unsigned int k = 0; k < nz; k++) {
+                Dzu[INDEX_3D(i, j, k)] = workspace_offset[k + i * nz];
+            }
+        }
+    }
+
+    // NOTE: it is currently faster for these derivatives if we calculate
+    // them
+    for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
+        Dzu[ii] *= alpha;
+    }
 }
 
 }  // namespace dendroderivs
