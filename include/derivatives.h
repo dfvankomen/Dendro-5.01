@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "dendro.h"
+#include "libxsmm.h"
 
 #define IDX(i, j, k) ((i) + nx * ((j) + ny * (k)))
 
@@ -140,7 +141,9 @@ class Derivs {
      * @brief Get a string representation.
      * @return A string describing the Derivs object.
      */
-    virtual std::string toString() const = 0;
+    virtual std::string toString() const                   = 0;
+
+    virtual void set_maximum_block_size(size_t block_size) = 0;
 };
 
 class DendroDerivatives {
@@ -253,12 +256,19 @@ class DendroDerivatives {
         _second_deriv->do_grad_z(du, u, dx, sz, bflag);
     }
 
+    void set_maximum_block_size(size_t block_size) {
+        _first_deriv->set_maximum_block_size(block_size);
+        _second_deriv->set_maximum_block_size(block_size);
+    }
+
     std::string toString() {
         return "DendroDerivs<" + _first_deriv->toString() + ", " +
                _second_deriv->toString() + ">";
     }
 };
 
-void initialize_derivatives();
+void inline initialize_derivatives() {}
+
+void inline finalize_derivatives() { libxsmm_finalize(); }
 
 }  // namespace dendroderivs

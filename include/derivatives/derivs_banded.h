@@ -62,14 +62,16 @@ class BandedCompactDerivs : public CompactDerivs {
      * @param bflag The boundary flag
      */
     void do_grad_x(double *const du, const double *const u, const double dx,
-                   const unsigned int *sz, const unsigned int bflag);
+                   const unsigned int *sz, const unsigned int bflag) override;
     void do_grad_y(double *const du, const double *const u, const double dx,
-                   const unsigned int *sz, const unsigned int bflag);
+                   const unsigned int *sz, const unsigned int bflag) override;
     void do_grad_z(double *const du, const double *const u, const double dx,
-                   const unsigned int *sz, const unsigned int bflag);
+                   const unsigned int *sz, const unsigned int bflag) override;
 
     inline double *getPBanded() const { return Pb_; }
     inline double *getQBanded() const { return Qb_; }
     inline double *getPScaleBand() const { return grad_xVars->AFB; }
+
+    void set_maximum_block_size(size_t block_size) override {};
 };
 }  // namespace dendroderivs

@@ -40,16 +40,20 @@ class MatrixCompactDerivs : public CompactDerivs {
 
    public:
     MatrixCompactDerivs(unsigned int ele_order) : CompactDerivs{ele_order} {
-        unsigned int nsq = p_n * p_n;  // n squared
-
         // establish workspace to be as large as our largest
-        workspace_       = std::vector<double>(nsq * p_n, 0.0);
-        workspace_tot_   = nsq * p_n;
+        unsigned int workspace_size_calc = p_n * p_n * p_n * 2;
+        workspace_     = std::vector<double>(workspace_size_calc, 0.0);
+        workspace_tot_ = workspace_size_calc;
     }
 
     ~MatrixCompactDerivs() {
         // make sure diagEntries is properly deleted to avoid memory leak
         delete diagEntries;
+    }
+
+    void set_maximum_block_size(size_t block_size) {
+        workspace_tot_ = block_size * 2;
+        workspace_.resize(workspace_tot_);
     }
 
     /**
@@ -115,18 +119,13 @@ class MatrixCompactDerivs : public CompactDerivs {
                                    createMatrixSystemForSingleSize<DerivOrder>(
                                        p_pw, sz[0], diagEntries, false));
 
-            // workspace_ also needs to be at least as large as this block
-            // TODO: consider setting workspace_ to being like 3 * largest_dim
-            if ((sz[0] * sz[1] * sz[2]) > workspace_tot_) {
-                workspace_tot_ = sz[0] * sz[1] * sz[2];
-                // resize vector to this new size
-                workspace_.resize(workspace_tot_);
-            }
-
             // then get it
             D_use =
                 get_deriv_mat_by_bflag_x(D_storage_map_[sz[0]].get(), bflag);
         }
+
+        // NOTE: it is now required that the workspace size be set **properly**
+        // by the user by setting derivs' max_block_size
 
         if constexpr (DerivOrder == 1) {
             matmul_x_dim(D_use->data(), du, u, 1.0 / dx, sz, bflag);
@@ -156,16 +155,13 @@ class MatrixCompactDerivs : public CompactDerivs {
                                    createMatrixSystemForSingleSize<DerivOrder>(
                                        p_pw, sz[1], diagEntries, false));
 
-            if ((sz[0] * sz[1] * sz[2]) > workspace_tot_) {
-                workspace_tot_ = sz[0] * sz[1] * sz[2];
-                // resize vector to this new size
-                workspace_.resize(workspace_tot_);
-            }
-
             // then get it
             D_use =
                 get_deriv_mat_by_bflag_y(D_storage_map_[sz[1]].get(), bflag);
         }
+
+        // NOTE: it is now required that the workspace size be set **properly**
+        // by the user by setting derivs' max_block_size
 
         if constexpr (DerivOrder == 1) {
             matmul_y_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data(),
@@ -197,16 +193,19 @@ class MatrixCompactDerivs : public CompactDerivs {
                                    createMatrixSystemForSingleSize<DerivOrder>(
                                        p_pw, sz[2], diagEntries, false));
 
-            if ((sz[0] * sz[1] * sz[2]) > workspace_tot_) {
-                workspace_tot_ = sz[0] * sz[1] * sz[2];
-                // resize vector to this new size
-                workspace_.resize(workspace_tot_);
-            }
-
             // then get it
             D_use =
                 get_deriv_mat_by_bflag_z(D_storage_map_[sz[2]].get(), bflag);
         }
+
+        // NOTE: it is now required that the workspace size be set **properly**
+        // by the user by setting derivs' max_block_size
+
+        // std::cout << "workspace_tot is: " << workspace_tot_ << std::endl;
+        // std::cout << "sz is: " << sz[0] << ", " << sz[1] << ", " << sz[2]
+        //           << std::endl;
+        // std::cout << "worksapce_ size is: " << workspace_.size() <<
+        // std::endl;
 
         if constexpr (DerivOrder == 1) {
             matmul_z_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data(),

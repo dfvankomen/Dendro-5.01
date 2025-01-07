@@ -433,7 +433,6 @@ inline KernelType get_or_create_kernel_yz(int M, int N, int K) {
 
     KernelType new_kernel(LIBXSMM_GEMM_FLAG_TRANS_B, M, N, K, M, N, M, 1.0,
                           0.0);
-    std::cout << "KERNEL: " << new_kernel << std::endl;
     if (!new_kernel) {
         std::cout << "FAILED TO BUILD A KERNEL in YZ!" << std::endl;
         kernel_cache_yz[dims] = KernelType();

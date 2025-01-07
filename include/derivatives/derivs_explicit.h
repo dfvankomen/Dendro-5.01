@@ -130,6 +130,8 @@ class ExplicitDerivsO4_DX : public Derivs {
     std::string toString() const override {
         return "ExplicitDerivsO4_FirstOrder";
     };
+
+    void set_maximum_block_size(size_t block_size) override {};
 };
 
 class ExplicitDerivsO4_DXX : public Derivs {
@@ -195,6 +197,8 @@ class ExplicitDerivsO4_DXX : public Derivs {
     std::string toString() const override {
         return "ExplicitDerivsO4_SecondOrder";
     };
+
+    void set_maximum_block_size(size_t block_size) override {};
 };
 
 class ExplicitDerivsO6_DX : public Derivs {
@@ -256,6 +260,8 @@ class ExplicitDerivsO6_DX : public Derivs {
     std::string toString() const override {
         return "ExplicitDerivsO6_FirstOrder";
     };
+
+    void set_maximum_block_size(size_t block_size) override {};
 };
 
 class ExplicitDerivsO6_DXX : public Derivs {
@@ -317,6 +323,8 @@ class ExplicitDerivsO6_DXX : public Derivs {
     std::string toString() const override {
         return "ExplicitDerivsO6_SecondOrder";
     };
+
+    void set_maximum_block_size(size_t block_size) override {};
 };
 
 class ExplicitDerivsO8_DX : public Derivs {
@@ -374,6 +382,8 @@ class ExplicitDerivsO8_DX : public Derivs {
     std::string toString() const override {
         return "ExplicitDerivsO8_FirstOrder";
     };
+
+    void set_maximum_block_size(size_t block_size) override {};
 };
 
 class ExplicitDerivsO8_DXX : public Derivs {
@@ -431,6 +441,8 @@ class ExplicitDerivsO8_DXX : public Derivs {
     std::string toString() const override {
         return "ExplicitDerivsO8_SecondOrder";
     };
+
+    void set_maximum_block_size(size_t block_size) override {};
 };
 
 }  // namespace dendroderivs
