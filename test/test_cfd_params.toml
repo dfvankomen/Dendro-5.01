@@ -1,7 +1,7 @@
 "eleorder" = 6
-"deriv_type" = "EXPERIMENTAL"
+"deriv_type" = "JTT6"
 # "deriv_type" = "E6"
-"deriv_type_2nd" = "E6"
+"deriv_type_2nd" = "JTT6"
 # "filter_type" = 7
 
 # this is the "order" that should be used for the regular derivatives
@@ -10,7 +10,7 @@
 "deriv_stencil_order" = 6
 
 # "num_tests" = 10000
-"num_tests" = 1
+"num_tests" = 10000
 
 # the data initialization, currently 2 is the best as it's the "boris" init which is fun
 "data_init" = 2

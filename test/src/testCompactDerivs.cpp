@@ -191,45 +191,95 @@ profiler_t t_compact_deriv_x;
 profiler_t t_compact_deriv_y;
 profiler_t t_compact_deriv_z;
 
-void print_profiler_results(uint64_t num_runs) {
+void print_profiler_results(uint64_t num_runs, std::string lineprefix = "",
+                            bool printAbbr = false) {
     long double num_runs_d = (long double)num_runs;
 
-    std::cout << YLW << "==== PROFILING RESULTS ====" << NRM << std::endl;
-    std::cout << "Over " << num_runs << " total runs each" << std::endl;
+    if (printAbbr) {
+        std::cout << lineprefix
+                  << "type,nruns,x_total,x_avg,y_total,y_avg,z_total,z_avg\n";
 
-    std::cout << "\t =< Original Stencils >=" << std::endl;
-    std::cout << "\tx deriv: total=" << t_deriv_original_x.seconds
-              << " average=" << t_deriv_original_x.seconds / num_runs_d
-              << std::endl;
-    std::cout << "\ty deriv: total=" << t_deriv_original_y.seconds
-              << " average=" << t_deriv_original_y.seconds / num_runs_d
-              << std::endl;
-    std::cout << "\tz deriv: total=" << t_deriv_original_z.seconds
-              << " average=" << t_deriv_original_z.seconds / num_runs_d
-              << std::endl;
+        std::cout << lineprefix << "original   ," << num_runs << ",";
+        // scientific notation
+        std::cout << std::scientific << std::setprecision(8) << std::setw(15);
+        std::cout << t_deriv_original_x.seconds << ","
+                  << t_deriv_original_x.seconds / num_runs_d;
+        std::cout << "," << t_deriv_original_y.seconds << ","
+                  << t_deriv_original_y.seconds / num_runs_d;
+        std::cout << "," << t_deriv_original_z.seconds << ","
+                  << t_deriv_original_z.seconds / num_runs_d;
+        std::cout << std::defaultfloat << std::setprecision(6) << std::setw(0)
+                  << std::endl;
 
-    std::cout << std::endl;
+        std::cout << lineprefix << "class_based," << num_runs << ",";
+        // scientific notation
+        std::cout << std::scientific << std::setprecision(8) << std::setw(15);
+        std::cout << t_deriv_x.seconds << "," << t_deriv_x.seconds / num_runs_d;
+        std::cout << "," << t_deriv_y.seconds << ","
+                  << t_deriv_y.seconds / num_runs_d;
+        std::cout << "," << t_deriv_z.seconds << ","
+                  << t_deriv_z.seconds / num_runs_d;
+        std::cout << std::defaultfloat << std::setprecision(6) << std::setw(0)
+                  << std::endl;
 
-    std::cout << "\t =< Class-Based Stencils >=" << std::endl;
-    std::cout << "\tx deriv: total=" << t_deriv_x.seconds
-              << " average=" << t_deriv_x.seconds / num_runs_d << std::endl;
-    std::cout << "\ty deriv: total=" << t_deriv_y.seconds
-              << " average=" << t_deriv_y.seconds / num_runs_d << std::endl;
-    std::cout << "\tz deriv: total=" << t_deriv_z.seconds
-              << " average=" << t_deriv_z.seconds / num_runs_d << std::endl;
+        std::cout << lineprefix << "compact    ," << num_runs << ",";
+        // scientific notation
+        std::cout << std::scientific << std::setprecision(8) << std::setw(15);
+        std::cout << t_compact_deriv_x.seconds << ","
+                  << t_compact_deriv_x.seconds / num_runs_d;
+        std::cout << "," << t_compact_deriv_y.seconds << ","
+                  << t_compact_deriv_y.seconds / num_runs_d;
+        std::cout << "," << t_compact_deriv_z.seconds << ","
+                  << t_compact_deriv_z.seconds / num_runs_d;
+        std::cout << std::defaultfloat << std::setprecision(6) << std::setw(0)
+                  << std::endl;
 
-    std::cout << std::endl;
+    } else {
+        std::cout << YLW << lineprefix << "==== PROFILING RESULTS ====" << NRM
+                  << std::endl;
+        std::cout << lineprefix << "Over " << num_runs << " total runs each"
+                  << std::endl;
 
-    std::cout << "\t =< Compact Stencils >=" << std::endl;
-    std::cout << "\tx deriv: total=" << t_compact_deriv_x.seconds
-              << " average=" << t_compact_deriv_x.seconds / num_runs_d
-              << std::endl;
-    std::cout << "\ty deriv: total=" << t_compact_deriv_y.seconds
-              << " average=" << t_compact_deriv_y.seconds / num_runs_d
-              << std::endl;
-    std::cout << "\tz deriv: total=" << t_compact_deriv_z.seconds
-              << " average=" << t_compact_deriv_z.seconds / num_runs_d
-              << std::endl;
+        std::cout << lineprefix << "\t =< Original Stencils >=" << std::endl;
+        std::cout << lineprefix
+                  << "\tx deriv: total=" << t_deriv_original_x.seconds
+                  << " average=" << t_deriv_original_x.seconds / num_runs_d
+                  << std::endl;
+        std::cout << lineprefix
+                  << "\ty deriv: total=" << t_deriv_original_y.seconds
+                  << " average=" << t_deriv_original_y.seconds / num_runs_d
+                  << std::endl;
+        std::cout << lineprefix
+                  << "\tz deriv: total=" << t_deriv_original_z.seconds
+                  << " average=" << t_deriv_original_z.seconds / num_runs_d
+                  << std::endl;
+
+        std::cout << lineprefix << std::endl;
+
+        std::cout << lineprefix << "\t =< Class-Based Stencils >=" << std::endl;
+        std::cout << lineprefix << "\tx deriv: total=" << t_deriv_x.seconds
+                  << " average=" << t_deriv_x.seconds / num_runs_d << std::endl;
+        std::cout << lineprefix << "\ty deriv: total=" << t_deriv_y.seconds
+                  << " average=" << t_deriv_y.seconds / num_runs_d << std::endl;
+        std::cout << lineprefix << "\tz deriv: total=" << t_deriv_z.seconds
+                  << " average=" << t_deriv_z.seconds / num_runs_d << std::endl;
+
+        std::cout << lineprefix << std::endl;
+
+        std::cout << lineprefix << "\t =< Compact Stencils >=" << std::endl;
+        std::cout << lineprefix
+                  << "\tx deriv: total=" << t_compact_deriv_x.seconds
+                  << " average=" << t_compact_deriv_x.seconds / num_runs_d
+                  << std::endl;
+        std::cout << lineprefix
+                  << "\ty deriv: total=" << t_compact_deriv_y.seconds
+                  << " average=" << t_compact_deriv_y.seconds / num_runs_d
+                  << std::endl;
+        std::cout << lineprefix
+                  << "\tz deriv: total=" << t_compact_deriv_z.seconds
+                  << " average=" << t_compact_deriv_z.seconds / num_runs_d
+                  << std::endl;
+    }
 }
 
 }  // namespace helpers
@@ -936,20 +986,22 @@ void test_cfd_with_original_stencil(
     // calculate the stencil derivatives
     calculate_all_derivs(u_var, sz, deltas, derivs, deriv_stencil, bflag);
 
+#if 0
     double *u_var_copy = new double[totalSize];
+    std::vector<double> u_var_copy(totalSize);
 
-    std::copy_n(u_var, totalSize, u_var_copy);
+    std::copy_n(u_var, totalSize, u_var_copy.data());
 
     std::ofstream fileForFilter("testOutputFilter.bin",
                                 std::ios::binary | std::ios::out);
     fileForFilter.write((char *)&totalSize, sizeof(totalSize));
-    fileForFilter.write((char *)u_var_copy, sizeof(double) * totalSize);
+    fileForFilter.write((char *)u_var_copy.data(), sizeof(double) * totalSize);
     std::cout << "\nL2 before filts: "
-              << calc_l2_norm(u_var, u_var_copy, totalSize)
+              << calc_l2_norm(u_var, u_var_copy.data(), totalSize)
               << " - without padding: "
-              << calc_3d_l2_without_padding(u_var, u_var_copy, sz) << std::endl;
+              << calc_3d_l2_without_padding(u_var, u_var_copy.data(), sz)
+              << std::endl;
 
-#if 0
     cfd->filter_cfd_x(u_var_copy, derivx_cfd, deltas[0], sz, bflag);
     fileForFilter.write((char *)u_var_copy, sizeof(double) * totalSize);
     std::cout << "L2 after X Filt: "
@@ -970,15 +1022,14 @@ void test_cfd_with_original_stencil(
               << calc_l2_norm(u_var, u_var_copy, totalSize)
               << " - without padding: "
               << calc_3d_l2_without_padding(u_var, u_var_copy, sz) << std::endl;
-#endif
 
     // DUMP FILTERED RESULTS
     fileForFilter.close();
 
     // calculate the stencil derivatives
-    calculate_all_derivs(u_var_copy, sz, deltas, cfd_derivs, deriv_cfd, bflag);
-
-    delete[] u_var_copy;
+    calculate_all_derivs(u_var_copy.data(), sz, deltas, cfd_derivs, deriv_cfd,
+                         bflag);
+#endif
 
     const double *const derivx_stencil  = deriv_stencil;
     const double *const derivy_stencil  = deriv_stencil + 1 * totalSize;
@@ -1146,6 +1197,7 @@ void test_cfd_with_original_stencil(
 #endif
 
     delete[] deriv_workspace;
+    // delete[] u_var_copy;
 }
 
 void profile_compact_stencils(double_t *const u_var, const uint32_t *sz,
@@ -1211,6 +1263,10 @@ void profile_class_based_stencils(double_t *const u_var, const uint32_t *sz,
 
     uint32_t bflag                 = 0;
 
+    helpers::t_deriv_x.clear();
+    helpers::t_deriv_y.clear();
+    helpers::t_deriv_z.clear();
+
     // warmup runs
     for (uint32_t ii = 0; ii < 100; ii++) {
         deriv->grad_x(derivx_stencil, u_var, deltas[0], sz, bflag);
@@ -1257,6 +1313,10 @@ void profile_original_stencils(double_t *const u_var, const uint32_t *sz,
     double_t *const derivz_stencil = deriv_workspace + 2 * totalSize;
 
     uint32_t bflag                 = 0;
+
+    helpers::t_deriv_original_x.clear();
+    helpers::t_deriv_original_y.clear();
+    helpers::t_deriv_original_z.clear();
 
     // warmup runs
     for (uint32_t ii = 0; ii < 100; ii++) {
@@ -1392,7 +1452,9 @@ int main(int argc, char **argv) {
     max_fused          = std::max(max_fused, params::num_z_blocks);
     uint32_t largest_1d_size = (1 + max_fused) * (helpers::padding * 2) + 1;
     uint32_t largest_3d_size =
-        largest_1d_size * largest_1d_size * largest_1d_size;
+        ((1 + params::num_x_blocks) * (helpers::padding * 2) + 1) *
+        ((1 + params::num_y_blocks) * (helpers::padding * 2) + 1) *
+        ((1 + params::num_z_blocks) * (helpers::padding * 2) + 1);
     // let's try with a bunch of stuff i guess
     double_t *u_larger          = new double_t[largest_3d_size];
     double_t *u_deriv_larger    = new double_t[largest_3d_size];
@@ -1402,6 +1464,9 @@ int main(int argc, char **argv) {
     double_t *u_dxx_true_larger = new double_t[largest_3d_size];
     double_t *u_dyy_true_larger = new double_t[largest_3d_size];
     double_t *u_dzz_true_larger = new double_t[largest_3d_size];
+
+    // tell the derivatives what the maximum size is
+    deriv_cfd.set_maximum_block_size(largest_3d_size);
 
     // cfd.initialize_cfd_3dblock_workspace(largest_3d_size);
 
@@ -1517,11 +1582,25 @@ int main(int argc, char **argv) {
                           << std::endl;
 
                 std::cout << std::endl;
+
+                // profile these sizes...
+                std::cout << "\tNow profiling ..." << std::endl;
+                profile_class_based_stencils((double_t *const)u_larger, new_sz,
+                                             &deriv, deltas, params::num_tests);
+                profile_compact_stencils((double_t *const)u_larger, new_sz,
+                                         deltas, &deriv_cfd, params::num_tests);
+                profile_original_stencils((double_t *const)u_larger, new_sz,
+                                          deltas, params::num_tests);
+
+                helpers::print_profiler_results(params::num_tests, "\t", true);
+                std::cout << "-------------------------------------"
+                          << std::endl
+                          << std::endl;
             }
         }
     }
 
-    uint32_t fused_x = 2;
+    std::cout << "----- FINISHED... cleaningup..." << std::endl;
 
     // var cleanup
     delete[] u_var;
@@ -1540,4 +1619,8 @@ int main(int argc, char **argv) {
     delete[] u_dxx_true_larger;
     delete[] u_dyy_true_larger;
     delete[] u_dzz_true_larger;
+
+    dendroderivs::finalize_derivatives();
+
+    std::cout << "----- FINISHED! -----" << std::endl;
 }
