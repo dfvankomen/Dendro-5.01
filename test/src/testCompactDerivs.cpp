@@ -929,6 +929,7 @@ void test_cfd_with_original_stencil(
     double_t *const deriv_cfd     = deriv_workspace + totalSize * 6;
 
     // const unsigned int bflag      = (1 << 6) - 1;
+    // NOTE: don't use the 0b111111 test with these, they're only single block!
     // const unsigned int bflag      = 0b010101;
     const unsigned int bflag      = 0;
 
@@ -1342,8 +1343,21 @@ int main(int argc, char **argv) {
 
     // create the explicit objects
 
+    std::string derivType_test;
+    if (params::eleorder == 4) {
+        derivType_test = "E4";
+    } else if (params::eleorder == 6) {
+        derivType_test = "E6";
+    } else if (params::eleorder == 8) {
+        derivType_test = "E8";
+    } else {
+        // default
+        derivType_test = "E4";
+    }
+
     std::cout << "Building Explicit derivatives..." << std::endl;
-    dendroderivs::DendroDerivatives deriv("E6", "E6", params::eleorder);
+    dendroderivs::DendroDerivatives deriv(derivType_test, derivType_test,
+                                          params::eleorder);
 
     std::cout << "Building test derivatives..." << std::endl;
     dendroderivs::DendroDerivatives deriv_cfd(
@@ -1405,7 +1419,8 @@ int main(int argc, char **argv) {
 
                 uint32_t new_sz[3] = {x_size, y_size, z_size};
 
-                uint32_t bflag     = 0b101010;
+                // uint32_t bflag     = 0b101010;
+                uint32_t bflag     = 0;
 
                 // fill our the matrix with boris init
                 init_data(params::data_init, u_larger, corner, new_sz, deltas,
