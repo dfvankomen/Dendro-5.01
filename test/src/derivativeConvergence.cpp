@@ -188,6 +188,7 @@ int derivtest_driver(MPI_Comm comm, std::ostream& outfile) {
 
     // then we'll just calculate the derivs stuff
 
+    theCtx->prepare_derivatives();
     theCtx->doDerivCalculation();
     theCtx->terminal_output();
     theCtx->write_vtu();

@@ -4,16 +4,16 @@
 
 namespace derivtest {
 
-double DERIV_TEST_GRID_MIN_X          = -4.0;
-double DERIV_TEST_GRID_MAX_X          = 4.0;
-double DERIV_TEST_GRID_MIN_Y          = -4.0;
-double DERIV_TEST_GRID_MAX_Y          = 4.0;
-double DERIV_TEST_GRID_MIN_Z          = -5.5;
-double DERIV_TEST_GRID_MAX_Z          = 5.5;
+double DERIV_TEST_GRID_MIN_X          = -5.0;
+double DERIV_TEST_GRID_MAX_X          = 5.0;
+double DERIV_TEST_GRID_MIN_Y          = -5.0;
+double DERIV_TEST_GRID_MAX_Y          = 5.0;
+double DERIV_TEST_GRID_MIN_Z          = -5.0;
+double DERIV_TEST_GRID_MAX_Z          = 5.0;
 unsigned int DERIV_TEST_ELE_ORDER     = 6;
 unsigned int DERIV_TEST_PADDING_WIDTH = DERIV_TEST_ELE_ORDER / 2;
 double DERIV_TEST_RK45_TIME_STEP_SIZE = 0.0;
-unsigned int DERIV_TEST_MAXDEPTH      = 7;
+unsigned int DERIV_TEST_MAXDEPTH      = 8;
 double DERIV_TEST_COMPD_MIN[3]  = {DERIV_TEST_GRID_MIN_X, DERIV_TEST_GRID_MIN_Y,
                                    DERIV_TEST_GRID_MIN_Z};
 double DERIV_TEST_COMPD_MAX[3]  = {DERIV_TEST_GRID_MAX_X, DERIV_TEST_GRID_MAX_Y,
@@ -22,10 +22,10 @@ double DERIV_TEST_OCTREE_MIN[3] = {0.0, 0.0, 0.0};
 double DERIV_TEST_OCTREE_MAX[3] = {(double)(1u << DERIV_TEST_MAXDEPTH),
                                    (double)(1u << DERIV_TEST_MAXDEPTH),
                                    (double)(1u << DERIV_TEST_MAXDEPTH)};
-unsigned int DERIV_TEST_ID_TYPE = 0;
+unsigned int DERIV_TEST_ID_TYPE = 3;
 bool DERIV_TEST_ENABLE_BLOCK_ADAPTIVITY            = false;
 
-std::string DERIV_TEST_DERIVTYPE_FIRST             = "EXPERIMENTAL";
+std::string DERIV_TEST_DERIVTYPE_FIRST             = "JTT6";
 std::string DERIV_TEST_DERIVTYPE_SECOND            = "JTT6";
 std::vector<double> DERIV_TEST_DERIV_FIRST_COEFFS  = {};
 std::vector<double> DERIV_TEST_DERIV_SECOND_COEFFS = {};
@@ -878,6 +878,119 @@ void initDataType2_AnalyticalDerivs(const double xx, const double yy,
     var[4] = -freq * freq * cos(freq * xx) * cos(freq * yy) * exp(zz) +
              2 * xx * xx * zz * zz;
     var[5] = cos(freq * xx) * cos(freq * yy) * exp(zz) + 2 * xx * xx * yy * yy;
+}
+
+void initDataType3(const double xx, const double yy, const double zz,
+                   double* var) {
+    // squared radial oscillation
+    const double f  = (1.6 / 2.0) * PI;
+    const double a  = 10.0;
+
+    const double x0 = xx * xx + yy * yy + zz * zz;
+    const double x1 = exp(-x0);
+
+    // Main vars
+    var[0] = a * (pow(x0, 2) * x1 * pow(sin(f * sqrt(x0)), 2) + x0 * x1);
+}
+
+void initDataType3_AnalyticalDerivs(const double xx, const double yy,
+                                    const double zz, double* var) {
+    const double f   = (1.6 / 2.0) * PI;
+    const double a   = 10.0;
+    // first order analytical derivative
+    // TEMP VARS
+    // TEMP VARS
+    const double x0  = xx * xx;
+    const double x1  = yy * yy;
+    const double x2  = zz * zz;
+    const double x3  = x0 + x1 + x2;
+    const double x4  = exp(-x3);
+    const double x5  = 2 * x4;
+    const double x6  = x5 * xx;
+    const double x7  = x3 * x4;
+    const double x8  = 2 * x7;
+    const double x9  = f * sqrt(x3);
+    const double x10 = sin(x9);
+    const double x11 = x10 * x10;
+    const double x12 = x11 * x7;
+    const double x13 = 4 * x12;
+    const double x14 = x11 * pow(x3, 2);
+    const double x15 = cos(x9);
+    const double x16 = f * pow(x3, 3.0 / 2.0);
+    const double x17 = x10 * x15 * x16;
+    const double x18 = x5 * yy;
+    const double x19 = x5 * zz;
+    const double x20 = 4 * x4;
+    const double x21 = x0 * x20;
+    const double x22 = x0 * x12;
+    const double x23 = x14 * x5;
+    const double x24 = f * f;
+    const double x25 = pow(x15, 2) * x24 * x7;
+    const double x26 = x10 * x15 * x4;
+    const double x27 = 7 * x26 * x9;
+    const double x28 = x11 * x8 - x14 * x4 + x16 * x26 - x7 + exp(-x3);
+    const double x29 = 2 * a;
+    const double x30 = x1 * x20;
+    const double x31 = x1 * x12;
+    const double x32 = x2 * x20;
+    const double x33 = x12 * x2;
+
+    // Main vars
+    var[0]           = a * (x13 * xx - x14 * x6 + x17 * x6 + x6 - x8 * xx);
+    var[1]           = a * (x13 * yy - x14 * x18 + x17 * x18 + x18 - x8 * yy);
+    var[2]           = a * (x13 * zz - x14 * x19 + x17 * x19 + x19 - x8 * zz);
+    var[3] = x29 * (x0 * x23 + x0 * x25 + x0 * x27 + x0 * x8 + x11 * x21 -
+                    x17 * x21 - x21 - x22 * x24 - 8 * x22 + x28);
+    var[4] = x29 * (x1 * x23 + x1 * x25 + x1 * x27 + x1 * x8 + x11 * x30 -
+                    x17 * x30 - x24 * x31 + x28 - x30 - 8 * x31);
+    var[5] = x29 * (x11 * x32 - x17 * x32 + x2 * x23 + x2 * x25 + x2 * x27 +
+                    x2 * x8 - x24 * x33 + x28 - x32 - 8 * x33);
+}
+
+void initDataType4(const double xx, const double yy, const double zz,
+                   double* var) {
+    // Rosenbrock function initialization
+    const double a     = 10.0;
+    const double scale = 1.0;
+
+    const double r     = sqrt(xx * xx + yy * yy + zz * zz);
+    var[0]             = a * exp(-1.0 * (r * r)) * pow(r / scale, 5.0);
+}
+
+void initDataType4_AnalyticalDerivs(const double xx, const double yy,
+                                    const double zz, double* var) {
+    double x           = xx;
+    double y           = yy;
+    double z           = zz;
+    const double a     = 10.0;
+    const double scale = 1.0;
+
+    // TEMP VARS
+    const double x0    = pow(scale, -5);
+    const double x1    = x * x;
+    const double x2    = y * y;
+    const double x3    = z * z;
+    const double x4    = x1 + x2 + x3;
+    const double x5    = pow(x4, 3.0 / 2.0);
+    const double x6    = exp(-x4);
+    const double x7    = a * x0 * x6;
+    const double x8    = 2 * pow(x4, 5.0 / 2.0);
+    const double x9    = 20 * x1;
+    const double x10   = 5 * x2;
+    const double x11   = 5 * x3;
+    const double x12   = 2 * pow(x4, 2);
+    const double x13   = sqrt(x4) * x7;
+    const double x14   = 5 * x1;
+    const double x15   = 20 * x2;
+    const double x16   = 20 * x3;
+
+    // Main vars
+    var[0]             = 5 * a * x * x0 * x5 * x6 - x * x7 * x8;
+    var[1]             = 5 * a * x0 * x5 * x6 * y - x7 * x8 * y;
+    var[2]             = 5 * a * x0 * x5 * x6 * z - x7 * x8 * z;
+    var[3]             = x13 * (x10 + x11 + x12 * (2 * x1 - 1) - x4 * x9 + x9);
+    var[4] = x13 * (x11 + x12 * (2 * x2 - 1) + x14 - x15 * x4 + x15);
+    var[5] = x13 * (x10 + x12 * (2 * x3 - 1) + x14 - x16 * x4 + x16);
 }
 
 }  // namespace derivtest

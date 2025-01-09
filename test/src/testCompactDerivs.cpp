@@ -985,6 +985,8 @@ void test_cfd_with_original_stencil(
 
     // calculate the stencil derivatives
     calculate_all_derivs(u_var, sz, deltas, derivs, deriv_stencil, bflag);
+    // calculate the cfd derivatives
+    calculate_all_derivs(u_var, sz, deltas, cfd_derivs, deriv_cfd, bflag);
 
 #if 0
     double *u_var_copy = new double[totalSize];

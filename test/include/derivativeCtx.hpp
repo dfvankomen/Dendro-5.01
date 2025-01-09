@@ -122,6 +122,18 @@ void initDataType2(const double xx, const double yy, const double zz,
 void initDataType2_AnalyticalDerivs(const double xx, const double yy,
                                     const double zz, double* var);
 
+void initDataType3(const double xx, const double yy, const double zz,
+                   double* var);
+
+void initDataType3_AnalyticalDerivs(const double xx, const double yy,
+                                    const double zz, double* var);
+
+void initDataType4(const double xx, const double yy, const double zz,
+                   double* var);
+
+void initDataType4_AnalyticalDerivs(const double xx, const double yy,
+                                    const double zz, double* var);
+
 void inline initDataFuncToPhysCoords(const double xx1, const double yy1,
                                      const double zz1, double* var) {
     // convert "grid" values to physical values
@@ -139,12 +151,12 @@ void inline initDataFuncToPhysCoords(const double xx1, const double yy1,
         case 2:
             initDataType2(xx, yy, zz, var);
             break;
-            // case 3:
-            //     initDataType3(xx, yy, zz, var);
-            //     break;
-            // case 4:
-            //     initDataType4(xx, yy, zz, var);
-            //     break;
+        case 3:
+            initDataType3(xx, yy, zz, var);
+            break;
+        case 4:
+            initDataType4(xx, yy, zz, var);
+            break;
 
         default:
             std::cout << "Unknown ID type: " << DERIV_TEST_ID_TYPE << std::endl;
@@ -170,12 +182,12 @@ void inline analyticalDerivs(const double xx1, const double yy1,
         case 2:
             initDataType2_AnalyticalDerivs(xx, yy, zz, var);
             break;
-            // case 3:
-            //     initDataType3(xx, yy, zz, var);
-            //     break;
-            // case 4:
-            //     initDataType4(xx, yy, zz, var);
-            //     break;
+        case 3:
+            initDataType3_AnalyticalDerivs(xx, yy, zz, var);
+            break;
+        case 4:
+            initDataType4_AnalyticalDerivs(xx, yy, zz, var);
+            break;
 
         default:
             std::cout << "Unknown ID type: " << DERIV_TEST_ID_TYPE << std::endl;
@@ -392,6 +404,32 @@ class DerivTestCtx : public ts::Ctx<DerivTestCtx, DendroScalar, unsigned int> {
     void calculate_full_grid_size();
 
     void write_grid_summary_data();
+
+    void inline prepare_derivatives() {
+        if (!m_uiMesh->isActive()) return;
+
+        // find the largest block size
+        const std::vector<ot::Block>& blkList = m_uiMesh->getLocalBlockList();
+        unsigned int max_blk_sz               = 0;
+        for (unsigned int i = 0; i < blkList.size(); i++) {
+            unsigned int blk_sz = blkList[i].getAllocationSzX() *
+                                  blkList[i].getAllocationSzY() *
+                                  blkList[i].getAllocationSzZ();
+            if (blk_sz > max_blk_sz) {
+                max_blk_sz = blk_sz;
+                std::cout << "LARGEST BLOCK SIZE IS NOW:" << std::endl;
+                std::cout << blkList[i].getAllocationSzX() << ", "
+                          << blkList[i].getAllocationSzY() << ", "
+                          << blkList[i].getAllocationSzZ() << std::endl;
+                std::cout << "setting largest block size to: " << max_blk_sz
+                          << std::endl;
+            }
+        }
+
+        std::cout << "setting largest block size to: " << max_blk_sz
+                  << std::endl;
+        DERIV_TEST_DERIVS->set_maximum_block_size(max_blk_sz);
+    }
 };
 
 }  // namespace derivtest
