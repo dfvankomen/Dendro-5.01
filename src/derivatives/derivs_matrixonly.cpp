@@ -181,7 +181,7 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
             *tempDiagEntries, n, Q_parity, boundary_top, boundary_bottom);
 
 #if 0
-        if (n == pw * 6 + 1) {
+        if (n == pw * 4 + 1) {
             std::cout << "P MATRIX for n=" << n << std::endl;
             printArray_2D_transpose(P_temp.data(), n, n);
 

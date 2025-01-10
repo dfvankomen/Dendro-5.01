@@ -1,4 +1,3 @@
-
 #pragma once
 
 #include "derivatives/derivs_banded.h"

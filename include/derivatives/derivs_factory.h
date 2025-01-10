@@ -5,6 +5,7 @@
 
 #include "derivatives.h"
 #include "derivatives/derivs_explicit.h"
+#include "derivatives/impl_boris.h"
 #include "derivatives/impl_bradylivescu.h"
 #include "derivatives/impl_byuderivs.h"
 #include "derivatives/impl_explicitmatrix.h"
@@ -57,6 +58,15 @@ class DerivsFactory {
         } else if (name == "BL6") {
             return std::unique_ptr<Derivs>(
                 new BradyLivescu_BL6_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "BorisO4") {
+            return std::unique_ptr<Derivs>(
+                new Boris_BorisO4_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "BorisO6") {
+            return std::unique_ptr<Derivs>(
+                new Boris_BorisO6_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "BorisO6Eta") {
+            return std::unique_ptr<Derivs>(
+                new Boris_BorisO6Eta_FirstOrder(std::forward<Args>(args)...));
         } else if (name == "BYUT4") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsT4_R3_FirstOrder(std::forward<Args>(args)...));

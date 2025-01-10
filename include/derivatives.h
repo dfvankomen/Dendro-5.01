@@ -43,6 +43,10 @@ enum DerivType {
     D_KB4,
     // Brady Livescue Derivatives
     D_BL6,
+    // BORIS derivatives
+    D_BORISO4,
+    D_BORISO6,
+    D_BORISO6_ETA,
     // BYU TRIDIAGONAL FREE PARAMTERS
     D_BYUT4,
     D_BYUT6,
