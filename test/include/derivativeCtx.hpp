@@ -94,6 +94,8 @@ extern std::string DERIV_TEST_DERIVTYPE_FIRST;
 extern std::string DERIV_TEST_DERIVTYPE_SECOND;
 extern std::vector<double> DERIV_TEST_DERIV_FIRST_COEFFS;
 extern std::vector<double> DERIV_TEST_DERIV_SECOND_COEFFS;
+extern unsigned int DERIV_TEST_DERIVFIRST_MATID;
+extern unsigned int DERIV_TEST_DERIVSECOND_MATID;
 
 const std::string DERIV_TEST_DERIV_NAMES[6] = {"U_DX",  "U_DY",  "U_DZ",
                                                "U_DXX", "U_DYY", "U_DZZ"};

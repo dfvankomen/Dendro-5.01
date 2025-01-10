@@ -25,10 +25,12 @@ double DERIV_TEST_OCTREE_MAX[3] = {(double)(1u << DERIV_TEST_MAXDEPTH),
 unsigned int DERIV_TEST_ID_TYPE = 3;
 bool DERIV_TEST_ENABLE_BLOCK_ADAPTIVITY            = false;
 
-std::string DERIV_TEST_DERIVTYPE_FIRST             = "JTT6";
+std::string DERIV_TEST_DERIVTYPE_FIRST             = "BL6";
 std::string DERIV_TEST_DERIVTYPE_SECOND            = "JTT6";
 std::vector<double> DERIV_TEST_DERIV_FIRST_COEFFS  = {};
 std::vector<double> DERIV_TEST_DERIV_SECOND_COEFFS = {};
+unsigned int DERIV_TEST_DERIVFIRST_MATID           = 1;
+unsigned int DERIV_TEST_DERIVSECOND_MATID          = 1;
 
 std::string DERIV_TEST_VTU_FILE_PREFIX             = "derivTest";
 bool DERIV_TEST_VTU_Z_SLICE_ONLY                   = true;
@@ -37,7 +39,8 @@ std::unique_ptr<dendroderivs::DendroDerivatives> DERIV_TEST_DERIVS =
     std::make_unique<dendroderivs::DendroDerivatives>(
         DERIV_TEST_DERIVTYPE_FIRST, DERIV_TEST_DERIVTYPE_SECOND,
         DERIV_TEST_ELE_ORDER, DERIV_TEST_DERIV_FIRST_COEFFS,
-        DERIV_TEST_DERIV_SECOND_COEFFS);
+        DERIV_TEST_DERIV_SECOND_COEFFS, DERIV_TEST_DERIVFIRST_MATID,
+        DERIV_TEST_DERIVSECOND_MATID);
 
 DerivTestCtx::DerivTestCtx(ot::Mesh* pMesh) : Ctx() {
     m_uiMesh = pMesh;

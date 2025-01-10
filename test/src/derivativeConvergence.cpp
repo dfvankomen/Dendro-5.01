@@ -208,6 +208,8 @@ int main(int argc, char** argv) {
     //     std::cout << "Usage: " << argv[0] << " paramFile " << std::endl;
     //     return 0;
     // }
+    //
+    std::cout << "Now initializing program!" << std::endl;
 
     MPI_Init(&argc, &argv);
     MPI_Comm comm = MPI_COMM_WORLD;
@@ -239,7 +241,9 @@ int main(int argc, char** argv) {
             derivtest::DERIV_TEST_DERIVTYPE_SECOND,
             derivtest::DERIV_TEST_ELE_ORDER,
             derivtest::DERIV_TEST_DERIV_FIRST_COEFFS,
-            derivtest::DERIV_TEST_DERIV_SECOND_COEFFS);
+            derivtest::DERIV_TEST_DERIV_SECOND_COEFFS,
+            derivtest::DERIV_TEST_DERIVFIRST_MATID,
+            derivtest::DERIV_TEST_DERIVSECOND_MATID);
 
     std::cout << "DENDRO DERIVS: " << derivtest::DERIV_TEST_DERIVS->toString()
               << std::endl;
