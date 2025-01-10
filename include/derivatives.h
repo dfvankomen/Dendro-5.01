@@ -41,6 +41,8 @@ enum DerivType {
     // J.W. Kim 4th order derivatives
     D_K4,
     D_KB4,
+    // Brady Livescue Derivatives
+    D_BL6,
     // BYU TRIDIAGONAL FREE PARAMTERS
     D_BYUT4,
     D_BYUT6,
@@ -163,7 +165,9 @@ class DendroDerivatives {
         const std::string derivType_1 = "E4",
         const std::string derivType_2 = "E4", const unsigned int ele_order = 13,
         const std::vector<double> &coeffs_in_1 = std::vector<double>(),
-        const std::vector<double> &coeffs_in_2 = std::vector<double>());
+        const std::vector<double> &coeffs_in_2 = std::vector<double>(),
+        const unsigned int deriv1_matrixID     = 0,
+        const unsigned int deriv2_matrixID     = 0);
 
     ~DendroDerivatives() = default;
 
@@ -270,5 +274,15 @@ class DendroDerivatives {
 void inline initialize_derivatives() {}
 
 void inline finalize_derivatives() { libxsmm_finalize(); }
+
+class DendroDerivsNotImplemented : public std::exception {
+   private:
+    std::string message_;
+
+   public:
+    explicit DendroDerivsNotImplemented(const std::string &msg)
+        : message_(msg) {}
+    const char *what() { return message_.c_str(); }
+};
 
 }  // namespace dendroderivs
