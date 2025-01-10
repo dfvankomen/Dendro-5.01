@@ -10,8 +10,6 @@ void fill_alpha_beta_bl_6th(std::vector<std::vector<double>> &alpha,
                             unsigned int matrixID) {
     std::vector<double> w(4, 0.0);
 
-    std::cout << "Attempting to fill alpha/beta" << std::endl;
-
     // fill alpha based on the imported generated code
 
     switch (matrixID) {
@@ -101,11 +99,6 @@ MatrixDiagonalEntries *createBL6thDiagonalsFirstOrder(unsigned int matrixID) {
         temp[i + 1] = beta[i][2];
 
         P1DiagBoundary.push_back(temp);
-        std::cout << "temp: ";
-        for (auto &x : temp) {
-            std::cout << x << " ";
-        }
-        std::cout << std::endl;
     }
 
     // diagonal elements for P matrix for 1st derivative

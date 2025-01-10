@@ -23,8 +23,6 @@ class BradyLivescu_BL6_FirstOrder : public MatrixCompactDerivs<1> {
         : MatrixCompactDerivs{ele_order} {
         diagEntries = createBL6thDiagonalsFirstOrder(matrixID);
 
-        diagEntries->toStdOut();
-
         this->init();
     }
 
