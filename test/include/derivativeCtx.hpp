@@ -419,17 +419,9 @@ class DerivTestCtx : public ts::Ctx<DerivTestCtx, DendroScalar, unsigned int> {
                                   blkList[i].getAllocationSzZ();
             if (blk_sz > max_blk_sz) {
                 max_blk_sz = blk_sz;
-                std::cout << "LARGEST BLOCK SIZE IS NOW:" << std::endl;
-                std::cout << blkList[i].getAllocationSzX() << ", "
-                          << blkList[i].getAllocationSzY() << ", "
-                          << blkList[i].getAllocationSzZ() << std::endl;
-                std::cout << "setting largest block size to: " << max_blk_sz
-                          << std::endl;
             }
         }
 
-        std::cout << "setting largest block size to: " << max_blk_sz
-                  << std::endl;
         DERIV_TEST_DERIVS->set_maximum_block_size(max_blk_sz);
     }
 };
