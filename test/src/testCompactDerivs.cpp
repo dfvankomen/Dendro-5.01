@@ -58,6 +58,9 @@ uint32_t eleorder            = 8;
 std::string derivType_first  = "";
 std::string derivType_second = "";
 
+unsigned int deriv1_matrixID = 1;
+unsigned int deriv2_matrixID = 1;
+
 // dendro_cfd::FilterType filter_type    = dendro_cfd::FILT_NONE;
 uint32_t num_tests           = 1000;
 uint32_t data_init           = 2;
@@ -88,6 +91,13 @@ void readParams(const char *inFile) {
     }
     if (file.contains("deriv_type_2nd")) {
         derivType_second = file["deriv_type_2nd"].as_string();
+    }
+
+    if (file.contains("deriv1_matrixID")) {
+        deriv1_matrixID = file["deriv1_matrixID"].as_integer();
+    }
+    if (file.contains("deriv2_matrixID")) {
+        deriv1_matrixID = file["deriv2_matrixID"].as_integer();
     }
     // if (file.contains("filter_type")) {
     //     filter_type = static_cast<dendro_cfd::FilterType>(
@@ -149,6 +159,8 @@ void readParams(const char *inFile) {
     std::cout << "  eleorder : " << eleorder << std::endl;
     std::cout << "  deriv_type : " << derivType_first << std::endl;
     std::cout << "  deriv_type_2nd : " << derivType_second << std::endl;
+    std::cout << "  deriv1_matrixID : " << deriv1_matrixID << std::endl;
+    std::cout << "  deriv2_matrixID : " << deriv2_matrixID << std::endl;
     // std::cout << "  filter_type : " << filter_type << std::endl;
     std::cout << "  num_tests : " << num_tests << std::endl;
     std::cout << "  data_init : " << data_init << std::endl;
@@ -1424,7 +1436,8 @@ int main(int argc, char **argv) {
     std::cout << "Building test derivatives..." << std::endl;
     dendroderivs::DendroDerivatives deriv_cfd(
         params::derivType_first, params::derivType_second, params::eleorder,
-        params::coeffs_1, params::coeffs_2);
+        params::coeffs_1, params::coeffs_2, params::deriv1_matrixID,
+        params::deriv2_matrixID);
     std::cout << "Derivatives built!" << std::endl;
 
     // run a short test to see what the errors are
