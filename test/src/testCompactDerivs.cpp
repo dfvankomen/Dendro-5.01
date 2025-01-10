@@ -97,7 +97,7 @@ void readParams(const char *inFile) {
         deriv1_matrixID = file["deriv1_matrixID"].as_integer();
     }
     if (file.contains("deriv2_matrixID")) {
-        deriv1_matrixID = file["deriv2_matrixID"].as_integer();
+        deriv2_matrixID = file["deriv2_matrixID"].as_integer();
     }
     // if (file.contains("filter_type")) {
     //     filter_type = static_cast<dendro_cfd::FilterType>(

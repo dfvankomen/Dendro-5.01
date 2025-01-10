@@ -1,10 +1,10 @@
 "eleorder" = 6
-"deriv_type" = "BL6"
+"deriv_type" = "JTT6"
 # "deriv_type" = "E6"
 "deriv_type_2nd" = "JTT6"
 # "filter_type" = 7
 # For use with BL6 primarily, but only works with 1st order derivs
-"deriv1_matrixID" = 15
+"deriv1_matrixID" = 1
 "deriv2_matrixID" = 1
 
 # this is the "order" that should be used for the regular derivatives
