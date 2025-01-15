@@ -1,6 +1,7 @@
 #include "derivativeCtx.hpp"
 
 #include <ostream>
+#include <toml.hpp>
 
 namespace derivtest {
 
@@ -24,6 +25,14 @@ double DERIV_TEST_OCTREE_MAX[3] = {(double)(1u << DERIV_TEST_MAXDEPTH),
                                    (double)(1u << DERIV_TEST_MAXDEPTH)};
 unsigned int DERIV_TEST_ID_TYPE = 3;
 bool DERIV_TEST_ENABLE_BLOCK_ADAPTIVITY            = false;
+unsigned int DERIV_TEST_DENDRO_GRAIN_SZ            = 1000;
+double DERIV_TEST_DENDRO_AMR_FAC                   = 0.1;
+unsigned int DERIV_TEST_INIT_GRID_ITER             = 1;
+bool DERIV_TEST_INIT_GRID_REINIT_EACH_TIME         = true;
+unsigned int DERIV_TEST_SPLIT_FIX                  = 256;
+double DERIV_TEST_CFL_FACTOR                       = 0.25;
+double DERIV_TEST_LOAD_IMB_TOL                     = 0.1;
+double DERIV_TEST_WAVELET_TOL                      = 0.0001;
 
 std::string DERIV_TEST_DERIVTYPE_FIRST             = "BL6";
 std::string DERIV_TEST_DERIVTYPE_SECOND            = "JTT6";
@@ -41,6 +50,195 @@ std::unique_ptr<dendroderivs::DendroDerivatives> DERIV_TEST_DERIVS =
         DERIV_TEST_ELE_ORDER, DERIV_TEST_DERIV_FIRST_COEFFS,
         DERIV_TEST_DERIV_SECOND_COEFFS, DERIV_TEST_DERIVFIRST_MATID,
         DERIV_TEST_DERIVSECOND_MATID);
+
+void readParamFile(const char* inFile, MPI_Comm comm) {
+    int rank, npes;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &npes);
+
+    auto file = toml::parse(inFile);
+
+    if (file.contains("DERIV_TEST_ID_TYPE")) {
+        DERIV_TEST_ID_TYPE = file["DERIV_TEST_ID_TYPE"].as_integer();
+    }
+
+    if (file.contains("DERIV_TEST_DERIVTYPE_FIRST")) {
+        DERIV_TEST_DERIVTYPE_FIRST =
+            file["DERIV_TEST_DERIVTYPE_FIRST"].as_string();
+    }
+
+    if (file.contains("DERIV_TEST_DERIVTYPE_SECOND")) {
+        DERIV_TEST_DERIVTYPE_SECOND =
+            file["DERIV_TEST_DERIVTYPE_SECOND"].as_string();
+    }
+
+    if (file.contains("DERIV_TEST_DERIVFIRST_MATID")) {
+        DERIV_TEST_DERIVFIRST_MATID =
+            file["DERIV_TEST_DERIVFIRST_MATID"].as_integer();
+    }
+
+    if (file.contains("DERIV_TEST_DERIVSECOND_MATID")) {
+        DERIV_TEST_DERIVSECOND_MATID =
+            file["DERIV_TEST_DERIVSECOND_MATID"].as_integer();
+    }
+
+    if (file.contains("DERIV_TEST_DERIV_FIRST_COEFFS")) {
+        DERIV_TEST_DERIV_FIRST_COEFFS = toml::find<std::vector<double>>(
+            file, "DERIV_TEST_DERIV_FIRST_COEFFS");
+    }
+    if (file.contains("DERIV_TEST_DERIV_SECOND_COEFFS")) {
+        DERIV_TEST_DERIV_SECOND_COEFFS = toml::find<std::vector<double>>(
+            file, "DERIV_TEST_DERIV_SECOND_COEFFS");
+    }
+
+    if (file.contains("DERIV_TEST_ELE_ORDER")) {
+        DERIV_TEST_ELE_ORDER = file["DERIV_TEST_ELE_ORDER"].as_integer();
+    }
+
+    // padding width is half the element order
+    // TODO: could potentially make it so element order is double, but
+    // whatever
+    DERIV_TEST_PADDING_WIDTH = DERIV_TEST_ELE_ORDER >> 1u;
+
+    if (file.contains("DERIV_TEST_ENABLE_BLOCK_ADAPTIVITY")) {
+        DERIV_TEST_ENABLE_BLOCK_ADAPTIVITY =
+            file["DERIV_TEST_ENABLE_BLOCK_ADAPTIVITY"].as_integer();
+    }
+
+    if (file.contains("DERIV_TEST_VTU_FILE_PREFIX")) {
+        DERIV_TEST_VTU_FILE_PREFIX =
+            file["DERIV_TEST_VTU_FILE_PREFIX"].as_string();
+    }
+
+    if (file.contains("DERIV_TEST_DENDRO_GRAIN_SZ")) {
+        DERIV_TEST_DENDRO_GRAIN_SZ =
+            file["DERIV_TEST_DENDRO_GRAIN_SZ"].as_integer();
+    }
+
+    if (file.contains("DERIV_TEST_DENDRO_AMR_FAC")) {
+        if (0.0 > file["DERIV_TEST_DENDRO_AMR_FAC"].as_floating() ||
+            0.2 < file["DERIV_TEST_DENDRO_AMR_FAC"].as_floating()) {
+            std::cerr << R"(Invalid value for "DERIV_TEST_DENDRO_AMR_FAC")"
+                      << std::endl;
+            exit(-1);
+        }
+
+        DERIV_TEST_DENDRO_AMR_FAC =
+            file["DERIV_TEST_DENDRO_AMR_FAC"].as_floating();
+    }
+
+    if (file.contains("DERIV_TEST_INIT_GRID_ITER")) {
+        DERIV_TEST_INIT_GRID_ITER =
+            file["DERIV_TEST_INIT_GRID_ITER"].as_integer();
+    }
+
+    if (file.contains("DERIV_TEST_INIT_GRID_REINIT_EACH_TIME")) {
+        DERIV_TEST_INIT_GRID_REINIT_EACH_TIME =
+            file["DERIV_TEST_INIT_GRID_REINIT_EACH_TIME"].as_boolean();
+    }
+
+    if (file.contains("DERIV_TEST_SPLIT_FIX")) {
+        DERIV_TEST_SPLIT_FIX = file["DERIV_TEST_SPLIT_FIX"].as_integer();
+    }
+
+    if (file.contains("DERIV_TEST_CFL_FACTOR")) {
+        if (0.0 > file["DERIV_TEST_CFL_FACTOR"].as_floating() ||
+            0.5 < file["DERIV_TEST_CFL_FACTOR"].as_floating()) {
+            std::cerr << R"(Invalid value for "DERIV_TEST_CFL_FACTOR")"
+                      << std::endl;
+            exit(-1);
+        }
+
+        DERIV_TEST_CFL_FACTOR = file["DERIV_TEST_CFL_FACTOR"].as_floating();
+    }
+
+    if (file.contains("DERIV_TEST_VTU_Z_SLICE_ONLY")) {
+        DERIV_TEST_VTU_Z_SLICE_ONLY =
+            file["DERIV_TEST_VTU_Z_SLICE_ONLY"].as_boolean();
+    }
+
+    // this one is always 1, only one var
+    // if (file.contains("DERIV_TEST_ASYNC_COMM_K")) {
+    //     DERIV_TEST_ASYNC_COMM_K =
+    //     file["DERIV_TEST_ASYNC_COMM_K"].as_integer();
+    // }
+
+    if (file.contains("DERIV_TEST_LOAD_IMB_TOL")) {
+        if (0.0 > file["DERIV_TEST_LOAD_IMB_TOL"].as_floating() ||
+            0.2 < file["DERIV_TEST_LOAD_IMB_TOL"].as_floating()) {
+            std::cerr << R"(Invalid value for "DERIV_TEST_LOAD_IMB_TOL")"
+                      << std::endl;
+            exit(-1);
+        }
+
+        DERIV_TEST_LOAD_IMB_TOL = file["DERIV_TEST_LOAD_IMB_TOL"].as_floating();
+    }
+
+    if (file.contains("DERIV_TEST_MAXDEPTH")) {
+        DERIV_TEST_MAXDEPTH = file["DERIV_TEST_MAXDEPTH"].as_integer();
+    }
+
+    // if (file.contains("DERIV_TEST_MINDEPTH")) {
+    //     DERIV_TEST_MINDEPTH = file["DERIV_TEST_MINDEPTH"].as_integer();
+    // }
+
+    if (file.contains("DERIV_TEST_WAVELET_TOL")) {
+        if (0.0 > file["DERIV_TEST_WAVELET_TOL"].as_floating() ||
+            1e-04 < file["DERIV_TEST_WAVELET_TOL"].as_floating()) {
+            std::cerr << R"(Invalid value for "DERIV_TEST_WAVELET_TOL")"
+                      << std::endl;
+            exit(-1);
+        }
+
+        DERIV_TEST_WAVELET_TOL = file["DERIV_TEST_WAVELET_TOL"].as_floating();
+    }
+
+    if (file.contains("DERIV_TEST_GRID_MIN_X")) {
+        DERIV_TEST_GRID_MIN_X = file["DERIV_TEST_GRID_MIN_X"].as_floating();
+    }
+
+    if (file.contains("DERIV_TEST_GRID_MAX_X")) {
+        DERIV_TEST_GRID_MAX_X = file["DERIV_TEST_GRID_MAX_X"].as_floating();
+    }
+
+    if (file.contains("DERIV_TEST_GRID_MIN_Y")) {
+        DERIV_TEST_GRID_MIN_Y = file["DERIV_TEST_GRID_MIN_Y"].as_floating();
+    }
+
+    if (file.contains("DERIV_TEST_GRID_MAX_Y")) {
+        DERIV_TEST_GRID_MAX_Y = file["DERIV_TEST_GRID_MAX_Y"].as_floating();
+    }
+
+    if (file.contains("DERIV_TEST_GRID_MIN_Z")) {
+        DERIV_TEST_GRID_MIN_Z = file["DERIV_TEST_GRID_MIN_Z"].as_floating();
+    }
+
+    if (file.contains("DERIV_TEST_GRID_MAX_Z")) {
+        DERIV_TEST_GRID_MAX_Z = file["DERIV_TEST_GRID_MAX_Z"].as_floating();
+    }
+
+    // COMPD_MIN and COMPD_MAX should be the same as the grid
+    DERIV_TEST_COMPD_MIN[0]  = DERIV_TEST_GRID_MIN_X;
+    DERIV_TEST_COMPD_MIN[1]  = DERIV_TEST_GRID_MIN_Y;
+    DERIV_TEST_COMPD_MIN[2]  = DERIV_TEST_GRID_MIN_Z;
+
+    DERIV_TEST_COMPD_MAX[0]  = DERIV_TEST_GRID_MAX_X;
+    DERIV_TEST_COMPD_MAX[1]  = DERIV_TEST_GRID_MAX_Y;
+    DERIV_TEST_COMPD_MAX[2]  = DERIV_TEST_GRID_MAX_Z;
+
+    DERIV_TEST_OCTREE_MAX[0] = (double)(1u << DERIV_TEST_MAXDEPTH);
+    DERIV_TEST_OCTREE_MAX[1] = (double)(1u << DERIV_TEST_MAXDEPTH);
+    DERIV_TEST_OCTREE_MAX[2] = (double)(1u << DERIV_TEST_MAXDEPTH);
+
+    DERIV_TEST_PADDING_WIDTH = DERIV_TEST_ELE_ORDER >> 1u;
+
+    // establish the dendro derivatives class, this should always be built
+    DERIV_TEST_DERIVS = std::make_unique<dendroderivs::DendroDerivatives>(
+        DERIV_TEST_DERIVTYPE_FIRST, DERIV_TEST_DERIVTYPE_SECOND,
+        DERIV_TEST_ELE_ORDER, DERIV_TEST_DERIV_FIRST_COEFFS,
+        DERIV_TEST_DERIV_SECOND_COEFFS, DERIV_TEST_DERIVFIRST_MATID,
+        DERIV_TEST_DERIVFIRST_MATID);
+}
 
 DerivTestCtx::DerivTestCtx(ot::Mesh* pMesh) : Ctx() {
     m_uiMesh = pMesh;

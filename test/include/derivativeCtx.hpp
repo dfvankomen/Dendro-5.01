@@ -54,10 +54,10 @@
 
 namespace derivtest {
 
-const unsigned int DERIV_TEST_NUM_VARS       = 6;
-const unsigned int DERIV_TEST_NUM_VARS_TRUE  = 1;
-const unsigned int DERIV_TEST_ASYNC_COMM_K   = 1;
-const unsigned int DERIV_TEST_INIT_GRID_ITER = 1;
+const unsigned int DERIV_TEST_NUM_VARS      = 6;
+const unsigned int DERIV_TEST_NUM_VARS_TRUE = 1;
+const unsigned int DERIV_TEST_ASYNC_COMM_K  = 1;
+extern unsigned int DERIV_TEST_INIT_GRID_ITER;
 extern unsigned int DERIV_TEST_ELE_ORDER;
 extern unsigned int DERIV_TEST_PADDING_WIDTH;
 extern double DERIV_TEST_GRID_MIN_X;
@@ -66,16 +66,16 @@ extern double DERIV_TEST_GRID_MIN_Y;
 extern double DERIV_TEST_GRID_MAX_Y;
 extern double DERIV_TEST_GRID_MIN_Z;
 extern double DERIV_TEST_GRID_MAX_Z;
-const bool DERIV_TEST_INIT_GRID_REINIT_EACH_TIME = true;
-const bool DERIV_TEST_DO_REFINE                  = true;
+extern bool DERIV_TEST_INIT_GRID_REINIT_EACH_TIME;
+const bool DERIV_TEST_DO_REFINE = true;
 extern bool DERIV_TEST_ENABLE_BLOCK_ADAPTIVITY;
 const unsigned int DERIV_TEST_NUM_REFINE_VARS = 1;
 const unsigned int DERIV_TEST_REFINE_VARS[1]  = {0};
-const double DERIV_TEST_WAVELET_TOL           = 0.0001;
-const double DERIV_TEST_DENDRO_AMR_FAC        = 0.1;
-const unsigned int DERIV_TEST_DENDRO_GRAIN_SZ = 1000;
-const double DERIV_TEST_LOAD_IMB_TOL          = 0.1;
-const unsigned int DERIV_TEST_SPLIT_FIX       = 256;
+extern double DERIV_TEST_WAVELET_TOL;
+extern double DERIV_TEST_DENDRO_AMR_FAC;
+extern unsigned int DERIV_TEST_DENDRO_GRAIN_SZ;
+extern double DERIV_TEST_LOAD_IMB_TOL;
+extern unsigned int DERIV_TEST_SPLIT_FIX;
 extern unsigned int DERIV_TEST_MAXDEPTH;
 extern double DERIV_TEST_COMPD_MIN[3];
 extern double DERIV_TEST_COMPD_MAX[3];
@@ -85,7 +85,7 @@ extern unsigned int DERIV_TEST_ID_TYPE;
 extern std::string DERIV_TEST_VTU_FILE_PREFIX;
 extern bool DERIV_TEST_VTU_Z_SLICE_ONLY;
 
-const double DERIV_TEST_CFL_FACTOR = 0.25;
+extern double DERIV_TEST_CFL_FACTOR;
 extern double DERIV_TEST_RK45_TIME_STEP_SIZE;
 
 extern std::unique_ptr<dendroderivs::DendroDerivatives> DERIV_TEST_DERIVS;
@@ -105,6 +105,8 @@ inline double computeWTolDCoords(double x, double y, double z, double* hx) {
 
     return DERIV_TEST_WAVELET_TOL;
 }
+
+void readParamFile(const char* inFile, MPI_Comm comm);
 
 void initDataType0(const double xx, const double yy, const double zz,
                    double* var);

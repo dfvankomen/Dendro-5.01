@@ -223,8 +223,8 @@ int main(int argc, char** argv) {
     }
 
     // 1 . read the parameter file.
-    // if (!rank) std::cout << " reading parameter file :" << argv[1] <<
-    // std::endl; readParamFile(argv[1], comm);
+    if (!rank) std::cout << " reading parameter file :" << argv[1] << std::endl;
+    derivtest::readParamFile(argv[1], comm);
 
     int root = std::min(1, npes - 1);
     // dumpParamFile(std::cout, root, comm);
