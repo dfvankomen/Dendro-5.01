@@ -66,6 +66,18 @@ template <unsigned int P>
 void deriv8666_z(double *const Dzu, const double *const u, const double dz,
                  const unsigned int *sz, unsigned bflag);
 
+template <unsigned int P>
+void deriv8666_xx(double *const Dxu, const double *const u, const double dx,
+                  const unsigned int *sz, unsigned bflag);
+
+template <unsigned int P>
+void deriv8666_yy(double *const Dyu, const double *const u, const double dy,
+                  const unsigned int *sz, unsigned bflag);
+
+template <unsigned int P>
+void deriv8666_zz(double *const Dzu, const double *const u, const double dz,
+                  const unsigned int *sz, unsigned bflag);
+
 class ExplicitDerivsO4_DX : public Derivs {
    private:
     std::function<void(double *const, const double *, const double,
@@ -344,13 +356,13 @@ class ExplicitDerivsO8_DX : public Derivs {
     ExplicitDerivsO8_DX(unsigned int ele_order, Args &&...)
         : Derivs(ele_order) {
         if (p_pw == 4) {
-            gradx_func = &deriv644_x<4>;
-            grady_func = &deriv644_y<4>;
-            gradz_func = &deriv644_z<4>;
+            gradx_func = &deriv8666_x<4>;
+            grady_func = &deriv8666_y<4>;
+            gradz_func = &deriv8666_z<4>;
         } else if (p_pw == 5) {
-            gradx_func = &deriv644_x<5>;
-            grady_func = &deriv644_y<5>;
-            gradz_func = &deriv644_z<5>;
+            gradx_func = &deriv8666_x<5>;
+            grady_func = &deriv8666_y<5>;
+            gradz_func = &deriv8666_z<5>;
         } else {
             throw std::invalid_argument(
                 "Explicit DerivsO8 DX requires a padding width of 2 to 5!");
@@ -403,13 +415,13 @@ class ExplicitDerivsO8_DXX : public Derivs {
     ExplicitDerivsO8_DXX(unsigned int ele_order, Args &&...)
         : Derivs(ele_order) {
         if (p_pw == 4) {
-            gradx_func = &deriv644_xx<4>;
-            grady_func = &deriv644_yy<4>;
-            gradz_func = &deriv644_zz<4>;
+            gradx_func = &deriv8666_xx<4>;
+            grady_func = &deriv8666_yy<4>;
+            gradz_func = &deriv8666_zz<4>;
         } else if (p_pw == 5) {
-            gradx_func = &deriv644_xx<5>;
-            grady_func = &deriv644_yy<5>;
-            gradz_func = &deriv644_zz<5>;
+            gradx_func = &deriv8666_xx<5>;
+            grady_func = &deriv8666_yy<5>;
+            gradz_func = &deriv8666_zz<5>;
         } else {
             throw std::invalid_argument(
                 "Explicit DerivsO8 DXX requires a padding width of 2 to 5!");
