@@ -57,7 +57,7 @@ uint32_t eleorder            = 8;
 
 std::string derivType_first  = "";
 std::string derivType_second = "";
-std::string filterType       = "KO2";
+std::string filterType       = "default";
 
 unsigned int deriv1_matrixID = 1;
 unsigned int deriv2_matrixID = 1;
