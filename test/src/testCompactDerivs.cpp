@@ -57,6 +57,7 @@ uint32_t eleorder            = 8;
 
 std::string derivType_first  = "";
 std::string derivType_second = "";
+std::string filterType       = "KO2";
 
 unsigned int deriv1_matrixID = 1;
 unsigned int deriv2_matrixID = 1;
@@ -1418,26 +1419,32 @@ int main(int argc, char **argv) {
     // create the explicit objects
 
     std::string derivType_test;
+    std::string filterType_test;
     if (params::eleorder == 4) {
-        derivType_test = "E4";
+        derivType_test  = "E4";
+        filterType_test = "KO2";
     } else if (params::eleorder == 6) {
-        derivType_test = "E6";
+        derivType_test  = "E6";
+        filterType_test = "KO4";
     } else if (params::eleorder == 8) {
-        derivType_test = "E8";
+        derivType_test  = "E8";
+        filterType_test = "KO8";
     } else {
         // default
-        derivType_test = "E4";
+        derivType_test  = "E4";
+        filterType_test = "KO4";
     }
 
     std::cout << "Building Explicit derivatives..." << std::endl;
     dendroderivs::DendroDerivatives deriv(derivType_test, derivType_test,
-                                          params::eleorder);
+                                          params::eleorder, {}, {}, 0, 0,
+                                          filterType_test);
 
     std::cout << "Building test derivatives..." << std::endl;
     dendroderivs::DendroDerivatives deriv_cfd(
         params::derivType_first, params::derivType_second, params::eleorder,
         params::coeffs_1, params::coeffs_2, params::deriv1_matrixID,
-        params::deriv2_matrixID);
+        params::deriv2_matrixID, params::filterType);
     std::cout << "Derivatives built!" << std::endl;
 
     // run a short test to see what the errors are
