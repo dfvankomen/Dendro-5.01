@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <functional>
 #include <memory>
 #include <stdexcept>
@@ -7,6 +8,7 @@
 #include <unordered_map>
 
 #include "dendro.h"
+#include "filters.h"
 #include "libxsmm.h"
 
 #define IDX(i, j, k) ((i) + nx * ((j) + ny * (k)))
@@ -97,13 +99,13 @@ class Derivs {
      * TODO: Implement full deep copy method for the derivatives, as
      * shallow copies would not be appropriate.
      */
-    Derivs(const Derivs &obj){};
+    Derivs(const Derivs &obj) {};
 
    public:
     /**
      * @brief Destructor
      */
-    virtual ~Derivs(){};
+    virtual ~Derivs() {};
 
     virtual std::unique_ptr<Derivs> clone() const    = 0;
 
@@ -159,6 +161,8 @@ class DendroDerivatives {
     // NOTE: unique ptr will automatically delete the object once out of scope
     // or if this object is deleted
 
+    std::unique_ptr<Filters> _filter;
+
     std::unique_ptr<double[]> _derivative_space;
 
     unsigned int _n_points_deriv_space;
@@ -171,7 +175,8 @@ class DendroDerivatives {
         const std::vector<double> &coeffs_in_1 = std::vector<double>(),
         const std::vector<double> &coeffs_in_2 = std::vector<double>(),
         const unsigned int deriv1_matrixID     = 0,
-        const unsigned int deriv2_matrixID     = 0);
+        const unsigned int deriv2_matrixID     = 0,
+        const std::string filterType           = "default");
 
     ~DendroDerivatives() = default;
 
@@ -271,7 +276,7 @@ class DendroDerivatives {
 
     std::string toString() {
         return "DendroDerivs<" + _first_deriv->toString() + ", " +
-               _second_deriv->toString() + ">";
+               _second_deriv->toString() + ", " + _filter->toString() + ">";
     }
 };
 

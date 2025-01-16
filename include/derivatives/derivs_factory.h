@@ -5,6 +5,7 @@
 
 #include "derivatives.h"
 #include "derivatives/derivs_explicit.h"
+#include "derivatives/filt_kodiss_explicit.h"
 #include "derivatives/impl_boris.h"
 #include "derivatives/impl_bradylivescu.h"
 #include "derivatives/impl_byuderivs.h"
@@ -12,6 +13,7 @@
 #include "derivatives/impl_hybrid_approaches.h"
 #include "derivatives/impl_jonathantyler.h"
 #include "derivatives/impl_kimderivs.h"
+#include "filters.h"
 
 namespace dendroderivs {
 
@@ -165,6 +167,26 @@ class DerivsFactory {
             return std::unique_ptr<Derivs>(
                 new JonathanTyler_JTP6_SecondOrder_Banded(
                     std::forward<Args>(args)...));
+        }
+
+        return nullptr;
+    }
+};
+
+class FilterFactory {
+   public:
+    template <typename... Args>
+    static std::unique_ptr<Filters> create_filter(const std::string &name,
+                                                  Args &&...args) {
+        if (name == "KO2") {
+            return std::unique_ptr<Filters>(
+                new ExplicitKODissO2(std::forward<Args>(args)...));
+        } else if (name == "KO4") {
+            return std::unique_ptr<Filters>(
+                new ExplicitKODissO4(std::forward<Args>(args)...));
+        } else if (name == "KO6") {
+            return std::unique_ptr<Filters>(
+                new ExplicitKODissO4(std::forward<Args>(args)...));
         }
 
         return nullptr;

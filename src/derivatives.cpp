@@ -1,18 +1,18 @@
 #include "derivatives.h"
 
+#include <ranges>
+
 #include "derivatives/derivs_factory.h"
 
 namespace dendroderivs {
 
 unsigned int DENDRO_DERIVS_PW = 0;
 
-DendroDerivatives::DendroDerivatives(const std::string derivType_1,
-                                     const std::string derivType_2,
-                                     const unsigned int ele_order,
-                                     const std::vector<double> &coeffs_in_1,
-                                     const std::vector<double> &coeffs_in_2,
-                                     const unsigned int deriv1_matrixID,
-                                     const unsigned int deriv2_matrixID)
+DendroDerivatives::DendroDerivatives(
+    const std::string derivType_1, const std::string derivType_2,
+    const unsigned int ele_order, const std::vector<double> &coeffs_in_1,
+    const std::vector<double> &coeffs_in_2, const unsigned int deriv1_matrixID,
+    const unsigned int deriv2_matrixID, const std::string filterType)
     : _n_points_deriv_space(0),
       _n_vars_deriv_space(0),
       _derivative_space(nullptr) {
@@ -33,6 +33,31 @@ DendroDerivatives::DendroDerivatives(const std::string derivType_1,
     if (!_second_deriv) {
         throw std::runtime_error("Failed to create Derivs object of type: " +
                                  derivType_2);
+    }
+
+    // then fetch the filter type
+    std::string filterUse = filterType;
+    if (filterType == "default") {
+        // choose default KO based on padding size
+        switch (ele_order) {
+            case 4:
+                filterUse = "KO2";
+                break;
+            case 6:
+                filterUse = "KO4";
+                break;
+            case 8:
+                filterUse = "KO6";
+                break;
+            default:
+                filterUse = "KO4";
+                break;
+        }
+    }
+    _filter = FilterFactory::create_filter(filterUse, ele_order);
+    if (!_filter) {
+        throw std::runtime_error("Failed to create Filter object of type: " +
+                                 filterUse);
     }
 
     const unsigned int pw = ele_order / 2;

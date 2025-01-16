@@ -113,6 +113,7 @@ set(DENDRO_INCLUDE_FILES
     include/launcher.h
     include/device.h
     include/derivatives.h
+    include/filters.h
     include/derivatives/derivs_explicit.h
     include/derivatives/derivs_compact.h
     include/derivatives/derivs_banded.h
