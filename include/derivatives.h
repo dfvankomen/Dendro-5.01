@@ -269,6 +269,17 @@ class DendroDerivatives {
         _second_deriv->do_grad_z(du, u, dx, sz, bflag);
     }
 
+    void filter(const double *const input, double *const output,
+                double *const workspace_x, double *const workspace_y,
+                double *const worksapce_z, const double dx, const double dy,
+                const double dz, const double coeff, const unsigned int *sz,
+                const unsigned int bflag) {
+        _filter->do_full_filter(input, output, workspace_x, workspace_y,
+                                worksapce_z, dx, dy, dz, coeff, sz, bflag);
+    }
+
+    bool inline do_filter_before() { return _filter->do_filter_before(); }
+
     void set_maximum_block_size(size_t block_size) {
         _first_deriv->set_maximum_block_size(block_size);
         _second_deriv->set_maximum_block_size(block_size);
