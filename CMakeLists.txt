@@ -9,7 +9,7 @@
 # The options in there must be included in the root directory of your project
 # that you are using this library with. This will configure everything for building,
 # but the options must be propagated to your own solvers and projects.
-# 
+#
 # ##############################################################################
 
 cmake_minimum_required(VERSION 3.1)
@@ -767,3 +767,28 @@ target_include_directories(sfcLaplaceEq
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(sfcLaplaceEq PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(sfcLaplaceEq PRIVATE ${GSL_INCLUDE_DIRS})
+
+
+
+set(SOURCE_FILES test/src/test_new_partitioning.cpp)
+add_executable(newPartitioning ${SOURCE_FILES})
+target_link_libraries(newPartitioning dendro5 ${LAPACK_LIBRARIES}
+                      ${MPI_LIBRARIES} m)
+target_include_directories(newPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(newPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(newPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(newPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(newPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(newPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(newPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(newPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(newPartitioning PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(newPartitioning PRIVATE ${GSL_INCLUDE_DIRS})

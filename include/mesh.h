@@ -24,6 +24,7 @@
 #pragma once
 #include <fdCoefficient.h>
 
+#include <cstdint>
 #include <memory>
 #include <vector>
 
@@ -58,6 +59,46 @@ extern double t_blk_g[3];
 
 #include "dendroProfileParams.h"
 #include "waveletRefEl.h"
+
+// oct_data used for storing some information about the global map
+template <typename T>
+struct oct_data {
+    uint32_t rank;
+    T eid;
+    T coord[3];
+    T e2e[6];
+
+    oct_data() {};
+
+    oct_data(T eid, uint32_t rank, T coord[3], T e2e[6]) {
+        this->eid      = eid;
+        this->rank     = rank;
+
+        this->coord[0] = coord[0];
+        this->coord[1] = coord[1];
+        this->coord[2] = coord[2];
+
+        this->e2e[0]   = e2e[0];
+        this->e2e[1]   = e2e[1];
+        this->e2e[2]   = e2e[2];
+
+        this->e2e[3]   = e2e[3];
+        this->e2e[4]   = e2e[4];
+        this->e2e[5]   = e2e[5];
+    }
+};
+
+template <typename T>
+void print_octdata_vector(std::vector<oct_data<T>> &oct) {
+    std::cout << ": OCT DATA:\n" << std::endl;
+    for (auto &o : oct) {
+        std::cout << o.rank << " \tEID: " << o.eid << " rank " << o.rank
+                  << " coord(" << o.coord[0] << ", " << o.coord[1] << ", "
+                  << o.coord[2] << ") : " << "e2e(" << o.e2e[0] << ", "
+                  << o.e2e[1] << ", " << o.e2e[2] << ", " << o.e2e[3] << ", "
+                  << o.e2e[4] << ", " << o.e2e[5] << ") " << std::endl;
+    }
+}
 
 /**
  * How the oct flags are used in the mesh generation part.
@@ -2679,6 +2720,120 @@ class Mesh {
      */
     void blkUnzipElementIDs(unsigned int blk,
                             std::vector<unsigned int> &eid) const;
+
+    // this builds up the global connectivity map, but for each individual
+    // processor we'll need to communicate the map to synchronize it, probably
+    void buildOctreeConnectivity() {
+        if (!m_uiIsActive) return;
+        std::cout << "inside build octree connectivity!" << std::endl;
+
+        typedef long int D_INT_L;
+
+        int rank                         = this->getMPIRank();
+        int npes                         = this->getMPICommSize();
+        MPI_Comm commActive              = this->getMPICommunicator();
+
+        // helpers for the nodes and e2e_map
+        const ot::TreeNode *const pNodes = this->getAllElements().data();
+        const unsigned int *e2e_map      = this->getE2EMapping().data();
+        const unsigned int lb            = this->getElementLocalBegin();
+        const unsigned int le            = this->getElementLocalEnd();
+
+        // number of local elements on the grid
+        D_INT_L localSz =
+            (this->getElementLocalEnd() - this->getElementLocalBegin());
+
+        // used to store the element counts and offsets for the global case
+        std::vector<D_INT_L> ele_counts;
+        std::vector<D_INT_L> ele_offsets;
+        ele_offsets.resize(npes);
+        ele_counts.resize(npes);
+
+        // gather counts from all processes to build global map
+        par::Mpi_Allgather(&localSz, ele_counts.data(), 1, commActive);
+        ele_offsets[0] = 0;
+        // this computes the offsets for each process
+        for (unsigned int i = 1; i < npes; i++)
+            ele_offsets[i] = ele_offsets[i - 1] + ele_counts[i - 1];
+
+        // final total number of elements across the entire global mesh
+        D_INT_L num_ele_global = ele_offsets[npes - 1] + ele_counts[npes - 1];
+
+        // element ID storage
+        D_INT_L *eid_vec       = this->createElementVector<D_INT_L>(0L, 1);
+        // populate element ID vector with global IDs for the **local** elements
+        for (unsigned int ele = this->getElementLocalBegin();
+             ele < this->getElementLocalEnd(); ele++) {
+            unsigned int lid_ele = ele - this->getElementLocalBegin();
+            eid_vec[ele]         = lid_ele + ele_offsets[rank];
+        }
+
+        // read from ghost element vectors
+        this->readFromGhostBeginElementVec(eid_vec, 1);
+        this->readFromGhostEndElementVec(eid_vec, 1);
+
+        // then build up and create the oct_connectivity_map
+        std::vector<oct_data<D_INT_L>> oct_connectivity_map;
+        oct_connectivity_map.resize(localSz);
+
+        // for each local element, populate the map
+        for (unsigned int ele = this->getElementLocalBegin();
+             ele < this->getElementLocalEnd(); ele++) {
+            // level
+            unsigned int pl      = pNodes[ele].getLevel();
+            // size of the cell
+            unsigned int psz     = 1u << (m_uiMaxDepth - pl - 1);
+            // local index of current element
+            unsigned int lid_ele = ele - this->getElementLocalBegin();
+            // number of directions
+            unsigned int ndir    = this->getNumDirections();
+
+            // global ID is then just the element ID (at 0) + global offsets
+            // for our rank
+            D_INT_L gid_ele =
+                (ele - this->getElementLocalBegin()) + ele_offsets[rank];
+            // sub-cell coordinate
+            D_INT_L coord[3] = {pNodes[ele].minX() + psz,
+                                pNodes[ele].minY() + psz,
+                                pNodes[ele].minZ() + psz};
+
+            if (gid_ele > num_ele_global)
+                printf("ele = %06ld x = %0ld y = %06ld z = %06ld\n", gid_ele,
+                       coord[0], coord[1], coord[2]);
+
+            oct_connectivity_map[lid_ele].eid      = gid_ele;
+            oct_connectivity_map[lid_ele].coord[0] = coord[0];
+            oct_connectivity_map[lid_ele].coord[1] = coord[1];
+            oct_connectivity_map[lid_ele].coord[2] = coord[2];
+            // and set the rank
+            oct_connectivity_map[lid_ele].rank     = rank;
+
+            // this calculates which element-to-element connections it has
+            for (unsigned int k = 0; k < ndir; k++) {
+                D_INT_L e2e[ndir];
+                // e2e mapping index
+                e2e[k] = e2e_map[ele * ndir + k];
+
+                // check if it is a valid mapping
+                if (e2e_map[ele * ndir + k] != LOOK_UP_TABLE_DEFAULT)
+                    // convert to global ID using element ID vector
+                    e2e[k] = eid_vec[e2e_map[ele * ndir + k]];
+
+                // then set the E2E mapping within the oct_connectivity_map
+                oct_connectivity_map[lid_ele].e2e[k] = e2e[k];
+            }
+        }
+
+        // distribute the data to the root rank, probably
+        MPI_Datatype oct_conn_type;
+        int blocklengths[] = {1, 1, 3, 6};
+
+        print_octdata_vector(oct_connectivity_map);
+
+        this->destroyVector(eid_vec);
+
+        // TODO: now the oct connectivity map can be sent to repartition
+    }
 };
 
 template <>
