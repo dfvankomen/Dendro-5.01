@@ -30,10 +30,11 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
         std::memcpy(tmpNodes.data(), oct, sizeof(ot::TreeNode) * num);
     }
 
+    // get the true global size of the number of octants in the mesh
     DendroIntL localSz  = tmpNodes.size();
     DendroIntL globalSz = 0;
-    par::Mpi_Reduce(&localSz, &globalSz, 1, MPI_SUM, 0, comm);
 
+    par::Mpi_Reduce(&localSz, &globalSz, 1, MPI_SUM, 0, comm);
     par::Mpi_Bcast(&globalSz, 1, 0, comm);
 
     if (!rank)
@@ -41,6 +42,8 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
 
     unsigned int grainSz = grain_sz;
 
+    // adjust the grain size to be half of the global size to at least use two
+    // processes
     if (grain_sz >= globalSz) grainSz = globalSz / 2;
 
     bool isActive;
@@ -50,25 +53,38 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
     const int p_npes_next =
         binOp::getNextHighestPowerOfTwo((globalSz / grainSz));
 
+    // determine which number of processes to use based on the "ideal" number of
+    // octants based on the grain size keeping it as close to a power of two as
+    // possible
     int p_npes = globalSz / grainSz;
     (std::abs(p_npes_prev - p_npes) <= std::abs(p_npes_next - p_npes))
         ? p_npes = p_npes_prev
         : p_npes = p_npes_next;
 
+    // enforce that the number of processes cannot go over the number that the
+    // user set with MPI
     if (p_npes > npes) p_npes = npes;
+
     // quick fix to enforce the npes>=2 for any given grain size.
     if (p_npes <= 1 && npes > 1) p_npes = 2;
 
     if (p_npes == npes) {
+        // if the number of desired procs is the same as the number we send in,
+        // we can just duplicate MPI's communicator, and just set each node to
+        // "isActive"
         MPI_Comm_dup(comm, &commActive);
         isActive = true;
 
     } else {
-        // isActive=(rank*grainSz<globalSz);
+        // otherwise we have to determine if our current rank is needed, and
+        // from there we split the comm isActive=(rank*grainSz<globalSz);
         isActive = isRankSelected(npes, rank, p_npes);
         par::splitComm2way(isActive, &commActive, comm);
     }
 
+    // ensures the octree is a the correct size for each process by better
+    // distributing how many nodes go to each process. It then enforces a
+    // de-duplication and a sorting by SFC
     shrinkOrExpandOctree(tmpNodes, ld_tol, DENDRO_DEFAULT_SF_K, isActive,
                          commActive, comm);
 
@@ -94,12 +110,14 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
         ot::TreeNode root(m_uiDim, m_uiMaxDepth);
         std::vector<ot::TreeNode> tmpVec;
 
+        // run SFC_TreeSort to remove duplicates first
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_REMOVE_DUPLICATES, sf_k, commActive);
         std::swap(tmpNodes, tmpVec);
         tmpVec.clear();
 
+        // run SFC_TreeSort again but this time to construct the OCTREE
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_CONSTRUCT_OCTREE, sf_k, commActive);
@@ -113,6 +131,7 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
             std::cout << GRN << " # const. octants: " << globalSz << NRM
                       << std::endl;
 
+        // then run SFC_TreeSort again to balance the tree
         SFC::parSort::SFC_treeSort(tmpNodes, balOct, balOct, balOct, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_BALANCE_OCTREE, sf_k, commActive);

@@ -233,8 +233,9 @@ void mesh2vtu(const ot::Mesh *pMesh, const char *fPrefix,
     retval = vtk_write_binary(fp, (char *)coord_data,
                               sizeof(*coord_data) * m_uiDim * num_vertices);
     if (retval) {
-        std::cout << rank << ": [VTU Error]: "
-                  << "base64 encode point data failed" << std::endl;
+        std::cout << rank
+                  << ": [VTU Error]: " << "base64 encode point data failed"
+                  << std::endl;
         fclose(fp);
     }
     delete[] coord_data;
@@ -345,8 +346,9 @@ void mesh2vtu(const ot::Mesh *pMesh, const char *fPrefix,
     retval = vtk_write_binary(fp, (char *)loc_offset,
                               sizeof(*loc_offset) * (num_cells));
     if (retval) {
-        std::cout << rank << ": [VTU Error]: "
-                  << "base64 encode offset data failed" << std::endl;
+        std::cout << rank
+                  << ": [VTU Error]: " << "base64 encode offset data failed"
+                  << std::endl;
         fclose(fp);
     }
     delete[] loc_offset;
@@ -789,8 +791,9 @@ void mesh2vtuCoarse(const ot::Mesh *pMesh, const char *fPrefix,
     retval = vtk_write_binary(fp, (char *)coord_data,
                               sizeof(*coord_data) * m_uiDim * num_vertices);
     if (retval) {
-        std::cout << rank << ": [VTU Error]: "
-                  << "base64 encode point data failed" << std::endl;
+        std::cout << rank
+                  << ": [VTU Error]: " << "base64 encode point data failed"
+                  << std::endl;
         fclose(fp);
     }
     delete[] coord_data;
@@ -887,8 +890,9 @@ void mesh2vtuCoarse(const ot::Mesh *pMesh, const char *fPrefix,
     retval = vtk_write_binary(fp, (char *)loc_offset,
                               sizeof(*loc_offset) * (num_cells));
     if (retval) {
-        std::cout << rank << ": [VTU Error]: "
-                  << "base64 encode offset data failed" << std::endl;
+        std::cout << rank
+                  << ": [VTU Error]: " << "base64 encode offset data failed"
+                  << std::endl;
         fclose(fp);
     }
     delete[] loc_offset;
@@ -1336,8 +1340,9 @@ void mesh2vtuFine(const ot::Mesh *pMesh, const char *fPrefix,
     retval = vtk_write_binary(fp, (char *)coord_data,
                               sizeof(*coord_data) * m_uiDim * num_vertices);
     if (retval) {
-        std::cout << rank << ": [VTU Error]: "
-                  << "base64 encode point data failed" << std::endl;
+        std::cout << rank
+                  << ": [VTU Error]: " << "base64 encode point data failed"
+                  << std::endl;
         fclose(fp);
     }
     delete[] coord_data;
@@ -1504,8 +1509,9 @@ void mesh2vtuFine(const ot::Mesh *pMesh, const char *fPrefix,
     retval = vtk_write_binary(fp, (char *)loc_offset,
                               sizeof(*loc_offset) * (num_cells));
     if (retval) {
-        std::cout << rank << ": [VTU Error]: "
-                  << "base64 encode offset data failed" << std::endl;
+        std::cout << rank
+                  << ": [VTU Error]: " << "base64 encode offset data failed"
+                  << std::endl;
         fclose(fp);
     }
     delete[] loc_offset;
@@ -1975,8 +1981,9 @@ void oct2vtu(const ot::TreeNode *pNodes, const unsigned int nSize,
     retval = vtk_write_binary(fp, (char *)coord_data,
                               sizeof(*coord_data) * m_uiDim * num_vertices);
     if (retval) {
-        std::cout << rank << ": [VTU Error]: "
-                  << "base64 encode point data failed" << std::endl;
+        std::cout << rank
+                  << ": [VTU Error]: " << "base64 encode point data failed"
+                  << std::endl;
         fclose(fp);
     }
     delete[] coord_data;
@@ -2073,8 +2080,9 @@ void oct2vtu(const ot::TreeNode *pNodes, const unsigned int nSize,
     retval = vtk_write_binary(fp, (char *)loc_offset,
                               sizeof(*loc_offset) * (num_cells));
     if (retval) {
-        std::cout << rank << ": [VTU Error]: "
-                  << "base64 encode offset data failed" << std::endl;
+        std::cout << rank
+                  << ": [VTU Error]: " << "base64 encode offset data failed"
+                  << std::endl;
         fclose(fp);
     }
     delete[] loc_offset;
@@ -2411,8 +2419,9 @@ void mesh2vtu_slice(const ot::Mesh *pMesh, unsigned int s_val[],
         retval = vtk_write_binary(fp, (char *)coord_data,
                                   sizeof(*coord_data) * m_uiDim * num_vertices);
         if (retval) {
-            std::cout << rank << ": [VTU Error]: "
-                      << "base64 encode point data failed" << std::endl;
+            std::cout << rank
+                      << ": [VTU Error]: " << "base64 encode point data failed"
+                      << std::endl;
             fclose(fp);
         }
         delete[] coord_data;
@@ -2583,8 +2592,9 @@ void mesh2vtu_slice(const ot::Mesh *pMesh, unsigned int s_val[],
         retval = vtk_write_binary(fp, (char *)loc_offset,
                                   sizeof(*loc_offset) * (num_cells));
         if (retval) {
-            std::cout << rank << ": [VTU Error]: "
-                      << "base64 encode offset data failed" << std::endl;
+            std::cout << rank
+                      << ": [VTU Error]: " << "base64 encode offset data failed"
+                      << std::endl;
             fclose(fp);
         }
         delete[] loc_offset;

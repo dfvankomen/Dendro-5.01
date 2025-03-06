@@ -638,6 +638,9 @@ void shrinkOrExpandOctree(std::vector<T>& in, const double ld_tol,
 
     unsigned int localSz = in.size();
 
+    // calculate approximately how much each rank should be getting based on the
+    // local size and the active comm size, the rankSelectRule tries to base
+    // this off of the power of two
     for (unsigned int i = 0; i < activeCommSz; i++)
         sendCount[rankSelectRule(npes_g, rank_g, activeCommSz, i)] =
             (((i + 1) * localSz) / activeCommSz) -
