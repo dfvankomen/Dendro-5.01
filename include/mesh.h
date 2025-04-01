@@ -286,7 +286,7 @@ MPI_Datatype create_octdata_mpi_type() {
 }
 
 enum PartitioningOptions {
-    NoPartition,
+    NoPartition = 0,
     OriginalPartition,
     RandomPartition,
     fastpart
@@ -3693,7 +3693,46 @@ class Mesh {
 #endif
     }
 
-    void repartitionMeshGlobal() {
+    void setPartitioningMethod(PartitioningOptions part_method) {
+        m_partitionOption = part_method;
+    }
+    PartitioningOptions getPartitioningMethod() { return m_partitionOption; }
+
+    void dumpOctDataParallel(std::vector<oct_element> my_oct,
+                             fastpart_uint_t *ele_offsets,
+                             fastpart_uint_t *ele_counts,
+                             fastpart_uint_t localSz, const char *fprefix) {
+        int rank            = this->getMPIRank();
+        int npes            = this->getMPICommSize();
+        MPI_Comm commActive = this->getMPICommunicator();
+
+        fastpart_uint_t num_ele_global =
+            ele_offsets[npes - 1] + ele_counts[npes - 1];
+
+        MPI_Datatype arraytype;
+        MPI_Offset disp         = sizeof(oct_element) * ele_offsets[rank];
+        fastpart_uint_t N_BYTES = sizeof(oct_element) * (int)localSz;
+
+        MPI_Type_contiguous(N_BYTES, MPI_BYTE, &arraytype);
+        MPI_Type_commit(&arraytype);
+
+        char fname[256];
+        sprintf(fname, "%s_%ld.oct", fprefix, num_ele_global);
+
+        MPI_File fh;
+        MPI_File_open(commActive, fname, MPI_MODE_CREATE | MPI_MODE_RDWR,
+                      MPI_INFO_NULL, &fh);
+        MPI_File_set_view(fh, disp, MPI_BYTE, arraytype, "native",
+                          MPI_INFO_NULL);
+        MPI_File_write(fh, my_oct.data(), N_BYTES, MPI_BYTE, MPI_STATUS_IGNORE);
+        MPI_File_close(&fh);
+
+        this->waitActive();
+    }
+
+    void repartitionMeshGlobal(bool do_block_creation    = true,
+                               bool do_fastpart_filesave = false,
+                               std::string fileprefix    = "octtree") {
         if (!m_uiIsActive) return;
 
         if (m_partitionOption == PartitioningOptions::NoPartition) {
@@ -3757,6 +3796,19 @@ class Mesh {
 
             for (unsigned int rk = 0; rk < ele_offsets.size(); rk++) {
                 vtx_dist[rk] = ele_offsets[rk];
+            }
+
+            // and convert the number in each rank
+            fastpart_uint_t *ele_counts_fp = static_cast<fastpart_uint_t *>(
+                malloc(npes * sizeof(fastpart_uint_t)));
+            for (unsigned int rk = 0; rk < npes; ++rk) {
+                ele_counts_fp[rk] = ele_counts[rk];
+            }
+
+            if (do_fastpart_filesave) {
+                dumpOctDataParallel(temp_oct_data, vtx_dist, ele_counts_fp,
+                                    oct_connectivity_map.size(),
+                                    fileprefix.c_str());
             }
 
             fastpart_uint_t *parts = static_cast<fastpart_uint_t *>(
@@ -4644,27 +4696,28 @@ class Mesh {
         // TODO: BLOCKS, includes m_uiUnzippedVecSz
         // TODO: BLOCKS ARE VERY BROKEN
 
-#if 0
-        m_uiIsBlockSetup = false;
-        m_uiLocalBlockList.clear();
-        if (!rank) {
-            std::cout << rank << ": Now preparing to set up blocks..."
-                      << std::endl;
-        }
-        performBlocksSetup(m_uiCoarsetBlkLev, NULL, 0);
-        if (!rank) {
-            std::cout << rank << ": Finished blocksetup after repartitioning..."
-                      << std::endl;
-        }
-        // this sets up m_uiUnZippedVecSz
+        if (do_block_creation) {
+            m_uiIsBlockSetup = false;
+            m_uiLocalBlockList.clear();
+            if (!rank) {
+                std::cout << rank << ": Now preparing to set up blocks..."
+                          << std::endl;
+            }
+            performBlocksSetup(m_uiCoarsetBlkLev, NULL, 0);
+            if (!rank) {
+                std::cout << rank
+                          << ": Finished blocksetup after repartitioning..."
+                          << std::endl;
+            }
+            // this sets up m_uiUnZippedVecSz
 
-        buildE2BlockMap();
+            buildE2BlockMap();
+        }
         if (!rank) {
             std::cout << rank
                       << ": Now finished with the repartitioning scheme!"
                       << std::endl;
         }
-#endif
     }
 
     template <typename T>
