@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &npes);
 
-    if (argc < 4) {
+    if (argc < 5) {
         if (!rank)
             std::cout << "Usage: " << argv[0]
                       << " maxDepth wavelet_tol partition_tol eleOrder"
@@ -34,10 +34,13 @@ int main(int argc, char** argv) {
         MPI_Abort(comm, 0);
     }
 
-    m_uiMaxDepth         = atoi(argv[1]);
-    double wavelet_tol   = atof(argv[2]);
-    double partition_tol = atof(argv[3]);
-    unsigned int eOrder  = atoi(argv[4]);
+    m_uiMaxDepth                 = atoi(argv[1]);
+    double wavelet_tol           = atof(argv[2]);
+    double partition_tol         = atof(argv[3]);
+    unsigned int eOrder          = atoi(argv[4]);
+    unsigned int DENDRO_GRAIN_SZ = atoi(argv[5]);
+    unsigned int SPLIT_FIX       = 256;
+    double LOAD_IMB_TOL          = 0.1;
 
     if (!rank) {
         std::cout << YLW << "maxDepth: " << m_uiMaxDepth << NRM << std::endl;
@@ -45,13 +48,14 @@ int main(int argc, char** argv) {
         std::cout << YLW << "partition_tol: " << partition_tol << NRM
                   << std::endl;
         std::cout << YLW << "eleOrder: " << eOrder << NRM << std::endl;
+        std::cout << YLW << "GRAIN_SZ: " << DENDRO_GRAIN_SZ << NRM << std::endl;
     }
 
     _InitializeHcurve(m_uiDim);
 
     // function that we need to interpolate.
-    const double d_min = -0.5;
-    const double d_max = 0.5;
+    const double d_min = -5.5;
+    const double d_max = 5.5;
     double dMin[]      = {d_min, d_min, d_min};
     double dMax[]      = {d_max, d_max, d_max};
 
@@ -117,6 +121,23 @@ int main(int argc, char** argv) {
                     cos(2 * M_PI * zz));
         };
 
+    std::function<double(double, double, double)> func_alt =
+        [d_min, d_max](const double x, const double y, const double z) {
+            double xx = (x / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            double yy = (y / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            double zz = (z / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            // squared radial oscillation
+            const double f  = (1.6 / 2.0) * 3.1415926;
+            const double a  = 10.0;
+
+            const double x0 = xx * xx + yy * yy + zz * zz;
+            const double x1 = exp(-x0);
+
+            // Main vars
+
+            return a * (pow(x0, 2) * x1 * pow(sin(f * sqrt(x0)), 2) + x0 * x1);
+        };
+
     // call function to octree
 
     if (!rank)
@@ -129,11 +150,8 @@ int main(int argc, char** argv) {
     unsigned int maxDepthIn;
 
     std::vector<ot::TreeNode> tmpNodes;
-    function2Octree(func, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder, comm);
-
-    unsigned int SPLIT_FIX       = 256;
-    unsigned int DENDRO_GRAIN_SZ = 100;
-    double LOAD_IMB_TOL          = 0.1;
+    function2Octree(func_alt, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder,
+                    comm);
 
     // create the mesh
     ot::Mesh* mesh = ot::createMesh(tmpNodes.data(), tmpNodes.size(), eOrder,
@@ -154,12 +172,23 @@ int main(int argc, char** argv) {
 
     MPI_Barrier(MPI_COMM_WORLD);
 
+    std::string save_prefix = "test_mesh_npes" + std::to_string(npes);
+
+    io::vtk::mesh2vtu(mesh, save_prefix.c_str(), 0, nullptr, nullptr, 0,
+                      nullptr, nullptr);
+
     if (!rank) {
         std::cout << "Now computing buildOctreeConnectivity...." << std::endl;
     }
 
     // now we can do some partitioning checks
-    mesh->buildOctreeConnectivity();
+    // mesh->buildOctreeConnectivity();
+    mesh->repartitionMeshGlobal();
+
+    std::string save_prefix_2 =
+        "test_mesh_repartitioned_npes" + std::to_string(npes);
+    io::vtk::mesh2vtu(mesh, save_prefix_2.c_str(), 0, nullptr, nullptr, 0,
+                      nullptr, nullptr);
 
     // END CLEANUP
     delete mesh;

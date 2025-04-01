@@ -2553,41 +2553,8 @@ inline void Mesh::OCT_DIR_DIAGONAL_E2E(unsigned int elementID,
                                        unsigned int &lookUp) const {
     assert(elementID < m_uiAllElements.size());
     unsigned int myLev = m_uiAllElements[elementID].getLevel();
-    /* unsigned int lookUpF1;
-     unsigned int lookUpF2;*/
 
     lookUp             = m_uiE2EMapping[elementID * m_uiNumDirections + face1];
-
-    /*   if(m_uiActiveRank==0 && elementID==65 && face1==OCT_DIR_RIGHT &&
-       face2==OCT_DIR_BACK)
-       {
-           lookUp=m_uiE2EMapping[elementID*m_uiNumDirections+OCT_DIR_BACK];
-           std::cout<<RED<<" element: "<<m_uiAllElements[elementID]<<" RB
-       :"<<m_uiAllElements[lookUp]<<NRM<<std::endl;
-       }*/
-
-    /* if(face1==OCT_DIR_LEFT  && face2==OCT_DIR_BACK)
-     {
-         if(lookUpF1!=LOOK_UP_TABLE_DEFAULT)
-             lookUp=m_uiE2EMapping[lookUpF1*m_uiNumDirections+OCT_DIR_BACK];
-
-     }else if(face1==OCT_DIR_BACK && face2==OCT_DIR_LEFT)
-     {
-         if(lookUpF1!=LOOK_UP_TABLE_DEFAULT)
-             lookUp=m_uiE2EMapping[lookUpF1*m_uiNumDirections+OCT_DIR_LEFT];
-     }else if(face1==OCT_DIR_LEFT && face2==OCT_DIR_FRONT)
-     {
-         if(lookUpF1!=LOOK_UP_TABLE_DEFAULT &&
-     myLev<=m_uiAllElements[lookUpF1].getLevel())
-         {
-             lookUp=m_uiE2EMapping[lookUpF1*m_uiNumDirections+OCT_DIR_FRONT];
-         }else
-         {
-             assert(abs(myLev-m_uiAllElements[lookUpF1].getLevel())==1);
-
-
-         }
-     }*/
 
     if (lookUp != LOOK_UP_TABLE_DEFAULT) {
         if (myLev >= m_uiAllElements[lookUp].getLevel())

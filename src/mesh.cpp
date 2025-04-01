@@ -123,7 +123,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
 
         if (!m_uiActiveRank)
             std::cout << " [MPI_COMM_SWITCH]: Selected comm.size: "
-                      << m_uiActiveNpes << std::endl;
+                      << m_uiActiveNpes << " also hi" << std::endl;
 
         if (in.size() <= 1) {
             std::cout << "rank: " << m_uiActiveRank << " input octree of size "
@@ -360,7 +360,8 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
 
         if (!m_uiActiveRank)
             std::cout << " [MPI_COMM_SWITCH]: Selected comm.size: "
-                      << m_uiActiveNpes << std::endl;
+                      << m_uiActiveNpes << " inside second mesh option "
+                      << std::endl;
 
         if (in.size() <= 1) {
             std::cout << "rank: " << m_uiActiveRank << " input octree of size "
@@ -1402,10 +1403,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                 // once we handle this case. )
     assert(par::test::isUniqueAndSorted(m_uiEmbeddedOctree, comm));
 
-#ifdef DEBUG_MESH_GENERATION
-    treeNodesTovtk(m_uiEmbeddedOctree, rank, "m_uiEmbeddedOctree");
-#endif
-
     // AllGather of the the max local octant. This will be used to split the
     // keys among the processors.
     m_uiLocalSplitterElements.resize(2 * npes);
@@ -1415,35 +1412,16 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
     par::Mpi_Allgather(localMinMaxElement,
                        &(*(m_uiLocalSplitterElements.begin())), 2, comm);
 
-#ifdef DEBUG_MESH_GENERATION
-    if (!rank) {
-        std::vector<ot::TreeNode> splitter_vec;
-        for (int i = 0; i < npes; i++) {
-            splitter_vec.push_back(m_uiLocalSplitterElements[i]);
-        }
-        treeNodesTovtk(splitter_vec, rank, "splitters");
-    }
-#endif
-
+    // ------------------------------------------------------
     // 2- generate the keys. (These are the keys for the local elements
     // \tau_{loc})
+    // ------------------------------------------------------
     generateSearchKeys();
 
-#ifdef DEBUG_MESH_GENERATION
-    if (!rank) std::cout << "Key generation completed " << std::endl;
-#endif
-
-#ifdef DEBUG_MESH_GENERATION
-        /* unsigned int localKeySz=keys_vec.size();
-            unsigned int globalKeySz=0;
-            par::Mpi_Reduce(&localKeySz,&globalKeySz,1,MPI_SUM,0,comm);
-            if(!rank) std::cout<<" Total number of keys generated:
-           "<<globalKeySz<<std::endl;*/
-#endif
-
+    // ------------------------------------------------------
     // 4- Compute Face Neighbors (By sending owners of the key to the correct
     // proc.
-    // )===================================================================================================================================================
+    // ------------------------------------------------------
 
     SFC::seqSort::SFC_treeSort(&(*(m_uiKeys.begin())), m_uiKeys.size(), tmpKeys,
                                tmpKeys, tmpKeys, m_uiMaxDepth, m_uiMaxDepth,
@@ -1521,9 +1499,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
     omp_par::scan(m_uiSendKeyCount, m_uiSendKeyOffset, npes);
     omp_par::scan(m_uiRecvKeyCount, m_uiRecvKeyOffset, npes);
 
-    // std::cout<<rank <<" ghostEleSz: "<<m_uiGhostElementIDsToBeSent.size()<<"
-    // computed Size:
-    // "<<(m_uiSendKeyOffset[npes-1]+m_uiSendKeyCount[npes-1])<<std::endl;
     assert(m_uiGhostElementIDsToBeSent.size() ==
            (m_uiSendKeyOffset[npes - 1] + m_uiSendKeyCount[npes - 1]));
 
@@ -1547,22 +1522,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
         tmpSendElementIds.clear();
     }
 
-#ifdef DEBUG_MESH_GENERATION
-    /* MPI_Barrier(comm);
-        if(!rank) std::cout<<"Ghost Element Size:
-       "<<m_uiScatterMapElementRound1.size()<<" without removing duplicates:
-       "<<m_uiGhostElementIDsToBeSent.size()<<std::endl;*/
-#endif
     m_uiGhostElementIDsToBeSent.clear();
-
-#ifdef DEBUG_MESH_GENERATION
-    if (!rank)
-        for (unsigned int k = 0; k < npes; k++) {
-            std::cout << "Processor " << k
-                      << " sendCnt: " << m_uiSendKeyCount[k]
-                      << " recvCnt: " << m_uiRecvKeyCount[k] << std::endl;
-        }
-#endif
 
     par::Mpi_Alltoall(m_uiSendOctCountRound1, m_uiRecvOctCountRound1, 1, comm);
 
@@ -1639,7 +1599,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
     // E2E Mapping for the Round 1 Ghost Exchange. Later we will perform another
     // round of ghost exchange, (for the ghost elements that are hanging ) and
     // build the correct complete E2E mapping.
-
     SFC::seqSearch::SFC_treeSearch(&(*(m_uiKeys.begin())),
                                    &(*(m_uiAllElements.begin())), 0,
                                    m_uiKeys.size(), 0, m_uiAllElements.size(),
@@ -1658,7 +1617,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
      *  first x axis. (left to right)
      *  second y axis. (down to up)
      *  third z axis. (back to front)**/
-
     for (unsigned int k = 0; k < m_uiKeys.size(); k++) {
         ownerList = m_uiKeysPtr[k].getOwnerList();
         if (!(OCT_FOUND & m_uiKeysPtr[k].getFlag()))
@@ -1708,16 +1666,16 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
 
             for (unsigned int w = 0; w < ownerList->size(); w++) {
                 direction = ((*stencilIndexDirection)[w]) & KEY_DIR_OFFSET;
-                m_uiE2EMapping[(((*ownerList)[w])) * m_uiNumDirections +
+                m_uiE2EMapping[(((*ownerList)[w]))*m_uiNumDirections +
                                direction] = result;
             }
         }
     }
 
-    //===========================================================================================================================================================================================================================================
-
+    // ----------------------------------------------------------
     // 5- Compute missing face keys
-    // ==============================================================================================================================================================================================================
+    // ----------------------------------------------------------
+
     //  computing the owner ship of the ghost elements.
     std::vector<unsigned int> elementOwner;
     computeElementOwnerRanks(elementOwner);
@@ -1875,23 +1833,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
     const unsigned int FACE_MISNG_EXC_ELE_BEGIN = m_uiElementLocalBegin;
     const unsigned int FACE_MISNG_EXC_ELE_END   = m_uiElementLocalEnd;
 
-#ifdef DEBUG_MESH_GENERATION
-
-    for (unsigned int ele = m_uiElementPreGhostBegin;
-         ele < m_uiElementPreGhostEnd; ele++)
-        m_uiGhostOctants.push_back(m_uiAllElements[ele]);
-
-    for (unsigned int ele = m_uiElementPostGhostBegin;
-         ele < m_uiElementPostGhostEnd; ele++)
-        m_uiGhostOctants.push_back(m_uiAllElements[ele]);
-
-    treeNodesTovtk(m_uiGhostOctants, rank, "ghostR1");
-    m_uiGhostOctants.clear();
-
-#endif
-
     // E2E Mapping for the Round face-1 & face-2 face ghost exchange.
-
     SFC::seqSearch::SFC_treeSearch(&(*(m_uiKeys.begin())),
                                    &(*(m_uiAllElements.begin())), 0,
                                    m_uiKeys.size(), 0, m_uiAllElements.size(),
@@ -1905,7 +1847,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
      *  first x axis. (left to right)
      *  second y axis. (down to up)
      *  third z axis. (back to front)**/
-
     for (unsigned int k = 0; k < m_uiKeys.size(); k++) {
         ownerList = m_uiKeysPtr[k].getOwnerList();
         if (ownerList->size() && (!((OCT_FOUND & m_uiKeysPtr[k].getFlag())))) {
@@ -1959,7 +1900,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
 
             for (unsigned int w = 0; w < ownerList->size(); w++) {
                 direction = ((*stencilIndexDirection)[w]) & KEY_DIR_OFFSET;
-                m_uiE2EMapping[(((*ownerList)[w])) * m_uiNumDirections +
+                m_uiE2EMapping[(((*ownerList)[w]))*m_uiNumDirections +
                                direction] = result;
                 // Note : Following is done to enforce that the local elements
                 // that points to ghost elements has the inverse mapping.
@@ -1967,10 +1908,9 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
         }
     }
 
-    //===========================================================================================================================================================================================================================================
-
+    // ---------------------------------------------------------------
     // 6- Perform exchange for edge and vertex neighbors.
-    // =======================================================================================================================================================================================
+    // ---------------------------------------------------------------
 
     m_uiKeysDiag.clear();
     generateBdyElementDiagonalSearchKeys();
@@ -2136,11 +2076,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
         (int *)m_uiRecvOctCountRound1Diag, (int *)m_uiRecvOctOffsetRound1Diag,
         comm);
 
-#ifdef DEBUG_MESH_GENERATION
-    treeNodesTovtk(m_uiGhostOctants, rank, "ghostR1Diag");
-    std::vector<ot::TreeNode> missingKeys;
-#endif
-
     m_uiAllElements.insert(m_uiAllElements.end(), m_uiGhostOctants.begin(),
                            m_uiGhostOctants.end());
     m_uiGhostOctants.clear();
@@ -2266,7 +2201,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
 
             for (unsigned int w = 0; w < ownerList->size(); w++) {
                 direction = ((*stencilIndexDirection)[w]) & KEY_DIR_OFFSET;
-                m_uiE2EMapping[(((*ownerList)[w])) * m_uiNumDirections +
+                m_uiE2EMapping[(((*ownerList)[w]))*m_uiNumDirections +
                                direction] = result;
                 // Note : Following is done to enforce that the local elements
                 // that points to ghost elements has the inverse mapping.
@@ -2335,20 +2270,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
     for (unsigned int p = 0; p < npes; p++)
         m_uiSendOctOffsetRound1[p] = m_uiSendEleOffset[p];
 
-    // for(unsigned int p=0;p<npes;p++)
-    // {
-    // std::cout<<" proc: "<<m_uiActiveRank<<" to "<<p<<" sendOctR1 :
-    // "<<m_uiSendEleCount[p] <<" offset send :
-    // "<<m_uiSendEleOffset[p]<<std::endl;
-    // }
-
-    // for(unsigned int p=0;p<npes;p++)
-    // {
-    //     std::cout<<" proc: "<<m_uiActiveRank<<" from "<<p<<" recvOctR1 :
-    //     "<<m_uiRecvEleCount[p]<<" offset recv :
-    //     "<<m_uiRecvEleOffset[p]<<std::endl;
-    // }
-
     delete[] scatterMapSend_R1;
 
     // push the diagonal ghost layer 1 keys. this includes the face
@@ -2361,9 +2282,9 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
          e < m_uiElementPostGhostEnd; e++)
         gKeys_R1.push_back(m_uiAllElements[e]);
 
+    // --------------------------------------------------------------------
     // 8 R2 ghost exchange
-    // =====================================================================================================================================================================================================
-
+    // --------------------------------------------------------------------
     m_uiSendOctCountRound2  = new unsigned int[npes];
     m_uiRecvOctCountRound2  = new unsigned int[npes];
 
@@ -2394,25 +2315,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                                       m_uiElementLocalBegin)]
                          .getLevel())) {
                     setHintUint = tmpSendEleIdR2[p].emplace(elementLookup);
-                    // this part of the ghost elements added to make the Scatter
-                    // map consitant for FEM computations. (these are not used
-                    // for FDM computations) 03/27/2019 -milinda.
-                    /*for(unsigned int dir2=0;dir2<m_uiNumDirections;dir2++)
-                    {
-                        lookUp=m_uiE2EMapping[elementLookup*m_uiNumDirections+dir2];
-                        if((lookUp!=LOOK_UP_TABLE_DEFAULT) &&
-                    (m_uiAllElements[lookUp].getLevel()<=m_uiAllElements[(m_uiScatterMapElementRound1[ele]+m_uiElementLocalBegin)].getLevel()))
-                            setHintUint = tmpSendEleIdR2[p].emplace(lookUp);
-                    }*/
-                    //(Milinda)27/05/20: I realized this was a wrong fix to the
-                    // correct the SM in FEM computations, this descrease the
-                    // mesh generation performance a lot since we increase the
-                    // pre and post ghost
-                    // elements an inactive ghost nodes, I realized this running
-                    // perfromace for mesh generations in Frontera, the fix made
-                    // for this was write to ghost nodes and accumilate from
-                    // ghost but I think I forgot to remove above code portion
-                    // after FEM SM fix.
                 }
             }
 
@@ -2584,10 +2486,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
         (int *)m_uiSendOctOffsetRound2, &(*(m_uiGhostOctants.begin())),
         (int *)m_uiRecvOctCountRound2, (int *)m_uiRecvOctOffsetRound2, comm);
 
-#ifdef DEBUG_MESH_GENERATION
-    treeNodesTovtk(m_uiGhostOctants, rank, "ghostR2");
-#endif
-
     m_uiAllElements.insert(m_uiAllElements.end(), m_uiGhostOctants.begin(),
                            m_uiGhostOctants.end());
 
@@ -2635,7 +2533,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                            m_uiNumPostGhostElements;
 
     // E2E Mapping for the Round 2 Ghost Exchange. (Final E2E Mapping )
-
     SFC::seqSearch::SFC_treeSearch(&(*(m_uiKeys.begin())),
                                    &(*(m_uiAllElements.begin())), 0,
                                    m_uiKeys.size(), 0, m_uiAllElements.size(),
@@ -2650,7 +2547,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
     // *  first x axis. (left to right)
     // *  second y axis. (down to up)
     // *  third z axis. (back to front)
-
     for (unsigned int k = 0; k < m_uiKeys.size(); k++) {
         ownerList = m_uiKeysPtr[k].getOwnerList();
 
@@ -2682,8 +2578,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
         }
     }
 
-    //}
-
     assert(seq::test::checkE2EMapping(
         m_uiE2EMapping, m_uiAllElements, m_uiElementLocalBegin,
         m_uiElementLocalEnd, 1, m_uiNumDirections));
@@ -2714,7 +2608,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
 
             for (unsigned int w = 0; w < ownerList->size(); w++) {
                 direction = ((*stencilIndexDirection)[w]) & KEY_DIR_OFFSET;
-                m_uiE2EMapping[(((*ownerList)[w])) * m_uiNumDirections +
+                m_uiE2EMapping[(((*ownerList)[w]))*m_uiNumDirections +
                                direction] = result;
                 // Note : Following is done to enforce that the local elements
                 // that points to ghost elements has the inverse mapping.
@@ -2722,34 +2616,10 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
         }
     }
 
-    //===========================================================================================================================================================================================================================================
-
-#ifdef DEBUG_MESH_GENERATION
-    treeNodesTovtk(m_uiAllElements, rank, "m_uiAllElements");
-    // std::cout<<"rank: "<<rank<<"pre begin: "<<m_uiElementPreGhostBegin<<" pre
-    // end: "<<m_uiElementPreGhostEnd<<" local begin:
-    // "<<m_uiElementLocalBegin<<" local end: "<<m_uiElementLocalEnd<<" post
-    // begin: "<<m_uiElementPostGhostBegin<<" post end:
-    // "<<m_uiElementPostGhostEnd<<std::endl;
-#endif
+    // -------------------------------------------------------------------------
 
     // Note: Note that m_uiAlllNodes need not to be sorted and contains
     // duplicates globally.
-
-#ifdef DEBUG_MESH_GENERATION
-    std::vector<ot::TreeNode> missedKeys;
-    for (unsigned int k = 0; k < m_uiKeys.size(); k++) {
-        if (!(m_uiAllElements[result].isAncestor(m_uiKeys[k]) ||
-              m_uiAllElements[result] == m_uiKeys[k])) {
-            /*std::cout << "rank: " << rank << " key : " << m_uiKeys[k] << " not
-               found!" << " Search index count: "
-                    << searchResults.size() << std::endl;*/
-            missedKeys.push_back(m_uiKeys[k]);
-        }
-    }
-
-    treeNodesTovtk(missedKeys, rank, "missedKeys");
-#endif
 
     // to identify the true ghost (level 1) elements.
     // Defn: True level 1 ghost element defined as any ghost element who shares
@@ -2801,113 +2671,6 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
 
         if (m_uiRecvEleCount[p] > 0) m_uiElementRecvProcList.push_back(p);
     }
-
-    // if(m_uiActiveRank==1)
-    // {
-    //     for(unsigned int i=0;  i < m_uiScatterMapElementRound1.size(); i++)
-    //         std::cout<<YLW<<" rank: "<<m_uiActiveRank<< " send ele :
-    //         "<<m_uiAllElements[ m_uiElementLocalBegin +
-    //         m_uiScatterMapElementRound1[i]]<<NRM<<"\n";
-
-    //     for(unsigned int i=0;  i < m_uiGhostElementRound1Index.size(); i++)
-    //         std::cout<<GRN<<" rank: "<<m_uiActiveRank<< " recv ele :
-    //         "<<m_uiAllElements[m_uiGhostElementRound1Index[i]]<<NRM<<"\n";
-    // }
-
-    // MPI_Barrier(m_uiCommActive);
-
-    // if(m_uiActiveRank==0)
-    // {
-    //     for(unsigned int i=0;  i < m_uiScatterMapElementRound1.size(); i++)
-    //         std::cout<<YLW<<" rank: "<<m_uiActiveRank<< " send ele :
-    //         "<<m_uiAllElements[ m_uiElementLocalBegin +
-    //         m_uiScatterMapElementRound1[i]]<<NRM<<"\n";
-
-    //     for(unsigned int i=0;  i < m_uiGhostElementRound1Index.size(); i++)
-    //         std::cout<<GRN<<" rank: "<<m_uiActiveRank<< " recv ele :
-    //         "<<m_uiAllElements[m_uiGhostElementRound1Index[i]]<<NRM<<"\n";
-    // }
-
-    // std::cout<<" rank: "<<m_uiActiveRank<<" m_uiGR1 Size:
-    // "<<m_uiGhostElementRound1Index.size()<<std::endl;
-
-    // BELOW CODE IS RISKY. YOU SHOULD NOT ADD R2 GHOST AS R1 GHOST WHEN
-    // GENERATING SM. THIS IS NOT CORRECT. IF WE HAVE DONE THE R1 GHOST EXCHANGE
-    // EXCHANGE CORRECTLY WE SHOULD NOT NEED THE BELOW CODE. KEEPING THIS IF WE
-    // NEEDED A QUICK FIX. AGAIN DO NOT ENABLE THE BELOW CODE. !!!!
-    /*
-    //m_uiGhostElementRound1Index.clear();
-    SFC::seqSearch::SFC_treeSearch(&(*(m_uiKeys.begin())),&(*(m_uiAllElements.begin())),0,m_uiKeys.size(),0,m_uiAllElements.size(),m_uiMaxDepth,m_uiMaxDepth,ROOT_ROTATION);
-    SFC::seqSearch::SFC_treeSearch(&(*(m_uiKeysDiag.begin())),&(*(m_uiAllElements.begin())),0,m_uiKeysDiag.size(),0,m_uiAllElements.size(),m_uiMaxDepth,m_uiMaxDepth,ROOT_ROTATION);
-
-
-    m_uiKeysPtr=&(*(m_uiKeys.begin()));
-    for (unsigned int k = 0; k < m_uiKeys.size(); k++) {
-        ownerList = m_uiKeysPtr[k].getOwnerList();
-
-        if(ownerList->size() && (!((OCT_FOUND & m_uiKeysPtr[k].getFlag())))) {
-            std::cout<<"rank: "<<m_uiActiveRank<<"[E2E Error]: Local key missing
-    after R1 & R1 Diag & R2  ghost exchange: "<<m_uiKeysPtr[k]<<std::endl;
-            exit(0); // no point in continuing if this fails E2N fails for sure
-    :)
-        }
-
-        if(ownerList->size())
-        {
-            result=m_uiKeysPtr[k].getSearchResult();
-            if((result<m_uiElementLocalBegin) || (result>=m_uiElementLocalEnd))
-                m_uiGhostElementRound1Index.push_back(result);
-        }
-
-
-    }
-
-    m_uiKeysPtr=&(*(m_uiKeysDiag.begin()));
-    for (unsigned int k = 0; k < m_uiKeysDiag.size(); k++) {
-        ownerList = m_uiKeysPtr[k].getOwnerList();
-
-        if(ownerList->size() && (!((OCT_FOUND & m_uiKeysPtr[k].getFlag())))) {
-            std::cout<<"rank: "<<m_uiActiveRank<<"[E2E Error]: Local Diag and
-    corner key missing after R1 & R1 Diag & R2  ghost exchange:
-    "<<m_uiKeysPtr[k]<<std::endl; exit(0); // no point in continuing if this
-    fails E2N fails for sure :)
-        }
-
-        if(ownerList->size())
-        {
-            result=m_uiKeysPtr[k].getSearchResult();
-            if((result<m_uiElementLocalBegin) || (result>=m_uiElementLocalEnd))
-                m_uiGhostElementRound1Index.push_back(result);
-        }
-
-    }
-    std::sort(m_uiGhostElementRound1Index.begin(),m_uiGhostElementRound1Index.end());
-    m_uiGhostElementRound1Index.erase(std::unique(m_uiGhostElementRound1Index.begin(),m_uiGhostElementRound1Index.end()),m_uiGhostElementRound1Index.end());*/
-
-#ifdef DEBUG_MESH_GENERATION
-    std::vector<ot::TreeNode> r1GhostElements;
-    std::vector<ot::TreeNode> localElements;
-    std::vector<ot::TreeNode> ghostElements;
-
-    for (unsigned int e = m_uiElementPreGhostBegin; e < m_uiElementPreGhostEnd;
-         e++)
-        ghostElements.push_back(m_uiAllElements[e]);
-
-    for (unsigned int e = m_uiElementPostGhostBegin;
-         e < m_uiElementPostGhostEnd; e++)
-        ghostElements.push_back(m_uiAllElements[e]);
-
-    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++)
-        localElements.push_back(m_uiAllElements[e]);
-
-    for (unsigned int e = 0; e < m_uiGhostElementRound1Index.size(); e++)
-        r1GhostElements.push_back(
-            m_uiAllElements[m_uiGhostElementRound1Index[e]]);
-
-    treeNodesTovtk(r1GhostElements, rank, "r1GhostElements");
-    treeNodesTovtk(localElements, rank, "localElements");
-    treeNodesTovtk(ghostElements, rank, "ghostElements");
-#endif
 
     if (!rank) std::cout << "E2E mapping Ended" << std::endl;
 }
@@ -3752,8 +3515,8 @@ void Mesh::buildE2NMap() {
 #ifdef DEBUG_E2N_MAPPING
     MPI_Barrier(MPI_COMM_WORLD);
     if (!m_uiActiveRank) std::cout << "Invalid nodes removed " << std::endl;
-        // treeNodesTovtk(invalidatedPreGhost,m_uiActiveRank,"invalidPre");
-        // treeNodesTovtk(invalidatedPostGhost,m_uiActiveRank,"invalidPost");
+    // treeNodesTovtk(invalidatedPreGhost,m_uiActiveRank,"invalidPre");
+    // treeNodesTovtk(invalidatedPostGhost,m_uiActiveRank,"invalidPost");
 #endif
 
     // 2. Removing the duplicate nodes from the mapping.
@@ -4313,62 +4076,62 @@ void Mesh::buildE2NMap() {
     if (m_uiActiveRank) std::cout << " DG to CG index updated " << std::endl;
 #endif
 
-        /*for(unsigned int
-        e=m_uiElementPreGhostBegin;e<m_uiElementPostGhostEnd;e++)
+    /*for(unsigned int
+    e=m_uiElementPreGhostBegin;e<m_uiElementPostGhostEnd;e++)
+    {
+        if(m_uiActiveRank==2 && e==28)
         {
-            if(m_uiActiveRank==2 && e==28)
+
+            std::vector<ot::TreeNode> cusEleCheck;
+            unsigned int ownerID,ii_x,jj_y,kk_z; // DG index to ownerID and
+    ijk decomposition variable. unsigned int x,y,z,sz;
+            cusEleCheck.push_back(m_uiAllElements[e]);
+            for(unsigned int node=0;node<m_uiNpE;node++)
             {
 
-                std::vector<ot::TreeNode> cusEleCheck;
-                unsigned int ownerID,ii_x,jj_y,kk_z; // DG index to ownerID and
-        ijk decomposition variable. unsigned int x,y,z,sz;
-                cusEleCheck.push_back(m_uiAllElements[e]);
-                for(unsigned int node=0;node<m_uiNpE;node++)
-                {
+                dg2eijk(m_uiE2NMapping_DG[e*m_uiNpE+node],ownerID,ii_x,jj_y,kk_z);
 
-                    dg2eijk(m_uiE2NMapping_DG[e*m_uiNpE+node],ownerID,ii_x,jj_y,kk_z);
+                x=m_uiAllElements[ownerID].getX();
+                y=m_uiAllElements[ownerID].getY();
+                z=m_uiAllElements[ownerID].getZ();
+                sz=1u<<(m_uiMaxDepth-m_uiAllElements[ownerID].getLevel());
+                cusEleCheck.push_back(m_uiAllElements[ownerID]);
 
-                    x=m_uiAllElements[ownerID].getX();
-                    y=m_uiAllElements[ownerID].getY();
-                    z=m_uiAllElements[ownerID].getZ();
-                    sz=1u<<(m_uiMaxDepth-m_uiAllElements[ownerID].getLevel());
-                    cusEleCheck.push_back(m_uiAllElements[ownerID]);
-
-                    cusEleCheck.push_back(ot::TreeNode((x + ii_x *
-        sz/m_uiElementOrder), (y + jj_y * sz/m_uiElementOrder), (z + kk_z *
-        sz/m_uiElementOrder), m_uiMaxDepth,m_uiDim, m_uiMaxDepth));
-
-                }
-
-                treeNodesTovtk(cusEleCheck,e,"cusE2N_3");
+                cusEleCheck.push_back(ot::TreeNode((x + ii_x *
+    sz/m_uiElementOrder), (y + jj_y * sz/m_uiElementOrder), (z + kk_z *
+    sz/m_uiElementOrder), m_uiMaxDepth,m_uiDim, m_uiMaxDepth));
 
             }
 
+            treeNodesTovtk(cusEleCheck,e,"cusE2N_3");
+
+        }
+
+    }*/
+
+    /*unsigned int eleIndex;
+    if(!m_uiActiveRank)  std::cout<<"E2N  rank :
+    "<<m_uiActiveRank<<std::endl; if(!m_uiActiveRank) for(unsigned int
+    e=0;e<m_uiAllElements.size();e++)
+        {
+            if(m_uiAllElements[e]==ot::TreeNode(24, 12, 40,
+    4,m_uiDim,m_uiMaxDepth)) { std::cout << "rank: "<<m_uiActiveRank<<"
+    Element : "<<e<<" " << m_uiAllElements[e] << " : Node List :"; for
+    (unsigned int k = 0; k < m_uiNpE; k++) { std::cout << " " <<
+    m_uiE2NMapping_DG[e * m_uiNpE + k];
+            }
+
+            std::cout << std::endl;
+            }
+
         }*/
+    //--------------------------------------------------------PRINT THE E2N
+    // MAP------------------------------------------------------------------------------------
+    /*for(unsigned int w=0;w<m_uiE2NMapping_CG.size();w++)
+        std::cout<<"w: "<<w<<" -> : "<<m_uiE2NMapping_CG[w]<<std::endl;*/
 
-        /*unsigned int eleIndex;
-        if(!m_uiActiveRank)  std::cout<<"E2N  rank :
-        "<<m_uiActiveRank<<std::endl; if(!m_uiActiveRank) for(unsigned int
-        e=0;e<m_uiAllElements.size();e++)
-            {
-                if(m_uiAllElements[e]==ot::TreeNode(24, 12, 40,
-        4,m_uiDim,m_uiMaxDepth)) { std::cout << "rank: "<<m_uiActiveRank<<"
-        Element : "<<e<<" " << m_uiAllElements[e] << " : Node List :"; for
-        (unsigned int k = 0; k < m_uiNpE; k++) { std::cout << " " <<
-        m_uiE2NMapping_DG[e * m_uiNpE + k];
-                }
-
-                std::cout << std::endl;
-                }
-
-            }*/
-        //--------------------------------------------------------PRINT THE E2N
-        // MAP------------------------------------------------------------------------------------
-        /*for(unsigned int w=0;w<m_uiE2NMapping_CG.size();w++)
-            std::cout<<"w: "<<w<<" -> : "<<m_uiE2NMapping_CG[w]<<std::endl;*/
-
-        //--------------------------------------------------------PRINT THE E2N
-        // MAP------------------------------------------------------------------------------------
+    //--------------------------------------------------------PRINT THE E2N
+    // MAP------------------------------------------------------------------------------------
 
 #ifdef DEBUG_E2N_MAPPING
     // MPI_Barrier(MPI_COMM_WORLD);

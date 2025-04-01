@@ -22,6 +22,9 @@ if(DENDROLIB_ISOLATED_DIR)
   include("CMakeLists-NonLibraryDefs.txt")
 endif()
 
+set(FASTPART_LIB_DIR "/path/to/fastpart/lib" CACHE PATH "Directory location of the fastpart library folder")
+set(FASTPART_INCLUDE_DIR "/path/to/fastpart/include" CACHE PATH "Directory location of the fastpart include folder")
+
 message(STATUS "Now setting the CMake files for the Dendro Library...")
 
 set(DENDRO_INCLUDE_FILES
@@ -264,6 +267,10 @@ if(BUILD_WITH_PETSC)
   target_include_directories(dendro5 PUBLIC ${PETSC_INCLUDES})
   target_link_libraries(dendro5 PUBLIC ${PETSC_LIBRARIES})
 endif()
+
+target_include_directories(dendro5 PUBLIC "${FASTPART_INCLUDE_DIR}")
+target_link_directories(dendro5 PUBLIC "${FASTPART_LIB_DIR}")
+target_link_libraries(dendro5 PUBLIC fastpart)
 
 # =======================
 # =======================

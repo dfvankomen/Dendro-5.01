@@ -23,9 +23,16 @@
 
 #pragma once
 #include <fdCoefficient.h>
+#include <sys/types.h>
 
 #include <cstdint>
-#include <memory>
+#include <numeric>
+#include <ostream>
+#include <random>
+#include <set>
+#include <tuple>
+#include <type_traits>
+#include <unordered_map>
 #include <vector>
 
 #include "TreeNode.h"
@@ -37,6 +44,7 @@
 #include "mpi.h"
 #include "node.h"
 #include "octUtils.h"
+#include "parUtils.h"
 #include "point.h"
 #include "refel.h"
 #include "sfcSearch.h"
@@ -46,6 +54,10 @@
 #include "testUtils.h"
 #include "treenode2vtk.h"
 #include "wavelet.h"
+
+#if 1
+#include "fastpart.h"
+#endif
 
 extern double t_e2e;  // e2e map generation time
 extern double t_e2n;  // e2n map generation time
@@ -57,18 +69,43 @@ extern double t_e2n_g[3];
 extern double t_sm_g[3];
 extern double t_blk_g[3];
 
+#define NUM_PTS_ELE 343
+
 #include "dendroProfileParams.h"
 #include "waveletRefEl.h"
+
+struct E2EUpdateData {
+    uint64_t sourceGlobalID;
+    uint64_t targetGlobalID;
+    int face;
+};
 
 // oct_data used for storing some information about the global map
 template <typename T>
 struct oct_data {
     uint32_t rank;
+    uint32_t trank = UINT32_MAX;
     T eid;
+    T localid;
     T coord[3];
     T e2e[6];
+    T level;
+    unsigned int flag;
 
-    oct_data() {};
+    // information about the e2n maps based on global IDs, only need dg
+    T e2n_dg[343];
+
+    // a boolean that is used for identification in the scattermap regeneration
+    bool isGhostTwo = false;
+
+    oct_data() {
+        e2e[0] = LOOK_UP_TABLE_DEFAULT;
+        e2e[1] = LOOK_UP_TABLE_DEFAULT;
+        e2e[2] = LOOK_UP_TABLE_DEFAULT;
+        e2e[3] = LOOK_UP_TABLE_DEFAULT;
+        e2e[4] = LOOK_UP_TABLE_DEFAULT;
+        e2e[5] = LOOK_UP_TABLE_DEFAULT;
+    };
 
     oct_data(T eid, uint32_t rank, T coord[3], T e2e[6]) {
         this->eid      = eid;
@@ -89,16 +126,171 @@ struct oct_data {
 };
 
 template <typename T>
-void print_octdata_vector(std::vector<oct_data<T>> &oct) {
+void print_octdata_vector(std::vector<oct_data<T>> &oct, int procrank = 0) {
     std::cout << ": OCT DATA:\n" << std::endl;
     for (auto &o : oct) {
-        std::cout << o.rank << " \tEID: " << o.eid << " rank " << o.rank
-                  << " coord(" << o.coord[0] << ", " << o.coord[1] << ", "
-                  << o.coord[2] << ") : " << "e2e(" << o.e2e[0] << ", "
-                  << o.e2e[1] << ", " << o.e2e[2] << ", " << o.e2e[3] << ", "
-                  << o.e2e[4] << ", " << o.e2e[5] << ") " << std::endl;
+        std::cout << procrank << " \tEID: " << std::setw(5) << std::right
+                  << o.eid << " LID: " << std::setw(5) << std::right
+                  << o.localid << " rank: " << std::setw(3) << std::right
+                  << o.rank << " level: " << std::setw(2) << std::right
+                  << o.level << " coord(" << std::setw(4) << std::right
+                  << o.coord[0] << ", " << std::setw(4) << std::right
+                  << o.coord[1] << ", " << std::setw(4) << std::right
+                  << o.coord[2] << ") : " << "e2e(" << std::setw(10)
+                  << std::right << o.e2e[0] << ", " << std::setw(10)
+                  << std::right << o.e2e[1] << ", " << std::setw(10)
+                  << std::right << o.e2e[2] << ", " << std::setw(10)
+                  << std::right << o.e2e[3] << ", " << std::setw(10)
+                  << std::right << o.e2e[4] << ", " << std::setw(10)
+                  << std::right << o.e2e[5] << ") "
+                  << "\t\tTARGET: " << std::setw(3) << std::right << o.trank
+
+                  << " \te2n_cg[0:5]=";
+        // for (int i = 0; i < 5; i++) {
+        //     std::cout << o.e2n_cg[i] << " ";
+        // }
+        std::cout << "\te2n_dg[0:5]=";
+        for (int i = 0; i < 5; i++) {
+            std::cout << o.e2n_dg[i] << " ";
+        }
+        std::cout << std::endl;
     }
 }
+
+template <typename T>
+struct node_data_ele {
+    uint32_t rank;
+    T ele_global_id;
+#if 0
+    std::unique_ptr<T[]> e2n_cg;
+    std::unique_ptr<T[]> e2n_dg;
+#else
+    // T e2n_cg[343];
+    T e2n_dg[343];
+#endif
+    uint32_t pts = 343;
+
+    node_data_ele() {}
+
+#if 0
+    node_data_ele(uint32_t pts_in)
+        : pts(pts_in), e2n_cg(new T[pts_in]), e2n_dg(new T[pts_in]) {}
+
+    ~node_data_ele() = default;
+
+    void set_pts(uint32_t pts_in) {
+        if (pts == pts_in) {
+            return;
+        }
+
+        pts = pts_in;
+
+        std::unique_ptr<T[]> new_e2n_cg(new T[pts_in]);
+        if (e2n_cg) {
+            std::copy(e2n_cg.get(), e2n_cg.get() + std::min(pts, pts_in),
+                      new_e2n_cg);
+        }
+        e2n_cg = std::move(new_e2n_cg);
+
+        std::unique_ptr<T[]> new_e2n_dg(new T[pts_in]);
+        if (e2n_dg) {
+            std::copy(e2n_dg.get(), e2n_dg.get() + std::min(pts, pts_in),
+                      new_e2n_dg);
+        }
+        e2n_cg = std::move(new_e2n_dg);
+    }
+
+    node_data_ele(node_data_ele &&other) noexcept
+        : rank(other.rank),
+          ele_global_id(other.ele_global_id),
+          e2n_cg(std::move(other.e2n_dg)),
+          e2n_dg(std::move(other.e2n_dg)),
+          pts(other.pts) {}
+
+    node_data_ele &operator=(node_data_ele &&other) noexcept {
+        if (this != &other) {
+            rank          = other.rank;
+            ele_global_id = other.ele_global_id;
+            e2n_cg        = std::move(other.e2n_cg);
+            e2n_dg        = std::move(other.e2n_dg);
+            pts           = other.pts;
+        }
+        return *this;
+    }
+#endif
+};
+
+template <typename T>
+void print_node_data_vector(std::vector<node_data_ele<T>> &node_data,
+                            int procrank = 0) {
+    std::cout << ": ELEMENT NODE DATA:\n" << std::endl;
+    for (auto &o : node_data) {
+        std::cout << procrank << " \tEGID: " << o.ele_global_id
+                  << " rank: " << o.rank << " npoints: " << o.pts
+                  << " e2n_cg[0]=" << o.e2n_cg[0]
+                  << " e2n_cg[end]=" << o.e2n_cg[o.pts - 1]
+                  << " e2n_dg[0]=" << o.e2n_dg[0]
+                  << " e2n_dg[end]=" << o.e2n_dg[o.pts - 1] << std::endl;
+    }
+}
+
+template <typename T>
+MPI_Datatype get_mpi_type() {
+    if (std::is_same<T, int8_t>::value) return MPI_INT8_T;
+    if (std::is_same<T, int16_t>::value) return MPI_INT16_T;
+    if (std::is_same<T, int32_t>::value) return MPI_INT32_T;
+    if (std::is_same<T, int64_t>::value) return MPI_INT64_T;
+    if (std::is_same<T, uint8_t>::value) return MPI_UINT8_T;
+    if (std::is_same<T, uint16_t>::value) return MPI_UINT16_T;
+    if (std::is_same<T, uint32_t>::value) return MPI_UINT32_T;
+    if (std::is_same<T, uint64_t>::value) return MPI_UINT64_T;
+    if (std::is_same<T, int>::value) return MPI_INT;
+    if (std::is_same<T, long>::value) return MPI_LONG;
+    if (std::is_same<T, long long>::value) return MPI_LONG_LONG_INT;
+    if (std::is_same<T, float>::value) return MPI_FLOAT;
+    if (std::is_same<T, double>::value) return MPI_DOUBLE;
+    throw std::runtime_error("Unsupported MPI type for typename T");
+}
+
+template <typename T>
+MPI_Datatype create_octdata_mpi_type() {
+    MPI_Datatype octdata_mpi_datatype;
+    int blocklengths[] = {1, 1, 1, 1, 3, 6, 1, 1, NUM_PTS_ELE, 1};
+    MPI_Aint offsets[10];
+    MPI_Datatype types[10];
+
+    types[0] = MPI_UINT32_T;  // 'rank' is always uint32_t
+    types[1] = MPI_UINT32_T;  // 'target_rank' is always uint32_t
+    types[2] = types[3] = types[4] = types[5] = types[6] = get_mpi_type<T>();
+    types[7]                                             = MPI_UNSIGNED;
+    types[8]                                             = get_mpi_type<T>();
+    types[9]                                             = MPI_CXX_BOOL;
+
+    // get the offsets for each member of the struct
+    offsets[0] = offsetof(oct_data<T>, rank);
+    offsets[1] = offsetof(oct_data<T>, trank);
+    offsets[2] = offsetof(oct_data<T>, eid);
+    offsets[3] = offsetof(oct_data<T>, localid);
+    offsets[4] = offsetof(oct_data<T>, coord);
+    offsets[5] = offsetof(oct_data<T>, e2e);
+    offsets[6] = offsetof(oct_data<T>, level);
+    offsets[7] = offsetof(oct_data<T>, flag);
+    offsets[8] = offsetof(oct_data<T>, e2n_dg);
+    offsets[9] = offsetof(oct_data<T>, isGhostTwo);
+
+    MPI_Type_create_struct(10, blocklengths, offsets, types,
+                           &octdata_mpi_datatype);
+    MPI_Type_commit(&octdata_mpi_datatype);
+
+    return octdata_mpi_datatype;
+}
+
+enum PartitioningOptions {
+    NoPartition,
+    OriginalPartition,
+    RandomPartition,
+    fastpart
+};
 
 /**
  * How the oct flags are used in the mesh generation part.
@@ -620,6 +812,8 @@ class Mesh {
     /**@brief element to block map count, if ele has no dependence then count
      * will be zero. */
     std::vector<unsigned int> m_e2b_unzip_counts;
+
+    PartitioningOptions m_partitionOption = PartitioningOptions::fastpart;
 
    private:
     /**@brief build E2N map for FEM computation*/
@@ -1567,6 +1761,20 @@ class Mesh {
     /** @brief: Decompose the DG index to element id and it's i,j,k values.*/
     inline void dg2eijk(unsigned int dg_index, unsigned int &e, unsigned int &i,
                         unsigned int &j, unsigned int &k) const {
+        // a more readable version that avoids comparisons
+        e                                   = dg_index / m_uiNpE;
+        unsigned int local_index            = dg_index % m_uiNpE;
+
+        unsigned int order_plus_one         = m_uiElementOrder + 1;
+        unsigned int order_plus_one_squared = order_plus_one * order_plus_one;
+
+        k = local_index / order_plus_one_squared;
+        local_index %= order_plus_one_squared;
+
+        j = local_index / order_plus_one;
+        i = local_index % order_plus_one;
+
+#if 0
         e = dg_index / m_uiNpE;
         k = 0;
         j = 0;
@@ -1589,6 +1797,24 @@ class Mesh {
                  k * ((m_uiElementOrder + 1) * (m_uiElementOrder + 1)) -
                  j * (m_uiElementOrder + 1));
         // std::cout<<"i: "<<i<<std::endl;
+#endif
+    }
+
+    inline unsigned int eijk2dg(unsigned int e, unsigned int i, unsigned int j,
+                                unsigned int k) {
+        unsigned int order_plus_one         = m_uiElementOrder + 1;
+        unsigned int order_plus_one_squared = order_plus_one * order_plus_one;
+
+        unsigned int dg_index =
+            e * m_uiNpE + k * order_plus_one_squared + j * order_plus_one + i;
+        return dg_index;
+
+#if 0
+        unsigned int dg_index =
+            e * m_uiNpE + k * (m_uiElementOrder + 1) * (m_uiElementOrder + 1) +
+            j * (m_uiElementOrder + 1) + i;
+        return dg_index;
+#endif
     }
 
     /**@brief returns the morton child number*/
@@ -2721,13 +2947,91 @@ class Mesh {
     void blkUnzipElementIDs(unsigned int blk,
                             std::vector<unsigned int> &eid) const;
 
+    template <typename T>
+    std::vector<T> noPartitionChange(
+        std::vector<oct_data<T>> &oct_connectivity_map) {
+        std::vector<T> my_partition;
+
+        for (const auto &o : oct_connectivity_map) {
+            my_partition.push_back(o.eid);
+        }
+
+        std::sort(my_partition.begin(), my_partition.end());
+
+        return my_partition;
+    }
+
+    template <typename T>
+    std::vector<T> randomPartitioningSimple(
+        std::vector<oct_data<T>> oct_connectivity_map) {
+        int rank            = this->getMPIRank();
+        int npes            = this->getMPICommSize();
+        MPI_Comm commActive = this->getMPICommunicator();
+
+        // number of local elements on the grid
+        T localSz = (this->getElementLocalEnd() - this->getElementLocalBegin());
+
+        std::vector<int> counts(npes);
+        int local_size_int = localSz;
+
+        MPI_Gather(&local_size_int, 1, MPI_INT, counts.data(), 1, MPI_INT, 0,
+                   commActive);
+
+        // calculate displacements
+        std::vector<int> displs;
+        int total_size = 0;
+        if (!rank) {
+            displs.resize(npes);
+            displs[0] = 0;
+            for (int i = 1; i < npes; ++i) {
+                displs[i] = displs[i - 1] + counts[i - 1];
+            }
+
+            total_size = std::accumulate(counts.begin(), counts.end(), 0);
+        }
+
+        // now gather all data to rank 0
+
+        std::vector<T> global_ids;
+
+        // randomness
+        std::random_device rd;
+        std::mt19937 gen(12345);
+
+        if (rank == 0) {
+            global_ids.resize(total_size);
+
+            for (unsigned int i = 0; i < total_size; i++) {
+                global_ids[i] = i;
+            }
+
+            // just shuffle the global ids
+            std::shuffle(global_ids.begin(), global_ids.end(), gen);
+
+            // and then we want to iterate through the counts and offsets to
+            // sort the arrays
+            for (int i = 0; i < npes - 1; ++i) {
+                std::sort(global_ids.begin() + displs[i],
+                          global_ids.begin() + displs[i + 1]);
+            }
+            std::sort(global_ids.begin() + displs[npes - 1], global_ids.end());
+        }
+
+        std::vector<T> my_partition(localSz);
+
+        MPI_Scatterv(global_ids.data(), counts.data(), displs.data(),
+                     get_mpi_type<T>(), my_partition.data(), localSz,
+                     get_mpi_type<T>(), 0, commActive);
+
+        return my_partition;
+    }
+
     // this builds up the global connectivity map, but for each individual
     // processor we'll need to communicate the map to synchronize it, probably
     void buildOctreeConnectivity() {
         if (!m_uiIsActive) return;
-        std::cout << "inside build octree connectivity!" << std::endl;
 
-        typedef long int D_INT_L;
+        typedef uint64_t D_INT_L;
 
         int rank                         = this->getMPIRank();
         int npes                         = this->getMPICommSize();
@@ -2802,37 +3106,1727 @@ class Mesh {
                        coord[0], coord[1], coord[2]);
 
             oct_connectivity_map[lid_ele].eid      = gid_ele;
+            oct_connectivity_map[lid_ele].localid  = lid_ele;
             oct_connectivity_map[lid_ele].coord[0] = coord[0];
             oct_connectivity_map[lid_ele].coord[1] = coord[1];
             oct_connectivity_map[lid_ele].coord[2] = coord[2];
-            // and set the rank
+            // and set the rank to the initial rank
             oct_connectivity_map[lid_ele].rank     = rank;
+            oct_connectivity_map[lid_ele].level    = pNodes[ele].getLevel();
 
             // this calculates which element-to-element connections it has
             for (unsigned int k = 0; k < ndir; k++) {
-                D_INT_L e2e[ndir];
-                // e2e mapping index
-                e2e[k] = e2e_map[ele * ndir + k];
+                D_INT_L e2e_use = e2e_map[ele * ndir + k];
 
                 // check if it is a valid mapping
-                if (e2e_map[ele * ndir + k] != LOOK_UP_TABLE_DEFAULT)
+                if (e2e_use != LOOK_UP_TABLE_DEFAULT) {
                     // convert to global ID using element ID vector
-                    e2e[k] = eid_vec[e2e_map[ele * ndir + k]];
+                    e2e_use = eid_vec[e2e_map[ele * ndir + k]];
+                    oct_connectivity_map[lid_ele].e2e[k] = e2e_use;
+                } else {
+                    oct_connectivity_map[lid_ele].e2e[k] =
+                        LOOK_UP_TABLE_DEFAULT;
+                }
+            }
+        }
+    }
 
-                // then set the E2E mapping within the oct_connectivity_map
-                oct_connectivity_map[lid_ele].e2e[k] = e2e[k];
+    // quick and dirty function that calculates a unique global node ID based on
+    // the global element ID
+    inline unsigned int globalNodeID(unsigned int global_element_id,
+                                     unsigned int node_internal_pos) {
+        return (global_element_id * m_uiNpE) + node_internal_pos;
+    }
+
+    std::tuple<unsigned int, unsigned int> globalAndNodeFromGlobalNodeID(
+        unsigned int global_node_id) {
+        return std::make_tuple(global_node_id / m_uiNpE,
+                               global_node_id % m_uiNpE);
+    }
+
+    /**
+     * Build Octant Connectivity on Global Scale
+     *
+     * Additionally builds up a local-to-global map object for easy conversion
+     *
+     */
+    template <typename T>
+    std::tuple<std::vector<oct_data<T>>, std::vector<T>, std::vector<T>,
+               std::vector<T>>
+    buildOctantConnectivityMap() {
+        int rank                         = this->getMPIRank();
+        int npes                         = this->getMPICommSize();
+        MPI_Comm commActive              = this->getMPICommunicator();
+
+        // helpers for the nodes and e2e_map
+        const ot::TreeNode *const pNodes = this->getAllElements().data();
+        const unsigned int *e2e_map      = this->getE2EMapping().data();
+        const unsigned int lb            = this->getElementLocalBegin();
+        const unsigned int le            = this->getElementLocalEnd();
+
+        // BUILD UP OUTPUTS
+        std::vector<oct_data<T>> oct_connectivity_map;
+        std::vector<T> local_to_global(m_uiNumTotalElements,
+                                       LOOK_UP_TABLE_DEFAULT);
+
+        // number of local elements on the grid
+        T localSz = (this->getElementLocalEnd() - this->getElementLocalBegin());
+
+        // used to store the element counts and offsets for the global case
+        std::vector<T> ele_counts;
+        std::vector<T> ele_offsets;
+        ele_offsets.resize(npes);
+        ele_counts.resize(npes);
+
+        // gather counts from all processes to build global map
+        par::Mpi_Allgather(&localSz, ele_counts.data(), 1, commActive);
+        ele_offsets[0] = 0;
+        // this computes the offsets for each process
+        for (unsigned int i = 1; i < npes; i++)
+            ele_offsets[i] = ele_offsets[i - 1] + ele_counts[i - 1];
+
+        // final total number of elements across the entire global mesh
+        T num_ele_global = ele_offsets[npes - 1] + ele_counts[npes - 1];
+
+        // element ID storage
+        T *eid_vec = this->createElementVector<T>(LOOK_UP_TABLE_DEFAULT, 1);
+        // populate element ID vector with global IDs for the **local** elements
+        for (unsigned int ele = this->getElementLocalBegin();
+             ele < this->getElementLocalEnd(); ele++) {
+            unsigned int lid_ele = ele - this->getElementLocalBegin();
+            eid_vec[ele]         = lid_ele + ele_offsets[rank];
+        }
+
+        // read from ghost element vectors
+        this->readFromGhostBeginElementVec(eid_vec, 1);
+        this->readFromGhostEndElementVec(eid_vec, 1);
+
+        oct_connectivity_map.resize(localSz);
+
+        for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+            if (eid_vec[ele] != LOOK_UP_TABLE_DEFAULT) {
+                local_to_global[ele] = eid_vec[ele];
             }
         }
 
-        // distribute the data to the root rank, probably
-        MPI_Datatype oct_conn_type;
-        int blocklengths[] = {1, 1, 3, 6};
+        // for each local element, populate the map
+        for (unsigned int ele = this->getElementLocalBegin();
+             ele < this->getElementLocalEnd(); ele++) {
+            // level
+            unsigned int pl      = pNodes[ele].getLevel();
+            // size of the cell
+            unsigned int psz     = 1u << (m_uiMaxDepth - pl - 1);
+            // local index of current element
+            unsigned int lid_ele = ele - this->getElementLocalBegin();
+            // number of directions
+            unsigned int ndir    = this->getNumDirections();
 
-        print_octdata_vector(oct_connectivity_map);
+            // global ID is then just the element ID (at 0) + global offsets
+            // for our rank
+            T gid_ele =
+                (ele - this->getElementLocalBegin()) + ele_offsets[rank];
+            // sub-cell coordinate
+            T coord[3] = {pNodes[ele].minX() + psz, pNodes[ele].minY() + psz,
+                          pNodes[ele].minZ() + psz};
 
-        this->destroyVector(eid_vec);
+            if (gid_ele > num_ele_global)
+                printf("ele = %06ld x = %0ld y = %06ld z = %06ld\n", gid_ele,
+                       coord[0], coord[1], coord[2]);
 
-        // TODO: now the oct connectivity map can be sent to repartition
+            oct_connectivity_map[lid_ele].eid      = gid_ele;
+            oct_connectivity_map[lid_ele].localid  = ele;
+            oct_connectivity_map[lid_ele].coord[0] = coord[0];
+            oct_connectivity_map[lid_ele].coord[1] = coord[1];
+            oct_connectivity_map[lid_ele].coord[2] = coord[2];
+            // and set the rank to the initial rank
+            oct_connectivity_map[lid_ele].rank     = rank;
+            oct_connectivity_map[lid_ele].level    = pNodes[ele].getLevel();
+            oct_connectivity_map[lid_ele].flag     = pNodes[ele].getFlag();
+
+            // then local-to-global map updates
+            // local_to_global[ele]                   = gid_ele;
+
+            // this calculates which element-to-element connections it has
+            for (unsigned int k = 0; k < ndir; k++) {
+                T local_id_temp = e2e_map[ele * ndir + k];
+
+                // check if it is a valid mapping
+                if (local_id_temp != LOOK_UP_TABLE_DEFAULT) {
+                    // convert to global ID using element ID vector
+                    T e2e_use = eid_vec[local_id_temp];
+
+                    oct_connectivity_map[lid_ele].e2e[k] = e2e_use;
+                } else {
+                    oct_connectivity_map[lid_ele].e2e[k] =
+                        LOOK_UP_TABLE_DEFAULT;
+                }
+            }
+        }
+        ele_offsets.push_back(num_ele_global);
+
+        return std::make_tuple(oct_connectivity_map, local_to_global,
+                               ele_offsets, ele_counts);
+    }
+
+    template <typename T>
+    void createLocalToGlobalE2N(std::vector<oct_data<T>> &oct_connectivity_map,
+                                std::vector<T> &ele_local_to_global) {
+        int rank            = this->getMPIRank();
+        int npes            = this->getMPICommSize();
+        MPI_Comm commActive = this->getMPICommunicator();
+        // m_uiEL_i is just a counter to manage loop access over elements
+
+        // the function currentElementNeighbourIndexList iterates from 0 to
+        // m_uiNumDirections accessed by m_uiEL_i * m_uiNumDirections + k
+
+        // the m_uiE2NMapping_CG vector has an indexing pattern of m_uiEL_i *
+        // m_uiNpE + k (where k is 0-m_uiNpE from currentLementNodeList() ) the
+        // m_uiE2NMapping_DG vector does the same!
+
+        // size of m_uiE2NMapping_CG is m_uiAllNodes.size() * m_uiNpE
+
+        // -----------------
+        // CONTINOUS GALERKIN
+
+        // cg_local_to_global
+        std::map<T, T> cg_local_to_global;
+
+        // calculate how many there will be for this particular array
+        T localSzCG =
+            m_uiNpE * m_uiElementLocalEnd - m_uiNpE * m_uiElementLocalBegin;
+
+        // store element counts and offsets for global case, NOTE: these will be
+        // the same for DG and CG
+        std::vector<T> node_counts_CG;
+        std::vector<T> node_offsets_CG;
+        node_counts_CG.resize(npes);
+        node_offsets_CG.resize(npes);
+
+        // gather counts from all processes to build global map
+        par::Mpi_Allgather(&localSzCG, node_counts_CG.data(), 1, commActive);
+        node_offsets_CG[0] = 0;
+        for (unsigned int i = 1; i < npes; i++) {
+            node_offsets_CG[i] = node_offsets_CG[i - 1] + node_counts_CG[i - 1];
+        }
+
+        T num_node_CG_global =
+            node_offsets_CG[npes - 1] + node_counts_CG[npes - 1];
+        T *nodeid_vec_CG = this->createCGVector<T>((T)(0), 1);
+
+        for (unsigned int node_i = m_uiNodeLocalBegin;
+             node_i < m_uiNodeLocalEnd; node_i++) {
+            unsigned int lid_node = node_i - m_uiNodeLocalBegin;
+            // calculate a global value
+            nodeid_vec_CG[node_i] = lid_node + node_offsets_CG[rank];
+        }
+
+        // create a vector the same way as OCT_SHARED_NODES on
+        // DVec.create_vector, this will allow us to determine global IDs based
+        // on values requested
+        size_t vec_size = 1 * this->getDegOfFreedom();
+        std::vector<T> nodeid_vec_CG_use(vec_size, LOOK_UP_TABLE_DEFAULT);
+
+        // okay, determine unique local nodes
+        unsigned int nodeLookUp_CG;
+        unsigned int nodeLookUp_DG;
+        double x, y, z, len;
+        unsigned int ownerID, ii_x, jj_y, kk_z;
+        unsigned int extract_id;
+        for (unsigned int ele = m_uiElementLocalBegin;
+             ele < m_uiElementLocalEnd; ++ele) {
+            for (unsigned int k = 0; k < (m_uiElementOrder + 1); ++k) {
+                for (unsigned int j = 0; j < (m_uiElementOrder + 1); ++j) {
+                    for (unsigned int i = 0; (i < m_uiElementOrder + 1); ++i) {
+                        extract_id = ele * m_uiNpE +
+                                     k * (m_uiElementOrder + 1) *
+                                         (m_uiElementOrder + 1) +
+                                     j * (m_uiElementOrder + 1) + i;
+                        nodeLookUp_CG = m_uiE2NMapping_CG[extract_id];
+
+                        if (nodeLookUp_CG >= m_uiNodeLocalBegin &&
+                            nodeLookUp_CG < m_uiNodeLocalEnd) {
+                            nodeLookUp_DG = m_uiE2NMapping_DG[extract_id];
+
+                            // we can also calculate the X, Y, Z position here
+                            // too!
+                            dg2eijk(nodeLookUp_DG, ownerID, ii_x, jj_y, kk_z);
+
+                            len = 1u << (m_uiMaxDepth -
+                                         m_uiAllElements[ele].getLevel());
+
+                            x   = m_uiAllElements[ele].getX() +
+                                ii_x * (len / m_uiElementOrder);
+                            y = m_uiAllElements[ele].getY() +
+                                jj_y * (len / m_uiElementOrder);
+                            z = m_uiAllElements[ele].getZ() +
+                                kk_z * (len / m_uiElementOrder);
+
+                            nodeid_vec_CG_use[nodeLookUp_CG] =
+                                extract_id - (m_uiElementLocalBegin * m_uiNpE) +
+                                node_offsets_CG[rank];
+
+                            if (nodeLookUp_DG < m_uiNodeLocalBegin &&
+                                nodeLookUp_DG >= m_uiNodeLocalEnd) {
+                                std::cout
+                                    << rank
+                                    << ": NODE_LOOKUP_DG value out of bounds??"
+                                    << std::endl;
+                            }
+#if 0
+                            if (nodeLookUp_DG > vec_size) {
+                                std::cout << rank
+                                          << ": NODE_LOOKUP_DG value TOO BIG"
+                                          << std::endl;
+                            }
+#endif
+                        }
+                    }
+                }
+            }
+        }
+
+        this->readFromGhostBegin(nodeid_vec_CG_use.data(), 1);
+        this->readFromGhostEnd(nodeid_vec_CG_use.data(), 1);
+
+        // so now we should be able to create a new E2N CG:
+        std::vector<T> e2n_cg_new(m_uiE2NMapping_CG.size(),
+                                  LOOK_UP_TABLE_DEFAULT);
+
+        for (unsigned int ele = m_uiElementLocalBegin;
+             ele < m_uiElementLocalEnd; ++ele) {
+            for (unsigned int k = 0; k < (m_uiElementOrder + 1); ++k) {
+                for (unsigned int j = 0; j < (m_uiElementOrder + 1); ++j) {
+                    for (unsigned int i = 0; (i < m_uiElementOrder + 1); ++i) {
+                        extract_id = ele * m_uiNpE +
+                                     k * (m_uiElementOrder + 1) *
+                                         (m_uiElementOrder + 1) +
+                                     j * (m_uiElementOrder + 1) + i;
+                        e2n_cg_new[extract_id] =
+                            nodeid_vec_CG_use[m_uiE2NMapping_CG[extract_id]];
+
+                        if (e2n_cg_new[extract_id] == LOOK_UP_TABLE_DEFAULT) {
+                            std::cout << rank << ": ERROR: INVALID VALUE FOUND!"
+                                      << std::endl;
+                        }
+                    }
+                }
+            }
+        }
+
+        // now get the global values for e2n_dg, for our m_uiElementLocal values
+        std::vector<T> e2n_dg_new(m_uiE2NMapping_DG.size(),
+                                  LOOK_UP_TABLE_DEFAULT);
+
+        // NOW THE E2N_CG MAP IS UPDATED WITH GLOBAL IDS
+        unsigned int new_dg_val;
+        for (unsigned int ele = m_uiElementLocalBegin;
+             ele < m_uiElementLocalEnd; ++ele) {
+            long int id_for_global = ele - m_uiElementLocalBegin;
+            for (unsigned int k = 0; k < (m_uiElementOrder + 1); ++k) {
+                for (unsigned int j = 0; j < (m_uiElementOrder + 1); ++j) {
+                    for (unsigned int i = 0; (i < m_uiElementOrder + 1); ++i) {
+                        extract_id = ele * m_uiNpE +
+                                     k * (m_uiElementOrder + 1) *
+                                         (m_uiElementOrder + 1) +
+                                     j * (m_uiElementOrder + 1) + i;
+
+                        nodeLookUp_DG = m_uiE2NMapping_DG[extract_id];
+                        dg2eijk(nodeLookUp_DG, ownerID, ii_x, jj_y, kk_z);
+
+                        // convert the ownerID to its global ID
+                        if (ele_local_to_global[ownerID] !=
+                            LOOK_UP_TABLE_DEFAULT) {
+                            id_for_global = ele_local_to_global[ownerID];
+                        } else {
+#if 0
+                            std::cout << rank << ": COULDN'T FIND LOCAL ID "
+                                      << ownerID << " in map!" << std::endl;
+#endif
+                            continue;
+                        }
+
+                        new_dg_val = eijk2dg(id_for_global, ii_x, jj_y, kk_z);
+
+                        e2n_dg_new[extract_id] = new_dg_val;
+                    }
+                }
+            }
+        }
+
+        // with all of this information now, we can build up a vector of data
+        for (unsigned int ele = m_uiElementLocalBegin;
+             ele < m_uiElementLocalEnd; ++ele) {
+            // update the data in oct_connectivity_map's e2n_cg and e2n_dg
+
+            for (unsigned int i = 0; i < m_uiNpE; ++i) {
+                // oct_connectivity_map[ele - m_uiElementLocalBegin].e2n_cg[i] =
+                //     e2n_cg_new[ele * m_uiNpE + i];
+                oct_connectivity_map[ele - m_uiElementLocalBegin].e2n_dg[i] =
+                    e2n_dg_new[ele * m_uiNpE + i];
+            }
+        }
+
+        // return node_data_by_ele;
+    }
+
+    template <typename T>
+    inline oct_data<T> *findOctDataByGlobalID(
+        std::vector<oct_data<T>> &oct_connectivity_data,
+        const unsigned int eID) {
+        oct_data<T> *oct = nullptr;
+
+        for (auto &o : oct_connectivity_data) {
+            if (o.eid == eID) {
+                oct = &o;
+                break;
+            }
+        }
+
+        if (oct == nullptr) {
+            std::cerr << "ERROR: couldn't find requested data in getting "
+                         "element edge neighbors new partition! EID= "
+                      << eID << std::endl;
+            exit(-1);
+        }
+
+        return oct;
+    }
+
+    template <typename T>
+    void getElementFaceNeighborsNewPartition(
+        std::vector<oct_data<T>> &oct_connectivity_data, const unsigned int eID,
+        const unsigned int dir, unsigned int *lookup) {
+        lookup[0]        = eID;
+        lookup[1]        = LOOK_UP_TABLE_DEFAULT;
+        oct_data<T> *oct = findOctDataByGlobalID(oct_connectivity_data, eID);
+        unsigned level   = oct->level;
+
+        lookup[1]        = oct->e2e[dir];
+
+#if 0
+        // included in the original function, but since this function is only used to *identify* faces we need information from, it can be ignored
+        if (lookup[1] != LOOK_UP_TABLE_DEFAULT) {
+            oct_data<T> *oct2 =
+                findOctDataByGlobalID(oct_connectivity_data, lookup[i]);
+            if (oct2->level > level) {
+                lookup[1] = LOOK_UP_TABLE_DEFAULT;
+            }
+        }
+#endif
+    }
+
+    template <typename T>
+    void getElementEdgeNeighborsNewPartition(
+        std::vector<oct_data<T>> &oct_connectivity_data, const unsigned int eID,
+        const unsigned int dir, unsigned int *lookup) {
+        // oct_connectivity_data should be sorted
+        // remember though that this is based on GLOBALs
+        lookup[0]        = eID;
+        lookup[1]        = LOOK_UP_TABLE_DEFAULT;
+        lookup[2]        = LOOK_UP_TABLE_DEFAULT;
+        lookup[3]        = LOOK_UP_TABLE_DEFAULT;
+
+        oct_data<T> *oct = findOctDataByGlobalID(oct_connectivity_data, eID);
+        unsigned level   = oct->level;
+
+        // now we can actually find the data
+        unsigned int dir1, dir2;
+        unsigned int lk = LOOK_UP_TABLE_DEFAULT;
+
+        if (dir == OCT_DIR_LEFT_DOWN) {
+            dir1 = OCT_DIR_LEFT;
+            dir2 = OCT_DIR_DOWN;
+
+        } else if (dir == OCT_DIR_LEFT_UP) {
+            dir1 = OCT_DIR_LEFT;
+            dir2 = OCT_DIR_UP;
+
+        } else if (dir == OCT_DIR_LEFT_FRONT) {
+            dir1 = OCT_DIR_LEFT;
+            dir2 = OCT_DIR_FRONT;
+
+        } else if (dir == OCT_DIR_LEFT_BACK) {
+            dir1 = OCT_DIR_LEFT;
+            dir2 = OCT_DIR_BACK;
+
+        } else if (dir == OCT_DIR_RIGHT_DOWN) {
+            dir1 = OCT_DIR_RIGHT;
+            dir2 = OCT_DIR_DOWN;
+
+        } else if (dir == OCT_DIR_RIGHT_UP) {
+            dir1 = OCT_DIR_RIGHT;
+            dir2 = OCT_DIR_UP;
+
+        } else if (dir == OCT_DIR_RIGHT_BACK) {
+            dir1 = OCT_DIR_RIGHT;
+            dir2 = OCT_DIR_BACK;
+
+        } else if (dir == OCT_DIR_RIGHT_FRONT) {
+            dir1 = OCT_DIR_RIGHT;
+            dir2 = OCT_DIR_FRONT;
+
+        } else if (dir == OCT_DIR_UP_BACK) {
+            dir1 = OCT_DIR_UP;
+            dir2 = OCT_DIR_BACK;
+
+        } else if (dir == OCT_DIR_UP_FRONT) {
+            dir1 = OCT_DIR_UP;
+            dir2 = OCT_DIR_FRONT;
+
+        } else if (dir == OCT_DIR_DOWN_BACK) {
+            dir1 = OCT_DIR_DOWN;
+            dir2 = OCT_DIR_BACK;
+
+        } else if (dir == OCT_DIR_DOWN_FRONT) {
+            dir1 = OCT_DIR_DOWN;
+            dir2 = OCT_DIR_FRONT;
+        }
+
+        // we should be good here
+
+        lookup[1] = oct->e2e[dir1];
+
+        for (unsigned int i = 0; i < 2; i++) {
+            if (lookup[i] != LOOK_UP_TABLE_DEFAULT) {
+                // need to look up based on eid
+                oct_data<T> *oct2 =
+                    findOctDataByGlobalID(oct_connectivity_data, lookup[i]);
+                lookup[i + 2] = oct2->e2e[dir2];
+            }
+        }
+
+#if 0
+        // included in the original function, but since this function is only used to *identify* edges we need information from, it can be ignored
+        for (unsigned int i = 1; i < 4; i++) {
+            if (lookup[i] != LOOK_UP_TABLE_DEFAULT) {
+                oct_data<T> *oct2 =
+                    findOctDataByGlobalID(oct_connectivity_data, lookup[i]);
+                if (oct2->level > level) {
+                    lookup[i] = LOOK_UP_TABLE_DEFAULT;
+                }
+            }
+        }
+#endif
+    }
+
+    template <typename T>
+    void getElementVertexNeighborsNewPartition(
+        std::vector<oct_data<T>> &oct_connectivity_data, const unsigned int eID,
+        const unsigned int dir, unsigned int *lookup) {
+        // expects lookup to be of size 8
+
+        lookup[0] = eID;
+        for (unsigned int i = 1; i < NUM_CHILDREN; i++)
+            lookup[i] = LOOK_UP_TABLE_DEFAULT;
+
+        unsigned int dir1, dir2, dir3;
+        oct_data<T> *oct = findOctDataByGlobalID(oct_connectivity_data, eID);
+        unsigned level   = oct->level;
+
+        if (dir == OCT_DIR_LEFT_DOWN_BACK) {
+            dir1 = OCT_DIR_LEFT;
+            dir2 = OCT_DIR_DOWN;
+            dir3 = OCT_DIR_BACK;
+        } else if (dir == OCT_DIR_RIGHT_DOWN_BACK) {
+            dir1 = OCT_DIR_RIGHT;
+            dir2 = OCT_DIR_DOWN;
+            dir3 = OCT_DIR_BACK;
+        } else if (dir == OCT_DIR_LEFT_UP_BACK) {
+            dir1 = OCT_DIR_LEFT;
+            dir2 = OCT_DIR_UP;
+            dir3 = OCT_DIR_BACK;
+        } else if (dir == OCT_DIR_RIGHT_UP_BACK) {
+            dir1 = OCT_DIR_RIGHT;
+            dir2 = OCT_DIR_UP;
+            dir3 = OCT_DIR_BACK;
+        } else if (dir == OCT_DIR_LEFT_DOWN_FRONT) {
+            dir1 = OCT_DIR_LEFT;
+            dir2 = OCT_DIR_DOWN;
+            dir3 = OCT_DIR_FRONT;
+        } else if (dir == OCT_DIR_RIGHT_DOWN_FRONT) {
+            dir1 = OCT_DIR_RIGHT;
+            dir2 = OCT_DIR_DOWN;
+            dir3 = OCT_DIR_FRONT;
+        } else if (dir == OCT_DIR_LEFT_UP_FRONT) {
+            dir1 = OCT_DIR_LEFT;
+            dir2 = OCT_DIR_UP;
+            dir3 = OCT_DIR_FRONT;
+        } else if (dir == OCT_DIR_RIGHT_UP_FRONT) {
+            dir1 = OCT_DIR_RIGHT;
+            dir2 = OCT_DIR_UP;
+            dir3 = OCT_DIR_FRONT;
+        }
+
+        lookup[1] = oct->e2e[dir1];
+
+        // then go for other areas
+        for (unsigned int i = 0; i < 2; i++) {
+            if (lookup[i] != LOOK_UP_TABLE_DEFAULT) {
+                // need to look up based on eid
+                oct_data<T> *oct2 =
+                    findOctDataByGlobalID(oct_connectivity_data, lookup[i]);
+                lookup[i + 2] = oct2->e2e[dir2];
+            }
+        }
+
+        // then update the last two
+        for (unsigned int i = 0; i < 4; i++) {
+            if (lookup[i] != LOOK_UP_TABLE_DEFAULT) {
+                oct_data<T> *oct2 =
+                    findOctDataByGlobalID(oct_connectivity_data, lookup[i]);
+                lookup[i + 4] = oct2->e2e[dir3];
+            }
+        }
+
+#if 0
+        // checks based on level, not necessary for this function due to it only
+        // being used to find potential elements needed for communication
+        for (unsigned int i = 1; i < NUM_CHILDREN; i++) {
+            if (lookup[i] != LOOK_UP_TABLE_DEFAULT) {
+                oct_data<T> *oct2 =
+                    findOctDataByGlobalID(oct_connectivity_data, lookup[i]);
+                if (oct2->level > level) {
+                    lookup[i] = LOOK_UP_TABLE_DEFAULT;
+                }
+            }
+        }
+#endif
+    }
+
+    void repartitionMeshGlobal() {
+        if (!m_uiIsActive) return;
+
+        if (m_partitionOption == PartitioningOptions::NoPartition) {
+            return;
+        }
+
+        constexpr size_t RANK_TEST = 2;
+
+        typedef unsigned int D_INT_L;
+        // first generate the oct_connectivity_map, this gives us connectivity
+        // in global IDs and also provides a local-to-global mapping
+
+        int rank            = this->getMPIRank();
+        int npes            = this->getMPICommSize();
+        MPI_Comm commActive = this->getMPICommunicator();
+
+        auto [oct_connectivity_map, local_to_global, ele_offsets, ele_counts] =
+            buildOctantConnectivityMap<D_INT_L>();
+
+        // ele_offsets and ele_counts will help us figure out which process
+        // belongs to which
+
+        // then figure out node global IDs to get a local-to-global mapping for
+        // them
+
+        // E2E, E2E_DG, and E2E_CG have mesh connectivity and hanging node
+        // information
+        createLocalToGlobalE2N<D_INT_L>(oct_connectivity_map, local_to_global);
+
+        std::vector<D_INT_L> my_partition;
+
+        // auto my_partition = randomPartitioningSimple(oct_connectivity_map);
+        if (m_partitionOption == PartitioningOptions::OriginalPartition) {
+            my_partition = noPartitionChange(oct_connectivity_map);
+        } else if (m_partitionOption == PartitioningOptions::RandomPartition) {
+            my_partition = randomPartitioningSimple(oct_connectivity_map);
+        } else if (m_partitionOption == PartitioningOptions::fastpart) {
+            // quick conversion of oct_connectivity_map to wanted format
+
+            // oct_element is from fastpart.h
+            std::vector<oct_element> temp_oct_data(oct_connectivity_map.size());
+
+            for (unsigned int i = 0; i < oct_connectivity_map.size(); ++i) {
+                const auto &oct          = oct_connectivity_map[i];
+                temp_oct_data[i].rank    = oct.rank;
+                temp_oct_data[i].trank   = oct.trank;
+                temp_oct_data[i].eid     = oct.eid;
+                temp_oct_data[i].localid = oct.localid;
+                for (unsigned int j = 0; j < 3; ++j) {
+                    temp_oct_data[i].coord[j] = oct.coord[j];
+                }
+                for (unsigned int j = 0; j < 6; ++j) {
+                    temp_oct_data[i].e2e[j] = oct.e2e[j];
+                }
+                temp_oct_data[i].level = oct.level;
+            }
+
+            // vtx_dist is a prefix scan of the element count for each MPI node
+            fastpart_uint_t *vtx_dist = static_cast<fastpart_uint_t *>(
+                malloc(ele_offsets.size() * sizeof(fastpart_uint_t)));
+
+            for (unsigned int rk = 0; rk < ele_offsets.size(); rk++) {
+                vtx_dist[rk] = ele_offsets[rk];
+            }
+
+            fastpart_uint_t *parts = static_cast<fastpart_uint_t *>(
+                malloc(oct_connectivity_map.size() * sizeof(fastpart_uint_t)));
+
+            fastpart_partgraph_octree(vtx_dist, temp_oct_data.data(), parts,
+                                      &commActive);
+
+            // with the target_locations in mind, we need to figure out our "new
+            // partition"
+            std::vector<unsigned int> to_send[m_uiActiveNpes];
+            unsigned int total_send = 0;
+            for (unsigned int i = 0; i < oct_connectivity_map.size(); ++i) {
+                if (parts[i] == rank) {
+                    my_partition.push_back(oct_connectivity_map[i].eid);
+                    continue;
+                }
+
+                to_send[parts[i]].push_back(oct_connectivity_map[i].eid);
+                total_send++;
+            }
+            // then flatten it
+            std::vector<unsigned int> flatten_send(total_send);
+            std::vector<int> nsend(npes, 0);
+            unsigned int counter = 0;
+            for (unsigned int i = 0; i < npes; i++) {
+                for (const unsigned int &snd : to_send[i]) {
+                    flatten_send[counter++] = snd;
+                }
+                nsend[i] = to_send[i].size();
+            }
+            std::vector<int> nrecv(npes);
+
+            MPI_Alltoall(nsend.data(), 1, MPI_INT, nrecv.data(), 1, MPI_INT,
+                         commActive);
+
+            std::vector<int> sendOffset(npes);
+            std::vector<int> recvOffset(npes);
+            sendOffset[0] = 0;
+            for (int i = 1; i < npes; ++i) {
+                sendOffset[i] = sendOffset[i - 1] + nsend[i - 1];
+                recvOffset[i] = recvOffset[i - 1] + nrecv[i - 1];
+            }
+            unsigned int nTotalRecv = recvOffset[npes - 1] + nrecv[npes - 1];
+            std::vector<unsigned int> flatten_recv(nTotalRecv);
+
+            MPI_Alltoallv(flatten_send.data(), nsend.data(), sendOffset.data(),
+                          MPI_UNSIGNED, flatten_recv.data(), nrecv.data(),
+                          recvOffset.data(), MPI_UNSIGNED, commActive);
+
+            my_partition.insert(my_partition.end(), flatten_recv.begin(),
+                                flatten_recv.end());
+            std::sort(my_partition.begin(), my_partition.end());
+
+            free(parts);
+            free(vtx_dist);
+        }
+
+        std::cout << rank << ": ORIGINAL PARTITION SIZE - "
+                  << oct_connectivity_map.size() << " NEW PARTITION SIZE - "
+                  << my_partition.size() << std::endl;
+
+        auto new_oct_connectivity_map = getOctDataFromOtherProcesses(
+            oct_connectivity_map, ele_offsets, ele_counts, my_partition);
+
+        // now that we have all of this information, we just need to get our new
+        // assignment and then probe the rest of the mesh to get the necessary
+        // information
+
+        // assign back in the retained elements
+        for (auto &ele_id : my_partition) {
+            if (ele_id >= ele_offsets[rank] && ele_id < ele_offsets[rank + 1]) {
+                // make sure the target is properly set here too for sending
+                // information later
+                oct_connectivity_map[ele_id - ele_offsets[rank]].trank = rank;
+
+                new_oct_connectivity_map.push_back(
+                    oct_connectivity_map[ele_id - ele_offsets[rank]]);
+            }
+        }
+        // then sort by global ID
+        std::sort(new_oct_connectivity_map.begin(),
+                  new_oct_connectivity_map.end(),
+                  [](const oct_data<D_INT_L> &o1, const oct_data<D_INT_L> &o2) {
+                      return o1.trank < o2.trank;
+                  });
+
+        size_t newLocalBegin = LOOK_UP_TABLE_DEFAULT;
+        size_t newNumEle;
+
+        std::set<D_INT_L> global_ids_needed_for_e2e;
+        std::vector<D_INT_L> global_ids_needed_for_e2e_vec;
+        std::vector<oct_data<D_INT_L>> collected_ghost_elements;
+        std::vector<oct_data<D_INT_L>> remaining_data;
+        std::vector<D_INT_L> remove_these_ids;
+        std::vector<D_INT_L> post_first_round_comms_ids;
+        // 6 rounds of communication are what we want:
+        // 1- identify face neighbors of our partition
+        // 2- identify edge neighbors of our partition
+        // 3- identify vertex neighbors of our partition
+        // 4- identify face neighbors for level-2 ghosts (ownership concerns!)
+        // 5- identify edge neighbors for level-2 ghosts (ownership concerns!)
+        // 6- identify vertex neighbors for level-2 ghosts (ownership concerns!)
+        // 7- find remaining owners of the points that are needed in the
+        // original partition and level-1 ghosts
+        static const unsigned int N_COMM_ROUNDS = 7;
+        for (unsigned int comm_round = 0; comm_round < N_COMM_ROUNDS;
+             ++comm_round) {
+            std::vector<D_INT_L> &partition_search =
+                (comm_round < 3) ? my_partition : post_first_round_comms_ids;
+
+            // first round is to get just the face neighbors of everything
+            if (comm_round == 0 || comm_round == 3) {
+                unsigned int lookup[2];
+                for (const unsigned int dir :
+                     {OCT_DIR_LEFT, OCT_DIR_RIGHT, OCT_DIR_DOWN, OCT_DIR_UP,
+                      OCT_DIR_BACK, OCT_DIR_FRONT}) {
+                    for (const auto &ele_id : partition_search) {
+                        getElementFaceNeighborsNewPartition(
+                            new_oct_connectivity_map, ele_id, dir, lookup);
+                        if (lookup[1] != LOOK_UP_TABLE_DEFAULT) {
+                            global_ids_needed_for_e2e.insert(lookup[1]);
+                        }
+                    }
+                }
+            } else if (comm_round == 1 || comm_round == 4) {
+                // second round should be to get edge neighbors
+                unsigned int lookup[4];
+
+                for (const unsigned int dir :
+                     {OCT_DIR_LEFT_DOWN, OCT_DIR_LEFT_UP, OCT_DIR_LEFT_BACK,
+                      OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
+                      OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT,
+                      OCT_DIR_DOWN_BACK, OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK,
+                      OCT_DIR_UP_FRONT}) {
+                    for (const auto &ele_id : partition_search) {
+                        getElementEdgeNeighborsNewPartition(
+                            new_oct_connectivity_map, ele_id, dir, lookup);
+
+                        // then add all of the lookup values if they're not
+                        // defaults
+                        for (unsigned int lookup_id = 1; lookup_id < 4;
+                             ++lookup_id) {
+                            if (lookup[lookup_id] != LOOK_UP_TABLE_DEFAULT)
+                                global_ids_needed_for_e2e.insert(
+                                    lookup[lookup_id]);
+                        }
+                    }
+                }
+            } else if (comm_round == 2 || comm_round == 5) {
+                // third round should be to get vertex neighbors
+                unsigned int lookup[NUM_CHILDREN];
+
+                for (const unsigned int dir :
+                     {OCT_DIR_LEFT_DOWN_BACK, OCT_DIR_RIGHT_DOWN_BACK,
+                      OCT_DIR_LEFT_UP_BACK, OCT_DIR_RIGHT_UP_BACK,
+                      OCT_DIR_LEFT_DOWN_FRONT, OCT_DIR_RIGHT_DOWN_FRONT,
+                      OCT_DIR_LEFT_UP_FRONT, OCT_DIR_RIGHT_UP_FRONT}) {
+                    for (const auto &ele_id : partition_search) {
+                        getElementVertexNeighborsNewPartition(
+                            new_oct_connectivity_map, ele_id, dir, lookup);
+
+                        // then add all of the lookup values if they're not
+                        // defaults
+                        for (unsigned int lookup_id = 1;
+                             lookup_id < NUM_CHILDREN; ++lookup_id) {
+                            if (lookup[lookup_id] != LOOK_UP_TABLE_DEFAULT)
+                                global_ids_needed_for_e2e.insert(
+                                    lookup[lookup_id]);
+                        }
+                    }
+                }
+            } else if (comm_round == 6) {
+                // make sure we have everything we need based on the E2N global
+                // mapping
+                unsigned int ownerID, ii_x, jj_y, kk_z;
+                for (const auto &od : new_oct_connectivity_map) {
+                    if (od.isGhostTwo) {
+                        continue;
+                    }
+                    for (unsigned int i = 0; i < m_uiNpE; ++i) {
+                        dg2eijk(od.e2n_dg[i], ownerID, ii_x, jj_y, kk_z);
+                        global_ids_needed_for_e2e.insert(ownerID);
+                    }
+                }
+            }
+
+            // -- CLEAN UP
+            // remove those that are already contained inside the
+            // oct_connectivity_map
+            for (const auto &od : new_oct_connectivity_map) {
+                global_ids_needed_for_e2e.erase(od.eid);
+            }
+
+            // find the ones that might already still be part of
+            // oct_connectivity_map, then we can grab those directly
+            for (auto &ele_id : global_ids_needed_for_e2e) {
+                if (ele_id >= ele_offsets[rank] &&
+                    ele_id < ele_offsets[rank + 1]) {
+                    collected_ghost_elements.push_back(
+                        oct_connectivity_map[ele_id - ele_offsets[rank]]);
+                    remove_these_ids.push_back(ele_id);
+                }
+            }
+            // clear these overlapped elements, no need to communicate
+            for (auto &ele_id : remove_these_ids) {
+                global_ids_needed_for_e2e.erase(ele_id);
+            }
+
+            // convert to vector
+            std::copy(global_ids_needed_for_e2e.begin(),
+                      global_ids_needed_for_e2e.end(),
+                      std::back_inserter(global_ids_needed_for_e2e_vec));
+
+            // then fetch the data, make sure we don't update our target
+            remaining_data = getOctDataFromOtherProcesses(
+                oct_connectivity_map, ele_offsets, ele_counts,
+                global_ids_needed_for_e2e_vec, false);
+
+            // then make sure we insert the chunks we stored in
+            // collected_ghost_elements
+            remaining_data.insert(remaining_data.end(),
+                                  collected_ghost_elements.begin(),
+                                  collected_ghost_elements.end());
+
+            if (comm_round >= 3) {
+                // if we're on round 3 or more, we mark each one as "ghostTwo"
+                for (unsigned int i = 0; i < remaining_data.size(); i++) {
+                    remaining_data[i].isGhostTwo = true;
+                }
+            }
+
+            // then make sure we push it into the new oct_connectivity_map
+            new_oct_connectivity_map.insert(new_oct_connectivity_map.end(),
+                                            remaining_data.begin(),
+                                            remaining_data.end());
+
+            // clear the maps of interest
+            global_ids_needed_for_e2e.clear();
+            global_ids_needed_for_e2e_vec.clear();
+            collected_ghost_elements.clear();
+            remove_these_ids.clear();
+            remaining_data.clear();
+
+            // finally, make sure we sort
+
+            std::sort(
+                new_oct_connectivity_map.begin(),
+                new_oct_connectivity_map.end(),
+                [](const oct_data<D_INT_L> &a, const oct_data<D_INT_L> &b) {
+                    if (a.trank != b.trank) {
+                        return a.trank < b.trank;
+                    } else {
+                        return a.eid < b.eid;
+                    }
+                });
+
+            size_t counter = 0;
+            for (auto &o : new_oct_connectivity_map) {
+                if (o.trank == rank) {
+                    break;
+                }
+                counter++;
+            }
+
+            newLocalBegin = counter;
+            newNumEle     = new_oct_connectivity_map.size();
+
+            if (comm_round == 2) {
+                // just finished first round of ghost fetching
+                for (const auto &ot : new_oct_connectivity_map) {
+                    // fill out the vector of comm ids, this is what we'll use
+                    post_first_round_comms_ids.push_back(ot.eid);
+                }
+            }
+        }
+
+        size_t newLocalEnd = newLocalBegin + my_partition.size();
+        // finished all of the fetching rounds, should now have ghosts and
+        // "second" ghosts
+
+        // TODO: do we need to check for remaining global IDs? i.e. do we need
+        // to do one more round of communication for the level 2 ghost
+        // neighbors, which would include edge and corner neighbors?
+
+        // now we can rebuild the E2E map based on this data!
+        std::vector<D_INT_L> newE2EMap(newNumEle * this->getNumDirections(),
+                                       LOOK_UP_TABLE_DEFAULT);
+
+        // quickly create a global to local map
+        std::map<D_INT_L, D_INT_L> globaltoNewLocal;
+        for (size_t eid_local = 0; eid_local < newNumEle; eid_local++) {
+            globaltoNewLocal[new_oct_connectivity_map[eid_local].eid] =
+                eid_local;
+        }
+
+        // CREATE FULL E2E MAP BASED ON DATA
+        for (size_t eid_local = 0; eid_local < newNumEle; eid_local++) {
+            for (int faceid = 0; faceid < this->getNumDirections(); faceid++) {
+                if (new_oct_connectivity_map[eid_local].e2e[faceid] !=
+                    LOOK_UP_TABLE_DEFAULT) {
+                    D_INT_L tempVal =
+                        new_oct_connectivity_map[eid_local].e2e[faceid];
+                    if (globaltoNewLocal.find(tempVal) !=
+                        globaltoNewLocal.end()) {
+                        newE2EMap[eid_local * this->getNumDirections() +
+                                  faceid] =
+                            globaltoNewLocal[new_oct_connectivity_map[eid_local]
+                                                 .e2e[faceid]];
+                    } else {
+                        newE2EMap[eid_local * this->getNumDirections() +
+                                  faceid] = LOOK_UP_TABLE_DEFAULT / 2;
+                    }
+                }
+            }
+        }
+        // done with E2E map creation!
+
+        // --------------------
+        // CREATE THE E2N MAP
+
+        // start with the E2N_DG, because it's easiest
+        std::vector<D_INT_L> newE2N_dg(newNumEle * m_uiNpE,
+                                       LOOK_UP_TABLE_DEFAULT);
+        std::vector<D_INT_L> newE2N_cg(newNumEle * m_uiNpE,
+                                       LOOK_UP_TABLE_DEFAULT);
+        unsigned int nodeLookUp_DG;
+        unsigned int nodeLookUp_CG;
+        unsigned int inject_id, sub_extract_id;
+        unsigned int ownerID, ii_x, jj_y, kk_z;
+        unsigned int newOwnerID;
+
+        // construction of the e2n_dg based on the methods in create e2n
+        // function
+        for (size_t ele_id = 0; ele_id < newNumEle; ++ele_id) {
+            // then through the number of dimensions
+            D_INT_L currGlobal = new_oct_connectivity_map[ele_id].eid;
+
+            // ele_id is the current local id
+
+            // so the math is pretty simple
+            for (unsigned int k = 0; k < (m_uiElementOrder + 1); ++k) {
+                for (unsigned int j = 0; j < (m_uiElementOrder + 1); ++j) {
+                    for (unsigned int i = 0; (i < m_uiElementOrder + 1); ++i) {
+                        sub_extract_id = k * (m_uiElementOrder + 1) *
+                                             (m_uiElementOrder + 1) +
+                                         j * (m_uiElementOrder + 1) + i;
+                        inject_id     = ele_id * m_uiNpE + sub_extract_id;
+
+                        // the "global" representation
+                        nodeLookUp_DG = new_oct_connectivity_map[ele_id]
+                                            .e2n_dg[sub_extract_id];
+
+                        // get the k, j, i, values through dg2eijk based on this
+                        // global value
+                        dg2eijk(nodeLookUp_DG, ownerID, ii_x, jj_y, kk_z);
+
+                        // so, ownerID is the global ID, we need to match it
+                        // back to new global
+                        if (globaltoNewLocal.find(ownerID) !=
+                            globaltoNewLocal.end()) {
+                            newOwnerID = globaltoNewLocal[ownerID];
+                        } else {
+                            // if we don't have a match, then it's technically
+                            // owned by another value, but at this point if we
+                            // have the level 1 and level 2 ghosts, we pretty
+                            // much don't need it, but to avoid errors we'll set
+                            // it to the current local element
+                            newOwnerID = ele_id;
+                        }
+
+                        // now that we have the ii_x, jj_y, and kk_z, we can
+                        // recreate this with our local ele_id
+
+                        newE2N_dg[inject_id] =
+                            eijk2dg(newOwnerID, ii_x, jj_y, kk_z);
+                    }
+                }
+            }
+        }
+
+        // following the logic from build e2N w/ SM
+        // this lets us create the E2N CG really easily
+        newE2N_cg = newE2N_dg;
+        std::sort(newE2N_dg.begin(), newE2N_dg.end());
+        newE2N_dg.erase(std::unique(newE2N_dg.begin(), newE2N_dg.end()),
+                        newE2N_dg.end());
+
+        // then cg2dg
+        std::vector<D_INT_L> cg2dg;
+        cg2dg.resize(newE2N_dg.size());
+        cg2dg = newE2N_dg;
+
+        newE2N_dg.resize(newNumEle * m_uiNpE);
+        newE2N_dg = newE2N_cg;
+
+        std::vector<unsigned int> dg2cg;
+        dg2cg.resize(m_uiNpE * newNumEle, LOOK_UP_TABLE_DEFAULT);
+
+        for (unsigned int i = 0; i < cg2dg.size(); i++) dg2cg[cg2dg[i]] = i;
+
+        for (unsigned int i = 0; i < newE2N_dg.size(); i++)
+            newE2N_cg[i] = dg2cg[newE2N_cg[i]];
+
+        const unsigned int numCGNodes     = cg2dg.size();
+
+        const unsigned int newEleGhostEnd = new_oct_connectivity_map.size();
+        unsigned int tmpIndex;
+        unsigned int newNodePreGhostBegin  = UINT_MAX;
+        unsigned int newNodeLocalBegin     = UINT_MAX;
+        unsigned int newNodePostGhostBegin = UINT_MAX;
+        unsigned int newNodePreGhostEnd, newNodeLocalEnd, newNodePostGhostEnd;
+        for (unsigned int e = 0; e < newNumEle; ++e) {
+            for (unsigned int k = 0; k < m_uiNpE; k++) {
+                tmpIndex = (newE2N_dg[e * m_uiNpE + k] / m_uiNpE);
+                // if we're within "preghost begin or end" and our newNode value
+                // is greater than what's found...
+                if ((tmpIndex >= 0) && (tmpIndex < newLocalBegin) &&
+                    (newNodePreGhostBegin > newE2N_dg[e * m_uiNpE + k])) {
+                    newNodePreGhostBegin = newE2N_dg[e * m_uiNpE + k];
+                }
+
+                // if we're within "local begin and end" and our newNode value
+                // is greater than what's found...
+                if ((tmpIndex >= newLocalBegin) && (tmpIndex < newLocalEnd) &&
+                    (newNodeLocalBegin > newE2N_dg[e * m_uiNpE + k])) {
+                    newNodeLocalBegin = newE2N_dg[e * m_uiNpE + k];
+                }
+
+                // if we're within "postghost begin and end" and our newNode
+                // value is greater than what's found...
+                if ((tmpIndex >= newLocalEnd) && (tmpIndex < newEleGhostEnd) &&
+                    (newNodePostGhostBegin > newE2N_dg[e * m_uiNpE + k])) {
+                    newNodePostGhostBegin = newE2N_dg[e * m_uiNpE + k];
+                }
+            }
+        }
+
+        assert(newNodeLocalBegin != UINT_MAX);
+        assert(dg2cg[newNodeLocalBegin] != LOOK_UP_TABLE_DEFAULT);
+        newNodeLocalBegin = dg2cg[newNodeLocalBegin];
+        if (newNodePreGhostBegin == UINT_MAX) {
+            newNodePreGhostBegin = 0;
+            newNodePreGhostEnd   = 0;
+            assert(newNodeLocalBegin == 0);
+        } else {
+            assert(dg2cg[newNodePreGhostBegin] != LOOK_UP_TABLE_DEFAULT);
+            newNodePreGhostBegin = dg2cg[newNodePreGhostBegin];
+            newNodePreGhostEnd   = newNodeLocalBegin;
+        }
+
+        if (newNodePostGhostBegin == UINT_MAX) {
+            newNodeLocalEnd       = cg2dg.size();  // E2N_DG_Sorted.size();
+            newNodePostGhostBegin = newNodeLocalEnd;
+            newNodePostGhostEnd   = newNodeLocalEnd;
+        } else {
+            assert(dg2cg[newNodePostGhostBegin] != LOOK_UP_TABLE_DEFAULT);
+            newNodePostGhostBegin = dg2cg[newNodePostGhostBegin];
+            newNodeLocalEnd       = newNodePostGhostBegin;
+            newNodePostGhostEnd   = cg2dg.size();  // E2N_DG_Sorted.size();
+        }
+
+        // --------------------
+        // RECREATE THE SCATTERMAPS
+        std::vector<int> sendNodeCount;
+        std::vector<int> recvNodeCount;
+        std::vector<unsigned int> sendNodeSM[npes];
+        std::vector<unsigned int> recvNodeSM[npes];
+        std::vector<unsigned int> recvNodeDGGlobals[npes];
+        sendNodeCount.resize(m_uiActiveNpes, 0);
+        recvNodeCount.resize(m_uiActiveNpes, 0);
+        D_INT_L nodeIndex;
+
+        unsigned int n_dg;
+        unsigned int dir;
+        unsigned int ib, ie, jb, je, kb, ke;
+        unsigned int procIDEle;
+
+        // create receive maps
+        for (unsigned int ele_id = 0; ele_id < newNumEle; ele_id++) {
+            const auto &ele      = new_oct_connectivity_map[ele_id];
+            const D_INT_L procId = ele.trank;
+
+            if (procId == rank) {
+                // no need to parse through the whole block here, the
+                // "ownership" of the DG and CG map helps
+                continue;
+            }
+            if (ele.isGhostTwo) {
+                continue;
+            }
+
+            // go through the "corners" and middles of each of these, which
+            // tells us enough information about the number we need in each
+            // direction
+            for (const unsigned int &kk :
+                 {0U, m_uiElementOrder / 2, m_uiElementOrder}) {
+                for (const unsigned int &jj :
+                     {0U, m_uiElementOrder / 2, m_uiElementOrder}) {
+                    for (const unsigned int &ii :
+                         {0U, m_uiElementOrder / 2, m_uiElementOrder}) {
+                        // now we can where it actually goes in the DG mapping
+                        nodeIndex = newE2N_dg[ele_id * m_uiNpE +
+                                              kk * (m_uiElementOrder + 1) *
+                                                  (m_uiElementOrder + 1) +
+                                              jj * (m_uiElementOrder + 1) + ii];
+                        dg2eijk(nodeIndex, ownerID, ii_x, jj_y, kk_z);
+
+                        // check if the ownerID is within the new localBegin and
+                        // localEnd, if it's not then we need to receive it
+                        if (ownerID >= newLocalBegin && ownerID < newLocalEnd) {
+                            continue;
+                        }
+
+                        // calculate the procID based on the owner ID **here**
+                        procIDEle = new_oct_connectivity_map[ownerID].trank;
+
+                        // std::cout << rank << ": ii, jj, kk: " << ii << ", "
+                        //           << jj << ", " << kk
+                        //           << " - ii_x, jj_y, kk_z: " << ii_x << ", "
+                        //           << jj_y << ", " << kk_z << std::endl;
+
+                        // otherwise...
+                        if (ii_x == 0) {
+                            ib = 0;
+                            ie = 0;
+                        }
+                        if (jj_y == 0) {
+                            jb = 0;
+                            je = 0;
+                        }
+                        if (kk_z == 0) {
+                            kb = 0;
+                            ke = 0;
+                        }
+
+                        if (ii_x == m_uiElementOrder / 2) {
+                            ib = 1;
+                            ie = m_uiElementOrder - 1;
+                        }
+                        if (jj_y == m_uiElementOrder / 2) {
+                            jb = 1;
+                            je = m_uiElementOrder - 1;
+                        }
+                        if (kk_z == m_uiElementOrder / 2) {
+                            kb = 1;
+                            ke = m_uiElementOrder - 1;
+                        }
+
+                        if (ii_x == m_uiElementOrder) {
+                            ib = m_uiElementOrder;
+                            ie = m_uiElementOrder;
+                        }
+                        if (jj_y == m_uiElementOrder) {
+                            jb = m_uiElementOrder;
+                            je = m_uiElementOrder;
+                        }
+                        if (kk_z == m_uiElementOrder) {
+                            kb = m_uiElementOrder;
+                            ke = m_uiElementOrder;
+                        }
+
+                        for (unsigned int k = kb; k <= ke; k++)
+                            for (unsigned int j = jb; j <= je; j++)
+                                for (unsigned int i = ib; i <= ie; i++) {
+                                    recvNodeCount[procIDEle]++;
+                                    recvNodeSM[procIDEle].push_back(
+                                        newE2N_cg[ownerID * m_uiNpE +
+                                                  k * (m_uiElementOrder + 1) *
+                                                      (m_uiElementOrder + 1) +
+                                                  j * (m_uiElementOrder + 1) +
+                                                  i]);
+                                    recvNodeDGGlobals[procIDEle].push_back(
+                                        new_oct_connectivity_map[ownerID]
+                                            .e2n_dg[k * (m_uiElementOrder + 1) *
+                                                        (m_uiElementOrder + 1) +
+                                                    j * (m_uiElementOrder + 1) +
+                                                    i]);
+                                }
+                    }
+                }
+            }
+        }
+
+        for (unsigned int i = 0; i < npes; i++) {
+            auto [recv_tmp, recv_global_tmp] =
+                removeDuplicatesSameOrder(recvNodeSM[i], recvNodeDGGlobals[i]);
+            std::swap(recvNodeSM[i], recv_tmp);
+            std::swap(recvNodeDGGlobals[i], recv_global_tmp);
+            recvNodeCount[i] = recvNodeSM[i].size();
+        }
+
+        // calculate offsets
+        std::vector<int> recvOffsets(npes);
+        recvOffsets[0] = 0;
+        for (int i = 1; i < npes; ++i) {
+            recvOffsets[i] = recvOffsets[i - 1] + recvNodeCount[i - 1];
+        }
+        int total_recv_size = recvOffsets[npes - 1] + recvNodeCount[npes - 1];
+
+        // exchange all of the send counts
+        MPI_Alltoall(recvNodeCount.data(), 1, MPI_INT, sendNodeCount.data(), 1,
+                     MPI_INT, commActive);
+
+        std::vector<int> sendOffsets(npes);
+        sendOffsets[0] = 0;
+        for (int i = 1; i < npes; ++i) {
+            sendOffsets[i] = sendOffsets[i - 1] + sendNodeCount[i - 1];
+        }
+        int total_send_size = sendOffsets[npes - 1] + sendNodeCount[npes - 1];
+
+        // create a flattened recv and send buffer
+        std::vector<long unsigned int> flattened_send_buffer(total_send_size);
+        std::vector<long unsigned int> flattened_recv_buffer(total_recv_size);
+
+        // NOTE: it's important to remember that we're "sending" receive data
+        // and vice versa
+        int send_offset = 0;
+        for (int i = 0; i < npes; ++i) {
+            for (const unsigned int &rcv_data : recvNodeDGGlobals[i]) {
+                flattened_recv_buffer[send_offset++] = rcv_data;
+            }
+        }
+
+        /// now we can do an alltoallv
+        MPI_Alltoallv(flattened_recv_buffer.data(), recvNodeCount.data(),
+                      recvOffsets.data(), MPI_UNSIGNED_LONG,
+                      flattened_send_buffer.data(), sendNodeCount.data(),
+                      sendOffsets.data(), MPI_UNSIGNED_LONG, commActive);
+
+        // with the communication now, we can create the "send" scattermap
+
+        std::vector<unsigned int> convertedSendSM(total_send_size);
+        std::vector<unsigned int> convertedRecvSM(total_recv_size);
+        for (size_t i = 0; i < flattened_send_buffer.size(); ++i) {
+            // convert the value to local ID
+            dg2eijk(flattened_send_buffer[i], ownerID, ii_x, jj_y, kk_z);
+
+            if (globaltoNewLocal.find(ownerID) != globaltoNewLocal.end()) {
+                newOwnerID = globaltoNewLocal[ownerID];
+                if (newOwnerID < newLocalBegin || newOwnerID >= newLocalEnd) {
+                    // TODO: some kind of error handling, perhaps? this
+                    // shouldn't trigger ever
+                } else {
+                    // std::cout << " I FOUND A TRUE OWNER! " << std::endl;
+                }
+            } else {
+                std::cout << "ERROR: Unknown new Owner ID, original was: "
+                          << ownerID << std::endl;
+            }
+
+            unsigned int newDGVal = eijk2dg(newOwnerID, ii_x, jj_y, kk_z);
+
+            // then we update the scattermap with the "found" ID
+            convertedSendSM[i] =
+                newE2N_cg[newOwnerID * m_uiNpE +
+                          kk_z * (m_uiElementOrder + 1) *
+                              (m_uiElementOrder + 1) +
+                          jj_y * (m_uiElementOrder + 1) + ii_x];
+        }
+
+        // flatten the receive scattermap
+        unsigned int recv_offset = 0;
+        for (int i = 0; i < npes; ++i) {
+            for (unsigned int j = 0; j < recvNodeSM[i].size(); ++j) {
+                convertedRecvSM[recv_offset++] = recvNodeSM[i][j];
+            }
+        }
+
+        // --------------------
+        // UPDATE INTERNAL MESH DATASTRUCTURES
+
+        std::swap(m_uiE2EMapping, newE2EMap);
+        std::swap(m_uiE2NMapping_CG, newE2N_cg);
+        std::swap(m_uiE2NMapping_DG, newE2N_dg);
+        std::swap(m_uiCG2DG, cg2dg);
+        std::swap(m_uiDG2CG, dg2cg);
+
+        // create m_uiAllElements, which is a vector of treeNodes
+        std::vector<ot::TreeNode> newAllElements;
+        for (const auto &oct : new_oct_connectivity_map) {
+            unsigned int psz = 1u << (m_uiMaxDepth - oct.level - 1);
+            ot::TreeNode temp(oct.coord[0] - psz, oct.coord[1] - psz,
+                              oct.coord[2] - psz, oct.level, 3, m_uiMaxDepth);
+            // make sure flag is set, though I don't think it's used often, so
+            // might not be necessary
+            temp.setFlag(oct.flag);
+
+            newAllElements.push_back(temp);
+        }
+        std::swap(m_uiAllElements, newAllElements);
+        // m_uiAllLocalNode doesn't need to be updated here
+
+        // update locations
+        m_uiElementPreGhostEnd    = 0;
+        m_uiElementPreGhostEnd    = newLocalBegin;
+        m_uiElementLocalBegin     = newLocalBegin;
+        m_uiElementLocalEnd       = newLocalEnd;
+        m_uiElementPostGhostBegin = newLocalEnd;
+        m_uiElementPostGhostEnd   = new_oct_connectivity_map.size();
+        // update counts
+        m_uiNumLocalElements      = newLocalEnd - newLocalBegin;
+        m_uiNumPreGhostElements   = newLocalBegin;
+        m_uiNumPostGhostElements =
+            m_uiElementPostGhostEnd - m_uiElementPostGhostBegin;
+        m_uiNumActualNodes = m_uiNumPreGhostElements + m_uiNumLocalElements +
+                             m_uiNumPostGhostElements;
+
+        // update preghost begin/end in CG indexing
+        m_uiNodePreGhostBegin  = newNodePreGhostBegin;
+        m_uiNodePreGhostEnd    = newNodePreGhostEnd;
+        m_uiNodeLocalBegin     = newNodeLocalBegin;
+        m_uiNodeLocalEnd       = newNodeLocalEnd;
+        m_uiNodePostGhostBegin = newNodePostGhostBegin;
+        m_uiNodePostGhostEnd   = newNodePostGhostEnd;
+
+        // then update the nodal scattermap stuff
+        std::vector<unsigned int> sendNodeCount_modified =
+            convertVectorType<int, unsigned int>(sendNodeCount);
+        std::vector<unsigned int> recvNodeCount_modified =
+            convertVectorType<int, unsigned int>(recvNodeCount);
+        std::vector<unsigned int> sendOffsets_modified =
+            convertVectorType<int, unsigned int>(sendOffsets);
+        std::vector<unsigned int> recvOffsets_modified =
+            convertVectorType<int, unsigned int>(recvOffsets);
+        std::swap(m_uiSendNodeCount, sendNodeCount_modified);
+        std::swap(m_uiRecvNodeCount, recvNodeCount_modified);
+        std::swap(m_uiSendNodeOffset, sendOffsets_modified);
+        std::swap(m_uiRecvNodeOffset, recvOffsets_modified);
+        std::swap(m_uiScatterMapActualNodeSend, convertedSendSM);
+        std::swap(m_uiScatterMapActualNodeRecv, convertedRecvSM);
+        m_uiSendBufferNodes.resize(std::accumulate(m_uiSendNodeCount.begin(),
+                                                   m_uiSendNodeCount.end(), 0));
+        m_uiRecvBufferNodes.resize(std::accumulate(m_uiRecvNodeCount.begin(),
+                                                   m_uiRecvNodeCount.end(), 0));
+
+        // then update the information
+        if (m_uiActiveNpes > 1) {
+            m_uiSendProcList.clear();
+            m_uiRecvProcList.clear();
+            for (unsigned int p = 0; p < m_uiActiveNpes; p++) {
+                if (m_uiSendNodeCount[p] != 0) m_uiSendProcList.push_back(p);
+                if (m_uiRecvNodeCount[p] != 0) m_uiRecvProcList.push_back(p);
+            }
+
+            // then resize the bufferNodes
+            m_uiSendBufferNodes.resize(m_uiSendNodeOffset[m_uiActiveNpes - 1] +
+                                       m_uiSendNodeCount[m_uiActiveNpes - 1]);
+            m_uiRecvBufferNodes.resize(m_uiRecvNodeOffset[m_uiActiveNpes - 1] +
+                                       m_uiRecvNodeCount[m_uiActiveNpes - 1]);
+        }
+
+        // -----
+        // ELEMENT SCATTERMAP
+        std::set<unsigned int> scatterMapSend_R1[npes];
+        // get the element scattermap as well
+
+        // post_first_round_comms_ids are *all* the elements by global ID that
+        // *actually* work, need to convert them to locals, then sort
+        std::vector<unsigned int> post_first_round_comms_vec_local;
+        post_first_round_comms_vec_local.reserve(
+            post_first_round_comms_ids.size());
+        for (const auto &ele_id_global : post_first_round_comms_ids) {
+            // fortunately, since they were fetched, they're all captured
+            const unsigned int local_id = globaltoNewLocal[ele_id_global];
+            post_first_round_comms_vec_local.push_back(local_id);
+        }
+
+        // then build up ele_scattermap
+        std::sort(post_first_round_comms_vec_local.begin(),
+                  post_first_round_comms_vec_local.end());
+        for (const auto &ele_id : post_first_round_comms_vec_local) {
+            if (ele_id >= newLocalBegin && ele_id < newLocalEnd) {
+                // don't process local stuff for this map
+                continue;
+            }
+
+            const auto &oct         = new_oct_connectivity_map[ele_id];
+            const D_INT_L procOwner = oct.trank;
+
+            unsigned int lookup[NUM_CHILDREN];
+
+            for (const unsigned int dir :
+                 {OCT_DIR_LEFT, OCT_DIR_RIGHT, OCT_DIR_DOWN, OCT_DIR_UP,
+                  OCT_DIR_BACK, OCT_DIR_FRONT}) {
+                getElementalFaceNeighbors(ele_id, dir, lookup);
+                if (lookup[1] != LOOK_UP_TABLE_DEFAULT) {
+                    if (lookup[1] >= newLocalBegin && lookup[1] < newLocalEnd) {
+                        scatterMapSend_R1[procOwner].insert(lookup[1] -
+                                                            newLocalBegin);
+                    }
+                }
+            }
+
+            for (const unsigned int dir :
+                 {OCT_DIR_LEFT_DOWN, OCT_DIR_LEFT_UP, OCT_DIR_LEFT_BACK,
+                  OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
+                  OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
+                  OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK, OCT_DIR_UP_FRONT}) {
+                getElementalEdgeNeighbors(ele_id, dir, lookup);
+                for (unsigned int lookup_id = 1; lookup_id < 4; ++lookup_id) {
+                    if (lookup[lookup_id] != LOOK_UP_TABLE_DEFAULT) {
+                        if (lookup[lookup_id] >= newLocalBegin &&
+                            lookup[lookup_id] < newLocalEnd) {
+                            scatterMapSend_R1[procOwner].insert(
+                                lookup[lookup_id] - newLocalBegin);
+                        }
+                    }
+                }
+            }
+
+            for (const unsigned int dir :
+                 {OCT_DIR_LEFT_DOWN_BACK, OCT_DIR_RIGHT_DOWN_BACK,
+                  OCT_DIR_LEFT_UP_BACK, OCT_DIR_RIGHT_UP_BACK,
+                  OCT_DIR_LEFT_DOWN_FRONT, OCT_DIR_RIGHT_DOWN_FRONT,
+                  OCT_DIR_LEFT_UP_FRONT, OCT_DIR_RIGHT_UP_FRONT}) {
+                getElementalVertexNeighbors(ele_id, dir, lookup);
+                for (unsigned int lookup_id = 1; lookup_id < NUM_CHILDREN;
+                     ++lookup_id) {
+                    if (lookup[lookup_id] != LOOK_UP_TABLE_DEFAULT) {
+                        if (lookup[lookup_id] >= newLocalBegin &&
+                            lookup[lookup_id] < newLocalEnd) {
+                            scatterMapSend_R1[procOwner].insert(
+                                lookup[lookup_id] - newLocalBegin);
+                        }
+                    }
+                }
+            }
+        }
+
+        // now we can flatten the data
+        m_uiScatterMapElementRound1.clear();
+        std::fill(m_uiSendEleCount.begin(), m_uiSendEleCount.end(), 0);
+        std::fill(m_uiRecvEleCount.begin(), m_uiRecvEleCount.end(), 0);
+        std::fill(m_uiSendEleOffset.begin(), m_uiSendEleOffset.end(), 0);
+        std::fill(m_uiRecvEleOffset.begin(), m_uiRecvEleOffset.end(), 0);
+        for (unsigned int p = 0; p < npes; ++p) {
+            m_uiScatterMapElementRound1.insert(
+                m_uiScatterMapElementRound1.end(), scatterMapSend_R1[p].begin(),
+                scatterMapSend_R1[p].end());
+            m_uiSendEleCount[p] = scatterMapSend_R1[p].size();
+        }
+
+        par::Mpi_Alltoall(m_uiSendEleCount.data(), m_uiRecvEleCount.data(), 1,
+                          m_uiCommActive);
+        m_uiSendEleOffset[0] = 0;
+        m_uiRecvEleOffset[0] = 0;
+
+        omp_par::scan(m_uiSendEleCount.data(), m_uiSendEleOffset.data(), npes);
+        omp_par::scan(m_uiRecvEleCount.data(), m_uiRecvEleOffset.data(), npes);
+
+        m_uiElementSendProcList.clear();
+        m_uiElementRecvProcList.clear();
+
+        for (unsigned int p = 0; p < m_uiActiveNpes; p++) {
+            if (m_uiSendEleCount[p] > 0) m_uiElementSendProcList.push_back(p);
+            if (m_uiRecvEleCount[p] > 0) m_uiElementRecvProcList.push_back(p);
+        }
+
+        // END ELEMENT SCATTERMAP
+
+        // data we don't need:
+        // m_uiSplitterNodes, m_uiSendKeyCount, m_uiSendKeyOffset,
+        // m_uiSendOct[Count/Offset]Round1
+        // m_uiSendOct[Count/Offset]Round2
+        // m_ui[Send/Recv]KeyDiag[Count/Offset]
+        // m_ui[Send/Recv]Oct[Count/Offset]Round1Diag
+        // m_uiRecvKey[Count/Offset]
+        // m_uiRecvOct[Count/Offset]Round1
+        // m_uiRecvOct[Count/Offset]Round2
+        // m_uiGhostElementIDsToBe[Sent/Recv]
+        // m_uiSendBufferElement - only used in construction of initial E2E
+        // don't need to update the FE element stuff
+        // don't need to update mesh domain min/max
+        // don't need to update num fake nodes
+        // don't need m_uiGhostElementIDsToBe[Sent/Recv]
+        // don't need m_ui[Pre/Post]GhostHangingNodeCGID
+        // m_uiNpE, m_uiElementOrder, M_uiStencilSz, m_uiNumDirections,
+        // m_uiRefEl
+        // m_uiF2EMap stuff, since we're not FME
+        // m_ui[Send/Recv][Count/Offset]RePt and the lists
+        // none of the intergrid transfer stuff
+        // unzip map, unzip offset, unzip counts
+
+        // TODO: BLOCKS, includes m_uiUnzippedVecSz
+        // TODO: BLOCKS ARE VERY BROKEN
+
+#if 0
+        m_uiIsBlockSetup = false;
+        m_uiLocalBlockList.clear();
+        if (!rank) {
+            std::cout << rank << ": Now preparing to set up blocks..."
+                      << std::endl;
+        }
+        performBlocksSetup(m_uiCoarsetBlkLev, NULL, 0);
+        if (!rank) {
+            std::cout << rank << ": Finished blocksetup after repartitioning..."
+                      << std::endl;
+        }
+        // this sets up m_uiUnZippedVecSz
+
+        buildE2BlockMap();
+        if (!rank) {
+            std::cout << rank
+                      << ": Now finished with the repartitioning scheme!"
+                      << std::endl;
+        }
+#endif
+    }
+
+    template <typename T>
+    std::vector<oct_data<T>> getOctDataFromOtherProcesses(
+        std::vector<oct_data<T>> &oct_connectivity_map,
+        std::vector<T> &ele_offsets, std::vector<T> &ele_counts,
+        std::vector<T> &data_to_fetch, bool set_target_rank = true) {
+        int rank            = this->getMPIRank();
+        int npes            = this->getMPICommSize();
+        MPI_Comm commActive = this->getMPICommunicator();
+
+        // go through the partition to figure out what needs to be sent, since
+        // that's the info we have
+        std::vector<int> send_counts(npes, 0);
+        std::vector<int> recv_counts(npes, 0);
+        std::vector<int> send_offsets(npes, 0);
+        std::vector<int> recv_offsets(npes, 0);
+
+        std::vector<oct_data<T>> send_buffer;
+        std::vector<oct_data<T>> data_keep;
+
+        std::vector<unsigned long int> send_requests[npes];
+        std::vector<unsigned long int> recv_requests[npes];
+
+        for (const auto &ele_id : data_to_fetch) {
+            if (ele_id < ele_offsets[rank] || ele_id >= ele_offsets[rank + 1]) {
+                // find the original owner of this data
+                for (size_t r_id = 0; r_id < npes; ++r_id) {
+                    if (ele_id >= ele_offsets[r_id] &&
+                        ele_id < ele_offsets[r_id + 1]) {
+                        recv_requests[r_id].push_back(ele_id);
+                        send_counts[r_id]++;
+                        break;
+                    }
+                }
+            }
+        }
+
+        send_offsets[0] = 0;
+        for (int i = 1; i < npes; ++i) {
+            send_offsets[i] = send_offsets[i - 1] + send_counts[i - 1];
+        }
+        int total_send_size = send_offsets[npes - 1] + send_counts[npes - 1];
+
+        // then exchange the send counts to get "receive counts", which is how
+        // many we'll actually need to send to each process
+        MPI_Alltoall(send_counts.data(), 1, MPI_INT, recv_counts.data(), 1,
+                     MPI_INT, commActive);
+
+        // calculate receive displacements
+        recv_offsets[0] = 0;
+        for (int i = 1; i < npes; ++i) {
+            recv_offsets[i] = recv_offsets[i - 1] + recv_counts[i - 1];
+        }
+        int total_recv_size = recv_offsets[npes - 1] + recv_counts[npes - 1];
+
+        // flattened buffers to get which elements need to be fetched
+        std::vector<long unsigned int> flattened_send_buffer(total_send_size);
+        std::vector<long unsigned int> flattened_recv_buffer(total_recv_size);
+
+        int send_offset = 0;
+        for (int i = 0; i < npes; ++i) {
+            for (long unsigned int ele_id : recv_requests[i]) {
+                flattened_send_buffer[send_offset++] = ele_id;
+            }
+        }
+
+        // perform all-to-all-v which lets us know what we need
+        MPI_Alltoallv(flattened_send_buffer.data(), send_counts.data(),
+                      send_offsets.data(), MPI_UNSIGNED_LONG,
+                      flattened_recv_buffer.data(), recv_counts.data(),
+                      recv_offsets.data(), MPI_UNSIGNED_LONG, commActive);
+
+        // flattened_recv_buffer is basically how we'll know what we need to
+        // **SEND** from our original data structures, so recv from above means
+        // "to send off"
+        std::vector<oct_data<T>> flattened_send_full_data(total_recv_size);
+        std::vector<oct_data<T>> flattened_recv_full_data(total_send_size);
+
+        // build up the array of data that we need to send
+        uint32_t counter = 0;
+        for (uint32_t i = 0; i < npes; ++i) {
+            for (uint32_t j = 0; j < recv_counts[i]; ++j) {
+                T requested = flattened_recv_buffer[counter];
+                requested -= ele_offsets[rank];
+
+                // update the target rank, this will be used as the new home
+                if (set_target_rank) oct_connectivity_map[requested].trank = i;
+
+                flattened_send_full_data[counter] =
+                    oct_connectivity_map[requested];
+
+                counter++;
+            }
+        }
+
+        MPI_Datatype octdata_mpi_type = create_octdata_mpi_type<T>();
+
+        // perform full communication, flattened_recv_full_data now has what was
+        // requested
+        MPI_Alltoallv(flattened_send_full_data.data(), recv_counts.data(),
+                      recv_offsets.data(), octdata_mpi_type,
+                      flattened_recv_full_data.data(), send_counts.data(),
+                      send_offsets.data(), octdata_mpi_type, commActive);
+
+        MPI_Type_free(&octdata_mpi_type);
+
+        return flattened_recv_full_data;
+    }
+
+    template <typename T>
+    std::tuple<std::vector<T>, std::vector<T>> removeDuplicatesSameOrder(
+        std::vector<T> &vec, std::vector<T> &vec2) {
+        // I don't like this, but it gets the job done...
+        std::vector<T> result;
+        std::vector<T> result2;
+        std::unordered_set<T> seen;
+
+        size_t counter = 0;
+        for (T element : vec) {
+            if (seen.find(element) == seen.end()) {
+                // Element not seen before
+                result.push_back(element);
+                result2.push_back(vec2[counter]);
+                seen.insert(element);
+            }
+            counter++;
+        }
+        return std::make_tuple(result, result2);
+    }
+
+    template <typename T, typename N>
+    std::vector<N> convertVectorType(const std::vector<T> &input) {
+        // static assertion helps make sure the compiler never tries to use this
+        // with non-arithmetic values, i.e. ints (signed/unsigned) and
+        // floats/doubles
+        static_assert(std::is_arithmetic_v<T>,
+                      "Input type in vector conversion must be integer or "
+                      "floating point.");
+
+        static_assert(std::is_arithmetic_v<N>,
+                      "Output type in vector conversion must be integer or "
+                      "floating point.");
+
+        // NOTE: floating point to integers uses std::round! it doesn't just
+        // truncate
+
+        std::vector<N> output(input.size());
+
+        std::transform(input.begin(), input.end(), output.begin(), [](T val) {
+            if constexpr (std::is_integral_v<N>) {
+                // float to integer rounding
+                if constexpr (std::is_floating_point_v<T>) {
+                    val = std::round(val);
+                }
+                if constexpr (std::is_unsigned_v<N> && std::is_signed_v<T>) {
+                    return static_cast<N>(val < 0 ? std::abs(val) : val);
+                }
+            }
+            return static_cast<N>(val);
+        });
+        return output;
     }
 };
 
@@ -2946,8 +4940,8 @@ inline bool Mesh::computeOveralppingNodes(const ot::TreeNode &parent,
                                           int *idy, int *idz) {
     unsigned int Lp = 1u << (m_uiMaxDepth - parent.getLevel());
     unsigned int Lc = 1u << (m_uiMaxDepth - child.getLevel());
-    // intilize the mapping to -1. -1 denotes that mapping is not defined for
-    // given k value.
+    // intilize the mapping to -1. -1 denotes that mapping is not defined
+    // for given k value.
 
     unsigned int dp, dc;
     dp = (m_uiElementOrder);
@@ -2975,8 +4969,8 @@ inline bool Mesh::computeOveralppingNodes(const ot::TreeNode &parent,
     } else if (parent.isAncestor(child)) {
         /*if((((child.getX()-parent.getX())*m_uiElementOrder)%Lp) ||
            (((child.getY()-parent.getY())*m_uiElementOrder)%Lp) ||
-           (((child.getZ()-parent.getZ())*m_uiElementOrder)%Lp)) return false;
-            else*/
+           (((child.getZ()-parent.getZ())*m_uiElementOrder)%Lp)) return
+           false; else*/
         {
             unsigned int index[3];
             for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++) {

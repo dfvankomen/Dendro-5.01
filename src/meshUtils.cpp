@@ -25,12 +25,13 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
 
     std::vector<ot::TreeNode> tmpNodes;
 
+    // if we have nodes to process, we want to resize and copy data over
     if (num > 0) {
         tmpNodes.resize(num);
         std::memcpy(tmpNodes.data(), oct, sizeof(ot::TreeNode) * num);
     }
 
-    // get the true global size of the number of octants in the mesh
+    // calculate local and global sizes so all processes have information
     DendroIntL localSz  = tmpNodes.size();
     DendroIntL globalSz = 0;
 
@@ -42,8 +43,7 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
 
     unsigned int grainSz = grain_sz;
 
-    // adjust the grain size to be half of the global size to at least use two
-    // processes
+    // if grain size is too large, we want to set it to half of global size
     if (grain_sz >= globalSz) grainSz = globalSz / 2;
 
     bool isActive;
@@ -57,9 +57,10 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
     // octants based on the grain size keeping it as close to a power of two as
     // possible
     int p_npes = globalSz / grainSz;
-    (std::abs(p_npes_prev - p_npes) <= std::abs(p_npes_next - p_npes))
-        ? p_npes = p_npes_prev
-        : p_npes = p_npes_next;
+    if (std::abs(p_npes_prev - p_npes) <= std::abs(p_npes_next - p_npes))
+        p_npes = p_npes_prev;
+    else
+        p_npes = p_npes_next;
 
     // enforce that the number of processes cannot go over the number that the
     // user set with MPI
@@ -74,11 +75,11 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
         // "isActive"
         MPI_Comm_dup(comm, &commActive);
         isActive = true;
-
     } else {
-        // otherwise we have to determine if our current rank is needed, and
-        // from there we split the comm isActive=(rank*grainSz<globalSz);
+        // otherwise, we want to check if the process should be active or not
+        // isActive=(rank*grainSz<globalSz);
         isActive = isRankSelected(npes, rank, p_npes);
+        // split the comm based on active and inactive
         par::splitComm2way(isActive, &commActive, comm);
     }
 
@@ -96,8 +97,10 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
             MPI_Abort(comm, 0);
         }
 
+    // this vector holds the balanced octree nodes from SFC_Treesort
     std::vector<ot::TreeNode> balOct;
     localSz = 0;
+
     if (isActive) {
         int rank_active, npes_active;
 
@@ -107,23 +110,25 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
         if (!rank_active)
             std::cout << "[MPI_COMM_SWITCH]: " << npes_active << std::endl;
 
+        // initialize the root for SFC sort
         ot::TreeNode root(m_uiDim, m_uiMaxDepth);
         std::vector<ot::TreeNode> tmpVec;
 
-        // run SFC_TreeSort to remove duplicates first
+        // this one sorts and REMOVES DUPLICATES
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_REMOVE_DUPLICATES, sf_k, commActive);
         std::swap(tmpNodes, tmpVec);
         tmpVec.clear();
 
-        // run SFC_TreeSort again but this time to construct the OCTREE
+        // this one sorts and CONSTRUCTS THE OCTREE
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_CONSTRUCT_OCTREE, sf_k, commActive);
         std::swap(tmpNodes, tmpVec);
         tmpVec.clear();
 
+        // local size then needs to be recalculated
         localSz = tmpNodes.size();
         par::Mpi_Reduce(&localSz, &globalSz, 1, MPI_SUM, 0, commActive);
 
@@ -131,7 +136,7 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
             std::cout << GRN << " # const. octants: " << globalSz << NRM
                       << std::endl;
 
-        // then run SFC_TreeSort again to balance the tree
+        // finally we perform the balancing of the octree
         SFC::parSort::SFC_treeSort(tmpNodes, balOct, balOct, balOct, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_BALANCE_OCTREE, sf_k, commActive);
@@ -148,6 +153,7 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
         std::cout << GRN << " balanced # octants : " << globalSz << NRM
                   << std::endl;
 
+    // construct the mesh from the balanced tree
     ot::Mesh* mesh = new ot::Mesh(balOct, 1, eleOrder, comm, true, sm_type,
                                   grain_sz, ld_tol, sf_k, getWeight);
     localSz        = mesh->getNumLocalMeshNodes();
