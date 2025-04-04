@@ -799,3 +799,26 @@ target_include_directories(newPartitioning
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(newPartitioning PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(newPartitioning PRIVATE ${GSL_INCLUDE_DIRS})
+
+set(SOURCE_FILES test/src/partitioningMeshTests.cpp)
+add_executable(testPartitioning ${SOURCE_FILES})
+target_link_libraries(testPartitioning dendro5 ${LAPACK_LIBRARIES}
+                      ${MPI_LIBRARIES} m)
+target_include_directories(testPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(testPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(testPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(testPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(testPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(testPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(testPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(testPartitioning
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(testPartitioning PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(testPartitioning PRIVATE ${GSL_INCLUDE_DIRS})
