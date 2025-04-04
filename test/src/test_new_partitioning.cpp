@@ -183,7 +183,7 @@ int main(int argc, char** argv) {
 
     // now we can do some partitioning checks
     // mesh->buildOctreeConnectivity();
-    mesh->repartitionMeshGlobal();
+    mesh->repartitionMeshGlobal(false, true, "somewhatinterestingmesh");
 
     std::string save_prefix_2 =
         "test_mesh_repartitioned_npes" + std::to_string(npes);
