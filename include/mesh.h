@@ -98,6 +98,9 @@ struct oct_data {
     // a boolean that is used for identification in the scattermap regeneration
     bool isGhostTwo = false;
 
+    T edgeNeighbors[12];
+    T vertexNeighbors[8];
+
     oct_data() {
         e2e[0] = LOOK_UP_TABLE_DEFAULT;
         e2e[1] = LOOK_UP_TABLE_DEFAULT;
@@ -105,6 +108,13 @@ struct oct_data {
         e2e[3] = LOOK_UP_TABLE_DEFAULT;
         e2e[4] = LOOK_UP_TABLE_DEFAULT;
         e2e[5] = LOOK_UP_TABLE_DEFAULT;
+
+        for (unsigned int i = 0; i < 12; ++i) {
+            edgeNeighbors[i] = LOOK_UP_TABLE_DEFAULT;
+        }
+        for (unsigned int i = 0; i < 8; ++i) {
+            vertexNeighbors[i] = LOOK_UP_TABLE_DEFAULT;
+        }
     };
 
     oct_data(T eid, uint32_t rank, T coord[3], T e2e[6]) {
@@ -124,6 +134,20 @@ struct oct_data {
         this->e2e[5]   = e2e[5];
     }
 };
+
+#if 0
+typedef struct {
+    fastpart_uint_t rank;
+    fastpart_uint_t trank;
+    fastpart_uint_t eid;
+    fastpart_uint_t localid;
+    fastpart_uint_t coord[3];
+    fastpart_uint_t e2e[6];
+    fastpart_uint_t level;
+    fastpart_uint_t edgeNeighbors[12];
+    fastpart_uint_t vertexNeighbors[8];
+} oct_element_MINE;
+#endif
 
 template <typename T>
 void print_octdata_vector(std::vector<oct_data<T>> &oct, int procrank = 0) {
@@ -255,9 +279,9 @@ MPI_Datatype get_mpi_type() {
 template <typename T>
 MPI_Datatype create_octdata_mpi_type() {
     MPI_Datatype octdata_mpi_datatype;
-    int blocklengths[] = {1, 1, 1, 1, 3, 6, 1, 1, NUM_PTS_ELE, 1};
-    MPI_Aint offsets[10];
-    MPI_Datatype types[10];
+    int blocklengths[] = {1, 1, 1, 1, 3, 6, 1, 1, NUM_PTS_ELE, 1, 12, 8};
+    MPI_Aint offsets[12];
+    MPI_Datatype types[12];
 
     types[0] = MPI_UINT32_T;  // 'rank' is always uint32_t
     types[1] = MPI_UINT32_T;  // 'target_rank' is always uint32_t
@@ -265,20 +289,24 @@ MPI_Datatype create_octdata_mpi_type() {
     types[7]                                             = MPI_UNSIGNED;
     types[8]                                             = get_mpi_type<T>();
     types[9]                                             = MPI_CXX_BOOL;
+    types[10]                                            = get_mpi_type<T>();
+    types[11]                                            = get_mpi_type<T>();
 
     // get the offsets for each member of the struct
-    offsets[0] = offsetof(oct_data<T>, rank);
-    offsets[1] = offsetof(oct_data<T>, trank);
-    offsets[2] = offsetof(oct_data<T>, eid);
-    offsets[3] = offsetof(oct_data<T>, localid);
-    offsets[4] = offsetof(oct_data<T>, coord);
-    offsets[5] = offsetof(oct_data<T>, e2e);
-    offsets[6] = offsetof(oct_data<T>, level);
-    offsets[7] = offsetof(oct_data<T>, flag);
-    offsets[8] = offsetof(oct_data<T>, e2n_dg);
-    offsets[9] = offsetof(oct_data<T>, isGhostTwo);
+    offsets[0]  = offsetof(oct_data<T>, rank);
+    offsets[1]  = offsetof(oct_data<T>, trank);
+    offsets[2]  = offsetof(oct_data<T>, eid);
+    offsets[3]  = offsetof(oct_data<T>, localid);
+    offsets[4]  = offsetof(oct_data<T>, coord);
+    offsets[5]  = offsetof(oct_data<T>, e2e);
+    offsets[6]  = offsetof(oct_data<T>, level);
+    offsets[7]  = offsetof(oct_data<T>, flag);
+    offsets[8]  = offsetof(oct_data<T>, e2n_dg);
+    offsets[9]  = offsetof(oct_data<T>, isGhostTwo);
+    offsets[10] = offsetof(oct_data<T>, edgeNeighbors);
+    offsets[11] = offsetof(oct_data<T>, vertexNeighbors);
 
-    MPI_Type_create_struct(10, blocklengths, offsets, types,
+    MPI_Type_create_struct(12, blocklengths, offsets, types,
                            &octdata_mpi_datatype);
     MPI_Type_commit(&octdata_mpi_datatype);
 
@@ -3261,6 +3289,41 @@ class Mesh {
                         LOOK_UP_TABLE_DEFAULT;
                 }
             }
+
+            unsigned int lookup[NUM_CHILDREN];
+
+            // then we use this element ID to find edge and vertex neighbors
+            unsigned int counter = 0;
+            for (const unsigned int dir :
+                 {OCT_DIR_LEFT_DOWN, OCT_DIR_LEFT_UP, OCT_DIR_LEFT_BACK,
+                  OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
+                  OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
+                  OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK, OCT_DIR_UP_FRONT}) {
+                getElementalEdgeNeighbors(ele, dir, lookup);
+                T temp_local = lookup[3];
+                if (temp_local != LOOK_UP_TABLE_DEFAULT) {
+                    // find in the e2e vector for global ID
+                    oct_connectivity_map[lid_ele].edgeNeighbors[counter] =
+                        eid_vec[temp_local];
+                }
+
+                counter++;
+            }
+
+            counter = 0;
+            for (const unsigned int dir :
+                 {OCT_DIR_LEFT_DOWN_BACK, OCT_DIR_RIGHT_DOWN_BACK,
+                  OCT_DIR_LEFT_UP_BACK, OCT_DIR_RIGHT_UP_BACK,
+                  OCT_DIR_LEFT_DOWN_FRONT, OCT_DIR_RIGHT_DOWN_FRONT,
+                  OCT_DIR_LEFT_UP_FRONT, OCT_DIR_RIGHT_UP_FRONT}) {
+                getElementalVertexNeighbors(ele, dir, lookup);
+                T temp_local = lookup[7];
+                if (temp_local != LOOK_UP_TABLE_DEFAULT) {
+                    // find in the e2e vector for global ID
+                    oct_connectivity_map[lid_ele].vertexNeighbors[counter] =
+                        eid_vec[temp_local];
+                }
+            }
         }
         ele_offsets.push_back(num_ele_global);
 
@@ -3788,6 +3851,15 @@ class Mesh {
                     temp_oct_data[i].e2e[j] = oct.e2e[j];
                 }
                 temp_oct_data[i].level = oct.level;
+#if 0
+                for (unsigned int j = 0; j < 12; ++j) {
+                    temp_oct_data[i].edgeNeighbors[j] = oct.edgeNeighbors[j];
+                }
+                for (unsigned int j = 0; j < 8; ++j) {
+                    temp_oct_data[i].vertexNeighbors[j] =
+                        oct.vertexNeighbors[j];
+                }
+#endif
             }
 
             // vtx_dist is a prefix scan of the element count for each MPI node
@@ -4477,6 +4549,30 @@ class Mesh {
                 convertedRecvSM[recv_offset++] = recvNodeSM[i][j];
             }
         }
+
+        // print information about the sendNodeCount and recvNodeCount
+        // original
+        std::cout << rank << ": ORIGINAL SEND NODE COUNT : ";
+        for (auto sendn : m_uiSendNodeCount) {
+            std::cout << sendn << " ";
+        }
+        std::cout << std::endl;
+        std::cout << rank << ": ORIGINAL RECV NODE COUNT : ";
+        for (auto recvn : m_uiRecvNodeCount) {
+            std::cout << recvn << " ";
+        }
+        std::cout << std::endl;
+        // UPDATED DATA
+        std::cout << rank << ": UPDATED SEND NODE COUNT : ";
+        for (auto sendn : sendNodeCount) {
+            std::cout << sendn << " ";
+        }
+        std::cout << std::endl;
+        std::cout << rank << ": UPDATED RECV NODE COUNT : ";
+        for (auto recvn : recvNodeCount) {
+            std::cout << recvn << " ";
+        }
+        std::cout << std::endl;
 
         // --------------------
         // UPDATE INTERNAL MESH DATASTRUCTURES
