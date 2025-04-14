@@ -6,12 +6,23 @@
 namespace dendroderivs {
 
 MatrixDiagonalEntries* createKimDiagonals() {
-    const double alpha   = 0.5;
-    const double beta    = 1.0 / 20.0;
+    // NOTE: this is standard stencil, not updated, this is **INCORRECT** but
+    // left here for previous versions for now
 
-    const double a1      = 17.0 / 24.0;
-    const double a2      = 101.0 / 600.0;
-    const double a3      = 1.0 / 600.0;
+    // const double alpha   = 0.5;
+    // const double beta    = 1.0 / 20.0;
+    //
+    // const double a1      = 17.0 / 24.0;
+    // const double a2      = 101.0 / 600.0;
+    // const double a3      = 1.0 / 600.0;
+
+    // these are the correct alpha, beta, a1, a2, a3
+    const double alpha   = 0.5862704032801503;
+    const double beta    = 9.549533555017055e-2;
+
+    const double a1      = 0.6431406736919156;
+    const double a2      = 0.2586011023495066;
+    const double a3      = 7.140953479797375e-3;
 
     // i = 0
     const double alpha01 = 43.65980335321481;
