@@ -22,6 +22,11 @@
 //
 
 #pragma once
+
+// comment this out if you want to run fastpart, having this defined will make
+// it so it only outputs the .oct files
+// #define _ONLY_DUMP_OCT_DATA_
+
 #include <fdCoefficient.h>
 #include <sys/types.h>
 
@@ -3883,6 +3888,10 @@ class Mesh {
                                     fileprefix.c_str());
             }
 
+            // TEMP: skip doing all of this, because we just need to save
+            // everything
+#ifndef _ONLY_DUMP_OCT_DATA_
+
             fastpart_uint_t *parts = static_cast<fastpart_uint_t *>(
                 malloc(oct_connectivity_map.size() * sizeof(fastpart_uint_t)));
 
@@ -3934,10 +3943,17 @@ class Mesh {
             my_partition.insert(my_partition.end(), flatten_recv.begin(),
                                 flatten_recv.end());
             std::sort(my_partition.begin(), my_partition.end());
-
             free(parts);
+#endif
+
             free(vtx_dist);
+            free(ele_counts_fp);
         }
+
+#ifdef _ONLY_DUMP_OCT_DATA_
+        // NOTE: early return, we just want to save the .oct files
+        return;
+#endif
 
         std::cout << rank << ": ORIGINAL PARTITION SIZE - "
                   << oct_connectivity_map.size() << " NEW PARTITION SIZE - "
