@@ -72,13 +72,21 @@ class DerivsFactory {
         } else if (name == "BYUT4") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsT4_R3_FirstOrder(std::forward<Args>(args)...));
-        } else if (name == "BYUT6R3") {
+        } else if (name == "BYUT42") {
+            return std::unique_ptr<Derivs>(
+                new BYUDerivsT4_R42_FirstOrder(std::forward<Args>(args)...));
+        }
+        else if (name == "BYUT6R3") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsT6_R3_FirstOrder(std::forward<Args>(args)...));
         } else if (name == "BYUT6") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsT6_R4_FirstOrder(std::forward<Args>(args)...));
-        } else if (name == "BYUP6") {
+        }else if (name == "BYUT62") {
+            return std::unique_ptr<Derivs>(
+                new BYUDerivsT6_R42_FirstOrder(std::forward<Args>(args)...));
+        }
+         else if (name == "BYUP6") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsP6_R3_FirstOrder(std::forward<Args>(args)...));
         } else if (name == "BYUP8") {
