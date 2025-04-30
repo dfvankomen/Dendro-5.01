@@ -14,8 +14,11 @@
 
 #include <functional>
 #include <iostream>
+#include <memory>
 #include <vector>
 
+#include "asyncExchangeContex.h"
+#include "compression.h"
 #include "dendro.h"
 #include "dendroProfileParams.h"
 #include "dvec.h"
@@ -245,12 +248,18 @@ class Ctx {
     std::vector<unsigned int> m_uiTotalBytesRecvCompress;
     unsigned int m_uiTotalBytesCounter = 0;
 
+    ot::CTXSendType m_sendTypeCTX      = ot::SendTypeHelper<T>::value;
+
    public:
     /**@brief: default constructor*/
-    Ctx(){};
+    Ctx() {};
 
     /**@brief: default destructor*/
-    ~Ctx(){};
+    ~Ctx() {};
+
+    void setSendTypeCTX(ot::CTXSendType& sendtype) { m_sendTypeCTX = sendtype; }
+
+    inline ot::CTXSendType getSendTypeCTX() const { return m_sendTypeCTX; }
 
     /**@brief: derived class static cast*/
     inline DerivedCtx& asLeaf() { return static_cast<DerivedCtx&>(*this); }
@@ -428,11 +437,28 @@ class Ctx {
                                 std::vector<unsigned int>& recv_requests_ctx,
                                 std::vector<MPI_Status>& statuses);
 
+    void process_finished_unzip_all_dof(
+        ot::DVector<T, I>& in, ot::DVector<T, I>& out, unsigned int async_k,
+        bool use_compression, std::vector<int>& completed_batches,
+        std::vector<MPI_Request>& send_requests,
+        std::vector<MPI_Request>& recv_requests,
+        std::vector<unsigned int>& send_requests_ctx,
+        std::vector<unsigned int>& recv_requests_ctx,
+        std::vector<MPI_Status>& statuses);
+
     void unzip_rewrite(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                        unsigned int async_k, bool use_compression);
 
     void unzip_device(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                       unsigned int async_k, bool use_compression);
+
+    void exchange_host_gathered_dof_compression(ot::DVector<T, I>& in,
+                                                ot::DVector<T, I>& out,
+                                                unsigned int async_k);
+
+    void exchange_host_gathered_dof(ot::DVector<T, I>& in,
+                                    ot::DVector<T, I>& out,
+                                    unsigned int async_k);
 
     void exchange_host_compression(ot::DVector<T, I>& in,
                                    ot::DVector<T, I>& out,
@@ -728,6 +754,151 @@ void Ctx<DerivedCtx, T, I>::process_finished_unzip(
 }
 
 template <typename DerivedCtx, typename T, typename I>
+void Ctx<DerivedCtx, T, I>::process_finished_unzip_all_dof(
+    ot::DVector<T, I>& in, ot::DVector<T, I>& out, unsigned int async_k,
+    bool use_compression, std::vector<int>& completed_indices,
+    std::vector<MPI_Request>& send_requests,
+    std::vector<MPI_Request>& recv_requests,
+    std::vector<unsigned int>& send_requests_ctx,
+    std::vector<unsigned int>& recv_requests_ctx,
+    std::vector<MPI_Status>& statuses) {
+    if (!m_uiMesh->isActive()) return;
+    // NOTE: this function should never be called by the device code
+
+    const unsigned int dof             = in.get_dof();
+    T* in_ptr                          = in.get_vec_ptr();
+    T* out_ptr                         = out.get_vec_ptr();
+
+    const unsigned int sz_per_dof_zip  = in.get_size() / dof;
+    const unsigned int sz_per_dof_uzip = out.get_size() / dof;
+    T* temp_ptr;
+
+    // preallocate the completed indices and statuses to use in both Testsome
+    completed_indices.resize(
+        std::max(send_requests.size(), recv_requests.size()));
+    statuses.resize(completed_indices.size());
+
+    int outcount = 0;
+    if (!send_requests.empty()) {
+        // HANDLE completed sends
+        dendro::timer::t_compression_wait_comms.start();
+        MPI_Testsome(send_requests.size(), send_requests.data(), &outcount,
+                     completed_indices.data(), statuses.data());
+
+        // NOTE: insert iteration over the completed values if things need to be
+        // done with the send requests
+
+        // if the sends are completed, we can clear them from the request list
+        if (outcount > 0) {
+            dendro::timer::t_compression_wait_comms.stop();
+            std::vector<int> indices_remove(
+                completed_indices.begin(),
+                completed_indices.begin() + outcount);
+
+            std::sort(indices_remove.begin(), indices_remove.end(),
+                      std::greater<int>());
+
+            for (int index : indices_remove) {
+                if (index < send_requests.size()) {
+                    // remove the recv requests by swapping to end, and popping
+                    // back
+                    send_requests[index] = std::move(send_requests.back());
+                    send_requests.pop_back();
+
+                    // then do the same for the ctx vector
+                    send_requests_ctx[index] =
+                        std::move(send_requests_ctx.back());
+                    send_requests_ctx.pop_back();
+                }
+            }
+        } else {
+            dendro::timer::t_compression_wait_comms.stop();
+        }
+    }
+
+    outcount = 0;
+    if (!recv_requests.empty()) {
+        // HANDLE COMPLETED RECEIVES
+        dendro::timer::t_compression_wait_comms.start();
+        MPI_Testsome(recv_requests.size(), recv_requests.data(), &outcount,
+                     completed_indices.data(), statuses.data());
+
+        if (outcount > 0) {
+            dendro::timer::t_compression_wait_comms.stop();
+            for (int i = 0; i < outcount; ++i) {
+                // this handles any completed send requests
+                const unsigned int ctx_idx =
+                    recv_requests_ctx[completed_indices[i]];
+
+                // in this function, we only deal with DOF, no batch size
+                if (use_compression) {
+                    // need to decompress to the recv buffer
+
+                    if (m_mpi_ctx[ctx_idx].getCommDtype() ==
+                        ot::CTXSendType::CTX_FLOAT) {
+                        m_uiMesh->decompressSingleProcessAllDOF<T, float>(
+                            m_mpi_ctx[ctx_idx], dof, statuses[i].MPI_SOURCE);
+                    } else if (m_mpi_ctx[ctx_idx].getCommDtype() ==
+                               ot::CTXSendType::CTX_DOUBLE) {
+                        m_uiMesh->decompressSingleProcessAllDOF<T, double>(
+                            m_mpi_ctx[ctx_idx], dof, statuses[i].MPI_SOURCE);
+                    } else {
+                        std::cerr
+                            << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
+                               "WHEN DECOMPRESSING RECEIVED DATA - "
+                               "RECV_PROCESS "
+                               "FINISHED - comDtype was: "
+                            << m_mpi_ctx[ctx_idx].getCommDtype() << std::endl;
+                    }
+                }
+
+                if (m_mpi_ctx[ctx_idx].getCommDtype() ==
+                    ot::CTXSendType::CTX_FLOAT) {
+                    m_uiMesh->unextractAllDofSingleProcess<T, float>(
+                        m_mpi_ctx[ctx_idx], in_ptr, dof,
+                        statuses[i].MPI_SOURCE);
+                } else if (m_mpi_ctx[ctx_idx].getCommDtype() ==
+                           ot::CTXSendType::CTX_DOUBLE) {
+                    m_uiMesh->unextractAllDofSingleProcess<T, double>(
+                        m_mpi_ctx[ctx_idx], in_ptr, dof,
+                        statuses[i].MPI_SOURCE);
+                } else {
+                    std::cerr
+                        << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
+                           "WHEN UNEXTRACTING RECEIVED DATA - RECV_PROCESS "
+                           "FINISHED - comDtype was: "
+                        << m_mpi_ctx[ctx_idx].getCommDtype() << std::endl;
+                }
+            }
+            // make sure to remove the values from recv_requests_ctx
+
+            std::vector<int> indices_remove(
+                completed_indices.begin(),
+                completed_indices.begin() + outcount);
+
+            std::sort(indices_remove.begin(), indices_remove.end(),
+                      std::greater<int>());
+
+            for (int index : indices_remove) {
+                if (index < recv_requests.size()) {
+                    // remove the recv requests by swapping to end, and popping
+                    // back
+                    recv_requests[index] = std::move(recv_requests.back());
+                    recv_requests.pop_back();
+
+                    // then do the same for the ctx vector
+                    recv_requests_ctx[index] =
+                        std::move(recv_requests_ctx.back());
+                    recv_requests_ctx.pop_back();
+                }
+            }
+        } else {
+            dendro::timer::t_compression_wait_comms.stop();
+        }
+    }
+}
+
+template <typename DerivedCtx, typename T, typename I>
 void Ctx<DerivedCtx, T, I>::exchange_host_compression(ot::DVector<T, I>& in,
                                                       ot::DVector<T, I>& out,
                                                       unsigned int async_k) {
@@ -974,6 +1145,277 @@ void Ctx<DerivedCtx, T, I>::exchange_host_default(ot::DVector<T, I>& in,
 }
 
 template <typename DerivedCtx, typename T, typename I>
+void Ctx<DerivedCtx, T, I>::exchange_host_gathered_dof(ot::DVector<T, I>& in,
+                                                       ot::DVector<T, I>& out,
+                                                       unsigned int async_k) {
+    // this is the function that will be called when we want to exchange whole
+    // blocks
+    const unsigned int dof             = in.get_dof();
+    T* in_ptr                          = in.get_vec_ptr();
+    T* out_ptr                         = out.get_vec_ptr();
+
+    const unsigned int sz_per_dof_zip  = in.get_size() / dof;
+    const unsigned int sz_per_dof_uzip = out.get_size() / dof;
+
+    assert(sz_per_dof_uzip == m_uiMesh->getDegOfFreedomUnZip());
+    assert(sz_per_dof_zip == m_uiMesh->getDegOfFreedom());
+
+    std::vector<int> completed_indices;
+    std::vector<MPI_Request> send_requests, recv_requests;
+    std::vector<unsigned int> send_requests_ctx, recv_requests_ctx;
+    std::vector<MPI_Status> statuses;
+
+    T *temp_ptr, *temp_ptr_next;
+    const unsigned int THRESHOLD = m_uiMesh->getMPICommSize() * 1;
+
+    // if async_k is not 1, then we are done here
+    if (async_k != 1) {
+        std::cerr << "ERROR: async_k needs to be 1 for gathered dof to work "
+                     "(currently)"
+                  << std::endl;
+    }
+
+    m_uiMesh->extractFullDataCombinedBlocks(m_mpi_ctx[0], in_ptr, dof);
+
+    // then need to set up send/recv requests
+    if (m_mpi_ctx[0].getCommDtype() == ot::CTXSendType::CTX_FLOAT) {
+        m_uiMesh->setUpSendRecvRequests<float>(m_mpi_ctx[0], dof, send_requests,
+                                               recv_requests, send_requests_ctx,
+                                               recv_requests_ctx, 0);
+    } else if (m_mpi_ctx[0].getCommDtype() == ot::CTXSendType::CTX_DOUBLE) {
+        m_uiMesh->setUpSendRecvRequests<double>(
+            m_mpi_ctx[0], dof, send_requests, recv_requests, send_requests_ctx,
+            recv_requests_ctx, 0);
+    } else {
+        std::cerr << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
+                     "WHEN SETTING UP SEND/RECV REQUESTS - comDtype was: "
+                  << m_mpi_ctx[0].getCommDtype() << std::endl;
+    }
+
+    while (!send_requests.empty() || !recv_requests.empty()) {
+        this->process_finished_unzip_all_dof(
+            in, out, async_k, false, completed_indices, send_requests,
+            recv_requests, send_requests_ctx, recv_requests_ctx, statuses);
+    }
+
+    const size_t dtypeSize = getCTXSendTypeSize(m_mpi_ctx[0].getCommDtype());
+
+    // TEMP: this is only to gather information about the
+    // compression/decompression
+    for (unsigned i = 0; i < async_k; i++) {
+        const unsigned int v_begin  = ((i * dof) / async_k);
+        const unsigned int v_end    = (((i + 1) * dof) / async_k);
+        const unsigned int batch_sz = (v_end - v_begin);
+        for (unsigned int j = 0; j < m_uiMesh->getMPICommSize(); j++) {
+            m_uiTotalBytesSend[j] +=
+                m_uiMesh->getNodalSendCounts()[j] * batch_sz * dtypeSize;
+            m_uiTotalBytesRecv[j] +=
+                m_uiMesh->getNodalRecvCounts()[j] * batch_sz * dtypeSize;
+            // then the compress amounts, which is the *total* amount not
+            // including batch syze
+            m_uiTotalBytesSendCompress[j] +=
+                m_uiMesh->getNodalSendCounts()[j] * batch_sz * dtypeSize;
+            m_uiTotalBytesRecvCompress[j] +=
+                m_uiMesh->getNodalRecvCounts()[j] * batch_sz * dtypeSize;
+        }
+    }
+}
+
+template <typename DerivedCtx, typename T, typename I>
+void Ctx<DerivedCtx, T, I>::exchange_host_gathered_dof_compression(
+    ot::DVector<T, I>& in, ot::DVector<T, I>& out, unsigned int async_k) {
+    ot::DENDRO_number_times_compress_called++;
+    const unsigned int dof             = in.get_dof();
+    T* in_ptr                          = in.get_vec_ptr();
+    T* out_ptr                         = out.get_vec_ptr();
+
+    const unsigned int sz_per_dof_zip  = in.get_size() / dof;
+    const unsigned int sz_per_dof_uzip = out.get_size() / dof;
+
+    assert(sz_per_dof_uzip == m_uiMesh->getDegOfFreedomUnZip());
+    assert(sz_per_dof_zip == m_uiMesh->getDegOfFreedom());
+
+    std::vector<int> completed_indices;
+    std::vector<MPI_Request> send_requests, recv_requests;
+    std::vector<unsigned int> send_requests_ctx, recv_requests_ctx;
+    std::vector<MPI_Status> statuses;
+
+    int mpi_comm_tag_compression   = 5098;
+
+    // a vector of send_requests based on the size we need
+    const unsigned int n_send_proc = m_uiMesh->getSendProcListSize();
+    const unsigned int n_recv_proc = m_uiMesh->getRecvProcListSize();
+    std::vector<MPI_Request> size_requests(n_send_proc + n_recv_proc);
+
+    T* temp_ptr_next;
+    const unsigned int THRESHOLD = m_uiMesh->getMPICommSize() * 1;
+
+    // if async_k is not 1, then we are done here
+    // TODO: this can be improved to do chunks of the send array
+    if (async_k != 1) {
+        std::cerr << "ERROR: async_k needs to be 1 for gathered dof to work "
+                     "(currently)"
+                  << std::endl;
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    // this for loop is essentially meanlingless right now
+    for (unsigned int i = 0; i < async_k; i++) {
+        // we need to know where we're at with our variables
+        const unsigned int v_begin  = (i * dof) / async_k;
+        const unsigned int v_end    = ((i + 1) * dof) / async_k;
+        const unsigned int batch_sz = v_end - v_begin;
+        unsigned int compressOffset = 0;
+
+        auto& send_compress_counts  = m_mpi_ctx[i].getSendCompressCounts();
+        auto& recv_compress_counts  = m_mpi_ctx[i].getReceiveCompressCounts();
+        auto& send_compress_offsets = m_mpi_ctx[i].getSendCompressOffsets();
+        auto& recv_compress_offsets = m_mpi_ctx[i].getReceiveCompressOffsets();
+
+        // allocate the recv_requests for size
+        recv_requests.reserve(recv_requests.size() +
+                              m_uiMesh->getRecvProcList().size());
+        recv_requests_ctx.reserve(recv_requests_ctx.size() +
+                                  m_uiMesh->getRecvProcList().size());
+        send_requests.reserve(send_requests.size() +
+                              m_uiMesh->getSendProcList().size());
+        send_requests_ctx.reserve(send_requests_ctx.size() +
+                                  m_uiMesh->getSendProcList().size());
+
+        // IMPORTANT: this is the pointer to the current batch of data!
+        // T* temp_ptr = in_ptr + v_begin * sz_per_dof_zip;
+        T* temp_ptr = in_ptr;
+
+        // make sure send compress counts is filled with zeros!
+        std::fill(send_compress_counts.begin(), send_compress_counts.end(), 0);
+        std::fill(recv_compress_counts.begin(), recv_compress_counts.end(), 0);
+        send_compress_offsets[0] = recv_compress_offsets[0] = 0;
+
+        for (unsigned int proc_id = 0; proc_id < n_recv_proc; ++proc_id) {
+            unsigned int recv_p_id = m_uiMesh->getRecvProcList()[proc_id];
+            par::Mpi_Irecv(&recv_compress_counts[recv_p_id], 1, recv_p_id,
+                           mpi_comm_tag_compression,
+                           m_uiMesh->getMPICommunicator(),
+                           &size_requests[proc_id]);
+        }
+
+        // for each process that needs data, we need to extract the data out
+        for (unsigned int proc_id = 0; proc_id < n_send_proc; ++proc_id) {
+            unsigned int send_p_id = m_uiMesh->getSendProcList()[proc_id];
+            // extract and then compress the data
+
+            if (m_mpi_ctx[i].getCommDtype() == ot::CTXSendType::CTX_FLOAT) {
+                m_uiMesh->extractAllDofSingleProcess<T, float>(
+                    m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id);
+            } else if (m_mpi_ctx[i].getCommDtype() ==
+                       ot::CTXSendType::CTX_DOUBLE) {
+                m_uiMesh->extractAllDofSingleProcess<T, double>(
+                    m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id);
+            } else {
+                std::cerr << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
+                             "WHEN EXTRACTING DATA TO SEND"
+                          << std::endl;
+            }
+
+            // then compress based on blocksize
+
+            if (m_mpi_ctx[i].getCommDtype() == ot::CTXSendType::CTX_FLOAT) {
+                m_uiMesh->compressSingleProcessAllDOF<T, float>(
+                    m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id,
+                    compressOffset);
+            } else if (m_mpi_ctx[i].getCommDtype() ==
+                       ot::CTXSendType::CTX_DOUBLE) {
+                m_uiMesh->compressSingleProcessAllDOF<T, double>(
+                    m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id,
+                    compressOffset);
+            } else {
+                std::cerr << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
+                             "WHEN COMPRESSING DATA TO SEND"
+                          << std::endl;
+            }
+
+            // now we set up the send part of our non-blocking "all-to-all"
+            // NOTE: size_requests is offset by **recv** procid
+            dendro::timer::t_compression_begin_comms.start();
+            par::Mpi_Isend(&send_compress_counts[send_p_id], 1, send_p_id,
+                           mpi_comm_tag_compression,
+                           m_uiMesh->getMPICommunicator(),
+                           &size_requests[n_recv_proc + proc_id]);
+            dendro::timer::t_compression_begin_comms.stop();
+        }
+
+        // TODO: potentially start extracting the next one
+
+        dendro::timer::t_compression_compress.start();
+        // compute the offsets for the send values
+        omp_par::scan(&(*(send_compress_counts.begin())),
+                      &(*(send_compress_offsets.begin())),
+                      send_compress_counts.size());
+        dendro::timer::t_compression_compress.stop();
+
+        dendro::timer::t_compression_wait_comms.start();
+        // now we want to process our send sizes, but we need them all to
+        // finish because we need the proper receive offsets
+        MPI_Waitall(size_requests.size(), size_requests.data(),
+                    MPI_STATUSES_IGNORE);
+        dendro::timer::t_compression_wait_comms.stop();
+
+        dendro::timer::t_compression_compress.start();
+        // compute the offsets for the recv values
+        omp_par::scan(&(*(recv_compress_counts.begin())),
+                      &(*(recv_compress_offsets.begin())),
+                      recv_compress_counts.size());
+        dendro::timer::t_compression_compress.stop();
+
+        // then we can set up the sends and receives, they can just get started
+        dendro::timer::t_compression_begin_comms.start();
+        m_uiMesh->setUpSendRecvCompressionRequests<T>(
+            m_mpi_ctx[i], send_requests, recv_requests, send_requests_ctx,
+            recv_requests_ctx, i);
+        dendro::timer::t_compression_begin_comms.stop();
+
+        // then if we have enough, we can start processing some communications,
+        // while others finish
+        if (send_requests.size() + recv_requests.size() > THRESHOLD) {
+            this->process_finished_unzip_all_dof(
+                in, out, async_k, true, completed_indices, send_requests,
+                recv_requests, send_requests_ctx, recv_requests_ctx, statuses);
+        }
+
+        ++mpi_comm_tag_compression;
+    }
+
+    // as long as we have active requests, we need to try and clear them out
+    while (!send_requests.empty() || !recv_requests.empty()) {
+        this->process_finished_unzip_all_dof(
+            in, out, async_k, true, completed_indices, send_requests,
+            recv_requests, send_requests_ctx, recv_requests_ctx, statuses);
+    }
+
+    // TEMP: this is only to gather information about the
+    // compression/decompression
+    for (unsigned i = 0; i < async_k; i++) {
+        const unsigned int v_begin  = ((i * dof) / async_k);
+        const unsigned int v_end    = (((i + 1) * dof) / async_k);
+        const unsigned int batch_sz = (v_end - v_begin);
+        for (unsigned int j = 0; j < m_uiMesh->getMPICommSize(); j++) {
+            m_uiTotalBytesSend[j] +=
+                m_uiMesh->getNodalSendCounts()[j] * batch_sz * sizeof(T);
+            m_uiTotalBytesRecv[j] +=
+                m_uiMesh->getNodalRecvCounts()[j] * batch_sz * sizeof(T);
+            // then the compress amounts, which is the *total* amount not
+            // including batch syze
+            m_uiTotalBytesSendCompress[j] +=
+                m_mpi_ctx[i].getSendCompressCounts()[j];
+            m_uiTotalBytesRecvCompress[j] +=
+                m_mpi_ctx[i].getReceiveCompressCounts()[j];
+        }
+    }
+
+    // then we're finished! We run the unzip back in the outer function
+}
+
+template <typename DerivedCtx, typename T, typename I>
 void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                                   unsigned int async_k, bool use_compression) {
     // ONLY ACTIVE PROCS IN THE MESH INTERACT
@@ -986,10 +1428,13 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
         return;
     }
 
-    if (use_compression) {
-        this->exchange_host_compression(in, out, async_k);
+    if (use_compression && dendro_compress::COMPRESSION_OPTION !=
+                               dendro_compress::CompressionType::NONE) {
+        // this->exchange_host_compression(in, out, async_k);
+        this->exchange_host_gathered_dof_compression(in, out, async_k);
     } else {
-        this->exchange_host_default(in, out, async_k);
+        this->exchange_host_gathered_dof(in, out, async_k);
+        // this->exchange_host_default(in, out, async_k);
     }
 
     const unsigned int dof             = in.get_dof();

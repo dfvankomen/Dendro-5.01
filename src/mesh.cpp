@@ -23,6 +23,7 @@
  * */
 
 #include "mesh.h"
+
 double t_e2e;  // e2e map generation time
 double t_e2n;  // e2n map generation time
 double t_sm;   // sm map generation time
@@ -37,6 +38,9 @@ double t_blk_g[3];
 // #define DEBUG_MESH_GENERATION
 
 namespace ot {
+
+size_t DENDRO_number_times_compress_called = 0;
+std::string DENDRO_compression_file_prefix = "";
 
 Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
            unsigned int activeNpes, MPI_Comm comm, bool pBlockSetup,
@@ -1441,11 +1445,11 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
 #endif
 
 #ifdef DEBUG_MESH_GENERATION
-        /* unsigned int localKeySz=keys_vec.size();
-            unsigned int globalKeySz=0;
-            par::Mpi_Reduce(&localKeySz,&globalKeySz,1,MPI_SUM,0,comm);
-            if(!rank) std::cout<<" Total number of keys generated:
-           "<<globalKeySz<<std::endl;*/
+    /* unsigned int localKeySz=keys_vec.size();
+        unsigned int globalKeySz=0;
+        par::Mpi_Reduce(&localKeySz,&globalKeySz,1,MPI_SUM,0,comm);
+        if(!rank) std::cout<<" Total number of keys generated:
+       "<<globalKeySz<<std::endl;*/
 #endif
 
     // 4- Compute Face Neighbors (By sending owners of the key to the correct
@@ -3440,8 +3444,8 @@ void Mesh::buildE2NWithSM() {
         std::vector<unsigned int> recvNodeCount;
         std::vector<unsigned int> sendNodeSM;
         std::vector<unsigned int> recvNodeSM;
-        std::vector<unsigned char> sendNodeBlockConfig;
-        std::vector<unsigned char> recvNodeBlockConfig;
+        std::vector<sm_config::SMConfig> sendNodeBlockConfig;
+        std::vector<sm_config::SMConfig> recvNodeBlockConfig;
         std::vector<unsigned int> sendNodeConfigCount;
         std::vector<unsigned int> recvNodeConfigCount;
 
@@ -3452,6 +3456,8 @@ void Mesh::buildE2NWithSM() {
 
         m_uiScatterMapConfigOffsetNodeSend.resize(m_uiActiveNpes, 0);
         m_uiScatterMapConfigOffsetNodeRecv.resize(m_uiActiveNpes, 0);
+
+        std::size_t smOffset = 0;
 
         // send SM
         for (unsigned int m = 0; m < m_uiActiveNpes; m++) {
@@ -3572,16 +3578,27 @@ void Mesh::buildE2NWithSM() {
                         }
                     }
                 }
-                // we can just add in one go
-                sendNodeCount[m] +=
+
+                // send node block config gets the encoded value as well as the
+                // offset, which is based on values. The offset helps us figure
+                // out where in the pure scattermap we need to go to
+                // extract/inject data
+                sendNodeBlockConfig.push_back(
+                    {encoded_ijk, smOffset /**, n */});
+
+                const unsigned int pointsMove =
                     (ie - ib + 1) * (ke - kb + 1) * (je - jb + 1);
+                // we can just add in one go
+                sendNodeCount[m] += pointsMove;
+
+                smOffset += pointsMove;
 
                 // append our encoded ijk value here
                 sendNodeConfigCount[m]++;
-                sendNodeBlockConfig.push_back(encoded_ijk);
             }  // end iterating over current offsets
         }  // end iterating over active processes
 
+        smOffset = 0;
         // recv SM
         for (unsigned int m = 0; m < m_uiActiveNpes; m++) {
             for (unsigned int n = m_uiRecvNodeOffset[m];
@@ -3684,11 +3701,146 @@ void Mesh::buildE2NWithSM() {
                                 e2n_cg[ownerID * nPe_3d + IDXp(i, j, k)]);
                         }
 
+                // recv node block config gets the encoded value as well as the
+                // offset, which is based on values. The offset helps us figure
+                // out where in the pure scattermap we need to go to
+                // extract/inject data
+                recvNodeBlockConfig.push_back(
+                    {encoded_ijk, smOffset /** , n */});
+                smOffset += (ie - ib + 1) * (ke - kb + 1) * (je - jb + 1);
+
                 // append our encoded ijk value here
                 recvNodeConfigCount[m]++;
-                recvNodeBlockConfig.push_back(encoded_ijk);
             }
         }
+
+#if 1
+        std::vector<std::array<unsigned int, 4>> scatterMapConfigDimCountsSend;
+        std::vector<std::array<unsigned int, 4>> scatterMapConfigDimCountsRecv;
+        std::vector<std::array<unsigned int, 4>> scatterMapConfigDimOffsetSend;
+        std::vector<std::array<unsigned int, 4>> scatterMapConfigDimOffsetRecv;
+        // now we want to sort the send and receive scattermaps, but only based
+        // on the counts
+        smOffset = 0;
+        for (auto const sendCounts : sendNodeConfigCount) {
+            auto start_it = sendNodeBlockConfig.begin() + smOffset;
+            auto end_it   = sendNodeBlockConfig.begin() + smOffset + sendCounts;
+            // sort based on the dimensionality, i think we can just sort
+            std::sort(
+                start_it, end_it,
+                [](const sm_config::SMConfig &a, const sm_config::SMConfig &b) {
+                    // sort first by number of dimensions
+                    if (a.getNDim() > b.getNDim()) {
+                        return true;
+                    } else if (a.getNDim() < b.getNDim()) {
+                        return false;
+                    } else {
+                        // now we're on the same dimension, we want to sort by
+                        // nodeOffsetID (for now) because it ensures that we
+                        // line up with receives on other ends
+                        // return a.nodeOffsetID < b.nodeOffsetID;
+
+                        // try sm offset
+                        return a.sm_offset < b.sm_offset;
+                    }
+                });
+
+            // now we can go through the sendNodeBlockConfig at the same point
+            // and calculate where we are
+
+            if (sendCounts == 0) {
+                scatterMapConfigDimCountsSend.push_back({0, 0, 0, 0});
+                scatterMapConfigDimOffsetSend.push_back({0, 0, 0, 0});
+            } else {
+                // make sure the iterators are updated back to the original
+                // spots
+                start_it = sendNodeBlockConfig.begin() + smOffset;
+                end_it   = sendNodeBlockConfig.begin() + smOffset + sendCounts;
+
+                std::array<unsigned int, 4> temp_arr = {0, 0, 0, 0};
+                for (auto it = start_it; it != end_it; ++it) {
+                    // now we can count based on the ndim
+                    temp_arr[it->getNDim()]++;
+                }
+
+                // calculate the reverse "offsets"
+                std::array<unsigned int, 4> temp_arr_offsets = {0, 0, 0, 0};
+                for (unsigned int iii = 0; iii < 3; iii++) {
+                    temp_arr_offsets[2 - iii] =
+                        temp_arr_offsets[3 - iii] + temp_arr[3 - iii];
+                }
+
+                // then push back
+                scatterMapConfigDimCountsSend.push_back(temp_arr);
+                scatterMapConfigDimOffsetSend.push_back(temp_arr_offsets);
+            }
+
+            smOffset += sendCounts;
+        }
+
+        smOffset = 0;
+        for (auto const recvCounts : recvNodeConfigCount) {
+            auto start_it = recvNodeBlockConfig.begin() + smOffset;
+            auto end_it   = recvNodeBlockConfig.begin() + smOffset + recvCounts;
+            // sort based on the dimensionality, i think we can just sort
+            std::sort(
+                start_it, end_it,
+                [](const sm_config::SMConfig &a, const sm_config::SMConfig &b) {
+                    // sort first by number of dimensions
+                    if (a.getNDim() > b.getNDim()) {
+                        return true;
+                    } else if (a.getNDim() < b.getNDim()) {
+                        return false;
+                    } else {
+                        // now we're on the same dimension, we want to sort by
+                        // nodeOffsetID (for now) because it ensures that we
+                        // line up with receives on other ends
+                        // return a.nodeOffsetID < b.nodeOffsetID;
+                        // return a.cfg < b.cfg;
+
+                        // try sm offset
+                        return a.sm_offset < b.sm_offset;
+                    }
+                });
+
+            // now we can go through the sendNodeBlockConfig at the same point
+            // and calculate where we are
+
+            if (recvCounts == 0) {
+                scatterMapConfigDimCountsRecv.push_back({0, 0, 0, 0});
+                scatterMapConfigDimOffsetRecv.push_back({0, 0, 0, 0});
+            } else {
+                // make sure the iterators are updated back to the original
+                // spots
+                start_it = recvNodeBlockConfig.begin() + smOffset;
+                end_it   = recvNodeBlockConfig.begin() + smOffset + recvCounts;
+
+                std::array<unsigned int, 4> temp_arr = {0, 0, 0, 0};
+                for (auto it = start_it; it != end_it; ++it) {
+                    // now we can count based on the ndim
+                    temp_arr[it->getNDim()]++;
+                }
+
+                // calculate the reverse "offsets"
+                std::array<unsigned int, 4> temp_arr_offsets = {0, 0, 0, 0};
+                for (unsigned int iii = 0; iii < 3; iii++) {
+                    temp_arr_offsets[2 - iii] =
+                        temp_arr_offsets[3 - iii] + temp_arr[3 - iii];
+                }
+
+                // then push back
+                scatterMapConfigDimCountsRecv.push_back(temp_arr);
+                scatterMapConfigDimOffsetRecv.push_back(temp_arr_offsets);
+            }
+
+            smOffset += recvCounts;
+        }
+        // now send and receive should be sorted based on ndim first, with 3D
+        // first
+
+        // also note that the ConfigDimCounts/Recv arrays are stored such that
+        // the dimensionality of the container is how it is indexed!
+#endif
 
 #ifdef DEBUG_E2N_MAPPING_SM
         if (m_uiGlobalRank == 0) {
@@ -3745,6 +3897,16 @@ void Mesh::buildE2NWithSM() {
 
         std::swap(m_uiScatterMapConfigCountNodeSend, sendNodeConfigCount);
         std::swap(m_uiScatterMapConfigCountNodeRecv, recvNodeConfigCount);
+
+        std::swap(m_uiScatterMapConfigDimCountsSend,
+                  scatterMapConfigDimCountsSend);
+        std::swap(m_uiScatterMapConfigDimCountsRecv,
+                  scatterMapConfigDimCountsRecv);
+
+        std::swap(m_uiScatterMapConfigDimOffsetSend,
+                  scatterMapConfigDimOffsetSend);
+        std::swap(m_uiScatterMapConfigDimOffsetRecv,
+                  scatterMapConfigDimOffsetRecv);
 
         m_uiScatterMapConfigOffsetNodeSend[0] = 0;
         m_uiScatterMapConfigOffsetNodeRecv[0] = 0;
@@ -3933,8 +4095,8 @@ void Mesh::buildE2NMap() {
 #ifdef DEBUG_E2N_MAPPING
     MPI_Barrier(MPI_COMM_WORLD);
     if (!m_uiActiveRank) std::cout << "Invalid nodes removed " << std::endl;
-        // treeNodesTovtk(invalidatedPreGhost,m_uiActiveRank,"invalidPre");
-        // treeNodesTovtk(invalidatedPostGhost,m_uiActiveRank,"invalidPost");
+    // treeNodesTovtk(invalidatedPreGhost,m_uiActiveRank,"invalidPre");
+    // treeNodesTovtk(invalidatedPostGhost,m_uiActiveRank,"invalidPost");
 #endif
 
     // -----------

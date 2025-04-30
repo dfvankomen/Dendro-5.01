@@ -16,6 +16,7 @@
 #include <vector>
 
 #include "asyncExchangeContex.h"
+#include "ctx.h"
 #include "dvec.h"
 #include "mesh.h"
 #include "octUtils.h"
@@ -140,10 +141,22 @@ int slice_mesh(const ot::Mesh* pMesh, unsigned int s_val[3],
 Mesh* createSplitMesh(unsigned int eleOrder, unsigned int lmin,
                       unsigned int lmax, MPI_Comm comm);
 
+/**
+ * @brief Allocates the MPI Ctx objects, used for keeping track of send/recv
+ * data
+ *
+ * @param pMesh pointer to the mesh object
+ * @param ctx_list The list of AsyncExchangeContex objects
+ * @param dof The number of degrees of freedom (variables)
+ * @param async_k The number of asynchrounous k values, used for batching
+ * @param
+ * @tparam T the expected data type
+ */
 template <typename T>
 void alloc_mpi_ctx(const Mesh* pMesh,
                    std::vector<AsyncExchangeContex>& ctx_list, int dof,
-                   int async_k) {
+                   int async_k,
+                   CTXSendType sendType = SendTypeHelper<T>::value) {
     if (pMesh->getMPICommSizeGlobal() == 1 || !pMesh->isActive()) return;
 
     {
@@ -186,28 +199,51 @@ void alloc_mpi_ctx(const Mesh* pMesh,
         const unsigned int sendBSz = std::max(sendBSzCg, sendBSzDg);
         const unsigned int recvBSz = std::max(recvBSzCg, recvBSzDg);
 
+        const size_t dtypeSize     = getCTXSendTypeSize(sendType);
+
         ctx_list.resize(async_k);
         for (unsigned int i = 0; i < async_k; i++) {
             const unsigned int v_begin  = ((i * dof) / async_k);
             const unsigned int v_end    = (((i + 1) * dof) / async_k);
             const unsigned int batch_sz = (v_end - v_begin);
 
+            // make sure we set the comm dtype, because this will determine what
+            // kind of input data is used, and will be read elsewhere when doing
+            // communications
+            ctx_list[i].setCommDtype(sendType);
+
             if (sendBSz) {
-                ctx_list[i].allocateSendBuffer(batch_sz * sendBSz * sizeof(T));
+                ctx_list[i].allocateSendBuffer(batch_sz * sendBSz * dtypeSize);
 
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+                // TODO: this should really only be done with ZFP, which can go
+                // "big"
+                unsigned int num_blocks = 0;
+                for (auto& blks : pMesh->getSendNodeSMConfigDimCounts()) {
+                    for (auto& b : blks) {
+                        num_blocks += b;
+                    }
+                }
                 ctx_list[i].allocateCompressSendBuffers(activeNpes);
-                ctx_list[i].allocateCompressSendBuffer(batch_sz * sendBSz *
-                                                       sizeof(T));
+                ctx_list[i].allocateCompressSendBuffer(
+                    batch_sz * sendBSz * dtypeSize +
+                    sizeof(size_t) * num_blocks);
 #endif
             }
 
             if (recvBSz) {
-                ctx_list[i].allocateRecvBuffer(batch_sz * recvBSz * sizeof(T));
+                ctx_list[i].allocateRecvBuffer(batch_sz * recvBSz * dtypeSize);
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
                 // simple preallocation, both will be reallocated when needed
-                ctx_list[i].allocateCompressRecvBuffer(batch_sz * recvBSz *
-                                                       sizeof(T));
+                unsigned int num_blocks = 0;
+                for (auto& blks : pMesh->getRecvNodeSMConfigDimCounts()) {
+                    for (auto& b : blks) {
+                        num_blocks += b;
+                    }
+                }
+                ctx_list[i].allocateCompressRecvBuffer(
+                    batch_sz * recvBSz * dtypeSize +
+                    sizeof(size_t) * num_blocks);
 
 #endif
             }

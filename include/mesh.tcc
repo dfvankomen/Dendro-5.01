@@ -8,9 +8,11 @@
  */
 //
 
+#include <cxxabi.h>
 #include <mpi.h>
 
 #include <cstdint>
+#include <typeinfo>
 
 #include "asyncExchangeContex.h"
 #include "compression.h"
@@ -24,6 +26,7 @@
 // #define __DEBUG__PRINT_OUTPUT_FROM_COMPRESSION
 
 namespace ot {
+
 template <typename T>
 T* Mesh::createVector() const {
     if (!m_uiIsActive) return NULL;
@@ -700,21 +703,31 @@ void Mesh::ghostExchangeRecvSync(T* vec, T* recvNodeBuffer,
     }
 }
 
-template <typename T>
-void inline extractSingleDof(T* inputBuffer, T* outputBuffer, size_t count,
+template <typename T, typename U>
+void inline extractSingleDof(T* inputBuffer, U* outputBuffer, size_t count,
                              size_t scattermapOffset,
                              const std::vector<unsigned int>& scatterMap) {
     for (unsigned int k = 0; k < count; k++) {
-        outputBuffer[k] = inputBuffer[scatterMap[scattermapOffset + k]];
+        if constexpr (std::is_same_v<T, U>) {
+            outputBuffer[k] = inputBuffer[scatterMap[scattermapOffset + k]];
+        } else {
+            outputBuffer[k] =
+                static_cast<U>(inputBuffer[scatterMap[scattermapOffset + k]]);
+        }
     }
 }
 
-template <typename T>
-void inline injectSingleDof(T* inputBuffer, T* outputBuffer, size_t count,
+template <typename T, typename U>
+void inline injectSingleDof(T* inputBuffer, U* outputBuffer, size_t count,
                             size_t scattermapOffset,
                             const std::vector<unsigned int>& scatterMap) {
     for (unsigned int k = 0; k < count; k++) {
-        outputBuffer[scatterMap[scattermapOffset + k]] = inputBuffer[k];
+        if constexpr (std::is_same_v<T, U>) {
+            outputBuffer[scatterMap[scattermapOffset + k]] = inputBuffer[k];
+        } else {
+            outputBuffer[scatterMap[scattermapOffset + k]] =
+                static_cast<U>(inputBuffer[k]);
+        }
     }
 }
 
@@ -745,6 +758,267 @@ void Mesh::extractFullSingleProcess(AsyncExchangeContex& ctx, T* vec,
                                  var * nodeSendCount[proc_id],
                              nodeSendCount[proc_id], nodeSendOffset[proc_id],
                              sendNodeSM);
+        }
+    }
+    dendro::timer::t_compression_extraction.stop();
+}
+
+template <typename T, typename U>
+void Mesh::extractAllDofSingleProcess(AsyncExchangeContex& ctx, T* vec,
+                                      unsigned int dof, unsigned int proc_id) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    MPI_Comm commActive           = this->getMPICommunicator();
+
+    const unsigned int activeNpes = this->getMPICommSize();
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+    const auto& sendProcList      = this->getSendProcList();
+    const auto& sendNodeSM        = this->getSendNodeSM();
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+
+    // information about each block that is getting sent
+    auto& sendNodeSMConfigCounts = this->getSendNodeSMConfigCount()[proc_id];
+    auto& sendNodeSMConfig       = this->getSendNodeSMConfig();
+    auto& sendNodeSMConfigOffset = this->getSendNodeSMConfigOffset()[proc_id];
+
+    // n points to grab per dimension
+    const std::size_t points_per_dim = m_uiElementOrder - 1;
+    const size_t total_points_0d     = 1;
+    const size_t total_points_1d     = points_per_dim;
+    const size_t total_points_2d     = total_points_1d * points_per_dim;
+    const size_t total_points_3d     = total_points_2d * points_per_dim;
+    const std::array<size_t, 4> points_lookup = {
+        total_points_0d, total_points_1d, total_points_2d, total_points_3d};
+
+    const auto node_send_offset = nodeSendOffset[proc_id];
+
+    if (sendBSz) {
+        U* sendB                     = static_cast<U*>(ctx.getSendBuffer());
+
+        U* sendB_initial_offset      = sendB + dof * nodeSendOffset[proc_id];
+        // so, the extraction needs to be "silly", in that we have the scatter
+        // map like our normal "extractFullSingleProcess", so there needs to be
+        // something that keeps track of if we're through the scattermap
+
+        std::size_t map_idx          = 0;
+
+        // DOES NOT INCLUDE DOF, this is only points!
+        std::size_t points_collected = 0;
+
+        // iterate through the blocks going to this proc_id
+        for (std::size_t i = 0; i < sendNodeSMConfigCounts; i++) {
+            // get the config data, which tells us if it's 1, 2, or 3d, we'll
+            // extract out the block for each dof
+            const auto& config = sendNodeSMConfig[sendNodeSMConfigOffset + i];
+
+            unsigned int ndim  = config.getNDim();
+
+            // // calculate sendB's location, which is based on the
+            // // config.sm_offset
+            // T* sendBPosition   = sendB + dof * config.sm_offset;
+
+            if (ndim > 3) {
+                std::cerr << "Invalid number of dimensions found when "
+                             "extracting all DOF. Exiting!"
+                          << std::endl;
+                exit(0);
+            }
+
+            std::size_t points_advance = points_lookup[ndim];
+
+            // now we can go through each dof and figure out where we're
+            // extracting from!
+
+            for (std::size_t var = 0; var < dof; ++var) {
+                // the only thing that changes here is the scattermap offset is
+                // now *directly* stored inside the config object we're
+                // iterating over
+                extractSingleDof(vec + var * m_uiNumActualNodes,
+                                 sendB_initial_offset + points_collected +
+                                     points_advance * var,
+                                 points_advance, config.sm_offset, sendNodeSM);
+            }
+
+            // scatter map increases only by one set of the extracted points
+            map_idx += points_advance;
+            // but the total number of points collected (which is the offset
+            // into the send buffer) must be offset by points_advance * dof
+            points_collected += points_advance * dof;
+        }
+    }
+
+    // that should do it, probably
+}
+
+template <typename T, typename U>
+void Mesh::unextractAllDofSingleProcess(AsyncExchangeContex& ctx, T* vec,
+                                        unsigned int dof,
+                                        unsigned int proc_id) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    MPI_Comm commActive           = this->getMPICommunicator();
+
+    const unsigned int activeNpes = this->getMPICommSize();
+    const auto& nodeRecvCount     = this->getNodalRecvCounts();
+    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
+    const auto& recvProcList      = this->getRecvProcList();
+    const auto& recvNodeSM        = this->getRecvNodeSM();
+
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+
+    // information about each block that is getting sent
+    auto& recvNodeSMConfigCounts = this->getRecvNodeSMConfigCount()[proc_id];
+    auto& recvNodeSMConfig       = this->getRecvNodeSMConfig();
+    auto& recvNodeSMConfigOffset = this->getRecvNodeSMConfigOffset()[proc_id];
+
+    // n points to grab per dimension
+    const std::size_t points_per_dim = m_uiElementOrder - 1;
+    const size_t total_points_0d     = 1;
+    const size_t total_points_1d     = points_per_dim;
+    const size_t total_points_2d     = total_points_1d * points_per_dim;
+    const size_t total_points_3d     = total_points_2d * points_per_dim;
+    const std::array<size_t, 4> points_lookup = {
+        total_points_0d, total_points_1d, total_points_2d, total_points_3d};
+
+    const auto node_recv_offset = nodeRecvOffset[proc_id];
+
+    if (recvBSz) {
+        U* recvB                     = static_cast<U*>(ctx.getRecvBuffer());
+
+        // this initial offset gets us to where we are supposed to pull from
+        // based on the incoming proc ID
+        U* recvB_initial_offset      = recvB + dof * node_recv_offset;
+
+        // so, the extraction needs to be "silly", in that we have the scatter
+        // map like our normal "extractFullSingleProcess", so there needs to be
+        // something that keeps track of if we're through the scattermap
+
+        std::size_t map_idx          = 0;
+
+        // DOES NOT INCLUDE DOF, this is only points!
+        std::size_t points_collected = 0;
+
+        // iterate through the blocks going to this proc_id
+        for (std::size_t i = 0; i < recvNodeSMConfigCounts; i++) {
+            // get the config data, which tells us if it's 1, 2, or 3d, we'll
+            // extract out the block for each dof
+            const auto& config = recvNodeSMConfig[recvNodeSMConfigOffset + i];
+
+            unsigned int ndim  = config.getNDim();
+
+            if (ndim > 3) {
+                std::cerr << "Invalid number of dimensions found when "
+                             "extracting all DOF. Exiting!"
+                          << std::endl;
+                exit(0);
+            }
+
+            std::size_t points_advance = points_lookup[ndim];
+
+            // now we can go through each dof and figure out where we're
+            // extracting from!
+
+            for (std::size_t var = 0; var < dof; ++var) {
+                // remember, the receive buffer is still based on the original
+                // offset, i.e. we need to jump to dof * node_recv_offset (done
+                // above) to get to our block's data. Then we can extract based
+                // off of the new format
+                injectSingleDof(recvB_initial_offset + points_collected +
+                                    points_advance * var,
+                                vec + var * m_uiNumActualNodes, points_advance,
+                                config.sm_offset, recvNodeSM);
+            }
+
+            // scatter map increases only by one set of the extracted points
+            map_idx += points_advance;
+            // but the total number of points collected (which is the offset
+            // into the send buffer) must be offset by points_advance * dof
+            points_collected += points_advance * dof;
+        }
+    }
+
+    // that should do it, probably
+}
+
+template <typename T>
+void Mesh::extractFullDataCombinedBlocks(AsyncExchangeContex& ctx, T* vec,
+                                         unsigned int dof) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    const unsigned int activeNpes = this->getMPICommSize();
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& sendProcList      = this->getSendProcList();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+
+    unsigned int proc_id;
+
+    dendro::timer::t_compression_extraction.start();
+    if (sendBSz) {
+        // iterate through them all, and then call the extraction
+        for (unsigned int send_p = 0; send_p < sendProcList.size(); send_p++) {
+            proc_id = sendProcList[send_p];
+
+            // then based on the type in our ctx, we'll call the right "version"
+            if (ctx.getCommDtype() == CTXSendType::CTX_FLOAT) {
+                extractAllDofSingleProcess<T, float>(ctx, vec, dof, proc_id);
+            } else if (ctx.getCommDtype() == CTXSendType::CTX_DOUBLE) {
+                extractAllDofSingleProcess<T, double>(ctx, vec, dof, proc_id);
+            } else {
+                std::cerr << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
+                             "WHEN EXTRACTING DATA TO SEND"
+                          << std::endl;
+            }
+        }
+    }
+    dendro::timer::t_compression_extraction.stop();
+}
+
+template <typename T>
+void Mesh::unextractFullDataCombinedBlocks(AsyncExchangeContex& ctx, T* vec,
+                                           unsigned int dof) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    const unsigned int activeNpes = this->getMPICommSize();
+    const auto& nodeRecvCount     = this->getNodalRecvCounts();
+    const auto& recvProcList      = this->getRecvProcList();
+    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
+
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+
+    unsigned int proc_id;
+
+    dendro::timer::t_compression_extraction.start();
+    if (recvBSz) {
+        // iterate through them all, and then call the extraction
+        for (unsigned int recv_p = 0; recv_p < recvProcList.size(); recv_p++) {
+            proc_id = recvProcList[recv_p];
+
+            // then based on the type stored in the ctx object
+            if (ctx.getCommDtype() == CTXSendType::CTX_FLOAT) {
+                unextractAllDofSingleProcess<T, float>(ctx, vec, dof, proc_id);
+            } else if (ctx.getCommDtype() == CTXSendType::CTX_DOUBLE) {
+                unextractAllDofSingleProcess<T, double>(ctx, vec, dof, proc_id);
+            } else {
+                std::cerr << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
+                             "WHEN INJECTING DATA FROM RECEIVE"
+                          << std::endl;
+            }
         }
     }
     dendro::timer::t_compression_extraction.stop();
@@ -846,6 +1120,181 @@ void Mesh::unextractSingleProcess(AsyncExchangeContex& ctx, T* vec,
         }
     }
     dendro::timer::t_compression_unextract.stop();
+}
+
+template <typename T, typename U>
+void Mesh::compressSingleProcessAllDOF(AsyncExchangeContex& ctx, T* vec,
+                                       unsigned int dof, unsigned int proc_id,
+                                       unsigned int& compressOffset) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    MPI_Comm commActive           = this->getMPICommunicator();
+
+    const unsigned int activeNpes = this->getMPICommSize();
+    const auto& nodeSendCount     = this->getNodalSendCounts();
+    const auto& nodeSendOffset    = this->getNodalSendOffsets();
+    const auto& sendProcList      = this->getSendProcList();
+    const auto& sendNodeSM        = this->getSendNodeSM();
+    auto& sendCompressCounts      = ctx.getSendCompressCounts();
+    auto& sendCompressOffsets     = ctx.getSendCompressOffsets();
+
+    // make sure sendCompressOffsets' starts at 0
+    sendCompressOffsets[0]        = 0;
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+
+    dendro::timer::t_compression_compress.start();
+    if (sendBSz) {
+        U* sendB = static_cast<U*>(ctx.getSendBuffer());
+        unsigned char* compressSendB =
+            static_cast<unsigned char*>(ctx.getCompressSendBuffer());
+
+        std::size_t originalOffset = 0;
+
+        // compress over all of the vars in our dof
+        std::size_t total_bytes_compressed =
+            dendro_compress::blockwise_all_dof_compression(
+                sendB + dof * (nodeSendOffset[proc_id]),
+                compressSendB + compressOffset,
+                this->getSendNodeSMConfigCount()[proc_id], dof,
+                this->getSendNodeSMConfig(),
+                this->getSendNodeSMConfigOffset()[proc_id],
+                this->getSendNodeSMConfigDimCounts()[proc_id],
+                this->getSendNodeSMConfigDimOffset()[proc_id],
+                m_uiElementOrder);
+
+#ifdef __DENDRO_TEST_COMPRESSION_QUALITY__
+
+        // build a quick decompression buffer
+        U* sendBOffset = sendB + dof * (nodeSendOffset[proc_id]);
+        std::size_t total_points_check = nodeSendCount[proc_id] * dof;
+
+        U* decompressBuffer =
+            static_cast<U*>(calloc(total_points_check, sizeof(U)));
+        U* absErrorBuffer =
+            static_cast<U*>(calloc(total_points_check, sizeof(U)));
+
+// do the decompression right now
+#if 1
+        std::size_t temp = dendro_compress::blockwise_all_dof_decompression(
+            decompressBuffer, compressSendB + compressOffset,
+            this->getSendNodeSMConfigCount()[proc_id], dof,
+            this->getSendNodeSMConfig(),
+            this->getSendNodeSMConfigOffset()[proc_id],
+            this->getSendNodeSMConfigDimCounts()[proc_id],
+            this->getSendNodeSMConfigDimOffset()[proc_id], m_uiElementOrder);
+#else
+        std::size_t temp = 0;
+#endif
+
+        // calculate the errors
+        for (size_t i = 0; i < total_points_check; ++i) {
+            absErrorBuffer[i] = std::abs(sendBOffset[i] - decompressBuffer[i]);
+        }
+
+        U mse =
+            dendro_compress::calculate_mse(absErrorBuffer, total_points_check);
+        U rmse = std::sqrt(mse);
+        U mae =
+            dendro_compress::calculate_mae(absErrorBuffer, total_points_check);
+        U max_error = dendro_compress::calculate_max_error(absErrorBuffer,
+                                                           total_points_check);
+        U min_error = dendro_compress::calculate_min_error(absErrorBuffer,
+                                                           total_points_check);
+
+        // save this information to a file
+        std::string filename = DENDRO_compression_file_prefix + "_proc_" +
+                               std::to_string(this->getMPIRankGlobal()) +
+                               "_compressionErrors.txt";
+
+        std::ofstream outfile;
+        outfile.open(filename, std::ios::app);
+
+        int demangledstatus;
+        const char* typeName = typeid(U).name();
+        char* demangledName =
+            abi::__cxa_demangle(typeName, nullptr, nullptr, &demangledstatus);
+
+        outfile << DENDRO_number_times_compress_called << ","
+                << this->getMPIRankGlobal() << "," << proc_id << "," << dof
+                << "," << demangledName << "," << total_points_check << ","
+                << total_points_check * sizeof(T) << ","
+                << total_points_check * sizeof(U) << ","
+                << total_bytes_compressed << "," << mse << "," << rmse << ","
+                << mae << "," << max_error << "," << min_error;
+
+        free(demangledName);
+
+        // then we can do it based on block sizes
+        const std::size_t points_per_dim  = m_uiElementOrder - 1;
+        const std::size_t total_points_0d = 1 * dof;
+        const std::size_t total_points_1d = points_per_dim * dof;
+        const std::size_t total_points_2d =
+            points_per_dim * points_per_dim * dof;
+        const std::size_t total_points_3d =
+            points_per_dim * points_per_dim * points_per_dim * dof;
+        const std::vector<size_t> total_points_arr = {
+            total_points_0d, total_points_1d, total_points_2d, total_points_3d};
+        size_t ptOffset = 0;
+
+        std::vector<U> mse_blks(4);
+        std::vector<U> rmse_blks(4);
+        std::vector<U> mae_blks(4);
+        std::vector<U> maxerr_blks(4);
+        std::vector<U> minerr_blks(4);
+        std::vector<std::size_t> pts_blks(4);
+
+        for (const unsigned int ndim : {3, 2, 1, 0}) {
+            std::size_t num_blocks =
+                this->getSendNodeSMConfigDimCounts()[proc_id][ndim];
+            // rember that the total_points_arr already includes dof
+            std::size_t n_points_total = total_points_arr[ndim] * num_blocks;
+
+            U* absErrorBuffer_Offset   = absErrorBuffer + ptOffset;
+
+            // now we can do the same thing, and get an offset
+            mse_blks[ndim]             = dendro_compress::calculate_mse(
+                absErrorBuffer_Offset, n_points_total);
+            rmse_blks[ndim] = std::sqrt(mse_blks[ndim]);
+            mae_blks[ndim]  = dendro_compress::calculate_mae(
+                absErrorBuffer_Offset, n_points_total);
+            maxerr_blks[ndim] = dendro_compress::calculate_max_error(
+                absErrorBuffer_Offset, n_points_total);
+            minerr_blks[ndim] = dendro_compress::calculate_min_error(
+                absErrorBuffer_Offset, n_points_total);
+
+            pts_blks[ndim] = n_points_total;
+
+            ptOffset += n_points_total;
+        }
+
+        for (const unsigned int ndim : {3, 2, 1, 0}) {
+            outfile << "," << ndim << "," << pts_blks[ndim] << ","
+                    << this->getSendNodeSMConfigDimCounts()[proc_id][ndim]
+                    << "," << mse_blks[ndim] << "," << rmse_blks[ndim] << ","
+                    << mae_blks[ndim] << "," << maxerr_blks[ndim] << ","
+                    << minerr_blks[ndim];
+        }
+        // std::cout << std::endl;
+        outfile << std::endl;
+
+        // make sure file is closed
+        outfile.close();
+
+        free(decompressBuffer);
+        free(absErrorBuffer);
+
+#endif
+
+        // make sure we're updating the total number of compressed
+        // bytes to send over
+        sendCompressCounts[proc_id] += total_bytes_compressed;
+        compressOffset += total_bytes_compressed;
+    }
+    dendro::timer::t_compression_compress.stop();
 }
 
 template <typename T>
@@ -996,6 +1445,43 @@ void Mesh::decompressSingleProcess(AsyncExchangeContex& ctx, unsigned int dof,
             this->getRecvNodeSMConfigOffset()[proc_id], m_uiElementOrder);
         compressBufferOffset += temp;
     }
+    dendro::timer::t_compression_decompress.stop();
+}
+
+template <typename T, typename U>
+void Mesh::decompressSingleProcessAllDOF(AsyncExchangeContex& ctx,
+                                         unsigned int dof,
+                                         unsigned int proc_id) {
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const auto& nodeRecvCount     = this->getNodalRecvCounts();
+    const auto& nodeRecvOffset    = this->getNodalRecvOffsets();
+    const auto& recvProcList      = this->getRecvProcList();
+    const auto& recvNodeSM        = this->getRecvNodeSM();
+
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+
+    U* recvB = static_cast<U*>(ctx.getRecvBuffer());
+    unsigned char* recvBComp =
+        static_cast<unsigned char*>(ctx.getCompressRecvBuffer());
+    const auto& receiveCompressCounts  = ctx.getReceiveCompressCounts();
+    const auto& receiveCompressOffsets = ctx.getReceiveCompressOffsets();
+
+    // compress buffer offset is based off of the receive compress stored in
+    // this ctx object
+    unsigned int compressBufferOffset  = receiveCompressOffsets[proc_id];
+
+    // now decompress
+    dendro::timer::t_compression_decompress.start();
+    std::size_t temp = dendro_compress::blockwise_all_dof_decompression(
+        recvB + dof * (nodeRecvOffset[proc_id]),
+        recvBComp + compressBufferOffset,
+        this->getRecvNodeSMConfigCount()[proc_id], dof,
+        this->getRecvNodeSMConfig(), this->getRecvNodeSMConfigOffset()[proc_id],
+        this->getRecvNodeSMConfigDimCounts()[proc_id],
+        this->getRecvNodeSMConfigDimOffset()[proc_id], m_uiElementOrder);
+    compressBufferOffset += temp;
     dendro::timer::t_compression_decompress.stop();
 }
 

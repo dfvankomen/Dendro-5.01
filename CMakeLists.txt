@@ -12,7 +12,7 @@
 # projects.
 #
 
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.5)
 project(Dendro-5.0-Library C CXX Fortran)
 
 option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
@@ -20,12 +20,18 @@ option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
 option(DENDRO_ENABLE_GHOST_COMPRESSION
        "Enable compression on Ghost Communication" ON)
 
+option(DENDRO_ENABLE_ML_LIBRARIES "Enable compression with ML Libraries" OFF)
+
 if(CMAKE_VERSION VERSION_GREATER_EQUAL "3.24.0")
   cmake_policy(SET CMP0135 NEW)
 endif()
 
 if(DENDRO_ENABLE_GHOST_COMPRESSION)
   add_definitions(-DDENDRO_ENABLE_GHOST_COMPRESSION)
+endif()
+
+if(DENDRO_ENABLE_ML_LIBRARIES)
+  add_definitions(-DDENDRO_ENABLE_ML_LIBRARIES)
 endif()
 
 add_subdirectory(libs)
@@ -72,6 +78,36 @@ FetchContent_Declare(
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fPIC")
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fPIC")
 
+# ML packages
+if(DENDRO_ENABLE_ML_LIBRARIES)
+  # then find the Torch package
+  find_package(Torch REQUIRED)
+  set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS}")
+
+
+  set(ONNX_ROOT "Path to where the ONNX Package is stored" "/path/to/onnxruntime/root" CACHE PATH "Path to the ONNX Runtime")
+  find_library(ONNX_RUNTIME_LIB NAMES onnxruntime HINTS "${ONNX_ROOT}/lib")
+  find_path(ONNX_INCLUDE_DIRS
+  onnxruntime_cxx_api.h
+  HINTS "${ONNX_ROOT}/include"
+)
+
+  # Verify the library was found
+  if(NOT ONNX_RUNTIME_LIB OR NOT ONNX_INCLUDE_DIRS)
+    message(FATAL_ERROR "ONNX Runtime library not found")
+  endif()
+endif()
+
+# find ONNX Runtime v1.21.0 (seems broken with cmake directly)
+# find_package(onnxruntime REQUIRED)
+#
+# if(onnxruntime_FOUND)
+#   include_directories(${onnxruntime_INCLUDE_DIRS})
+#   message("ONNXRuntime found! Include DIRS: ${onnxruntime_INCLUDE_DIRS}")
+# else()
+#   message(FATAL_ERROR "ONNXRuntime not found, make sure it's installed properly and you've put in the right pathgs to find it")
+# endif()
+
 FetchContent_MakeAvailable(blosc)
 
 message(STATUS "=== Finished configuring blosc library")
@@ -88,15 +124,15 @@ include_directories(${blosc_SOURCE_DIR}/blosc)
 
 message(STATUS "Now setting the CMake files for the Dendro Library...")
 
-set(CMAKE_CXX_FLAGS_DEBUG
-    "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover"
-)
-set(CMAKE_C_FLAGS_DEBUG
-    "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover"
-)
-set(CMAKE_EXE_LINKER_FLAGS_DEBUG
-    "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover"
-)
+# set(CMAKE_CXX_FLAGS_DEBUG
+#     "${CMAKE_CXX_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover"
+# )
+# set(CMAKE_C_FLAGS_DEBUG
+#     "${CMAKE_C_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover"
+# )
+# set(CMAKE_EXE_LINKER_FLAGS_DEBUG
+#     "${CMAKE_EXE_LINKER_FLAGS_DEBUG} -fsanitize=address,undefined,leak -fno-sanitize-recover"
+# )
 
 set(DENDRO_INCLUDE_FILES
     include/point.h
@@ -158,6 +194,7 @@ set(DENDRO_INCLUDE_FILES
     test/include/meshTestUtils.h
     include/launcher.h
     include/compression.h
+    include/scattermapConfig.h
     include/device.h)
 
 set(DENDRO_SOURCE_FILES
@@ -351,6 +388,30 @@ target_link_libraries(dendro5 PUBLIC zfp)
 target_include_directories(dendro5 PUBLIC ${blosc_SOURCE_DIR}/blosc)
 target_link_libraries(dendro5 PUBLIC blosc_static)
 # target_link_directories(dendro5 PUBLIC ${blosc_BUILD_DIR})
+
+if(DENDRO_ENABLE_ML_LIBRARIES)
+  # link PyTorch to dendro
+  message(STATUS "TORCH LIBRARIES: ${TORCH_LIBRARIES}")
+  target_link_libraries(dendro5 PUBLIC "${TORCH_LIBRARIES}")
+
+  message(STATUS "ONNXRUNTIME LIBRARIES: ${ONNX_INCLUDE_DIRS}")
+  message(STATUS "ONNXRUNTIME LIBNAME: ${ONNX_RUNTIME_LIB}")
+  # target_link_libraries(dendro5 PUBLIC onnxruntime::onnxruntime)
+  target_include_directories(dendro5 PUBLIC "${ONNX_INCLUDE_DIRS}")
+  target_link_libraries(dendro5 PUBLIC "${ONNX_RUNTIME_LIB}")
+endif()
+
+# make sure to copy over the chebyshev files to the build directory
+file(GLOB MATRIX_FILES "${CMAKE_CURRENT_SOURCE_DIR}/include/generated/*.bin")
+foreach(MAT_FILE IN LISTS MATRIX_FILES)
+  add_custom_command(
+    TARGET dendro5 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy
+            "${MAT_FILE}"
+            $<TARGET_FILE_DIR:dendro5>
+    COMMENT "Copying ${MAT_FILE} to dendrolib dir"
+  )
+endforeach()
 
 # =======================
 # =======================
@@ -855,3 +916,27 @@ target_include_directories(sfcLaplaceEq
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(sfcLaplaceEq PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(sfcLaplaceEq PRIVATE ${GSL_INCLUDE_DIRS})
+
+
+set(SOURCE_FILES test/src/testTorch.cpp)
+add_executable(torchTest ${SOURCE_FILES})
+target_link_libraries(torchTest dendro5 ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
+                      m)
+target_include_directories(torchTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(torchTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(torchTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(torchTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(torchTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(torchTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(torchTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(torchTest
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(torchTest PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(torchTest PRIVATE ${GSL_INCLUDE_DIRS})

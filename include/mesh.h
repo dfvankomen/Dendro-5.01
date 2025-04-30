@@ -38,6 +38,7 @@
 #include "octUtils.h"
 #include "point.h"
 #include "refel.h"
+#include "scattermapConfig.h"
 #include "sfcSearch.h"
 #include "sfcSort.h"
 #include "skey.h"
@@ -45,6 +46,8 @@
 #include "testUtils.h"
 #include "treenode2vtk.h"
 #include "wavelet.h"
+
+#define __DENDRO_TEST_COMPRESSION_QUALITY__
 
 #ifdef DENDRO_ENABLE_GHOST_COMPRESSION
 #include "compression.h"
@@ -102,6 +105,9 @@ enum NeighbourLevel { COARSE, SAME, REFINE };
 
 namespace ot {
 
+extern size_t DENDRO_number_times_compress_called;
+extern std::string DENDRO_compression_file_prefix;
+
 /**@brief type of the scatter map, based on numerical computation method*/
 enum SM_TYPE {
     FDM = 0,  // Finite Difference Method
@@ -153,6 +159,7 @@ enum VEC_TYPE { CG_NODAL, DG_NODAL, ELEMENTAL };
 }  // namespace ot
 
 namespace ot {
+
 /** Structure to order the send recv nodes based on the (e,i,j,k ) ordering. */
 struct NodeTuple {
    private:
@@ -462,14 +469,20 @@ class Mesh {
     /** Scatter map for the actual nodes, recieving from other processors. */
     std::vector<unsigned int> m_uiScatterMapActualNodeRecv;
 
-    std::vector<unsigned char> m_uiScatterMapConfigNodeSend;
-    std::vector<unsigned char> m_uiScatterMapConfigNodeRecv;
+    std::vector<sm_config::SMConfig> m_uiScatterMapConfigNodeSend;
+    std::vector<sm_config::SMConfig> m_uiScatterMapConfigNodeRecv;
 
     std::vector<unsigned int> m_uiScatterMapConfigCountNodeSend;
     std::vector<unsigned int> m_uiScatterMapConfigCountNodeRecv;
 
     std::vector<unsigned int> m_uiScatterMapConfigOffsetNodeSend;
     std::vector<unsigned int> m_uiScatterMapConfigOffsetNodeRecv;
+
+    // useful information for determining where batching things are
+    std::vector<std::array<unsigned int, 4>> m_uiScatterMapConfigDimCountsSend;
+    std::vector<std::array<unsigned int, 4>> m_uiScatterMapConfigDimCountsRecv;
+    std::vector<std::array<unsigned int, 4>> m_uiScatterMapConfigDimOffsetSend;
+    std::vector<std::array<unsigned int, 4>> m_uiScatterMapConfigDimOffsetRecv;
 
     // variables to manage loop access over elements.
     /**counter for the current element*/
@@ -1484,12 +1497,12 @@ class Mesh {
     }
 
     /**@brief return Scatter map configuration for node send*/
-    inline const std::vector<unsigned char> &getSendNodeSMConfig() const {
+    inline const std::vector<sm_config::SMConfig> &getSendNodeSMConfig() const {
         return m_uiScatterMapConfigNodeSend;
     }
 
     /**@brief return Scatter map for node send*/
-    inline const std::vector<unsigned char> &getRecvNodeSMConfig() const {
+    inline const std::vector<sm_config::SMConfig> &getRecvNodeSMConfig() const {
         return m_uiScatterMapConfigNodeRecv;
     }
 
@@ -1511,6 +1524,34 @@ class Mesh {
     /**@brief return Scatter map for node send*/
     inline const std::vector<unsigned int> &getRecvNodeSMConfigOffset() const {
         return m_uiScatterMapConfigOffsetNodeRecv;
+    }
+
+    /**@brief return Scatter map configuration counts for dimensionality, send
+     */
+    inline const std::vector<std::array<unsigned int, 4>> &
+    getSendNodeSMConfigDimCounts() const {
+        return m_uiScatterMapConfigDimCountsSend;
+    }
+
+    /**@brief return Scatter map configuration counts for dimensionality, recv
+     */
+    inline const std::vector<std::array<unsigned int, 4>> &
+    getRecvNodeSMConfigDimCounts() const {
+        return m_uiScatterMapConfigDimCountsRecv;
+    }
+
+    /**@brief return Scatter map configuration offsets for dimensionality, send
+     */
+    inline const std::vector<std::array<unsigned int, 4>> &
+    getSendNodeSMConfigDimOffset() const {
+        return m_uiScatterMapConfigDimOffsetSend;
+    }
+
+    /**@brief return Scatter map configuration offsets for dimensionality, recv
+     */
+    inline const std::vector<std::array<unsigned int, 4>> &
+    getRecvNodeSMConfigDimOffset() const {
+        return m_uiScatterMapConfigDimOffsetRecv;
     }
 
     /**@brief returns the cell/element send counts*/
@@ -2256,6 +2297,22 @@ class Mesh {
     void extractFullSingleProcess(AsyncExchangeContex &ctx, T *vec,
                                   unsigned int dof, unsigned int proc_id);
 
+    template <typename T, typename U>
+    void extractAllDofSingleProcess(AsyncExchangeContex &ctx, T *vec,
+                                    unsigned int dof, unsigned int proc_id);
+
+    template <typename T>
+    void extractFullDataCombinedBlocks(AsyncExchangeContex &ctx, T *vec,
+                                       unsigned int dof);
+
+    template <typename T, typename U>
+    void unextractAllDofSingleProcess(AsyncExchangeContex &ctx, T *vec,
+                                      unsigned int dof, unsigned int proc_id);
+
+    template <typename T>
+    void unextractFullDataCombinedBlocks(AsyncExchangeContex &ctx, T *vec,
+                                         unsigned int dof);
+
     template <typename T>
     void extractFullData(AsyncExchangeContex &ctx, T *vec, unsigned int dof);
 
@@ -2271,6 +2328,11 @@ class Mesh {
                                unsigned int dof, unsigned int proc_id,
                                unsigned int &compressOffset);
 
+    template <typename T, typename U>
+    void compressSingleProcessAllDOF(AsyncExchangeContex &ctx, T *vec,
+                                     unsigned int dof, unsigned int proc_id,
+                                     unsigned int &compressOffset);
+
     template <typename T>
     void compressFullData(AsyncExchangeContex &ctx, T *vec, unsigned int dof);
 
@@ -2279,6 +2341,10 @@ class Mesh {
     template <typename T>
     void decompressSingleProcess(AsyncExchangeContex &ctx, unsigned int dof,
                                  unsigned int recv_p);
+
+    template <typename T, typename U>
+    void decompressSingleProcessAllDOF(AsyncExchangeContex &ctx,
+                                       unsigned int dof, unsigned int recv_p);
 
     template <typename T>
     void setUpSendRecvRequests(AsyncExchangeContex &ctx, unsigned int dof,

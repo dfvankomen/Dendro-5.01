@@ -12,11 +12,47 @@
 #ifndef DENDRO_5_0_UPDATECTX_H
 #define DENDRO_5_0_UPDATECTX_H
 
+#include <iostream>
+#include <ostream>
 #include <vector>
 
 #include "mpi.h"
 
 namespace ot {
+
+/** @brief: type to send data through */
+enum CTXSendType { CTX_FLOAT = 0, CTX_DOUBLE, CTX_INT };
+
+static const char* CTX_SEND_TYPE_NAMES[] = {"CTX_FLOAT", "CTX_DOUBLE",
+                                            "CTX_INT"};
+
+inline std::ostream& operator<<(std::ostream& out, const CTXSendType t) {
+    return out << "<CTXSendType: " << CTX_SEND_TYPE_NAMES[t] << ">";
+}
+
+constexpr size_t getCTXSendTypeSize(CTXSendType dt) {
+    return (dt == CTX_FLOAT)    ? sizeof(float)
+           : (dt == CTX_DOUBLE) ? sizeof(double)
+           : (dt == CTX_INT)    ? sizeof(int)
+                                : 0;
+}
+
+template <typename T>
+struct SendTypeHelper {
+    static constexpr T value = {};
+};
+
+template <>
+struct SendTypeHelper<float> {
+    static constexpr CTXSendType value = CTXSendType::CTX_FLOAT;
+};
+
+template <>
+struct SendTypeHelper<double> {
+    static constexpr CTXSendType value = CTXSendType::CTX_DOUBLE;
+};
+
+// TODO: send support for ints or other floating types
 
 class AsyncExchangeContex {
    protected:
@@ -58,6 +94,8 @@ class AsyncExchangeContex {
 
 #endif
 
+    CTXSendType m_ctxSendType = CTXSendType::CTX_DOUBLE;
+
    public:
     /**@brief batched requests for send */
     std::vector<MPI_Request> m_send_req;
@@ -65,7 +103,7 @@ class AsyncExchangeContex {
     /**@brief batched requests for recv */
     std::vector<MPI_Request> m_recv_req;
 
-    AsyncExchangeContex(){};
+    AsyncExchangeContex() {};
 
     /**@brief creates an async ghost exchange contex*/
     AsyncExchangeContex(const void* var) {
@@ -78,7 +116,7 @@ class AsyncExchangeContex {
     }
 
     /**@brief : defaut destructor*/
-    ~AsyncExchangeContex(){};
+    ~AsyncExchangeContex() {};
 
     /**@brief allocates send buffer for ghost exchange*/
     inline void allocateSendBuffer(size_t bytes) {
@@ -92,14 +130,24 @@ class AsyncExchangeContex {
 
     /**@brief allocates send buffer for ghost exchange*/
     inline void deAllocateSendBuffer() {
-        free(m_uiSendBuf);
-        m_uiSendBuf = NULL;
+        if (m_uiSendBuf != NULL) {
+            free(m_uiSendBuf);
+            m_uiSendBuf = NULL;
+        } else {
+            std::cerr << "WARNING: ATTEMPTED TO DEALLOCATE A NULL SEND BUFFER"
+                      << std::endl;
+        }
     }
 
     /**@brief allocates recv buffer for ghost exchange*/
     inline void deAllocateRecvBuffer() {
-        free(m_uiRecvBuf);
-        m_uiRecvBuf = NULL;
+        if (m_uiRecvBuf != NULL) {
+            free(m_uiRecvBuf);
+            m_uiRecvBuf = NULL;
+        } else {
+            std::cerr << "WARNING: ATTEMPTED TO DEALLOCATE A NULL RECV BUFFER"
+                      << std::endl;
+        }
     }
 
     inline void* getSendBuffer() { return m_uiSendBuf; }
@@ -215,6 +263,10 @@ class AsyncExchangeContex {
     }
 
 #endif
+
+    void setCommDtype(CTXSendType inType) { m_ctxSendType = inType; }
+
+    inline CTXSendType getCommDtype() const { return m_ctxSendType; }
 };
 
 }  // namespace ot
