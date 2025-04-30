@@ -12,7 +12,9 @@
 #include "asyncExchangeContex.h"
 #include "blosc.h"
 #include "mpi.h"
+#ifdef DENDRO_ENABLE_ML_LIBRARIES
 #include "onnxruntime_cxx_api.h"
+#endif
 #include "zfp.h"
 #include "zfp/bitstream.h"
 
