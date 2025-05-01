@@ -1309,12 +1309,16 @@ void Ctx<DerivedCtx, T, I>::exchange_host_gathered_dof_compression(
             // extract and then compress the data
 
             if (m_mpi_ctx[i].getCommDtype() == ot::CTXSendType::CTX_FLOAT) {
+                dendro::timer::t_compression_extraction.start();
                 m_uiMesh->extractAllDofSingleProcess<T, float>(
                     m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id);
+                dendro::timer::t_compression_extraction.stop();
             } else if (m_mpi_ctx[i].getCommDtype() ==
                        ot::CTXSendType::CTX_DOUBLE) {
+                dendro::timer::t_compression_extraction.start();
                 m_uiMesh->extractAllDofSingleProcess<T, double>(
                     m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id);
+                dendro::timer::t_compression_extraction.stop();
             } else {
                 std::cerr << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
                              "WHEN EXTRACTING DATA TO SEND"
