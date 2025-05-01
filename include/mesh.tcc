@@ -1003,7 +1003,7 @@ void Mesh::unextractFullDataCombinedBlocks(AsyncExchangeContex& ctx, T* vec,
 
     unsigned int proc_id;
 
-    dendro::timer::t_compression_extraction.start();
+    dendro::timer::t_compression_unextract.start();
     if (recvBSz) {
         // iterate through them all, and then call the extraction
         for (unsigned int recv_p = 0; recv_p < recvProcList.size(); recv_p++) {
@@ -1021,7 +1021,7 @@ void Mesh::unextractFullDataCombinedBlocks(AsyncExchangeContex& ctx, T* vec,
             }
         }
     }
-    dendro::timer::t_compression_extraction.stop();
+    dendro::timer::t_compression_unextract.stop();
 }
 
 template <typename T>

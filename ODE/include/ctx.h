@@ -854,14 +854,18 @@ void Ctx<DerivedCtx, T, I>::process_finished_unzip_all_dof(
 
                 if (m_mpi_ctx[ctx_idx].getCommDtype() ==
                     ot::CTXSendType::CTX_FLOAT) {
+                    dendro::timer::t_compression_unextract.start();
                     m_uiMesh->unextractAllDofSingleProcess<T, float>(
                         m_mpi_ctx[ctx_idx], in_ptr, dof,
                         statuses[i].MPI_SOURCE);
+                    dendro::timer::t_compression_unextract.stop();
                 } else if (m_mpi_ctx[ctx_idx].getCommDtype() ==
                            ot::CTXSendType::CTX_DOUBLE) {
+                    dendro::timer::t_compression_unextract.start();
                     m_uiMesh->unextractAllDofSingleProcess<T, double>(
                         m_mpi_ctx[ctx_idx], in_ptr, dof,
                         statuses[i].MPI_SOURCE);
+                    dendro::timer::t_compression_unextract.stop();
                 } else {
                     std::cerr
                         << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
