@@ -17,6 +17,8 @@
 #include "onnxruntime_cxx_api.h"
 #endif
 
+#include <omp.h>
+
 #include "asyncExchangeContex.h"
 #include "lapac.h"
 #include "scattermapConfig.h"
@@ -1505,6 +1507,10 @@ class BloscCompression {
         // initialization
         blosc_init();
         blosc_set_compressor(bloscCompressor.c_str());
+        int max_threads = omp_get_max_threads();
+        std::cout << "MAXIMUM NUMBER OF THREADS AVAILABLE TO BLOSC: "
+                  << max_threads << std::endl;
+        if (max_threads > 1) blosc_set_nthreads(max_threads);
 
         calculateSizes();
     }
