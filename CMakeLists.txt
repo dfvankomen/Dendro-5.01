@@ -128,6 +128,9 @@ set(DENDRO_INCLUDE_FILES
     include/derivatives/impl_hybrid_approaches.h
     include/derivatives/filt_kodiss_explicit.h
     include/derivatives/nova_derivs.h
+    include/derivatives/impl_Kimfilter.h
+    include/derivatives/impl_BYUFilter.h
+    
 )
 
 set(DENDRO_SOURCE_FILES
@@ -167,6 +170,8 @@ set(DENDRO_SOURCE_FILES
     src/derivatives/impl_hybrid_approaches.cpp
     src/derivatives/filt_kodiss_explicit.cpp
     src/derivatives/nova_derivs.cpp
+    src/derivatives/impl_Kimfilter.cpp
+    src/derivatives/impl_BYUFilter.cpp
 )
 
 set(FEM_INC

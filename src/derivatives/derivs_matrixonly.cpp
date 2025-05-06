@@ -9,6 +9,10 @@
 #include "derivatives/derivs_utils.h"
 #include "lapac.h"
 #include "mathUtils.h"
+#include "refel.h"
+#include "derivatives/impl_Kimfilter.h"
+#include "derivatives/impl_BYUFilter.h"
+#include "mpi.h"
 
 #define _DENDRODERIV_USE_INV_METHOD 0
 
@@ -31,6 +35,9 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
     derivMatrixPtr->D_left      = std::vector<double>(nsq, 0.0);
     derivMatrixPtr->D_right     = std::vector<double>(nsq, 0.0);
     derivMatrixPtr->D_leftright = std::vector<double>(nsq, 0.0);
+
+    std::vector<double> F_coeffs = {0.5};
+    const MatrixDiagonalEntries* FilterEntries = BYUT6Filter(F_coeffs);
 
     for (BoundaryType b :
          {BoundaryType::NO_BOUNDARY, BoundaryType::LEFT_BOUNDARY,
@@ -63,9 +70,60 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
             *diagEntries, n, 1.0, boundary_top, boundary_bottom);
         std::vector<double> Q_temp = create_Q_from_diagonals(
             *diagEntries, n, Q_parity, boundary_top, boundary_bottom);
+        std::vector<double> R_temp = create_P_from_diagonals(
+            *FilterEntries, n, 1.0, boundary_top, boundary_bottom);
+        std::vector<double> S_temp = create_Q_from_diagonals(
+            *FilterEntries, n, 1.0, boundary_top, boundary_bottom);
+     //Making the filter matrices       
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if (rank == 0) {
+        if (n == pw * 6 + 1) {
+            std::cout << "R MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(R_temp.data(), n, n);
+
+            std::cout << "S MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(S_temp.data(), n, n);
+            std::cout << std::endl;
+        }
+       }
+
+#if 0
+        if (n == pw * 6 + 1) {
+            std::cout << "P MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(P_temp.data(), n, n);
+
+            std::cout << "Q MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(Q_temp.data(), n, n);
+            std::cout << std::endl;
+        }
+#endif
 
         std::vector<double>* const D_ptr =
             get_deriv_mat_by_boundary(derivMatrixPtr.get(), b);
+            // start by copying P to Pinv
+            std::vector<double> Pinv = P_temp;
+            std::vector<double> Rinv = R_temp;
+            std::vector<double> R1_S = R_temp;
+            std::vector<double> QRS = R_temp;
+            
+
+ // compute the inverse
+            lapack::iterative_inverse(R_temp.data(), Rinv.data(), n);
+            lapack::square_matrix_multiplication(Rinv.data(), S_temp.data(),
+                                                 R1_S.data(), n);
+            // for (size_t idx=0;idx<n;++idx){
+            //     R1_S [n*idx+idx] +=1.0;
+            // }
+            lapack::square_matrix_multiplication(Q_temp.data(), R1_S.data(),
+                                                 QRS.data(), n);
+            lapack::iterative_inverse(P_temp.data(), Pinv.data(), n);
+                                                 
+            lapack::square_matrix_multiplication(Pinv.data(), QRS.data(),
+                                                 D_ptr->data(), n);
+
+
+#if 0
 
         // then we solve it
         if constexpr (_DENDRODERIV_USE_INV_METHOD) {
@@ -103,6 +161,14 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
                                    D_ptr->data(), n, info);
             // this should directly solve for the matrix inverse
         }
+#endif
+#if 0
+        if (n == pw * 4 + 1) {
+            std::cout << "D MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(D_ptr->data(), n, n);
+            std::cout << std::endl << std::endl << std::endl;
+        }
+#endif
 
         // std::cout << "P is: " << std::endl;
         // printArray_2D_transpose(P_temp.data(), n, n);
@@ -111,7 +177,7 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
         // std::cout << "D is: " << std::endl;
         // printArray_2D_transpose(D_ptr->data(), n, n);
     }
-
+    delete FilterEntries;
     return derivMatrixPtr;
 }
 
