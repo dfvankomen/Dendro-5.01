@@ -51,10 +51,15 @@ enum DerivType {
     D_BORISO6_ETA,
     // BYU TRIDIAGONAL FREE PARAMTERS
     D_BYUT4,
-    D_BYUT42,
+    D_BYUT4R1,
+    D_BYUT4R2,
+    D_BYUT4R4,
     D_BYUT6,
-    D_BYUT62,
+    D_BYUT6R1,
+    D_BYUT6R2,
+    D_BYUT6R4,
     D_BYUT6R3,
+    D_BYUT64R3,
     D_BYUT8,
     // BYU PENTADIAGONAL FREE PARAMETERS (Nate and James)
     D_BYUP6,

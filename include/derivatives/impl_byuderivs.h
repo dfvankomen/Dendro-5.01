@@ -32,7 +32,18 @@ void inline check_end_of_boundaries(std::vector<std::vector<double>>& coeff_in,
             vec.pop_back();
         }
     }
-}
+} 
+MatrixDiagonalEntries* BYUDerivsT64R3DiagonalsFirstOrder(
+	const std::vector<double>& D_coeffs);
+
+MatrixDiagonalEntries* BYUDerivsT6R2DiagonalsFirstOrder(
+        const std::vector<double>& D_coeffs);
+
+MatrixDiagonalEntries* BYUDerivsT4R2DiagonalsFirstOrder(
+            const std::vector<double>& D_coeffs);
+
+MatrixDiagonalEntries* BYUDerivsT4R1DiagonalsFirstOrder(
+                const std::vector<double>& D_coeffs);
 
 MatrixDiagonalEntries* BYUDerivsT4R3DiagonalsFirstOrder(
     const std::vector<double>& D_coeffs);
@@ -71,6 +82,155 @@ MatrixDiagonalEntries* BYUDerivsP8R4DiagonalsFirstOrder(
     const std::vector<double>& D_coeffs);
 
 // TODO: banded matrix implementations
+class BYUDerivsT64_R3_FirstOrder : public MatrixCompactDerivs<1> {
+    private:
+     std::vector<double> D_coeffs_;
+ 
+     static constexpr unsigned int n_D_coeffs_ = 4;
+ 
+    public:
+     template <typename... Args>
+     BYUDerivsT64_R3_FirstOrder(
+         unsigned int ele_order,
+         const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
+         : MatrixCompactDerivs{ele_order} {
+         // check the coefficients
+ 
+         D_coeffs_ =
+             clean_coeffs(coeffs_in, BYUDerivsT64_R3_FirstOrder::n_D_coeffs_);
+ 
+         diagEntries = BYUDerivsT64R3DiagonalsFirstOrder(D_coeffs_);
+ 
+         this->init();
+     }
+     ~BYUDerivsT64_R3_FirstOrder() {}
+ 
+     std::unique_ptr<Derivs> clone() const override {
+         return std::make_unique<BYUDerivsT64_R3_FirstOrder>(*this);
+     }
+ 
+     DerivType getDerivType() const override { return DerivType::D_BYUT64R3; }
+     DerivOrder getDerivOrder() const override {
+         return DerivOrder::D_FIRST_ORDER;
+     }
+ 
+     std::string toString() const override {
+         return "BYUDerivsT64_R3_FirstOrder";
+     }
+ };
+ // TODO: banded matrix implementations
+class BYUDerivsT6_R2_FirstOrder : public MatrixCompactDerivs<1> {
+    private:
+     std::vector<double> D_coeffs_;
+ 
+     static constexpr unsigned int n_D_coeffs_ = 3;
+ 
+    public:
+     template <typename... Args>
+     BYUDerivsT6_R2_FirstOrder(
+         unsigned int ele_order,
+         const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
+         : MatrixCompactDerivs{ele_order} {
+         // check the coefficients
+ 
+         D_coeffs_ =
+             clean_coeffs(coeffs_in, BYUDerivsT6_R2_FirstOrder::n_D_coeffs_);
+ 
+         diagEntries = BYUDerivsT6R2DiagonalsFirstOrder(D_coeffs_);
+ 
+         this->init();
+     }
+     ~BYUDerivsT6_R2_FirstOrder() {}
+ 
+     std::unique_ptr<Derivs> clone() const override {
+         return std::make_unique<BYUDerivsT6_R2_FirstOrder>(*this);
+     }
+ 
+     DerivType getDerivType() const override { return DerivType::D_BYUT6R2; }
+     DerivOrder getDerivOrder() const override {
+         return DerivOrder::D_FIRST_ORDER;
+     }
+ 
+     std::string toString() const override {
+         return "BYUDerivsT6_R2_FirstOrder";
+     }
+ };
+
+// TODO: banded matrix implementations
+class BYUDerivsT4_R2_FirstOrder : public MatrixCompactDerivs<1> {
+    private:
+     std::vector<double> D_coeffs_;
+ 
+     static constexpr unsigned int n_D_coeffs_ = 3;
+ 
+    public:
+     template <typename... Args>
+     BYUDerivsT4_R2_FirstOrder(
+         unsigned int ele_order,
+         const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
+         : MatrixCompactDerivs{ele_order} {
+         // check the coefficients
+ 
+         D_coeffs_ =
+             clean_coeffs(coeffs_in, BYUDerivsT4_R2_FirstOrder::n_D_coeffs_);
+ 
+         diagEntries = BYUDerivsT4R2DiagonalsFirstOrder(D_coeffs_);
+ 
+         this->init();
+     }
+     ~BYUDerivsT4_R2_FirstOrder() {}
+ 
+     std::unique_ptr<Derivs> clone() const override {
+         return std::make_unique<BYUDerivsT4_R2_FirstOrder>(*this);
+     }
+ 
+     DerivType getDerivType() const override { return DerivType::D_BYUT4R2; }
+     DerivOrder getDerivOrder() const override {
+         return DerivOrder::D_FIRST_ORDER;
+     }
+ 
+     std::string toString() const override {
+         return "BYUDerivsT4_R2_FirstOrder";
+     }
+ };
+ // TODO: banded matrix implementations
+class BYUDerivsT4_R1_FirstOrder : public MatrixCompactDerivs<1> {
+    private:
+     std::vector<double> D_coeffs_;
+ 
+     static constexpr unsigned int n_D_coeffs_ = 2;
+ 
+    public:
+     template <typename... Args>
+     BYUDerivsT4_R1_FirstOrder(
+         unsigned int ele_order,
+         const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
+         : MatrixCompactDerivs{ele_order} {
+         // check the coefficients
+ 
+         D_coeffs_ =
+             clean_coeffs(coeffs_in, BYUDerivsT4_R1_FirstOrder::n_D_coeffs_);
+ 
+         diagEntries = BYUDerivsT4R1DiagonalsFirstOrder(D_coeffs_);
+ 
+         this->init();
+     }
+     ~BYUDerivsT4_R1_FirstOrder() {}
+ 
+     std::unique_ptr<Derivs> clone() const override {
+         return std::make_unique<BYUDerivsT4_R1_FirstOrder>(*this);
+     }
+ 
+     DerivType getDerivType() const override { return DerivType::D_BYUT4R1; }
+     DerivOrder getDerivOrder() const override {
+         return DerivOrder::D_FIRST_ORDER;
+     }
+ 
+     std::string toString() const override {
+         return "BYUDerivsT4_R1_FirstOrder";
+     }
+ };
+
 
 class BYUDerivsT4_R3_FirstOrder : public MatrixCompactDerivs<1> {
    private:
@@ -136,7 +296,7 @@ class BYUDerivsT4_R42_FirstOrder : public MatrixCompactDerivs<1> {
          return std::make_unique<BYUDerivsT4_R42_FirstOrder>(*this);
      }
  
-     DerivType getDerivType() const override { return DerivType::D_BYUT42; }
+     DerivType getDerivType() const override { return DerivType::D_BYUT4R4; }
      DerivOrder getDerivOrder() const override {
          return DerivOrder::D_FIRST_ORDER;
      }
@@ -320,7 +480,7 @@ class BYUDerivsT6_R42_FirstOrder : public MatrixCompactDerivs<1> {
          return std::make_unique<BYUDerivsT6_R42_FirstOrder>(*this);
      }
  
-     DerivType getDerivType() const override { return DerivType::D_BYUT62; }
+     DerivType getDerivType() const override { return DerivType::D_BYUT6R4; }
      DerivOrder getDerivOrder() const override {
          return DerivOrder::D_FIRST_ORDER;
      }
