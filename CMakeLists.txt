@@ -49,7 +49,9 @@ include(FetchContent)
 FetchContent_Declare(
   zfp
   GIT_REPOSITORY "https://github.com/LLNL/zfp"
-  GIT_TAG "1.0.1")
+  GIT_TAG "1.0.1"
+  CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release
+)
 # FetchContent_GetProperties(zfp) if(NOT zfp_POPULATED)
 # FetchContent_Populate(zfp)
 
@@ -69,7 +71,9 @@ include(FetchContent)
 FetchContent_Declare(
   blosc
   GIT_REPOSITORY "https://github.com/Blosc/c-blosc"
-  GIT_TAG "v1.21.6")
+  GIT_TAG "v1.21.6"
+  CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release
+)
 # FetchContent_GetProperties(blosc) if(NOT blosc_POPULATED)
 # FetchContent_Populate(blosc)
 
@@ -195,7 +199,13 @@ set(DENDRO_INCLUDE_FILES
     include/launcher.h
     include/compression.h
     include/scattermapConfig.h
-    include/device.h)
+    include/device.h
+    include/compression/compression_base.hpp
+    include/compression/compression_factory.hpp
+    include/compression/compression_interface.hpp
+    include/compression/compression_wrapper.hpp
+
+)
 
 set(DENDRO_SOURCE_FILES
     src/dendro.cpp
@@ -220,7 +230,11 @@ set(DENDRO_SOURCE_FILES
     src/meshUtils.cpp
     src/waveletRefEl.cpp
     src/compression.cpp
-    test/src/meshTestUtils.cpp)
+    test/src/meshTestUtils.cpp
+
+    src/compression/compression_factory.cpp
+
+)
 
 set(FEM_INC
     FEM/include/basis.h
