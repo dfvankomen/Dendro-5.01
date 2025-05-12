@@ -7,6 +7,8 @@ namespace dendroderivs {
 
 enum FilterType { F_NONE = 0, F_KO4, F_KO6, F_KO8 };
 
+enum FilterFamily { FF_NONE = 0, FF_KO };
+
 class Filters {
    protected:
     unsigned int p_n;
@@ -38,6 +40,8 @@ class Filters {
     virtual bool do_filter_before() const                  = 0;
 
     virtual void set_maximum_block_size(size_t block_size) = 0;
+
+    virtual FilterFamily get_filter_family() const         = 0;
 };
 
 }  // namespace dendroderivs

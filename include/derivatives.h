@@ -69,6 +69,18 @@ enum DerivType {
 
 enum DerivOrder { D_FIRST_ORDER = 0, D_SECOND_ORDER };
 
+enum DerivFamily {
+    DF_NONE = 0,
+    DF_EXPLICIT,
+    DF_JTT,    // Jonathan Tyler tridiagonal
+    DF_JTP,    // Jonathan Tyler pentadiagonal
+    DF_KIM,    // Kim
+    DF_BL,     // Brady Livescue
+    DF_BORIS,  // Boris
+    DF_BYUT,   // BYU tridiagonal
+    DF_BYUP    // BYU Pentadiagonal
+};
+
 /**
  * @class Derivs
  * @brief An Abstract base class for all dendro derivative calculations
@@ -276,13 +288,39 @@ class DendroDerivatives {
         _second_deriv->do_grad_z(du, u, dx, sz, bflag);
     }
 
+    // deriv renaming of grad naming
+    void deriv_x(double *du, const double *u, double dx, const unsigned int *sz,
+                 unsigned int bflag) {
+        _first_deriv->do_grad_x(du, u, dx, sz, bflag);
+    }
+    void deriv_y(double *du, const double *u, double dx, const unsigned int *sz,
+                 unsigned int bflag) {
+        _first_deriv->do_grad_y(du, u, dx, sz, bflag);
+    }
+    void deriv_z(double *du, const double *u, double dx, const unsigned int *sz,
+                 unsigned int bflag) {
+        _first_deriv->do_grad_z(du, u, dx, sz, bflag);
+    }
+    void deriv_xx(double *du, const double *u, double dx,
+                  const unsigned int *sz, unsigned int bflag) {
+        _second_deriv->do_grad_x(du, u, dx, sz, bflag);
+    }
+    void deriv_yy(double *du, const double *u, double dx,
+                  const unsigned int *sz, unsigned int bflag) {
+        _second_deriv->do_grad_y(du, u, dx, sz, bflag);
+    }
+    void deriv_zz(double *du, const double *u, double dx,
+                  const unsigned int *sz, unsigned int bflag) {
+        _second_deriv->do_grad_z(du, u, dx, sz, bflag);
+    }
+
     void filter(const double *const input, double *const output,
                 double *const workspace_x, double *const workspace_y,
-                double *const worksapce_z, const double dx, const double dy,
+                double *const workspace_z, const double dx, const double dy,
                 const double dz, const double coeff, const unsigned int *sz,
                 const unsigned int bflag) {
         _filter->do_full_filter(input, output, workspace_x, workspace_y,
-                                worksapce_z, dx, dy, dz, coeff, sz, bflag);
+                                workspace_z, dx, dy, dz, coeff, sz, bflag);
     }
 
     bool inline do_filter_before() { return _filter->do_filter_before(); }
@@ -296,6 +334,8 @@ class DendroDerivatives {
         return "DendroDerivs<" + _first_deriv->toString() + ", " +
                _second_deriv->toString() + ", " + _filter->toString() + ">";
     }
+
+    FilterFamily get_filter_family() { return _filter->get_filter_family(); }
 };
 
 void inline initialize_derivatives() {}

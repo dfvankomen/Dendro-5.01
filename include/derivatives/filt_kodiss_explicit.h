@@ -130,6 +130,10 @@ class ExplicitKODissO2 : public Filters {
     bool do_filter_before() const override { return false; }
 
     void set_maximum_block_size(size_t block_size) override {}
+
+    FilterFamily get_filter_family() const override {
+        return dendroderivs::FilterFamily::FF_KO;
+    }
 };
 
 class ExplicitKODissO4 : public Filters {
@@ -193,6 +197,10 @@ class ExplicitKODissO4 : public Filters {
     bool do_filter_before() const override { return false; }
 
     void set_maximum_block_size(size_t block_size) override {}
+
+    FilterFamily get_filter_family() const override {
+        return dendroderivs::FilterFamily::FF_KO;
+    }
 };
 
 class ExplicitKODissO6 : public Filters {
@@ -252,6 +260,10 @@ class ExplicitKODissO6 : public Filters {
     bool do_filter_before() const override { return false; }
 
     void set_maximum_block_size(size_t block_size) override {}
+
+    FilterFamily get_filter_family() const override {
+        return dendroderivs::FilterFamily::FF_KO;
+    }
 };
 
 // NOT YET IMPLEMENTED
@@ -309,6 +321,10 @@ class ExplicitKODissO8 : public Filters {
     bool do_filter_before() const override { return false; }
 
     void set_maximum_block_size(size_t block_size) override {}
+
+    FilterFamily get_filter_family() const override {
+        return dendroderivs::FilterFamily::FF_KO;
+    }
 };
 #endif
 
