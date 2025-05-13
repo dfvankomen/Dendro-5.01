@@ -10,7 +10,6 @@
 #include "derivatives/filt_inmat.h"
 #include "lapac.h"
 #include "mathUtils.h"
-#include "mpi.h"
 #include "refel.h"
 
 #define _DENDRODERIV_USE_INV_METHOD 0
@@ -191,19 +190,18 @@ createMatrixSystemForSingleSizeInMatrixFilter(
             *filterEntries, n, 1.0, boundary_top, boundary_bottom);
         std::vector<double> S_temp = create_Q_from_diagonals(
             *filterEntries, n, 1.0, boundary_top, boundary_bottom);
-        // Making the filter matrices
-        int rank;
-        MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-        if (rank == 0) {
-            if (n == pw * 6 + 1) {
-                std::cout << "R MATRIX for n=" << n << std::endl;
-                printArray_2D_transpose(R_temp.data(), n, n);
 
-                std::cout << "S MATRIX for n=" << n << std::endl;
-                printArray_2D_transpose(S_temp.data(), n, n);
-                std::cout << std::endl;
-            }
+        // Making the filter matrices
+#if 0
+        if (n == pw * 6 + 1) {
+            std::cout << "R MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(R_temp.data(), n, n);
+
+            std::cout << "S MATRIX for n=" << n << std::endl;
+            printArray_2D_transpose(S_temp.data(), n, n);
+            std::cout << std::endl;
         }
+#endif
 
 #if 0
         if (n == pw * 6 + 1) {
