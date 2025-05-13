@@ -78,11 +78,29 @@ class DerivsFactory {
         } else if (name == "BYUT4") {
             return std::unique_ptr<Derivs>(new BYUDerivsT4_R3_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        } else if (name == "BYUT4R1") {
+            return std::unique_ptr<Derivs>(new BYUDerivsT4_R1_FirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        } else if (name == "BYUT4R4") {
+            return std::unique_ptr<Derivs>(new BYUDerivsT4_R42_FirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        } else if (name == "BYUT4R2") {
+            return std::unique_ptr<Derivs>(new BYUDerivsT4_R42_FirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        } else if (name == "BYUT64R3") {
+            return std::unique_ptr<Derivs>(new BYUDerivsT64_R3_FirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        } else if (name == "BYUT6R2") {
+            return std::unique_ptr<Derivs>(new BYUDerivsT6_R2_FirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
         } else if (name == "BYUT6R3") {
             return std::unique_ptr<Derivs>(new BYUDerivsT6_R3_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
         } else if (name == "BYUT6") {
             return std::unique_ptr<Derivs>(new BYUDerivsT6_R4_FirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        } else if (name == "BYUT62") {
+            return std::unique_ptr<Derivs>(new BYUDerivsT6_R2_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
         } else if (name == "BYUP6") {
             return std::unique_ptr<Derivs>(new BYUDerivsP6_R3_FirstOrder(

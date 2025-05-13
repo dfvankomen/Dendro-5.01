@@ -13,6 +13,10 @@
 cmake_minimum_required(VERSION 3.1)
 project(Dendro-5.0-Library C CXX Fortran)
 
+if(POLICY CMP0169)
+  cmake_policy(SET CMP0169 OLD)
+endif()
+
 option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
 
 # require definitions from other file if dendrolib is not a library
