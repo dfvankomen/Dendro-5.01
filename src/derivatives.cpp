@@ -12,7 +12,11 @@ DendroDerivatives::DendroDerivatives(
     const std::string derivType_1, const std::string derivType_2,
     const unsigned int ele_order, const std::vector<double> &coeffs_in_1,
     const std::vector<double> &coeffs_in_2, const unsigned int deriv1_matrixID,
-    const unsigned int deriv2_matrixID, const std::string filterType)
+    const unsigned int deriv2_matrixID, const std::string inMatrixFilterType_1,
+    const std::string inMatrixFilterType_2,
+    const std::vector<double> &in_matrix_coeffs_in_1,
+    const std::vector<double> &in_matrix_coeffs_in_2,
+    const std::string postRHSFilterType)
     : _n_points_deriv_space(0),
       _n_vars_deriv_space(0),
       _derivative_space(nullptr) {
@@ -20,7 +24,8 @@ DendroDerivatives::DendroDerivatives(
     // derivType_1
     //           << std::endl;
     _first_deriv = DerivsFactory::create_first_order(
-        derivType_1, ele_order, coeffs_in_1, deriv1_matrixID);
+        derivType_1, ele_order, coeffs_in_1, deriv1_matrixID,
+        inMatrixFilterType_1, in_matrix_coeffs_in_1);
     if (!_first_deriv) {
         throw std::runtime_error("Failed to create Derivs object of type: " +
                                  derivType_1);
@@ -29,15 +34,16 @@ DendroDerivatives::DendroDerivatives(
     // std::cout << "Attempting to create second order derivatives: "
     //           << derivType_2 << std::endl;
     _second_deriv = DerivsFactory::create_second_order(
-        derivType_2, ele_order, coeffs_in_2, deriv1_matrixID);
+        derivType_2, ele_order, coeffs_in_2, deriv1_matrixID,
+        inMatrixFilterType_2, in_matrix_coeffs_in_2);
     if (!_second_deriv) {
         throw std::runtime_error("Failed to create Derivs object of type: " +
                                  derivType_2);
     }
 
     // then fetch the filter type
-    std::string filterUse = filterType;
-    if (filterType == "default") {
+    std::string filterUse = postRHSFilterType;
+    if (postRHSFilterType == "default") {
         // choose default KO based on padding size
         switch (ele_order) {
             case 4:

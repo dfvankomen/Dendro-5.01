@@ -18,9 +18,10 @@ class TestingHybridDerivatives_FirstOrder : public MatrixCompactDerivs<1> {
     MatrixDiagonalEntries* diagEntriesLeftRight = nullptr;
 
    public:
-    template <typename... Args>
-    TestingHybridDerivatives_FirstOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    TestingHybridDerivatives_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // idk, let's use JTT6 to start? then we'll override the boundaries
         diagEntries                         = createJTT6DiagonalsFirstOrder();
 

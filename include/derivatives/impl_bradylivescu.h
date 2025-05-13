@@ -14,12 +14,12 @@ void fill_alpha_beta_bl_6th(std::vector<std::vector<double>> &alpha,
 
 class BradyLivescu_BL6_FirstOrder : public MatrixCompactDerivs<1> {
    public:
-    template <typename... Args>
     BradyLivescu_BL6_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double> &coeffs_in = std::vector<double>(),
-        const unsigned int matrixID          = 1, Args &&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string &in_matrix_filter = "none",
+        const std::vector<double> &in_filter_coeffs = std::vector<double>(),
+        const std::vector<double> &coeffs_in        = std::vector<double>(),
+        const unsigned int matrixID                 = 1)
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createBL6thDiagonalsFirstOrder(matrixID);
 
         this->init();

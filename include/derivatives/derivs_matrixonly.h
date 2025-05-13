@@ -1,14 +1,34 @@
 
 #pragma once
 
+#include <stdexcept>
 #include <unordered_map>
 
 #include "derivatives/derivs_compact.h"
 #include "derivatives/derivs_utils.h"
 
+// in-matrix filter options
+#include "derivatives/filt_inmat.h"
+#include "derivatives/filt_inmat_byufilter.h"
+#include "derivatives/filt_inmat_kim.h"
+
 #define DDERIVS_MAX_BLOCKS_INIT 4
 
 namespace dendroderivs {
+
+inline std::unique_ptr<InMatrixFilter> createInMatrixFilterByType(
+    const std::string &in_matrix_filter,
+    const std::vector<double> &in_matrix_filter_coeffs) {
+    if (in_matrix_filter == "none") {
+        return std::make_unique<NoneFilter_InMatrix>(in_matrix_filter_coeffs);
+    } else if (in_matrix_filter == "BYUT6") {
+        return std::make_unique<BYUT6Filter_InMatrix>(in_matrix_filter_coeffs);
+    } else if (in_matrix_filter == "KIM") {
+        return std::make_unique<KimFilter_InMatrix>(in_matrix_filter_coeffs);
+    } else {
+        throw std::invalid_argument("Unsupported 'In-Matrix' Filter Type!");
+    }
+}
 
 template <unsigned int DerivOrder>
 std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
@@ -38,12 +58,20 @@ class MatrixCompactDerivs : public CompactDerivs {
     // interior and bounded entries for each P and Q matrix
     MatrixDiagonalEntries *diagEntries = nullptr;
 
+    std::unique_ptr<InMatrixFilter> in_matrix_filter_;
+
    public:
-    MatrixCompactDerivs(unsigned int ele_order) : CompactDerivs{ele_order} {
+    MatrixCompactDerivs(unsigned int ele_order,
+                        const std::string &in_matrix_filter = "none",
+                        const std::vector<double> &in_matrix_filter_coeffs =
+                            std::vector<double>())
+        : CompactDerivs{ele_order} {
         // establish workspace to be as large as our largest
         unsigned int workspace_size_calc = p_n * p_n * p_n * 2;
         workspace_     = std::vector<double>(workspace_size_calc, 0.0);
         workspace_tot_ = workspace_size_calc;
+
+        // then call and build up the in_matrix_filter_
     }
 
     ~MatrixCompactDerivs() {

@@ -176,7 +176,13 @@ class DendroDerivatives {
         const std::vector<double> &coeffs_in_2 = std::vector<double>(),
         const unsigned int deriv1_matrixID     = 0,
         const unsigned int deriv2_matrixID     = 0,
-        const std::string filterType           = "default");
+        const std::string inMatrixFilterType_1 = "none",
+        const std::string inMatrixFilterType_2 = "none",
+        const std::vector<double> &in_matrix_coeffs_in_1 =
+            std::vector<double>(),
+        const std::vector<double> &in_matrix_coeffs_in_2 =
+            std::vector<double>(),
+        const std::string postRHSFilterType = "default");
 
     ~DendroDerivatives() = default;
 
