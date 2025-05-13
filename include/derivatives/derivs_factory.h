@@ -72,21 +72,31 @@ class DerivsFactory {
         } else if (name == "BYUT4") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsT4_R3_FirstOrder(std::forward<Args>(args)...));
-        } else if (name == "BYUT42") {
+        } else if (name == "BYUT4R1") {
+            return std::unique_ptr<Derivs>(
+                new BYUDerivsT4_R1_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "BYUT4R4") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsT4_R42_FirstOrder(std::forward<Args>(args)...));
-        }
-        else if (name == "BYUT6R3") {
+        } else if (name == "BYUT4R2") {
+            return std::unique_ptr<Derivs>(
+                new BYUDerivsT4_R42_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "BYUT64R3") {
+            return std::unique_ptr<Derivs>(
+                new BYUDerivsT64_R3_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "BYUT6R2") {
+            return std::unique_ptr<Derivs>(
+                new BYUDerivsT6_R2_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "BYUT6R3") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsT6_R3_FirstOrder(std::forward<Args>(args)...));
         } else if (name == "BYUT6") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsT6_R4_FirstOrder(std::forward<Args>(args)...));
-        }else if (name == "BYUT62") {
+        } else if (name == "BYUT62") {
             return std::unique_ptr<Derivs>(
-                new BYUDerivsT6_R42_FirstOrder(std::forward<Args>(args)...));
-        }
-         else if (name == "BYUP6") {
+                new BYUDerivsT6_R2_FirstOrder(std::forward<Args>(args)...));
+        } else if (name == "BYUP6") {
             return std::unique_ptr<Derivs>(
                 new BYUDerivsP6_R3_FirstOrder(std::forward<Args>(args)...));
         } else if (name == "BYUP8") {

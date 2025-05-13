@@ -1,0 +1,55 @@
+
+"eleorder" = 6
+# "deriv_type" = "EXPERIMENTAL"
+"deriv_type" = "E6"
+"deriv_type_2nd" = "E6"
+# "filter_type" = 7
+
+# this is the "order" that should be used for the regular derivatives
+# we have 4th, 6th, and 8th. Note that 4th requires eleorder to be >=4, 6th >=6
+# and 8th >=8
+"deriv_stencil_order" = 6
+
+# "num_tests" = 10000
+"num_tests" = 1
+
+# the data initialization, currently 2 is the best as it's the "boris" init which is fun
+"data_init" = 2
+
+"num_x_blocks" = 1
+"num_y_blocks" = 1
+"num_z_blocks" = 1
+
+"x_start" = 0.3
+"y_start" = 0.1
+"z_start" = 0.2
+
+"dx" = 0.05
+"dy" = 0.10
+"dz" = 0.20
+
+num_profile_tests = 500
+
+
+deriv_X_coeffs = [
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+]
+deriv_XX_coeffs = [
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+  # 0.0000001,
+]
