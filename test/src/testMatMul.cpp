@@ -223,11 +223,11 @@ bool test_correctness_z() {
 
     // now we call the derivatives
     double* results             = new double[nx * ny * nz];
-    double* workspace           = new double[nx * ny * nz];
+    double* workspace           = new double[2 * nx * ny * nz];
 
     static const uint32_t sz[3] = {nx, ny, nz};
 
-#if 1
+#if 0
     print_3d_mat(fullBlock, nx, ny, nz);
 #endif
 
@@ -363,7 +363,7 @@ double test_speed_z(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
 
     double* fullBlock    = new double[nx * ny * nz];
     double* results      = new double[nx * ny * nz];
-    double* workspace    = new double[nx * ny * nz];
+    double* workspace    = new double[2 * nx * ny * nz];
 
     double* matrix_z     = new double[nz * nz]{};
 
@@ -389,9 +389,7 @@ double test_speed_x_original(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
     double* fullBlock    = new double[nx * ny * nz];
     double* results      = new double[nx * ny * nz];
 
-    // NOTE: ele_order is technically the input, but nx is fine, because
-    // explicit doesn't care
-    dendroderivs::ExplicitDerivsO4_DX deriv(nx);
+    dendroderivs::ExplicitDerivsO4_DX deriv(pw * 2);
 
     double time =
         test_runner([&]() { deriv.do_grad_x(results, fullBlock, 0.25, sz, 0); },
@@ -410,9 +408,7 @@ double test_speed_y_original(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
     double* fullBlock    = new double[nx * ny * nz];
     double* results      = new double[nx * ny * nz];
 
-    // NOTE: ele_order is technically the input, but nx is fine, because
-    // explicit doesn't care
-    dendroderivs::ExplicitDerivsO4_DX deriv(nx);
+    dendroderivs::ExplicitDerivsO4_DX deriv(pw * 2);
 
     double time =
         test_runner([&]() { deriv.do_grad_y(results, fullBlock, 0.25, sz, 0); },
@@ -433,7 +429,7 @@ double test_speed_z_original(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
 
     // NOTE: ele_order is technically the input, but nx is fine, because
     // explicit doesn't care
-    dendroderivs::ExplicitDerivsO4_DX deriv(nx);
+    dendroderivs::ExplicitDerivsO4_DX deriv(pw * 2);
 
     double time =
         test_runner([&]() { deriv.do_grad_z(results, fullBlock, 0.25, sz, 0); },
