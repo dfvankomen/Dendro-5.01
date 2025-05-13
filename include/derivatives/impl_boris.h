@@ -54,15 +54,15 @@ class Boris_BorisO4_FirstOrder : public MatrixCompactDerivs<1> {
     MatrixDiagonalEntries* diagEntriesLeftRight = nullptr;
 
    public:
-    template <typename... Args>
     Boris_BorisO4_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(),
-        const unsigned int matrixID          = 1, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>(),
+        const unsigned int closureID                = 1)
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // Matrix ID informs if we're using closure or not for this one
         // normal entries
-        diagEntries      = createBoris4thDiagonalsFirstOrder(matrixID, p_pw);
+        diagEntries      = createBoris4thDiagonalsFirstOrder(closureID, p_pw);
 
         // ensure we build up the entries with DIRICHLET
         diagEntriesLeft  = createBoris4thDiagonalsFirstOrder(1, p_pw);
@@ -102,15 +102,15 @@ class Boris_BorisO6_FirstOrder : public MatrixCompactDerivs<1> {
     MatrixDiagonalEntries* diagEntriesLeftRight = nullptr;
 
    public:
-    template <typename... Args>
     Boris_BorisO6_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(),
-        const unsigned int matrixID          = 1, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>(),
+        const unsigned int closureID                = 1)
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // Matrix ID informs if we're using closure or not for this one
         // normal entries
-        diagEntries      = createBoris6thDiagonalsFirstOrder(matrixID, p_pw);
+        diagEntries      = createBoris6thDiagonalsFirstOrder(closureID, p_pw);
 
         // ensure we build up the entries with DIRICHLET
         diagEntriesLeft  = createBoris6thDiagonalsFirstOrder(1, p_pw);
@@ -150,19 +150,19 @@ class Boris_BorisO6Eta_FirstOrder : public MatrixCompactDerivs<1> {
     MatrixDiagonalEntries* diagEntriesLeftRight = nullptr;
 
    public:
-    template <typename... Args>
     Boris_BorisO6Eta_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(),
-        const unsigned int matrixID          = 1, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>(),
+        const unsigned int closureID                = 1)
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // Matrix ID informs if we're using closure or not for this one
         // normal entries
-        diagEntries      = createBoris6thEtaDiagonalsFirstOrder(matrixID, p_pw);
+        diagEntries     = createBoris6thEtaDiagonalsFirstOrder(closureID, p_pw);
 
         // ensure we build up the entries with DIRICHLET
-        diagEntriesLeft  = createBoris6thEtaDiagonalsFirstOrder(1, p_pw);
-        diagEntriesRight = createBoris6thEtaDiagonalsFirstOrder(1, p_pw);
+        diagEntriesLeft = createBoris6thEtaDiagonalsFirstOrder(1, p_pw);
+        diagEntriesRight     = createBoris6thEtaDiagonalsFirstOrder(1, p_pw);
         diagEntriesLeftRight = createBoris6thEtaDiagonalsFirstOrder(1, p_pw);
 
         // now we can make sure that the Lower part of left is set to

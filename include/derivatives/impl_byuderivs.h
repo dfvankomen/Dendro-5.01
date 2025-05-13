@@ -89,11 +89,11 @@ class BYUDerivsT64_R3_FirstOrder : public MatrixCompactDerivs<1> {
     static constexpr unsigned int n_D_coeffs_ = 4;
 
    public:
-    template <typename... Args>
     BYUDerivsT64_R3_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
 
         D_coeffs_ =
@@ -128,9 +128,10 @@ class BYUDerivsT6_R2_FirstOrder : public MatrixCompactDerivs<1> {
    public:
     template <typename... Args>
     BYUDerivsT6_R2_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
 
         D_coeffs_ =
@@ -166,9 +167,10 @@ class BYUDerivsT4_R2_FirstOrder : public MatrixCompactDerivs<1> {
    public:
     template <typename... Args>
     BYUDerivsT4_R2_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
 
         D_coeffs_ =
@@ -203,9 +205,10 @@ class BYUDerivsT4_R1_FirstOrder : public MatrixCompactDerivs<1> {
    public:
     template <typename... Args>
     BYUDerivsT4_R1_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
 
         D_coeffs_ =
@@ -238,11 +241,11 @@ class BYUDerivsT4_R3_FirstOrder : public MatrixCompactDerivs<1> {
     static constexpr unsigned int n_D_coeffs_ = 4;
 
    public:
-    template <typename... Args>
     BYUDerivsT4_R3_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
 
         D_coeffs_ =
@@ -277,9 +280,10 @@ class BYUDerivsT4_R42_FirstOrder : public MatrixCompactDerivs<1> {
    public:
     template <typename... Args>
     BYUDerivsT4_R42_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
 
         D_coeffs_ =
@@ -296,7 +300,6 @@ class BYUDerivsT4_R42_FirstOrder : public MatrixCompactDerivs<1> {
     }
 
     DerivType getDerivType() const override { return DerivType::D_BYUT4R4; }
-
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
     }
@@ -313,11 +316,11 @@ class BYUDerivsT4_R3_SecondOrder : public MatrixCompactDerivs<2> {
     static constexpr unsigned int n_D_coeffs_ = 4;
 
    public:
-    template <typename... Args>
     BYUDerivsT4_R3_SecondOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT4_R3_SecondOrder::n_D_coeffs_);
@@ -349,11 +352,11 @@ class BYUDerivsT6_R3_FirstOrder : public MatrixCompactDerivs<1> {
     static constexpr unsigned int n_D_coeffs_ = 4;
 
    public:
-    template <typename... Args>
     BYUDerivsT6_R3_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R3_FirstOrder::n_D_coeffs_);
@@ -386,11 +389,11 @@ class BYUDerivsT6_R3_SecondOrder : public MatrixCompactDerivs<2> {
     static constexpr unsigned int n_D_coeffs_ = 4;
 
    public:
-    template <typename... Args>
     BYUDerivsT6_R3_SecondOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R3_SecondOrder::n_D_coeffs_);
@@ -423,11 +426,11 @@ class BYUDerivsT6_R4_FirstOrder : public MatrixCompactDerivs<1> {
     static constexpr unsigned int n_D_coeffs_ = 5;
 
    public:
-    template <typename... Args>
     BYUDerivsT6_R4_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R4_FirstOrder::n_D_coeffs_);
@@ -462,9 +465,10 @@ class BYUDerivsT6_R42_FirstOrder : public MatrixCompactDerivs<1> {
    public:
     template <typename... Args>
     BYUDerivsT6_R42_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R42_FirstOrder::n_D_coeffs_);
@@ -481,7 +485,6 @@ class BYUDerivsT6_R42_FirstOrder : public MatrixCompactDerivs<1> {
     }
 
     DerivType getDerivType() const override { return DerivType::D_BYUT6R4; }
-
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_FIRST_ORDER;
     }
@@ -498,11 +501,11 @@ class BYUDerivsT6_R4_SecondOrder : public MatrixCompactDerivs<2> {
     static constexpr unsigned int n_D_coeffs_ = 5;
 
    public:
-    template <typename... Args>
     BYUDerivsT6_R4_SecondOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsT6_R4_SecondOrder::n_D_coeffs_);
@@ -611,11 +614,11 @@ class BYUDerivsP6_R3_FirstOrder : public MatrixCompactDerivs<1> {
     static constexpr unsigned int n_D_coeffs_ = 7;
 
    public:
-    template <typename... Args>
     BYUDerivsP6_R3_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP6_R3_FirstOrder::n_D_coeffs_);
@@ -648,11 +651,11 @@ class BYUDerivsP6_R3_SecondOrder : public MatrixCompactDerivs<2> {
     static constexpr unsigned int n_D_coeffs_ = 7;
 
    public:
-    template <typename... Args>
     BYUDerivsP6_R3_SecondOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP6_R3_SecondOrder::n_D_coeffs_);
@@ -752,11 +755,11 @@ class BYUDerivsP8_R4_FirstOrder : public MatrixCompactDerivs<1> {
     static constexpr unsigned int n_D_coeffs_ = 9;
 
    public:
-    template <typename... Args>
     BYUDerivsP8_R4_FirstOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP8_R4_FirstOrder::n_D_coeffs_);
@@ -789,11 +792,11 @@ class BYUDerivsP8_R4_SecondOrder : public MatrixCompactDerivs<2> {
     static constexpr unsigned int n_D_coeffs_ = 9;
 
    public:
-    template <typename... Args>
     BYUDerivsP8_R4_SecondOrder(
-        unsigned int ele_order,
-        const std::vector<double>& coeffs_in = std::vector<double>(), Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         // check the coefficients
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP8_R4_SecondOrder::n_D_coeffs_);

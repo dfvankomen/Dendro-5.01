@@ -18,9 +18,10 @@ MatrixDiagonalEntries* createJTP6DiagonalsSecondOrder();
  */
 class JonathanTyler_JTT4_FirstOrder : public MatrixCompactDerivs<1> {
    public:
-    template <typename... Args>
-    JonathanTyler_JTT4_FirstOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    JonathanTyler_JTT4_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createJTT4DiagonalsFirstOrder();
 
         this->init();
@@ -94,9 +95,10 @@ class JonathanTyler_JTT4_FirstOrder_Banded : public BandedCompactDerivs {
  */
 class JonathanTyler_JTT4_SecondOrder : public MatrixCompactDerivs<2> {
    public:
-    template <typename... Args>
-    JonathanTyler_JTT4_SecondOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    JonathanTyler_JTT4_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createJTT4DiagonalsSecondOrder();
 
         this->init();
@@ -171,9 +173,10 @@ class JonathanTyler_JTT4_SecondOrder_Banded : public BandedCompactDerivs {
  */
 class JonathanTyler_JTT6_FirstOrder : public MatrixCompactDerivs<1> {
    public:
-    template <typename... Args>
-    JonathanTyler_JTT6_FirstOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    JonathanTyler_JTT6_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createJTT6DiagonalsFirstOrder();
 
         this->init();
@@ -248,9 +251,10 @@ class JonathanTyler_JTT6_FirstOrder_Banded : public BandedCompactDerivs {
  */
 class JonathanTyler_JTT6_SecondOrder : public MatrixCompactDerivs<2> {
    public:
-    template <typename... Args>
-    JonathanTyler_JTT6_SecondOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    JonathanTyler_JTT6_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createJTT6DiagonalsSecondOrder();
 
         this->init();
@@ -325,9 +329,10 @@ class JonathanTyler_JTT6_SecondOrder_Banded : public BandedCompactDerivs {
  */
 class JonathanTyler_JTP6_FirstOrder : public MatrixCompactDerivs<1> {
    public:
-    template <typename... Args>
-    JonathanTyler_JTP6_FirstOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    JonathanTyler_JTP6_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createJTP6DiagonalsFirstOrder();
 
         this->init();
@@ -387,9 +392,10 @@ class JonathanTyler_JTP6_FirstOrder_Banded : public BandedCompactDerivs {
  */
 class JonathanTyler_JTP6_SecondOrder : public MatrixCompactDerivs<2> {
    public:
-    template <typename... Args>
-    JonathanTyler_JTP6_SecondOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    JonathanTyler_JTP6_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createJTP6DiagonalsSecondOrder();
 
         this->init();

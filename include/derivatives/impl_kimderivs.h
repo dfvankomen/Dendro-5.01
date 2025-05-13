@@ -13,9 +13,11 @@ MatrixDiagonalEntries* createKimDiagonals();
 /** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
 class KimBoundO4_FirstOrder : public MatrixCompactDerivs<1> {
    public:
-    template <typename... Args>
-    KimBoundO4_FirstOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs<1>{ele_order} {
+    KimBoundO4_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter,
+                                 in_filter_coeffs} {
         diagEntries = createKimDiagonals();
 
         this->init();

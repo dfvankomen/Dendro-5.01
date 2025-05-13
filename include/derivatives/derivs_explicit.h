@@ -91,9 +91,7 @@ class ExplicitDerivsO4_DX : public Derivs {
         gradz_func;
 
    public:
-    template <typename... Args>
-    ExplicitDerivsO4_DX(unsigned int ele_order, Args &&...)
-        : Derivs(ele_order) {
+    ExplicitDerivsO4_DX(unsigned int ele_order) : Derivs(ele_order) {
         if (p_pw == 2) {
             gradx_func = &deriv42_x<2>;
             grady_func = &deriv42_y<2>;
@@ -159,9 +157,7 @@ class ExplicitDerivsO4_DXX : public Derivs {
         gradz_func;
 
    public:
-    template <typename... Args>
-    ExplicitDerivsO4_DXX(unsigned int ele_order, Args &&...)
-        : Derivs(ele_order) {
+    ExplicitDerivsO4_DXX(unsigned int ele_order) : Derivs(ele_order) {
         if (p_pw == 2) {
             gradx_func = &deriv42_xx<2>;
             grady_func = &deriv42_yy<2>;
@@ -226,9 +222,7 @@ class ExplicitDerivsO6_DX : public Derivs {
         gradz_func;
 
    public:
-    template <typename... Args>
-    ExplicitDerivsO6_DX(unsigned int ele_order, Args &&...)
-        : Derivs(ele_order) {
+    ExplicitDerivsO6_DX(unsigned int ele_order) : Derivs(ele_order) {
         if (p_pw == 3) {
             gradx_func = &deriv644_x<3>;
             grady_func = &deriv644_y<3>;
@@ -289,9 +283,7 @@ class ExplicitDerivsO6_DXX : public Derivs {
         gradz_func;
 
    public:
-    template <typename... Args>
-    ExplicitDerivsO6_DXX(unsigned int ele_order, Args &&...)
-        : Derivs(ele_order) {
+    ExplicitDerivsO6_DXX(unsigned int ele_order) : Derivs(ele_order) {
         if (p_pw == 3) {
             gradx_func = &deriv644_xx<3>;
             grady_func = &deriv644_yy<3>;
@@ -352,9 +344,7 @@ class ExplicitDerivsO8_DX : public Derivs {
         gradz_func;
 
    public:
-    template <typename... Args>
-    ExplicitDerivsO8_DX(unsigned int ele_order, Args &&...)
-        : Derivs(ele_order) {
+    ExplicitDerivsO8_DX(unsigned int ele_order) : Derivs(ele_order) {
         if (p_pw == 4) {
             gradx_func = &deriv8666_x<4>;
             grady_func = &deriv8666_y<4>;
@@ -411,9 +401,7 @@ class ExplicitDerivsO8_DXX : public Derivs {
         gradz_func;
 
    public:
-    template <typename... Args>
-    ExplicitDerivsO8_DXX(unsigned int ele_order, Args &&...)
-        : Derivs(ele_order) {
+    ExplicitDerivsO8_DXX(unsigned int ele_order) : Derivs(ele_order) {
         if (p_pw == 4) {
             gradx_func = &deriv8666_xx<4>;
             grady_func = &deriv8666_yy<4>;

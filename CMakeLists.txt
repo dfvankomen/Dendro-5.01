@@ -132,6 +132,9 @@ set(DENDRO_INCLUDE_FILES
     include/derivatives/impl_hybrid_approaches.h
     include/derivatives/filt_kodiss_explicit.h
     include/derivatives/nova_derivs.h
+    include/derivatives/filt_inmat.h
+    include/derivatives/filt_inmat_byufilter.h
+    include/derivatives/filt_inmat_kim.h
 )
 
 set(DENDRO_SOURCE_FILES

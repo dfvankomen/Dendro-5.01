@@ -14,9 +14,10 @@ MatrixDiagonalEntries* createE8DiagonalsSecondOrder();
 
 class ExplicitDerivsO4_Matrix_FirstOrder : public MatrixCompactDerivs<1> {
    public:
-    template <typename... Args>
-    ExplicitDerivsO4_Matrix_FirstOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    ExplicitDerivsO4_Matrix_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createE4DiagonalsFirstOrder();
 
         this->init();
@@ -40,9 +41,10 @@ class ExplicitDerivsO4_Matrix_FirstOrder : public MatrixCompactDerivs<1> {
 
 class ExplicitDerivsO4_Matrix_SecondOrder : public MatrixCompactDerivs<2> {
    public:
-    template <typename... Args>
-    ExplicitDerivsO4_Matrix_SecondOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    ExplicitDerivsO4_Matrix_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createE4DiagonalsSecondOrder();
 
         this->init();
@@ -65,9 +67,10 @@ class ExplicitDerivsO4_Matrix_SecondOrder : public MatrixCompactDerivs<2> {
 
 class ExplicitDerivsO6_Matrix_FirstOrder : public MatrixCompactDerivs<1> {
    public:
-    template <typename... Args>
-    ExplicitDerivsO6_Matrix_FirstOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    ExplicitDerivsO6_Matrix_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createE6DiagonalsFirstOrder();
 
         this->init();
@@ -91,9 +94,10 @@ class ExplicitDerivsO6_Matrix_FirstOrder : public MatrixCompactDerivs<1> {
 
 class ExplicitDerivsO6_Matrix_SecondOrder : public MatrixCompactDerivs<2> {
    public:
-    template <typename... Args>
-    ExplicitDerivsO6_Matrix_SecondOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    ExplicitDerivsO6_Matrix_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createE6DiagonalsSecondOrder();
 
         this->init();
@@ -116,9 +120,10 @@ class ExplicitDerivsO6_Matrix_SecondOrder : public MatrixCompactDerivs<2> {
 
 class ExplicitDerivsO8_Matrix_FirstOrder : public MatrixCompactDerivs<1> {
    public:
-    template <typename... Args>
-    ExplicitDerivsO8_Matrix_FirstOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    ExplicitDerivsO8_Matrix_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createE8DiagonalsFirstOrder();
 
         this->init();
@@ -142,9 +147,10 @@ class ExplicitDerivsO8_Matrix_FirstOrder : public MatrixCompactDerivs<1> {
 
 class ExplicitDerivsO8_Matrix_SecondOrder : public MatrixCompactDerivs<2> {
    public:
-    template <typename... Args>
-    ExplicitDerivsO8_Matrix_SecondOrder(unsigned int ele_order, Args&&...)
-        : MatrixCompactDerivs{ele_order} {
+    ExplicitDerivsO8_Matrix_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
         diagEntries = createE8DiagonalsSecondOrder();
 
         this->init();
