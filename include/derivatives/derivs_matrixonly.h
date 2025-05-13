@@ -68,10 +68,12 @@ class MatrixCompactDerivs : public CompactDerivs {
         : CompactDerivs{ele_order} {
         // establish workspace to be as large as our largest
         unsigned int workspace_size_calc = p_n * p_n * p_n * 2;
-        workspace_     = std::vector<double>(workspace_size_calc, 0.0);
-        workspace_tot_ = workspace_size_calc;
+        workspace_        = std::vector<double>(workspace_size_calc, 0.0);
+        workspace_tot_    = workspace_size_calc;
 
         // then call and build up the in_matrix_filter_
+        in_matrix_filter_ = createInMatrixFilterByType(in_matrix_filter,
+                                                       in_matrix_filter_coeffs);
     }
 
     ~MatrixCompactDerivs() {
