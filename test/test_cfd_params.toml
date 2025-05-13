@@ -30,6 +30,13 @@
 "dy" = 0.10
 "dz" = 0.20
 
+
+inmatfilt_1 = "BYUT6"
+inmatfilt_2 = "BYUT6"
+
+inmatfilt_X_coeffs = [0.5]
+inmatfilt_XX_coeffs = [0.5]
+
 num_profile_tests = 500
 
 

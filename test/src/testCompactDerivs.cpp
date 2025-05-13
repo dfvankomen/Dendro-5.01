@@ -53,32 +53,37 @@ void init_data(const uint32_t init_type, double_t *u_var, const double *corner,
 
 namespace params {
 
-uint32_t eleorder            = 8;
+uint32_t eleorder                   = 8;
 
-std::string derivType_first  = "";
-std::string derivType_second = "";
-std::string filterType       = "default";
+std::string derivType_first         = "";
+std::string derivType_second        = "";
+std::string filterType              = "default";
 
-unsigned int deriv1_matrixID = 1;
-unsigned int deriv2_matrixID = 1;
+std::string inMatrixFilterType_1    = "none";
+std::string inMatrixFilterType_2    = "none";
+std::vector<double> in_mat_coeffs_1 = {};
+std::vector<double> in_mat_coeffs_2 = {};
+
+unsigned int deriv1_matrixID        = 1;
+unsigned int deriv2_matrixID        = 1;
 
 // dendro_cfd::FilterType filter_type    = dendro_cfd::FILT_NONE;
-uint32_t num_tests           = 1000;
-uint32_t data_init           = 2;
-uint32_t num_x_blocks        = 10;
-uint32_t num_y_blocks        = 10;
-uint32_t num_z_blocks        = 10;
+uint32_t num_tests                  = 1000;
+uint32_t data_init                  = 2;
+uint32_t num_x_blocks               = 10;
+uint32_t num_y_blocks               = 10;
+uint32_t num_z_blocks               = 10;
 
-double x_start               = 0.0;
-double y_start               = 0.0;
-double z_start               = 0.0;
+double x_start                      = 0.0;
+double y_start                      = 0.0;
+double z_start                      = 0.0;
 
-double dx                    = 0.25;
-double dy                    = 0.25;
-double dz                    = 0.25;
+double dx                           = 0.25;
+double dy                           = 0.25;
+double dz                           = 0.25;
 
-std::vector<double> coeffs_1 = {};
-std::vector<double> coeffs_2 = {};
+std::vector<double> coeffs_1        = {};
+std::vector<double> coeffs_2        = {};
 
 void readParams(const char *inFile) {
     auto file = toml::parse(inFile);
@@ -147,6 +152,24 @@ void readParams(const char *inFile) {
 
     if (file.contains("deriv_XX_coeffs")) {
         coeffs_2 = toml::find<std::vector<double>>(file, "deriv_XX_coeffs");
+    }
+
+    if (file.contains("inmatfilt_1")) {
+        inMatrixFilterType_1 = file["inmatfilt_1"].as_string();
+    }
+
+    if (file.contains("inmatfilt_2")) {
+        inMatrixFilterType_1 = file["inmatfilt_2"].as_string();
+    }
+
+    if (file.contains("inmatfilt_X_coeffs")) {
+        in_mat_coeffs_1 =
+            toml::find<std::vector<double>>(file, "inmatfilt_X_coeffs");
+    }
+
+    if (file.contains("inmatfilt_XX_coeffs")) {
+        in_mat_coeffs_2 =
+            toml::find<std::vector<double>>(file, "inmatfilt_XX_coeffs");
     }
 
     // check to make sure we're good to go...
@@ -607,6 +630,7 @@ void boris_init(double_t *u_var, const double_t *corner, const uint32_t *sz,
                     double_t x = x_start + i * dx;
                     u_dyy[IDX(i, j, k)] =
                         2.0 * (sin(2 * y) + pow(cos(2 * y), 2)) *
+
                         exp(-sin(2 * x) - sin(2 * y) - sin(2 * z));
                 }
             }
@@ -1436,15 +1460,24 @@ int main(int argc, char **argv) {
     }
 
     std::cout << "Building Explicit derivatives..." << std::endl;
-    dendroderivs::DendroDerivatives deriv(derivType_test, derivType_test,
-                                          params::eleorder, {}, {}, 0, 0,
-                                          filterType_test);
+    dendroderivs::DendroDerivatives deriv(
+        derivType_test, derivType_test, params::eleorder, {}, {}, 0, 0,
+        params::inMatrixFilterType_1, params::inMatrixFilterType_2,
+        params::in_mat_coeffs_1, params::in_mat_coeffs_2, filterType_test);
 
     std::cout << "Building test derivatives..." << std::endl;
+    std::cout << "INCOMING COEFFS: ";
+    for (auto i : params::in_mat_coeffs_1) {
+        std::cout << i << " ";
+    }
+    std::cout << std::endl;
+
     dendroderivs::DendroDerivatives deriv_cfd(
         params::derivType_first, params::derivType_second, params::eleorder,
         params::coeffs_1, params::coeffs_2, params::deriv1_matrixID,
-        params::deriv2_matrixID, params::filterType);
+        params::deriv2_matrixID, params::inMatrixFilterType_1,
+        params::inMatrixFilterType_2, params::in_mat_coeffs_1,
+        params::in_mat_coeffs_2, params::filterType);
     std::cout << "Derivatives built!" << std::endl;
 
     // run a short test to see what the errors are
