@@ -19,8 +19,8 @@ inline void kim_filter_cal_coeff(double* c, double kc) {
 inline MatrixDiagonalEntries* create_Kim_filter_diagonals(
     const std::vector<double>& F_coeffs) {
     double pi  = 3.141592654;
-    double kc  = 0.50 * pi;
-    double eps = 0.25;
+    double kc  = F_coeffs[0] * pi;
+    double eps = F_coeffs[1];
     double c0[3];
     double cd[3];
     double cdd[3];
