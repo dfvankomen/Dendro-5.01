@@ -979,3 +979,29 @@ target_include_directories(buildGlobalMat
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(buildGlobalMat PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(buildGlobalMat PRIVATE ${GSL_INCLUDE_DIRS})
+
+
+set(SOURCE_FILES test/src/testKODiss.cpp )
+add_executable(testKODiss ${SOURCE_FILES})
+target_link_libraries(testKODiss dendro5 ${BLAS_LIBRARIES} -llapacke ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
+                      m toml11::toml11)
+target_include_directories(testKODiss
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(testKODiss
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include/derivatives)
+target_include_directories(testKODiss
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(testKODiss
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(testKODiss
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(testKODiss
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(testKODiss
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(testKODiss
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(testKODiss
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(testKODiss PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(testKODiss PRIVATE ${GSL_INCLUDE_DIRS})
