@@ -488,24 +488,6 @@ void do_old_kodiss(double_t *u_var, double_t *u_rhs, double_t *u_rhs_output,
     ko_deriv42_y(u_dy_t.data(), u_var, deltas[1], sz, bflag);
     ko_deriv42_z(u_dz_t.data(), u_var, deltas[2], sz, bflag);
 
-    // compared to zero
-    std::vector<double_t> temp =
-        std::vector<double_t>(sz[0] * sz[1] * sz[2], 0.0);
-    double_t rmse_val, min_val, max_val;
-
-    std::tie(rmse_val, min_val, max_val) =
-        calculate_rmse(u_dx_t.data(), temp.data(), sz, padding);
-    std::cout << "OLD-X 'RMSE': " << rmse_val << "    - min : " << min_val
-              << " max : " << max_val << std::endl;
-    std::tie(rmse_val, min_val, max_val) =
-        calculate_rmse(u_dy_t.data(), temp.data(), sz, padding);
-    std::cout << "OLD-Y 'RMSE': " << rmse_val << "    - min : " << min_val
-              << " max : " << max_val << std::endl;
-    std::tie(rmse_val, min_val, max_val) =
-        calculate_rmse(u_dz_t.data(), temp.data(), sz, padding);
-    std::cout << "OLD-Z 'RMSE': " << rmse_val << "    - min : " << min_val
-              << " max : " << max_val << std::endl;
-
     for (unsigned int k = padding; k < nz - padding; k++) {
         for (unsigned int j = padding; j < ny - padding; j++) {
             for (unsigned int i = padding; i < nx - padding; i++) {
@@ -561,14 +543,6 @@ int main(int argc, char *argv[]) {
     std::vector<double_t> u_rhs_kodiss_old =
         std::vector<double_t>(sz[0] * sz[1] * sz[2]);
     std::vector<double_t> u_rhs_kodiss_new = u_rhs;
-
-    // check the URHS
-    std::vector<double_t> temp =
-        std::vector<double_t>(sz[0] * sz[1] * sz[2], 0.0);
-    std::tie(rmse_val, min_val, max_val) =
-        calculate_rmse(temp.data(), u_rhs.data(), sz, padding);
-    std::cout << "URHS: " << rmse_val << "    - min error: " << min_val
-              << " max error: " << max_val << std::endl;
 
     // do the old stuff
     do_old_kodiss(u_var.data(), u_rhs.data(), u_rhs_kodiss_old.data(), sigma,
