@@ -47,16 +47,11 @@ void inline do_ko_single(const double *const calc_dx,
                          const double coeff, const unsigned int *sz,
                          const unsigned int bflag, const unsigned int PW) {
     const unsigned int nx = sz[0];
-    const unsigned int ny = sz[0];
-    const unsigned int nz = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
+
     for (unsigned int k = PW; k < nz - PW; k++) {
         for (unsigned int j = PW; j < ny - PW; j++) {
-#ifdef SOLVER_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__RHS_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (unsigned int i = PW; i < nx - PW; i++) {
                 const unsigned int pp = i + nx * (j + ny * k);
                 output[pp] += coeff * (calc_dx[pp] + calc_dy[pp] + calc_dz[pp]);
@@ -107,7 +102,8 @@ class ExplicitKODissO2 : public Filters {
         return std::make_unique<ExplicitKODissO2>(*this);
     }
 
-    // for KO diss, input/output should actually be the same!
+    // for KO diss, input is our variable itself, and output is the in-place
+    // modified u_rhs
     virtual void do_full_filter(const double *const input, double *const output,
                                 double *const workspace_x,
                                 double *const workspace_y,
@@ -117,8 +113,8 @@ class ExplicitKODissO2 : public Filters {
                                 const unsigned int bflag) override {
         // calculate filt x, y, and z
         kox_func(workspace_x, input, dx, sz, bflag);
-        koy_func(workspace_y, input, dx, sz, bflag);
-        koz_func(workspace_z, input, dx, sz, bflag);
+        koy_func(workspace_y, input, dy, sz, bflag);
+        koz_func(workspace_z, input, dz, sz, bflag);
 
         do_ko_single(workspace_x, workspace_y, workspace_z, output, coeff, sz,
                      bflag, p_pw);
@@ -174,7 +170,8 @@ class ExplicitKODissO4 : public Filters {
         return std::make_unique<ExplicitKODissO4>(*this);
     }
 
-    // for KO diss, input/output should actually be the same!
+    // for KO diss, input is our variable itself, and output is the in-place
+    // modified u_rhs
     virtual void do_full_filter(const double *const input, double *const output,
                                 double *const workspace_x,
                                 double *const workspace_y,
@@ -182,10 +179,9 @@ class ExplicitKODissO4 : public Filters {
                                 const double dy, const double dz,
                                 const double coeff, const unsigned int *sz,
                                 const unsigned int bflag) override {
-        // calculate filt x, y, and z
         kox_func(workspace_x, input, dx, sz, bflag);
-        koy_func(workspace_y, input, dx, sz, bflag);
-        koz_func(workspace_z, input, dx, sz, bflag);
+        koy_func(workspace_y, input, dy, sz, bflag);
+        koz_func(workspace_z, input, dz, sz, bflag);
 
         do_ko_single(workspace_x, workspace_y, workspace_z, output, coeff, sz,
                      bflag, p_pw);
@@ -237,7 +233,8 @@ class ExplicitKODissO6 : public Filters {
         return std::make_unique<ExplicitKODissO6>(*this);
     }
 
-    // for KO diss, input/output should actually be the same!
+    // for KO diss, input is our variable itself, and output is the in-place
+    // modified u_rhs
     virtual void do_full_filter(const double *const input, double *const output,
                                 double *const workspace_x,
                                 double *const workspace_y,
@@ -247,8 +244,8 @@ class ExplicitKODissO6 : public Filters {
                                 const unsigned int bflag) override {
         // calculate filt x, y, and z
         kox_func(workspace_x, input, dx, sz, bflag);
-        koy_func(workspace_y, input, dx, sz, bflag);
-        koz_func(workspace_z, input, dx, sz, bflag);
+        koy_func(workspace_y, input, dy, sz, bflag);
+        koz_func(workspace_z, input, dz, sz, bflag);
 
         do_ko_single(workspace_x, workspace_y, workspace_z, output, coeff, sz,
                      bflag, p_pw);
@@ -298,7 +295,8 @@ class ExplicitKODissO8 : public Filters {
         return std::make_unique<ExplicitKODissO6>(*this);
     }
 
-    // for KO diss, input/output should actually be the same!
+    // for KO diss, input is our variable itself, and output is the in-place
+    // modified u_rhs
     virtual void do_full_filter(const double *const input, double *const output,
                                 double *const workspace_x,
                                 double *const workspace_y,
