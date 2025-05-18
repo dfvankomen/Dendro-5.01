@@ -42,6 +42,8 @@ enum DerivType {
     D_JTP10,
     // J.W. Kim 4th order derivatives
     D_K4,
+    D_K4_07,
+    D_K4_16,
     D_KB4,
     // Brady Livescue Derivatives
     D_BL6,

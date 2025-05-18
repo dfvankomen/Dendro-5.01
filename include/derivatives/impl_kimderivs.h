@@ -9,6 +9,8 @@
 namespace dendroderivs {
 
 MatrixDiagonalEntries* createKimDiagonals();
+MatrixDiagonalEntries* createKim07Diagonals();
+MatrixDiagonalEntries* createKim16Diagonals();
 
 /** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
 class KimBoundO4_FirstOrder : public MatrixCompactDerivs<1> {
@@ -40,6 +42,69 @@ class KimBoundO4_FirstOrder : public MatrixCompactDerivs<1> {
 
     std::string toString() const override { return "KimBoundO4_FirstOrder"; };
 };
+
+/** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
+class Kim_07_BoundO4_FirstOrder : public MatrixCompactDerivs<1> {
+   public:
+    Kim_07_BoundO4_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter,
+                                 in_filter_coeffs} {
+        diagEntries = createKim07Diagonals();
+
+        this->init();
+    }
+    ~Kim_07_BoundO4_FirstOrder() {
+#ifdef DEBUG
+        std::cout << "in BandedCompactDerivs_KimBound4 deconstructor"
+                  << std::endl;
+#endif
+    };
+
+    std::unique_ptr<Derivs> clone() const override {
+    return std::make_unique<Kim_07_BoundO4_FirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_K4_07; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override { return "Kim_07BoundO4_FirstOrder"; };
+};
+
+/** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
+class Kim_16_BoundO4_FirstOrder : public MatrixCompactDerivs<1> {
+   public:
+    Kim_16_BoundO4_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter,
+                                 in_filter_coeffs} {
+        diagEntries = createKim16Diagonals();
+
+        this->init();
+    }
+    ~Kim_16_BoundO4_FirstOrder() {
+#ifdef DEBUG
+        std::cout << "in BandedCompactDerivs_KimBound4 deconstructor"
+                  << std::endl;
+#endif
+    };
+
+    std::unique_ptr<Derivs> clone() const override {
+    return std::make_unique<Kim_16_BoundO4_FirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_K4_16; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override { return "Kim_016BoundO4_FirstOrder"; };
+};
+
 
 /** 4th order tridiagonal Kim Derivative, First Order, Banded System */
 class KimBoundO4_FirstOrder_Banded : public BandedCompactDerivs {
