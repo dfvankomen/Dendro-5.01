@@ -47,6 +47,12 @@ class DerivsFactory {
         } else if (name == "KIM4") {
             return std::unique_ptr<Derivs>(new KimBoundO4_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "KIM407") {
+            return std::unique_ptr<Derivs>(new Kim_07_BoundO4_FirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "KIM416") {
+            return std::unique_ptr<Derivs>(new Kim_16_BoundO4_FirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
         } else if (name == "JTT4") {
             return std::unique_ptr<Derivs>(new JonathanTyler_JTT4_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));

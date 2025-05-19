@@ -42,6 +42,8 @@ enum DerivType {
     D_JTP10,
     // J.W. Kim 4th order derivatives
     D_K4,
+    D_K4_07,
+    D_K4_16,
     D_KB4,
     // Brady Livescue Derivatives
     D_BL6,
@@ -344,7 +346,7 @@ class DendroDerivatives {
     FilterFamily get_filter_family() { return _filter->get_filter_family(); }
 };
 
-void inline initialize_derivatives() {}
+void inline initialize_derivatives() { libxsmm_init(); }
 
 void inline finalize_derivatives() { libxsmm_finalize(); }
 

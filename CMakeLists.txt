@@ -25,6 +25,14 @@ if(DENDROLIB_ISOLATED_DIR)
 endif()
 
 # configure third party libraries:
+option(USE_LOCAL_XSMM "Use a local copy of libxsmm's source instead of fetching at build" OFF)
+
+if (USE_LOCAL_XSMM)
+  set(LOCAL_XSMM_PATH "" CACHE PATH "Path to local libxsmm repository")
+  if(NOT EXISTS "${LOCAL_XSMM_PATH}/CMakeLists.txt")
+    message(FATAL_ERROR "LOCAL_XSMM_PATH is either not set or is pointing to an invalid libxsmm source")
+  endif()
+endif()
 
 
 option(USE_LOCAL_XSMM "Use a local copy of libxsmm's source instead of fetching at build" OFF)
