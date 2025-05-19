@@ -25,8 +25,35 @@ if(DENDROLIB_ISOLATED_DIR)
 endif()
 
 # configure third party libraries:
+if (USE_LOCAL_XSMM)
+  set(LOCAL_XSMM_PATH "" CACHE PATH "Path to local libxsmm repository")
+  if(NOT EXISTS "${LOCAL_XSMM_PATH}/CMakeLists.txt")
+    message(FATAL_ERROR "LOCAL_XSMM_PATH is either not set or is pointing to an invalid libxsmm source")
+  endif()
+endif()
 
 include(FetchContent)
+
+if (USE_LOCAL_XSMM)
+  FetchContent_Declare(
+    xsmm
+    SOURCE_DIR ${LOCAL_XSMM_PATH}
+  )
+else()
+  # libxsmm configuration
+  FetchContent_Declare(
+    xsmm
+    GIT_REPOSITORY https://github.com/libxsmm/libxsmm.git
+    # GIT_TAG        1.17
+    # older tag that I used in another project
+    # GIT_TAG 03f1da20478a43fca64d0a14f1afa9f687d0f070
+    # recent tag
+    # GIT_TAG ffabf6eaa7547a46a2b191c2bf170470a3fd2c4a
+    GIT_TAG main
+    GIT_SHALLOW TRUE
+  )
+endif()
+
 # libxsmm configuration
 FetchContent_Declare(
   xsmm
