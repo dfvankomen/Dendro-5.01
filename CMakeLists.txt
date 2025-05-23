@@ -9,7 +9,7 @@
 # The options in there must be included in the root directory of your project
 # that you are using this library with. This will configure everything for building,
 # but the options must be propagated to your own solvers and projects.
-# 
+#
 # ##############################################################################
 
 cmake_minimum_required(VERSION 3.1)
@@ -21,6 +21,9 @@ option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
 if(DENDROLIB_ISOLATED_DIR)
   include("CMakeLists-NonLibraryDefs.txt")
 endif()
+
+# GR's important AEH Solver
+add_subdirectory(lib/BHaHAHA)
 
 message(STATUS "Now setting the CMake files for the Dendro Library...")
 
@@ -82,7 +85,9 @@ set(DENDRO_INCLUDE_FILES
     test/include/testUtils.tcc
     test/include/meshTestUtils.h
     include/launcher.h
-    include/device.h)
+    include/device.h
+    include/aeh_bhahaha.h
+)
 
 set(DENDRO_SOURCE_FILES
     src/dendro.cpp
@@ -105,7 +110,9 @@ set(DENDRO_SOURCE_FILES
     src/sub_oda.cpp
     src/meshUtils.cpp
     src/waveletRefEl.cpp
-    test/src/meshTestUtils.cpp)
+    test/src/meshTestUtils.cpp
+    src/aeh_bhahaha.cpp
+)
 
 set(FEM_INC
     FEM/include/basis.h
@@ -264,6 +271,8 @@ if(BUILD_WITH_PETSC)
   target_include_directories(dendro5 PUBLIC ${PETSC_INCLUDES})
   target_link_libraries(dendro5 PUBLIC ${PETSC_LIBRARIES})
 endif()
+
+target_link_libraries(dendro5 PUBLIC BHaHAHA)
 
 # =======================
 # =======================
