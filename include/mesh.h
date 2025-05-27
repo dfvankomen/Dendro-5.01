@@ -79,6 +79,14 @@ extern double t_blk_g[3];
 #include "dendroProfileParams.h"
 #include "waveletRefEl.h"
 
+// two small helpers to check if something is a vector, and they're the same
+// (hopefully)
+template <typename T>
+struct is_vector : std::false_type {};
+
+template <typename T, typename A>
+struct is_vector<std::vector<T, A>> : std::true_type {};
+
 struct E2EUpdateData {
     uint64_t sourceGlobalID;
     uint64_t targetGlobalID;
@@ -1520,6 +1528,9 @@ class Mesh {
         return m_uiNumPostGhostElements;
     }
     // get nodal information.
+
+    /** @brief Returns the number of post-ghost elements */
+    inline unsigned int getNumActualNodes() const { return m_uiNumActualNodes; }
 
     /**@brief return the number of nodes local to the mesh*/
     inline unsigned int getNumLocalMeshNodes() const {
@@ -4615,7 +4626,7 @@ class Mesh {
         // m_uiAllLocalNode doesn't need to be updated here
 
         // update locations
-        m_uiElementPreGhostEnd    = 0;
+        m_uiElementPreGhostBegin  = 0;
         m_uiElementPreGhostEnd    = newLocalBegin;
         m_uiElementLocalBegin     = newLocalBegin;
         m_uiElementLocalEnd       = newLocalEnd;
@@ -4992,6 +5003,187 @@ class Mesh {
             return static_cast<N>(val);
         });
         return output;
+    }
+
+    template <typename T>
+    inline int checkMismatch(const T &self_val, const T &other_val,
+                             const std::string &field) {
+        if constexpr (is_vector<T>::value) {
+            // check size comparison first
+            if (self_val.size() != self_val.size()) {
+                std::cerr << " ERROR (rank " << this->m_uiGlobalRank
+                          << "): " << field
+                          << " size mismatch! self: " << self_val.size()
+                          << " vs other: " << other_val.size() << std::endl;
+                return -1;
+            }
+            for (size_t i = 0; i < self_val.size(); ++i) {
+                if (self_val[i] != other_val[i]) {
+                    std::cerr << "ERROR (rank " << this->m_uiGlobalRank
+                              << "): " << field << " mismatch at index " << i
+                              << "! self: " << self_val[i]
+                              << " vs other: " << other_val[i] << std::endl;
+                    return -1;
+                }
+            }
+        } else {
+            if (self_val != other_val) {
+                std::cerr << "ERROR (rank " << this->m_uiGlobalRank
+                          << "): " << field << " mismatch! self: " << self_val
+                          << " vs other: " << other_val << std::endl;
+                return -1;
+            }
+        }
+        return 0;
+    }
+
+    /**
+     * @brief This is a "debug" test function that lets us directly compare
+     * various objects together
+     */
+    int compareCriticalMeshObjects(const Mesh *other) {
+        if (!this->m_uiIsActive) return 0;
+
+        bool failed = false;
+
+        // test the m_uiE2EMapping, CG_DG, etc
+        if (checkMismatch(this->m_uiE2EMapping, other->getE2EMapping(),
+                          "E2EMapping (vec)") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiE2NMapping_CG, other->getE2NMapping(),
+                          "E2NMapping_CG (vec)") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiE2NMapping_DG, other->getE2NMapping_DG(),
+                          "E2NMapping_DG (vec)") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiCG2DG, other->getCG2DGMap(),
+                          "CG2DGMap (vec)") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiDG2CG, other->getDG2CGMap(),
+                          "DG2CGMap (vec)") != 0) {
+            failed = true;
+        }
+
+        // number of elements stored
+        if (checkMismatch(this->m_uiNumLocalElements,
+                          other->getNumLocalMeshElements(),
+                          "NumLocalElements") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiNumPreGhostElements,
+                          other->getNumPreGhostElements(),
+                          "NumPreGhostElements") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiNumPostGhostElements,
+                          other->getNumPostGhostElements(),
+                          "NumPostGhostElements") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiNumActualNodes, other->getNumActualNodes(),
+                          "NumActualNodes") != 0) {
+            failed = true;
+        }
+        // mesh element offsets...
+        if (checkMismatch(this->m_uiElementPreGhostBegin,
+                          other->getElementPreGhostBegin(),
+                          "ElementPreGhostBegin") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiElementPreGhostEnd,
+                          other->getElementPreGhostEnd(),
+                          "ElementPreGhostEnd") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiElementLocalBegin,
+                          other->getElementLocalBegin(),
+                          "ElementLocalBegin") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiElementLocalEnd,
+                          other->getElementLocalEnd(),
+                          "ElementLocalEnd") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiElementPostGhostBegin,
+                          other->getElementPostGhostBegin(),
+                          "ElementPostGhostBegin") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiElementPostGhostEnd,
+                          other->getElementPostGhostEnd(),
+                          "ElementPostGhostEnd") != 0) {
+            failed = true;
+        }
+
+        // node element offsets
+        if (checkMismatch(this->m_uiNodePreGhostBegin,
+                          other->getNodePreGhostBegin(),
+                          "NodePreGhostBegin") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiNodePreGhostEnd,
+                          other->getNodePreGhostEnd(),
+                          "NodePreGhostEnd") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiNodeLocalBegin, other->getNodeLocalBegin(),
+                          "NodeLocalBegin") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiNodeLocalEnd, other->getNodeLocalEnd(),
+                          "NodeLocalEnd") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiNodePostGhostBegin,
+                          other->getNodePostGhostBegin(),
+                          "NodePostGhostBegin") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiNodePostGhostEnd,
+                          other->getNodePostGhostEnd(),
+                          "NodePostGhostEnd") != 0) {
+            failed = true;
+        }
+
+        // send counts
+        if (checkMismatch(this->m_uiSendNodeCount, other->getNodalSendCounts(),
+                          "SendNodeCount (vec)") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiRecvNodeCount, other->getNodalRecvCounts(),
+                          "RecvNodeCount (vec)") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiSendNodeOffset,
+                          other->getNodalSendOffsets(),
+                          "SendNodeOffset (vec)") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiRecvNodeOffset,
+                          other->getNodalRecvOffsets(),
+                          "RecvNodeOffset (vec)") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiScatterMapActualNodeSend,
+                          other->getSendNodeSM(),
+                          "SendNodeScatterMap (vec)") != 0) {
+            failed = true;
+        }
+        if (checkMismatch(this->m_uiScatterMapActualNodeRecv,
+                          other->getRecvNodeSM(),
+                          "SendNodeScatterMap (vec)") != 0) {
+            failed = true;
+        }
+
+        // TODO: scattermap data!
+
+        if (failed) return -1;
+        return 0;
     }
 };
 
