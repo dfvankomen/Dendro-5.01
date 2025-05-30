@@ -204,7 +204,11 @@ set(DENDRO_INCLUDE_FILES
     include/compression/compression_factory.hpp
     include/compression/compression_interface.hpp
     include/compression/compression_wrapper.hpp
-
+    include/compression/compressor_dummy.hpp
+    include/compression/compressor_interpolation.hpp
+    include/compression/compressor_onnx.hpp
+    include/compression/compressor_torchscript.hpp
+    include/compression/compressor_zfp.hpp
 )
 
 set(DENDRO_SOURCE_FILES
@@ -954,3 +958,27 @@ target_include_directories(torchTest
                            PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
 target_include_directories(torchTest PRIVATE ${MPI_INCLUDE_PATH})
 target_include_directories(torchTest PRIVATE ${GSL_INCLUDE_DIRS})
+
+
+set(SOURCE_FILES test/src/compressDecompressTest.cpp)
+add_executable(compressDecompress ${SOURCE_FILES})
+target_link_libraries(compressDecompress dendro5 ${LAPACK_LIBRARIES} ${MPI_LIBRARIES}
+                      m)
+target_include_directories(compressDecompress
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(compressDecompress
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/test/include)
+target_include_directories(compressDecompress
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/examples/include)
+target_include_directories(compressDecompress
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/FEM/include)
+target_include_directories(compressDecompress
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/ODE/include)
+target_include_directories(compressDecompress
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/LinAlg/include)
+target_include_directories(compressDecompress
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include)
+target_include_directories(compressDecompress
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc)
+target_include_directories(compressDecompress PRIVATE ${MPI_INCLUDE_PATH})
+target_include_directories(compressDecompress PRIVATE ${GSL_INCLUDE_DIRS})

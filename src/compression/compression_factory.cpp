@@ -5,6 +5,7 @@
 
 // compressors
 #include "compression/compressor_dummy.hpp"
+#include "compression/compressor_interpolation.hpp"
 #include "compression/compressor_onnx.hpp"
 #include "compression/compressor_torchscript.hpp"
 #include "compression/compressor_zfp.hpp"
@@ -145,6 +146,40 @@ void register_compressors() {
                 std::any_cast<std::string>(args[7]),
                 std::any_cast<std::string>(args[8]),
                 std::any_cast<std::string>(args[9]));
+        });
+
+    // Interpolation Compressor Registration
+    floatCompressor.register_compressor(
+        dendrocompression::CompressionType::COMP_INTERP,
+        [](const std::vector<std::any>& args) {
+            if (args.size() != 3 || !args[0].has_value() ||
+                !args[1].has_value() || !args[2].has_value()) {
+                throw std::runtime_error(
+                    "Invalid number of inputs for setting up Interpolation "
+                    "Compressor");
+            }
+            return std::make_unique<InterpolationCompressor<float>>(
+                // dummy compressor takes in two unsigned ints
+                std::any_cast<unsigned int>(args[0]),
+                std::any_cast<unsigned int>(args[1]),
+                std::any_cast<unsigned int>(args[2]));
+        });
+
+    doubleCompressor.register_compressor(
+        dendrocompression::CompressionType::COMP_INTERP,
+        [](const std::vector<std::any>& args) {
+            if (args.size() != 3 || !args[0].has_value() ||
+                !args[1].has_value() || !args[2].has_value()) {
+                throw std::runtime_error(
+                    "Invalid number of inputs for setting up Interpolation "
+                    "Compressor");
+            }
+
+            return std::make_unique<InterpolationCompressor<double>>(
+                // dummy compressor takes in two unsigned ints
+                std::any_cast<unsigned int>(args[0]),
+                std::any_cast<unsigned int>(args[1]),
+                std::any_cast<unsigned int>(args[2]));
         });
 
     // do all of the compression registering here...

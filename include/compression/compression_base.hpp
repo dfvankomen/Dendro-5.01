@@ -14,7 +14,8 @@ enum CompressionType {
     COMP_CHEBYSHEV,
     COMP_BLOSC,
     COMP_TORCH_SCRIPT,
-    COMP_ONNX_MODEL
+    COMP_ONNX_MODEL,
+    COMP_INTERP
 };
 
 template <typename T>
