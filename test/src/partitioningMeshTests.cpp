@@ -28,7 +28,8 @@ namespace temp_data {
 std::random_device rd;
 std::mt19937 gen(rd());
 
-std::normal_distribution<double> dist(0.0, 1.0);
+std::normal_distribution<double> distnorm(0.0, 1.0);
+std::uniform_real_distribution<double> distuniform(-1.0, 1.0);
 
 }  // namespace temp_data
 
@@ -117,7 +118,12 @@ int main(int argc, char** argv) {
 
     std::function<double(double, double, double)> func_flat =
         [d_min, d_max](const double x, const double y, const double z) {
-            return 1e8 * temp_data::dist(temp_data::gen);
+            return 1e8 * temp_data::distuniform(temp_data::gen);
+        };
+
+    std::function<double(double, double, double)> func_sine =
+        [d_min, d_max](const double x, const double y, const double z) {
+            return sin(x) * sin(y) * sin(z);
         };
 
     //@note that based on how the functions are defined (f(x), dxf(x), etc)
@@ -209,7 +215,7 @@ int main(int argc, char** argv) {
     // function2Octree(func_alt, tmpNodes, m_uiMaxDepth, wavelet_tol,
     // eOrder,
     //                 comm);
-    function2Octree(func_flat, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder,
+    function2Octree(func_sine, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder,
                     comm);
 
     // THIS MESH WILL NOT BE AFFECTED
