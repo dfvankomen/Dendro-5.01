@@ -1250,5 +1250,308 @@ MatrixDiagonalEntries* BYUDerivsP8R4DiagonalsSecondOrder(
 
     return diagEntries;
 }
+MatrixDiagonalEntries* BYUDerivsP6R32DiagonalsSecondOrder(
+	const std::vector<double>& D_coeffs) {
+		double alpha0 = 12.0 / 97.0;
+		double alpha = alpha0 + D_coeffs[0];
+		double a06 = D_coeffs[1];
+		double a16 = D_coeffs[2];
+		double a26 = D_coeffs[3];
 
+		double a1 = 120.0 / 97.0;
+		double beta =  - 1.0 / 194.0;
+		double a00 = (177.0 - 524.0 * a06) / 16.0;
+		double a01 = ( - 3.0 * (169.0 + 1476.0 * a06)) / 8.0;
+		double a02 = (27.0 * (29.0 + 380.0 * a06)) / 8.0;
+		double a03 = ( - 201.0 - 3140.0 * a06) / 4.0;
+		double a04 = (81.0 * (1.0 + 20.0 * a06)) / 16.0;
+		double a05 = ( - 3.0 * (1.0 + 36.0 * a06)) / 8.0;
+		double a10 = (421.0 + 13592.0 * a16) / 632.0;
+		double a11 = (5465.0 - 441936.0 * a16) / 1896.0;
+		double a12 = (5.0 * ( - 1387.0 + 98172.0 * a16)) / 948.0;
+		double a13 = ( - 5.0 * ( - 209.0 + 27472.0 * a16)) / 316.0;
+		double a14 = (5.0 * (179.0 + 53784.0 * a16)) / 1896.0;
+		double a15 = ( - 23.0 - 27216.0 * a16) / 1896.0;
+		double a20 = (3565.0 + 269178.0 * a26) / 18078.0;
+		double a21 = (2.0 * (3680.0 + 78813.0 * a26)) / 9039.0;
+		double a22 = ( - 5.0 * (1219.0 + 259173.0 * a26)) / 3013.0;
+		double a23 = (20.0 * (368.0 + 321063.0 * a26)) / 9039.0;
+		double a24 = ( - 5.0 * ( - 713.0 + 989658.0 * a26)) / 18078.0;
+		double a25 = ( - 918.0 * a26) / 23.0;
+		double gamma01 = (11.0 - 180.0 * a06) / 2.0;
+		double gamma02 = ( - 131.0 - 1980.0 * a06) / 4.0;
+		double gamma10 = (23.0 + 1620.0 * a16) / 711.0;
+		double gamma12 = (547.0 - 22680.0 * a16) / 158.0;
+		double gamma13 = (1169.0 + 110160.0 * a16) / 1422.0;
+		double gamma20 = (23.0 + 1620.0 * a26) / 2358.0;
+		double gamma21 = (344.0 * (23.0 + 1620.0 * a26)) / 27117.0;
+		double gamma23 = ( - 8.0 * ( - 989.0 + 938385.0 * a26)) / 27117.0;
+		double gamma24 = (529.0 - 3782700.0 * a26) / 54234.0;
+
+		// boundary elements for P matrix for 2nd derivative
+		std::vector<std::vector<double>> P2DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 2nd derivative
+		std::vector<double> P2DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 2nd derivative
+		std::vector<std::vector<double>> Q2DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		double t1 = -2.0 * (a1/1.0);
+		// diagonal elements for Q matrix for 2nd derivative
+		std::vector<double> Q2DiagInterior{
+			-a1/1.0, t1, a1/1.0
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P2DiagInterior, P2DiagBoundary, Q2DiagInterior, Q2DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* BYUDerivsP6R32DiagonalsFirstOrder(
+	const std::vector<double>& D_coeffs) {
+		double alpha0 = 17.0 / 57.0;
+		double alpha = alpha0 + D_coeffs[0];
+		double a05 = D_coeffs[1];
+		double a15 = D_coeffs[2];
+		double a25 = D_coeffs[3];
+
+		double a1 = 30.0 / 19.0;
+		double beta =  - 1.0 / 114.0;
+		double a00 = ( - 43.0 - 72.0 * a05) / 12.0;
+		double a01 = ( - 5.0 * (4.0 + 75.0 * a05)) / 3.0;
+		double a02 = 9.0 + 80.0 * a05;
+		double a03 = (4.0 * (1.0 + 45.0 * a05)) / 3.0;
+		double a04 = ( - 1.0 - 120.0 * a05) / 12.0;
+		double a10 = ( - 47.0 - 2244.0 * a15) / 144.0;
+		double a11 = ( - 4.0 + 225.0 * a15) / 3.0;
+		double a12 = (3.0 + 500.0 * a15) / 4.0;
+		double a13 = ( - 4.0 * ( - 2.0 + 375.0 * a15)) / 9.0;
+		double a14 = (1.0 - 900.0 * a15) / 48.0;
+		double a20 = ( - 25.0 + 2784.0 * a25) / 216.0;
+		double a21 = (5.0 * ( - 4.0 + 165.0 * a25)) / 27.0;
+		double a22 =  - 100.0 * a25;
+		double a23 = (20.0 * (1.0 + 15.0 * a25)) / 27.0;
+		double a24 = (25.0 * (1.0 + 384.0 * a25)) / 216.0;
+		double gamma01 = 4.0 * (2.0 + 15.0 * a05);
+		double gamma02 = 6.0 * (1.0 + 20.0 * a05);
+		double gamma10 = (1.0 + 60.0 * a15) / 12.0;
+		double gamma12 = ( - 3.0 * ( - 1.0 + 100.0 * a15)) / 2.0;
+		double gamma13 = (1.0 - 300.0 * a15) / 3.0;
+		double gamma20 = (1.0 - 120.0 * a25) / 36.0;
+		double gamma21 = ( - 4.0 * ( - 1.0 + 75.0 * a25)) / 9.0;
+		double gamma23 = (4.0 * (1.0 + 150.0 * a25)) / 9.0;
+		double gamma24 = (1.0 + 600.0 * a25) / 36.0;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05},
+			{a10, a11, a12, a13, a14, a15},
+			{a20, a21, a22, a23, a24, a25}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a1/2.0, 0.0, a1/2.0
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* BYUDerivsP6R2DiagonalsFirstOrder(
+	const std::vector<double>& D_coeffs) {
+		double alpha0 = 17.0 / 57.0;
+		double alpha = alpha0 + D_coeffs[0];
+		double a05 = D_coeffs[1];
+		double a15 = D_coeffs[2];
+
+		double a1 = 30.0 / 19.0;
+		double beta =  - 1.0 / 114.0;
+		double a00 = ( - 43.0 - 72.0 * a05) / 12.0;
+		double a01 = ( - 5.0 * (4.0 + 75.0 * a05)) / 3.0;
+		double a02 = 9.0 + 80.0 * a05;
+		double a03 = (4.0 * (1.0 + 45.0 * a05)) / 3.0;
+		double a04 = ( - 1.0 - 120.0 * a05) / 12.0;
+		double a10 = ( - 47.0 - 2244.0 * a15) / 144.0;
+		double a11 = ( - 4.0 + 225.0 * a15) / 3.0;
+		double a12 = (3.0 + 500.0 * a15) / 4.0;
+		double a13 = ( - 4.0 * ( - 2.0 + 375.0 * a15)) / 9.0;
+		double a14 = (1.0 - 900.0 * a15) / 48.0;
+		double gamma01 = 4.0 * (2.0 + 15.0 * a05);
+		double gamma02 = 6.0 * (1.0 + 20.0 * a05);
+		double gamma10 = (1.0 + 60.0 * a15) / 12.0;
+		double gamma12 = ( - 3.0 * ( - 1.0 + 100.0 * a15)) / 2.0;
+		double gamma13 = (1.0 - 300.0 * a15) / 3.0;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05},
+			{a10, a11, a12, a13, a14, a15}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a1/2.0, 0.0, a1/2.0
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* BYUDerivsP6R2DiagonalsSecondOrder(
+	const std::vector<double>& D_coeffs) {
+		double alpha0 = 12.0 / 97.0;
+		double alpha = alpha0 + D_coeffs[0];
+		double a06 = D_coeffs[1];
+		double a16 = D_coeffs[2];
+
+		double a1 = 120.0 / 97.0;
+		double beta =  - 1.0 / 194.0;
+		double a00 = (177.0 - 524.0 * a06) / 16.0;
+		double a01 = ( - 3.0 * (169.0 + 1476.0 * a06)) / 8.0;
+		double a02 = (27.0 * (29.0 + 380.0 * a06)) / 8.0;
+		double a03 = ( - 201.0 - 3140.0 * a06) / 4.0;
+		double a04 = (81.0 * (1.0 + 20.0 * a06)) / 16.0;
+		double a05 = ( - 3.0 * (1.0 + 36.0 * a06)) / 8.0;
+		double a10 = (421.0 + 13592.0 * a16) / 632.0;
+		double a11 = (5465.0 - 441936.0 * a16) / 1896.0;
+		double a12 = (5.0 * ( - 1387.0 + 98172.0 * a16)) / 948.0;
+		double a13 = ( - 5.0 * ( - 209.0 + 27472.0 * a16)) / 316.0;
+		double a14 = (5.0 * (179.0 + 53784.0 * a16)) / 1896.0;
+		double a15 = ( - 23.0 - 27216.0 * a16) / 1896.0;
+		double gamma01 = (11.0 - 180.0 * a06) / 2.0;
+		double gamma02 = ( - 131.0 - 1980.0 * a06) / 4.0;
+		double gamma10 = (23.0 + 1620.0 * a16) / 711.0;
+		double gamma12 = (547.0 - 22680.0 * a16) / 158.0;
+		double gamma13 = (1169.0 + 110160.0 * a16) / 1422.0;
+
+		// boundary elements for P matrix for 2nd derivative
+		std::vector<std::vector<double>> P2DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13}
+		};
+
+		// diagonal elements for P matrix for 2nd derivative
+		std::vector<double> P2DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 2nd derivative
+		std::vector<std::vector<double>> Q2DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16}
+		};
+
+		double t1 = -2.0 * (a1/1.0);
+		// diagonal elements for Q matrix for 2nd derivative
+		std::vector<double> Q2DiagInterior{
+			-a1/1.0, t1, a1/1.0
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P2DiagInterior, P2DiagBoundary, Q2DiagInterior, Q2DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* BYUDerivsT6R2DiagonalsSecondOrder(
+	const std::vector<double>& D_coeffs) {
+		double alpha0 = 2.0 / 11.0;
+		double alpha = alpha0 + D_coeffs[0];
+		double a07 = D_coeffs[1];
+		double a17 = D_coeffs[2];
+
+		double a1 = 12.0 / 11.0;
+		double a2 = 3.0 / 11.0;
+		double a00 = (7.0 * (1871.0 + 1620.0 * a07)) / 990.0;
+		double a01 = ( - 2943.0 - 700.0 * a07) / 110.0;
+		double a02 = ( - 3.0 * ( - 191.0 + 648.0 * a07)) / 44.0;
+		double a03 = (167.0 + 7695.0 * a07) / 99.0;
+		double a04 = ( - 2.0 * (9.0 + 335.0 * a07)) / 11.0;
+		double a05 = (3.0 * (19.0 + 1080.0 * a07)) / 110.0;
+		double a06 = ( - 131.0 - 16200.0 * a07) / 1980.0;
+		double a10 = (48241.0 + 14404140.0 * a17) / 110160.0;
+		double a11 = (1821.0 - 493220.0 * a17) / 340.0;
+		double a12 = ( - 10453.0 + 2142324.0 * a17) / 816.0;
+		double a13 = (1283.0 - 230490.0 * a17) / 162.0;
+		double a14 = ( - 281.0 + 30740.0 * a17) / 272.0;
+		double a15 = (143.0 + 10620.0 * a17) / 1020.0;
+		double a16 = ( - 1169.0 - 788220.0 * a17) / 110160.0;
+		double gamma01 = (18.0 * (7.0 + 10.0 * a07)) / 11.0;
+		double gamma10 = (5.0 * (1.0 + 1692.0 * a17)) / 612.0;
+		double gamma12 = ( - 3.0 * ( - 113.0 + 21780.0 * a17)) / 68.0;
+
+		// boundary elements for P matrix for 2nd derivative
+		std::vector<std::vector<double>> P2DiagBoundary{
+			{1.0, gamma01},
+			{gamma10, 1.0, gamma12}
+		};
+
+		// diagonal elements for P matrix for 2nd derivative
+		std::vector<double> P2DiagInterior{
+			alpha, 1.0, alpha
+		};
+
+		// boundary elements for Q matrix for 2nd derivative
+		std::vector<std::vector<double>> Q2DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06, a07},
+			{a10, a11, a12, a13, a14, a15, a16, a17}
+		};
+
+		double t1 = -2.0 * (a1/1.0, a2/4.0);
+		// diagonal elements for Q matrix for 2nd derivative
+		std::vector<double> Q2DiagInterior{
+			-a2/4.0, -a1/1.0, t1, a1/1.0, a2/4.0
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P2DiagInterior, P2DiagBoundary, Q2DiagInterior, Q2DiagBoundary
+			};
+		return diagEntries;
+	}
 }  // namespace dendroderivs

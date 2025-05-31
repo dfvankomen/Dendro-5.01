@@ -65,6 +65,8 @@ enum DerivType {
     D_BYUT8,
     // BYU PENTADIAGONAL FREE PARAMETERS (Nate and James)
     D_BYUP6,
+    D_BYUP6R3,
+    D_BYUP6R2,
     D_BYUP8,
     D_BYUP8B7
 };

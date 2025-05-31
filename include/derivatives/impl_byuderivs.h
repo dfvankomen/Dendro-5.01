@@ -69,10 +69,25 @@ MatrixDiagonalEntries* BYUDerivsT6R42DiagonalsFirstOrder(
 MatrixDiagonalEntries* BYUDerivsT6R4DiagonalsSecondOrder(
     const std::vector<double>& D_coeffs);
 
+MatrixDiagonalEntries* BYUDerivsT6R2DiagonalsSecondOrder(
+    const std::vector<double>& D_coeffs);
+
+MatrixDiagonalEntries* BYUDerivsP6R2DiagonalsSecondOrder(
+    const std::vector<double>& D_coeffs);
+
+MatrixDiagonalEntries* BYUDerivsP6R2DiagonalsFirstOrder(
+    const std::vector<double>& D_coeffs);
+
 MatrixDiagonalEntries* BYUDerivsP6R3DiagonalsFirstOrder(
     const std::vector<double>& D_coeffs);
 
+MatrixDiagonalEntries* BYUDerivsP6R32DiagonalsFirstOrder(
+    const std::vector<double>& D_coeffs);
+
 MatrixDiagonalEntries* BYUDerivsP6R3DiagonalsSecondOrder(
+    const std::vector<double>& D_coeffs);
+
+MatrixDiagonalEntries* BYUDerivsP6R32DiagonalsSecondOrder(
     const std::vector<double>& D_coeffs);
 
 MatrixDiagonalEntries* BYUDerivsP8R4DiagonalsSecondOrder(
@@ -309,6 +324,8 @@ class BYUDerivsT4_R42_FirstOrder : public MatrixCompactDerivs<1> {
     }
 };
 
+
+
 class BYUDerivsT4_R3_SecondOrder : public MatrixCompactDerivs<2> {
    private:
     std::vector<double> D_coeffs_;
@@ -342,6 +359,149 @@ class BYUDerivsT4_R3_SecondOrder : public MatrixCompactDerivs<2> {
 
     std::string toString() const override {
         return "BYUDerivsT4_R3_SecondOrder";
+    }
+};
+class BYUDerivsP6_R2_FirstOrder : public MatrixCompactDerivs<1> {
+   private:
+    std::vector<double> D_coeffs_;
+
+    static constexpr unsigned int n_D_coeffs_ = 3;
+
+   public:
+    BYUDerivsP6_R2_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        // check the coefficients
+
+        D_coeffs_ =
+            clean_coeffs(coeffs_in, BYUDerivsP6_R2_FirstOrder::n_D_coeffs_);
+
+        diagEntries = BYUDerivsP6R2DiagonalsFirstOrder(D_coeffs_);
+
+        this->init();
+    }
+    ~BYUDerivsP6_R2_FirstOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsP6_R2_FirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_BYUP6R2; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override {
+        return "BYUDerivsP6_R2_FirstOrder";
+    }
+};
+class BYUDerivsP6_R32_SecondOrder : public MatrixCompactDerivs<2> {
+   private:
+    std::vector<double> D_coeffs_;
+
+    static constexpr unsigned int n_D_coeffs_ = 4;
+
+   public:
+    BYUDerivsP6_R32_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        // check the coefficients
+        D_coeffs_ =
+            clean_coeffs(coeffs_in, BYUDerivsP6_R32_SecondOrder::n_D_coeffs_);
+
+        diagEntries = BYUDerivsP6R32DiagonalsSecondOrder(D_coeffs_);
+
+        this->init();
+    }
+    ~BYUDerivsP6_R32_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsP6_R32_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_BYUP6R3; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_SECOND_ORDER;
+    }
+
+    std::string toString() const override {
+        return "BYUDerivsP6_R32_SecondOrder";
+    }
+};
+
+class BYUDerivsP6_R2_SecondOrder : public MatrixCompactDerivs<2> {
+   private:
+    std::vector<double> D_coeffs_;
+
+    static constexpr unsigned int n_D_coeffs_ = 3;
+
+   public:
+    BYUDerivsP6_R2_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        // check the coefficients
+        D_coeffs_ =
+            clean_coeffs(coeffs_in, BYUDerivsP6_R2_SecondOrder::n_D_coeffs_);
+
+        diagEntries = BYUDerivsP6R2DiagonalsSecondOrder(D_coeffs_);
+
+        this->init();
+    }
+    ~BYUDerivsP6_R2_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsP6_R2_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_BYUP6R2; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_SECOND_ORDER;
+    }
+
+    std::string toString() const override {
+        return "BYUDerivsP6_R2_SecondOrder";
+    }
+};
+
+class BYUDerivsT6_R2_SecondOrder : public MatrixCompactDerivs<2> {
+   private:
+    std::vector<double> D_coeffs_;
+
+    static constexpr unsigned int n_D_coeffs_ = 4;
+
+   public:
+    BYUDerivsT6_R2_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        // check the coefficients
+        D_coeffs_ =
+            clean_coeffs(coeffs_in, BYUDerivsT6_R2_SecondOrder::n_D_coeffs_);
+
+        diagEntries = BYUDerivsT6R2DiagonalsSecondOrder(D_coeffs_);
+
+        this->init();
+    }
+    ~BYUDerivsT6_R2_SecondOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsT6_R2_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_BYUT6R2; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_SECOND_ORDER;
+    }
+
+    std::string toString() const override {
+        return "BYUDerivsT6_R2_SecondOrder";
     }
 };
 
@@ -379,6 +539,43 @@ class BYUDerivsT6_R3_FirstOrder : public MatrixCompactDerivs<1> {
 
     std::string toString() const override {
         return "BYUDerivsT6_R3_SecondOrder";
+    }
+};
+
+class BYUDerivsP6_R32_FirstOrder : public MatrixCompactDerivs<1> {
+   private:
+    std::vector<double> D_coeffs_;
+
+    static constexpr unsigned int n_D_coeffs_ = 4;
+
+   public:
+    BYUDerivsP6_R32_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        // check the coefficients
+        D_coeffs_ =
+            clean_coeffs(coeffs_in, BYUDerivsP6_R32_FirstOrder::n_D_coeffs_);
+
+        diagEntries = BYUDerivsP6R32DiagonalsFirstOrder(D_coeffs_);
+
+        this->init();
+    }
+
+    ~BYUDerivsP6_R32_FirstOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsP6_R32_FirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_BYUP6R3; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override {
+        return "BYUDerivsP6_R32_FirstOrder";
     }
 };
 
@@ -671,7 +868,7 @@ class BYUDerivsP6_R3_SecondOrder : public MatrixCompactDerivs<2> {
         return std::make_unique<BYUDerivsP6_R3_SecondOrder>(*this);
     }
 
-    DerivType getDerivType() const override { return DerivType::D_BYUT6; }
+    DerivType getDerivType() const override { return DerivType::D_BYUP6; }
     DerivOrder getDerivOrder() const override {
         return DerivOrder::D_SECOND_ORDER;
     }
