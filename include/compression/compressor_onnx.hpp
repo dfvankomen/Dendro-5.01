@@ -123,8 +123,6 @@ class ONNXCompressor : public Compression<T> {
         decoder_1d_ = std::make_unique<Ort::Session>(
             env_, decoder_1d_path_.c_str(), session_options_);
 
-        std::cout << "LOADED MODELS" << std::endl;
-
         // TODO: 0D, will need checks for it
 
         // allocator that helps us get the input and output names
@@ -149,12 +147,6 @@ class ONNXCompressor : public Compression<T> {
 
         auto input_name_ptr = encoder_3d_->GetInputNameAllocated(0, allocator);
         input_name_3d_      = input_name_ptr.get();
-
-        std::cout << "ENCODER SHAPE: ";
-        for (auto i : input_shape_3d_) {
-            std::cout << i << " ";
-        }
-        std::cout << std::endl;
 
         const char *input_names_3d[]  = {input_name_3d_.c_str()};
         const char *output_names_3d[] = {output_name_3d_.c_str()};
@@ -307,12 +299,6 @@ class ONNXCompressor : public Compression<T> {
 
         // update batch size
         input_shape_3d_[0] = batch_size;
-
-        std::cout << "ENCODER SHAPE: ";
-        for (auto i : input_shape_3d_) {
-            std::cout << i << " ";
-        }
-        std::cout << std::endl;
 
         // only resize if we're going to use this buffer
         if constexpr (std::is_same_v<T, double>) {

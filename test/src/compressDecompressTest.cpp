@@ -15,6 +15,44 @@
 
 #define UNIFORM_RAND_0_TO_X(X) ((double)rand() / (double)RAND_MAX * X)
 
+namespace testcomp {
+
+std::string compressor_path_onnx_3d =
+    "../testmodels/ENCODER_twodim_equal_in_out_3d.onnx";
+std::string decompressor_path_onnx_3d =
+    "../testmodels/DECODER_twodim_equal_in_out_3d.onnx";
+std::string compressor_path_onnx_2d =
+    "../testmodels/ENCODER_twodim_equal_in_out_2d.onnx";
+std::string decompressor_path_onnx_2d =
+    "../testmodels/DECODER_twodim_equal_in_out_2d.onnx";
+std::string compressor_path_onnx_1d =
+    "../testmodels/ENCODER_twodim_equal_in_out_1d.onnx";
+std::string decompressor_path_onnx_1d =
+    "../testmodels/DECODER_twodim_equal_in_out_1d.onnx";
+std::string compressor_path_onnx_0d =
+    "../testmodels/ENCODER_twodim_equal_in_out_0d.onnx";
+std::string decompressor_path_onnx_0d =
+    "../testmodels/DECODER_twodim_equal_in_out_0d.onnx";
+
+std::string compressor_path_pt_3d =
+    "../testmodels/ENCODER_twodim_equal_in_out_3d.pt";
+std::string decompressor_path_pt_3d =
+    "../testmodels/DECODER_twodim_equal_in_out_3d.pt";
+std::string compressor_path_pt_2d =
+    "../testmodels/ENCODER_twodim_equal_in_out_2d.pt";
+std::string decompressor_path_pt_2d =
+    "../testmodels/DECODER_twodim_equal_in_out_2d.pt";
+std::string compressor_path_pt_1d =
+    "../testmodels/ENCODER_twodim_equal_in_out_1d.pt";
+std::string decompressor_path_pt_1d =
+    "../testmodels/DECODER_twodim_equal_in_out_1d.pt";
+std::string compressor_path_pt_0d =
+    "../testmodels/ENCODER_twodim_equal_in_out_0d.pt";
+std::string decompressor_path_pt_0d =
+    "../testmodels/DECODER_twodim_equal_in_out_0d.pt";
+
+}  // namespace testcomp
+
 void fillMatrixWave(double* vec, int x, int y, int z, double frequency,
                     double amplitude, double phase, double fx, double fy,
                     double fz, double dx, double dy, double dz) {
@@ -176,7 +214,9 @@ int main() {
 
     unsigned int eleorder      = 6;
     unsigned int n             = eleorder - 1;
-    unsigned int nvar          = 10;
+    unsigned int nvar          = 2;
+
+    unsigned int nbatches      = 10;
 
     unsigned int interp_stride = 2;
 
@@ -184,7 +224,7 @@ int main() {
 
     int x = n, y = n, z = n;  // Dimensions of matrix. Modify as needed.
     int npts       = x * y * z;
-    int total_npts = x * y * z * nvar;
+    int total_npts = x * y * z * nvar * nbatches;
 
     std::cout << "x, y, z: " << x << ", " << y << ", " << z
               << " -> npts: " << npts << " total_npts: " << total_npts
@@ -199,15 +239,19 @@ int main() {
                            (double)sizeof(double))));
 
     uint32_t offset = 0;
-    for (int ii = 0; ii < nvar; ii++) {
-        fillMatrixWave(&fullmatrix[offset], x, y, z, 1.0, (ii + 1) * 1.0, 0.0,
-                       1.0, 1.0, 1.0, 0.01, 0.01, 0.01);
+    for (int jj = 0; jj < nbatches; jj++) {
+        for (int ii = 0; ii < nvar; ii++) {
+            fillMatrixWave(&fullmatrix[offset], x, y, z, 1.0,
+                           (jj + 1) * (ii + 1) * 1.0, 0.0, 1.0, 1.0, 1.0, 0.01,
+                           0.01, 0.01);
 
-        fillMatrixRandom(x, y, z, 1000000000000, &decompressed_full[offset]);
-        fillMatrixRandom(x, y, z, 1000000000000,
-                         &decompressed_full_second[offset]);
+            fillMatrixRandom(x, y, z, 1000000000000,
+                             &decompressed_full[offset]);
+            fillMatrixRandom(x, y, z, 1000000000000,
+                             &decompressed_full_second[offset]);
 
-        offset += npts;
+            offset += npts;
+        }
     }
     std::cout << "FINISHED INITALIZING DATA!" << std::endl;
 
@@ -219,6 +263,18 @@ int main() {
     std::vector<std::vector<std::any>> params{
         // dummy params
         {eleorder, nvar},
+        // onnx model params
+        {eleorder, nvar, testcomp::compressor_path_onnx_3d,
+         testcomp::decompressor_path_onnx_3d, testcomp::compressor_path_onnx_2d,
+         testcomp::decompressor_path_onnx_2d, testcomp::compressor_path_onnx_1d,
+         testcomp::decompressor_path_onnx_1d, testcomp::compressor_path_onnx_0d,
+         testcomp::decompressor_path_onnx_0d},
+        // torchscript model params
+        {eleorder, nvar, testcomp::compressor_path_pt_3d,
+         testcomp::decompressor_path_pt_3d, testcomp::compressor_path_pt_2d,
+         testcomp::decompressor_path_pt_2d, testcomp::compressor_path_pt_1d,
+         testcomp::decompressor_path_pt_1d, testcomp::compressor_path_pt_0d,
+         testcomp::decompressor_path_pt_0d},
         // zfp params
         {eleorder, nvar, zfp_mode, zfp_param},
         // interp params
@@ -226,6 +282,8 @@ int main() {
 
     std::vector<dendrocompression::CompressionType> comp_types = {
         dendrocompression::CompressionType::COMP_DUMMY,
+        dendrocompression::CompressionType::COMP_ONNX_MODEL,
+        dendrocompression::CompressionType::COMP_TORCH_SCRIPT,
         dendrocompression::CompressionType::COMP_ZFP,
         dendrocompression::CompressionType::COMP_INTERP};
 
@@ -247,27 +305,28 @@ int main() {
             if (dim == 3) {
                 // run 3d compression/decompression
                 compressed_bytes = compressor->do_compress_3d(
-                    fullmatrix.data(), compressed_buffer, 1);
+                    fullmatrix.data(), compressed_buffer, nbatches);
 
                 // do decompression
                 compressed_bytes_bak = compressor->do_decompress_3d(
-                    compressed_buffer, decompressed_full.data(), 1);
+                    compressed_buffer, decompressed_full.data(), nbatches);
             } else if (dim == 2) {
                 // run 3d compression/decompression
                 compressed_bytes = compressor->do_compress_2d(
-                    fullmatrix.data(), compressed_buffer, 1 * z);
+                    fullmatrix.data(), compressed_buffer, nbatches * z);
 
                 // do decompression
                 compressed_bytes_bak = compressor->do_decompress_2d(
-                    compressed_buffer, decompressed_full.data(), 1 * z);
+                    compressed_buffer, decompressed_full.data(), nbatches * z);
             } else if (dim == 1) {
                 // run 3d compression/decompression
                 compressed_bytes = compressor->do_compress_1d(
-                    fullmatrix.data(), compressed_buffer, 1 * z * y);
+                    fullmatrix.data(), compressed_buffer, nbatches * z * y);
 
                 // do decompression
                 compressed_bytes_bak = compressor->do_decompress_1d(
-                    compressed_buffer, decompressed_full.data(), 1 * z * y);
+                    compressed_buffer, decompressed_full.data(),
+                    nbatches * z * y);
             }
             std::cout << "\tOriginal matrix size: " << originalMatrixBytes
                       << " bytes" << std::endl;
@@ -283,75 +342,6 @@ int main() {
 
         std::cout << std::endl << std::endl;
     }
-
-#if 0
-    std::cout << "\n\n==== Sending as Chunks" << std::endl;
-
-    // now test compressing a few chunks at a time
-    int all_compressedSize      = 0;
-    uint32_t decompressedOffset = 0;
-    for (int ii = 0; ii < num_matrices; ii++) {
-        int newCompressedSize;
-
-        unsigned char* newCompressedMatrix = ZFPAlgorithms::compressMatrix1D(
-            &fullmatrix[decompressedOffset], n, rate, newCompressedSize);
-
-        // Decompress the matrix
-        ZFPAlgorithms::decompressMatrix1D(
-            newCompressedMatrix, newCompressedSize,
-            &decompressed_full_second[decompressedOffset]);
-
-        all_compressedSize += newCompressedSize;
-
-        decompressedOffset += total_points;
-
-        delete[] newCompressedMatrix;
-    }
-
-    std::cout << "Original matrix size: " << originalMatrixBytes << " bytes"
-              << std::endl;
-    std::cout << "Compressed matrix size: " << all_compressedSize << " bytes"
-              << std::endl;
-    std::cout << "Compressed/Original: "
-              << (double)all_compressedSize / (double)originalMatrixBytes
-              << std::endl;
-    // Printing various types of error between original and decompressed data
-    printError(fullmatrix, decompressed_full_second, x, y, z);
-
-    // printComparison(fullmatrix, decompressed_full_second, x, y, z);
-
-    // for (int ii = 0; ii < num_matrices; ii++) {
-    //     // Define original matrix
-    //     // double* originalMatrix = createMatrixWave(x, y, z, 3.1415, 10.0,
-    //     // 0, 1.0,
-    //     //                                           2.0, 7.0, 0.1, 0.1,
-    //     0.15); double* originalMatrix = createMatrixRandom(x, y, z, 0.01 *
-    //     (ii + 1)); int originalMatrixBytes = x * y * z * sizeof(double);
-
-    //     // Compress the matrix
-    //     int compressedSize;
-    //     unsigned char* compressedMatrix = ZFPAlgorithms::compressMatrix1D(
-    //         originalMatrix, n, rate, compressedSize);
-
-    //     double* decompressedMatrix = new double[x * y * z];
-
-    //     // Decompress the matrix
-    //     ZFPAlgorithms::decompressMatrix1D(compressedMatrix, compressedSize,
-    //                                       decompressedMatrix);
-
-    //     // Printing comparison of original and decompressed data
-    //     printComparison(originalMatrix, decompressedMatrix, x, y, z);
-
-    //     std::cout << "Original matrix size: " << originalMatrixBytes << "
-    //     bytes"
-    //               << std::endl;
-    //     std::cout << "Compressed matrix size: " << compressedSize << " bytes"
-    //               << std::endl;
-    //     // Printing various types of error between original and decompressed
-    //     // data
-    //     printError(originalMatrix, decompressedMatrix, x, y, z);
-    // }
-#endif
 
     // Freeing the memory
     free(compressed_buffer);
