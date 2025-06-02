@@ -429,7 +429,7 @@ class InterpolationCompressor : public Compression<T> {
                     std::size_t src_idx   = x5;
 
                     // then write to the buffer
-                    output_translated[batch_offset_out + var_offset_out + +x] =
+                    output_translated[batch_offset_out + var_offset_out + x] =
                         original_matrix[batch_offset_orig + var_offset_orig +
                                         src_idx];
                 }
@@ -485,17 +485,22 @@ class InterpolationCompressor : public Compression<T> {
                     batch_offset_orig + var_offset_orig;
 
                 for (unsigned int x = 0; x < this->n_; ++x) {
-                    T x_norm       = x * this->scale_;
-                    int x0         = static_cast<int>(x_norm);
-                    int x1         = std::min(x0 + 1,
-                                              static_cast<int>(this->n_reduced_) - 1);
-                    T dx           = x_norm - x0;
-                    T dx_inv       = 1.0f - dx;
+                    T x_norm = x * this->scale_;
+                    int x0   = static_cast<int>(x_norm);
+                    int x1   = std::min(x0 + 1,
+                                        static_cast<int>(this->n_reduced_) - 1);
+                    T dx     = x_norm - x0;
+                    T dx_inv = 1.0f - dx;
+
+                    const unsigned int x0_offset =
+                        batch_offset_comp + var_offset_comp + x0;
+                    const unsigned int x1_offset =
+                        batch_offset_comp + var_offset_comp + x1;
 
                     // fetch 8 corners from input grid
 
-                    T corner_0     = input_translated[x0];
-                    T corner_1     = input_translated[x1];
+                    T corner_0     = input_translated[x0_offset];
+                    T corner_1     = input_translated[x1_offset];
 
                     // trilinear interpolation happens here
 

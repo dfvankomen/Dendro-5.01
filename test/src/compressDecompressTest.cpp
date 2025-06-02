@@ -88,7 +88,8 @@ double* createMatrixRandom(int x, int y, int z, double amplitude) {
 }
 
 void printError(std::vector<double> originalMatrix,
-                std::vector<double> decompressedMatrix) {
+                std::vector<double> decompressedMatrix,
+                std::string prefix = "") {
     // Computing and printing Mean Squared Error, Mean Absolute Error,
     // Maximum Absolute Error, Root Mean Squared Error and Peak Signal to Noise
     // Ratio.
@@ -104,7 +105,7 @@ void printError(std::vector<double> originalMatrix,
     }
     mse /= (total_pts);
 
-    std::cout << "Mean Squared Error: " << mse << "\n";
+    std::cout << prefix << "Mean Squared Error: " << mse << "\n";
     // Compute and print Mean Absolute Error
     double mae = 0;
     for (size_t i = 0; i < total_pts; ++i) {
@@ -112,7 +113,7 @@ void printError(std::vector<double> originalMatrix,
         mae += error;
     }
     mae /= (total_pts);
-    std::cout << "Mean Absolute Error: " << mae << "\n";
+    std::cout << prefix << "Mean Absolute Error: " << mae << "\n";
 
     // Compute and print Maximum Absolute Error
     double maxError = 0;
@@ -120,17 +121,18 @@ void printError(std::vector<double> originalMatrix,
         double error = std::abs(originalMatrix[i] - decompressedMatrix[i]);
         maxError     = std::max(maxError, error);
     }
-    std::cout << "Max Absolute Error: " << maxError << "\n";
+    std::cout << prefix << "Max Absolute Error: " << maxError << "\n";
 
     // Compute and print Root Mean Squared Error
     double rmse = sqrt(mse);
-    std::cout << "Root Mean Squared Error: " << rmse << "\n";
+    std::cout << prefix << "Root Mean Squared Error: " << rmse << "\n";
 
     // Compute and print Peak Signal to Noise Ratio (PSNR)
     double maxOriginalValue = *std::max_element(
         originalMatrix.data(), originalMatrix.data() + (total_pts));
     double psnr = 20 * log10(maxOriginalValue / rmse);
-    std::cout << "Peak Signal to Noise Ratio (in dB): " << psnr << "\n";
+    std::cout << prefix << "Peak Signal to Noise Ratio (in dB): " << psnr
+              << "\n";
 }
 
 void printComparison(const double* originalMatrix,
@@ -188,11 +190,13 @@ int main() {
               << " -> npts: " << npts << " total_npts: " << total_npts
               << std::endl;
 
+    double compressed_buffer_padding = 1.1;
     std::vector<double> fullmatrix(total_npts);
     std::vector<double> decompressed_full(total_npts, 0.0);
     std::vector<double> decompressed_full_second(total_npts, 0.0);
-    unsigned char* compressed_buffer =
-        static_cast<unsigned char*>(malloc(total_npts * sizeof(double)));
+    unsigned char* compressed_buffer = static_cast<unsigned char*>(
+        malloc(std::size_t(compressed_buffer_padding * (double)total_npts *
+                           (double)sizeof(double))));
 
     uint32_t offset = 0;
     for (int ii = 0; ii < nvar; ii++) {
@@ -209,31 +213,76 @@ int main() {
 
     std::size_t originalMatrixBytes = total_npts * sizeof(double);
 
-    std::cout << "BUILDING THE COMPRESSOR" << std::endl;
-    std::unique_ptr<dendrocompression::Compression<double>> compressor =
-        dendrocompression::doubleCompressor.create(
-            dendrocompression::CompressionType::COMP_INTERP,
-            {eleorder, nvar, interp_stride});
+    double zfp_param                = 1.0e-5;
+    std::string zfp_mode            = "accuracy";
 
-    std::cout << " COMPRESSOR type:" << compressor->to_string() << std::endl;
+    std::vector<std::vector<std::any>> params{
+        // dummy params
+        {eleorder, nvar},
+        // zfp params
+        {eleorder, nvar, zfp_mode, zfp_param},
+        // interp params
+        {eleorder, nvar, interp_stride}};
 
-    // compress the data
-    std::size_t compressed_bytes =
-        compressor->do_compress_3d(fullmatrix.data(), compressed_buffer, 1);
+    std::vector<dendrocompression::CompressionType> comp_types = {
+        dendrocompression::CompressionType::COMP_DUMMY,
+        dendrocompression::CompressionType::COMP_ZFP,
+        dendrocompression::CompressionType::COMP_INTERP};
 
-    // do decompression
-    std::size_t compressed_bytes_2 = compressor->do_decompress_3d(
-        compressed_buffer, decompressed_full.data(), 1);
+    unsigned int test_idx = 0;
+    for (auto& comp_type : comp_types) {
+        std::cout << "BUILDING THE COMPRESSOR" << std::endl;
+        std::unique_ptr<dendrocompression::Compression<double>> compressor =
+            dendrocompression::doubleCompressor.create(comp_type,
+                                                       params[test_idx++]);
 
-    std::cout << "Original matrix size: " << originalMatrixBytes << " bytes"
-              << std::endl;
-    std::cout << "Compressed buffer size: " << compressed_bytes << " bytes"
-              << std::endl;
-    std::cout << "Original/Compressed bytes (compression ratio): "
-              << (double)originalMatrixBytes / (double)compressed_bytes
-              << std::endl;
-    // Printing various types of error between original and decompressed data
-    printError(fullmatrix, decompressed_full);
+        std::cout << " COMPRESSOR type:" << compressor->to_string()
+                  << std::endl;
+
+        for (unsigned int dim : {3, 2, 1}) {
+            // do full compression/decompression based on each one
+            std::size_t compressed_bytes, compressed_bytes_bak;
+
+            std::cout << "\tNUMDIM: " << dim << std::endl;
+            if (dim == 3) {
+                // run 3d compression/decompression
+                compressed_bytes = compressor->do_compress_3d(
+                    fullmatrix.data(), compressed_buffer, 1);
+
+                // do decompression
+                compressed_bytes_bak = compressor->do_decompress_3d(
+                    compressed_buffer, decompressed_full.data(), 1);
+            } else if (dim == 2) {
+                // run 3d compression/decompression
+                compressed_bytes = compressor->do_compress_2d(
+                    fullmatrix.data(), compressed_buffer, 1 * z);
+
+                // do decompression
+                compressed_bytes_bak = compressor->do_decompress_2d(
+                    compressed_buffer, decompressed_full.data(), 1 * z);
+            } else if (dim == 1) {
+                // run 3d compression/decompression
+                compressed_bytes = compressor->do_compress_1d(
+                    fullmatrix.data(), compressed_buffer, 1 * z * y);
+
+                // do decompression
+                compressed_bytes_bak = compressor->do_decompress_1d(
+                    compressed_buffer, decompressed_full.data(), 1 * z * y);
+            }
+            std::cout << "\tOriginal matrix size: " << originalMatrixBytes
+                      << " bytes" << std::endl;
+            std::cout << "\tCompressed buffer size: " << compressed_bytes
+                      << " bytes" << std::endl;
+            std::cout << "\tOriginal/Compressed bytes (compression ratio): "
+                      << (double)originalMatrixBytes / (double)compressed_bytes
+                      << std::endl;
+            // Printing various types of error between original and decompressed
+            // data
+            printError(fullmatrix, decompressed_full, "\t\t");
+        }
+
+        std::cout << std::endl << std::endl;
+    }
 
 #if 0
     std::cout << "\n\n==== Sending as Chunks" << std::endl;

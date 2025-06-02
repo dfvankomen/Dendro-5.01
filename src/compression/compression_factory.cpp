@@ -56,6 +56,13 @@ void register_compressors() {
     doubleCompressor.register_compressor(
         dendrocompression::CompressionType::COMP_ZFP,
         [](const std::vector<std::any>& args) {
+            if (args.size() != 4 || !args[0].has_value() ||
+                !args[1].has_value() || !args[2].has_value() ||
+                !args[3].has_value()) {
+                throw std::runtime_error(
+                    "Invalid argument count or unset values");
+            }
+
             return std::make_unique<ZFPCompressor<double>>(
                 // dummy compressor takes in two unsigned ints
                 std::any_cast<unsigned int>(args[0]),
