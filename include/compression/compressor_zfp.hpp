@@ -258,7 +258,6 @@ class ZFPCompressor : public Compression<T> {
             throw std::runtime_error(
                 "CRITICAL ERROR CALCULATING MAXIMUM SIZE in ZFP 3d Compress!");
         }
-        std::cout << "MAX BUFSIZE: " << bufsize << std::endl;
 
         bitstream *stream = stream_open(output_array + sizeof(size_t), bufsize);
         if (stream == nullptr) {
@@ -307,8 +306,6 @@ class ZFPCompressor : public Compression<T> {
         // first extract out the buffer size
         size_t bufsize;
         std::memcpy(&bufsize, compressed_buffer, sizeof(size_t));
-
-        std::cout << "BUF SIZE IS: " << bufsize << std::endl;
 
         if (bufsize == uncompressed_size) {
             std::memcpy(output_array, compressed_buffer + sizeof(size_t),

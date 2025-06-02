@@ -28,8 +28,6 @@ class DummyCompressor : public Compression<T> {
     std::size_t do_compress_3d(T* const original_matrix,
                                unsigned char* const output_array,
                                unsigned int batch_size) override {
-        std::cout << "Hi, inside do_compress_3d: " << batch_size
-                  << " total bytes: " << this->total_3d_bytes_ << std::endl;
         std::memcpy(output_array, original_matrix,
                     batch_size * this->total_3d_bytes_);
         return batch_size * this->total_3d_bytes_;
