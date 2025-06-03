@@ -253,4 +253,199 @@ void dealloc_mpi_ctx(const Mesh* pMesh,
     ctx_list.clear();
 }
 
+template <typename T>
+inline T R_calc(const T comp_domain_max, const T comp_domain_min) {
+    return comp_domain_max - comp_domain_min;
+}
+
+template <typename T>
+inline T Rg_calc(const T octree_domain_max, const T octree_domain_min) {
+    return octree_domain_max - octree_domain_min;
+}
+
+template <typename T>
+inline T grid_to_domain(const T x, const T comp_domain_max,
+                        const T comp_domain_min, const T octree_domain_max,
+                        const T octree_domain_min) {
+    return (((R_calc(comp_domain_max, comp_domain_min) /
+              Rg_calc(octree_domain_max, octree_domain_min)) *
+             (x - octree_domain_min)) +
+            comp_domain_min);
+}
+
+template <typename T>
+inline T grid_to_domain_x(const T x, const T comp_domain_max[3],
+                          const T comp_domain_min[3],
+                          const T octree_domain_max[3],
+                          const T octree_domain_min[3]) {
+    return grid_to_domain(x, comp_domain_max[0], comp_domain_min[0],
+                          octree_domain_max[0], octree_domain_min[0]);
+}
+
+template <typename T>
+inline T grid_to_domain_y(const T x, const T comp_domain_max[3],
+                          const T comp_domain_min[3],
+                          const T octree_domain_max[3],
+                          const T octree_domain_min[3]) {
+    return grid_to_domain(x, comp_domain_max[1], comp_domain_min[1],
+                          octree_domain_max[1], octree_domain_min[1]);
+}
+
+template <typename T>
+inline T grid_to_domain_z(const T x, const T comp_domain_max[3],
+                          const T comp_domain_min[3],
+                          const T octree_domain_max[3],
+                          const T octree_domain_min[3]) {
+    return grid_to_domain(x, comp_domain_max[2], comp_domain_min[2],
+                          octree_domain_max[2], octree_domain_min[2]);
+}
+
+// better optimized
+template <typename T>
+struct PrecomputedRs {
+    T R;
+    T Rg;
+    T odm;
+    T cdm;
+    T RoRg;
+    T RgoRx;
+};
+
+template <typename T>
+PrecomputedRs<T> precomputeR(const T comp_domain_max, const T comp_domain_min,
+                             const T octree_domain_max,
+                             const T octree_domain_min) {
+    PrecomputedRs<T> ranges;
+    ranges.R     = R_calc(comp_domain_max, comp_domain_min);
+    ranges.Rg    = Rg_calc(octree_domain_max, octree_domain_min);
+    ranges.odm   = octree_domain_min;
+    ranges.cdm   = comp_domain_max;
+    ranges.RoRg  = ranges.R / ranges.Rg;
+    ranges.RgoRx = ranges.Rg / ranges.R;
+    return ranges;
+}
+
+template <typename T>
+inline T grid_to_domain(const T x, const PrecomputedRs<T>& r) {
+    return (((r.RoRg) * (x - r.odm)) + r.cdm);
+}
+
+template <typename T>
+inline T domain_to_grid(const T x, const PrecomputedRs<T>& r) {
+    return (((r.RgoRx) * (x - r.cdm)) + r.odm);
+}
+
+template <typename T>
+T normL2_volnorm(const Mesh* mesh, const T* vec, const T octree_domain_max[3],
+                 const T octree_domain_min[3], const T comp_domain_max[3],
+                 const T comp_domain_min[3]) {
+    double l2_g = 0.0;
+
+    PrecomputedRs<T> xr =
+        precomputeR(comp_domain_max[0], comp_domain_min[0],
+                    octree_domain_max[0], octree_domain_min[0]);
+    PrecomputedRs<T> yr =
+        precomputeR(comp_domain_max[1], comp_domain_min[1],
+                    octree_domain_max[1], octree_domain_min[1]);
+    PrecomputedRs<T> zr =
+        precomputeR(comp_domain_max[2], comp_domain_min[2],
+                    octree_domain_max[2], octree_domain_min[2]);
+
+    if (mesh->isActive()) {
+        MPI_Comm comm                     = mesh->getMPICommunicator();
+        const unsigned int eleLocalBegin  = mesh->getElementLocalBegin();
+        const unsigned int eleLocalEnd    = mesh->getElementLocalEnd();
+
+        const unsigned int nodeLocalBegin = mesh->getNodeLocalBegin();
+        const unsigned int nodeLocalEnd   = mesh->getNodeLocalEnd();
+        const unsigned int nPe            = mesh->getNumNodesPerElement();
+
+        const unsigned int* e2n_cg        = &(*(mesh->getE2NMapping().begin()));
+        const unsigned int* e2n_dg  = &(*(mesh->getE2NMapping_DG().begin()));
+        const unsigned int eleOrder = mesh->getElementOrder();
+        const ot::TreeNode* pNodes  = mesh->getAllElements().data();
+
+        double l2                   = 0.0;
+
+        DendroIntL localGridPts     = 0;
+        DendroIntL globalGridPts    = 0;
+        std::vector<bool> accumulated;
+        accumulated.resize(mesh->getDegOfFreedom(), false);
+
+        for (unsigned int elem = eleLocalBegin; elem < eleLocalEnd; elem++) {
+            for (unsigned int k = 0; k < (eleOrder + 1); k++)
+                for (unsigned int j = 0; j < (eleOrder + 1); j++)
+                    for (unsigned int i = 0; i < (eleOrder + 1); i++) {
+                        const unsigned int nodeLookUp_CG =
+                            e2n_cg[elem * nPe +
+                                   k * (eleOrder + 1) * (eleOrder + 1) +
+                                   j * (eleOrder + 1) + i];
+                        if ((nodeLookUp_CG >= nodeLocalBegin &&
+                             nodeLookUp_CG < nodeLocalEnd) &&
+                            !(accumulated[nodeLookUp_CG])) {
+                            const unsigned int nodeLookUp_DG =
+                                e2n_dg[elem * nPe +
+                                       k * (eleOrder + 1) * (eleOrder + 1) +
+                                       j * (eleOrder + 1) + i];
+                            unsigned int ownerID, ii_x, jj_y, kk_z;
+
+                            mesh->dg2eijk(nodeLookUp_DG, ownerID, ii_x, jj_y,
+                                          kk_z);
+                            const double len =
+                                (double)(1u << (m_uiMaxDepth -
+                                                pNodes[ownerID].getLevel()));
+
+                            const double x_ot =
+                                pNodes[ownerID].getX() +
+                                ii_x * (len / ((double)eleOrder));
+                            const double y_ot =
+                                pNodes[ownerID].getY() +
+                                jj_y * (len / ((double)eleOrder));
+                            const double z_ot =
+                                pNodes[ownerID].getZ() +
+                                kk_z * (len / ((double)eleOrder));
+
+                            const double dall_ot  = len / ((double)eleOrder);
+                            // then we can convert directly based on the scaling
+                            // to the dx, dy, and dz
+                            const double dx       = dall_ot * xr.RoRg;
+                            const double dy       = dall_ot * yr.RoRg;
+                            const double dz       = dall_ot * zr.RoRg;
+
+                            const double vol_term = dx * dy * dz;
+
+                            const double x        = grid_to_domain(x_ot, xr);
+                            const double y        = grid_to_domain(y_ot, yr);
+                            const double z        = grid_to_domain(z_ot, zr);
+
+                            Point grid_pt(x, y, z);
+
+                            // l2 is then calculated like this:
+                            // NOTE: that we're scaling the l2 term by the
+                            // volume in dx/dy/dz
+                            l2 += (vec[nodeLookUp_CG] * vec[nodeLookUp_CG]) *
+                                  vol_term;
+                            accumulated[nodeLookUp_CG] = true;
+                            localGridPts++;
+                        }
+                    }
+        }
+
+        par::Mpi_Reduce(&l2, &l2_g, 1, MPI_SUM, 0, mesh->getMPICommunicator());
+        // par::Mpi_Reduce(&localGridPts, &globalGridPts, 1, MPI_SUM, 0,
+        //                 mesh->getMPICommunicator());
+
+        // then divide the full reduction by the total volume:
+        const double volume_total = (comp_domain_max[0] - comp_domain_min[0]) *
+                                    (comp_domain_max[1] - comp_domain_min[1]) *
+                                    (comp_domain_max[2] - comp_domain_min[2]);
+
+        if (!(mesh->getMPIRank())) {
+            l2_g = l2_g / volume_total;
+        }
+    }
+
+    return sqrt(l2_g);
+}
+
 }  // namespace ot
