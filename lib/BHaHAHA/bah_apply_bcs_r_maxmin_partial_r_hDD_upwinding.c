@@ -7,13 +7,13 @@
  * - Positive offsets correspond to forward (downwind) stencils.
  * Returns the computed first derivative at the given grid point.
  */
-static inline REAL FD1_arbitrary_upwind_x0_dirn(const commondata_struct *restrict commondata, const REAL *restrict gf, const int i0, const int i1,
+static inline BHA_REAL FD1_arbitrary_upwind_x0_dirn(const commondata_struct *restrict commondata, const BHA_REAL *restrict gf, const int i0, const int i1,
                                                 const int i2, const int offset) {
 
   const MAYBE_UNUSED int Nxx_plus_2NGHOSTS0 = commondata->bcstruct_Nxx_plus_2NGHOSTS0;
   const MAYBE_UNUSED int Nxx_plus_2NGHOSTS1 = commondata->bcstruct_Nxx_plus_2NGHOSTS1;
   const MAYBE_UNUSED int Nxx_plus_2NGHOSTS2 = commondata->bcstruct_Nxx_plus_2NGHOSTS2;
-  const REAL invdxx0 = 1.0 / (commondata->bcstruct_dxx0);
+  const BHA_REAL invdxx0 = 1.0 / (commondata->bcstruct_dxx0);
   switch (offset) {
   case 0:
     return (-1.0 / 60.0 * gf[IDX3(i0 - 3, i1, i2)] + 3.0 / 20.0 * gf[IDX3(i0 - 2, i1, i2)] - 3.0 / 4.0 * gf[IDX3(i0 - 1, i1, i2)] +
@@ -71,7 +71,7 @@ static inline REAL FD1_arbitrary_upwind_x0_dirn(const commondata_struct *restric
  * @note - Parallelizes angular computations to enhance performance and reduce computation time.
  *
  */
-void bah_apply_bcs_r_maxmin_partial_r_hDD_upwinding(const commondata_struct *restrict commondata, REAL *restrict xx[3], REAL *restrict gfs,
+void bah_apply_bcs_r_maxmin_partial_r_hDD_upwinding(const commondata_struct *restrict commondata, BHA_REAL *restrict xx[3], BHA_REAL *restrict gfs,
                                                     const bool fill_r_min_ghosts) {
 
   const int Nxx_plus_2NGHOSTS0 = commondata->bcstruct_Nxx_plus_2NGHOSTS0;
@@ -127,7 +127,7 @@ void bah_apply_bcs_r_maxmin_partial_r_hDD_upwinding(const commondata_struct *res
 
           if (base_gf != -1) {
             // Compute the radial derivative using the appropriate upwind stencil based on the offset.
-            const REAL partial_x0_f = FD1_arbitrary_upwind_x0_dirn(commondata, &gfs[base_gf * Nxxtot012], i0, i1, i2, offset);
+            const BHA_REAL partial_x0_f = FD1_arbitrary_upwind_x0_dirn(commondata, &gfs[base_gf * Nxxtot012], i0, i1, i2, offset);
             // Store the computed derivative in the target grid function array.
             gfs[IDX4(which_gf, i0, i1, i2)] = partial_x0_f;
           } // END IF the derivative gridfunction needs to be set
@@ -180,7 +180,7 @@ void bah_apply_bcs_r_maxmin_partial_r_hDD_upwinding(const commondata_struct *res
 
             if (base_gf != -1) {
               // Compute the radial derivative using the appropriate upwind stencil based on the offset.
-              const REAL partial_x0_f = FD1_arbitrary_upwind_x0_dirn(commondata, &gfs[base_gf * Nxxtot012], i0, i1, i2, offset);
+              const BHA_REAL partial_x0_f = FD1_arbitrary_upwind_x0_dirn(commondata, &gfs[base_gf * Nxxtot012], i0, i1, i2, offset);
               // Store the computed derivative in the target grid function array.
               gfs[IDX4(which_gf, i0, i1, i2)] = partial_x0_f;
             } // END IF the derivative gridfunction needs to be set

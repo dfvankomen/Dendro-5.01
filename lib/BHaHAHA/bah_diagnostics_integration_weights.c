@@ -9,12 +9,12 @@
  * - Otherwise, defaults to 2nd-order weights.
  *
  */
-void bah_diagnostics_integration_weights(int Nxx1, int Nxx2, const REAL *restrict *weights, int *restrict weight_stencil_size) {
+void bah_diagnostics_integration_weights(int Nxx1, int Nxx2, const BHA_REAL *restrict *weights, int *restrict weight_stencil_size) {
 
   // Define weights for different orders
-  static const REAL weights_2nd_order[1] = {1.0};
-  static const REAL weights_4th_order[4] = {13.0 / 12.0, 11.0 / 12.0, 11.0 / 12.0, 13.0 / 12.0};
-  static const REAL weights_8th_order[8] = {295627.0 / 241920.0, 71329.0 / 241920.0, 17473.0 / 8960.0,   128953.0 / 241920.0, //
+  static const BHA_REAL weights_2nd_order[1] = {1.0};
+  static const BHA_REAL weights_4th_order[4] = {13.0 / 12.0, 11.0 / 12.0, 11.0 / 12.0, 13.0 / 12.0};
+  static const BHA_REAL weights_8th_order[8] = {295627.0 / 241920.0, 71329.0 / 241920.0, 17473.0 / 8960.0,   128953.0 / 241920.0, //
                                             128953.0 / 241920.0, 17473.0 / 8960.0,   71329.0 / 241920.0, 295627.0 / 241920.0};
 
   // Default to 2nd-order weights

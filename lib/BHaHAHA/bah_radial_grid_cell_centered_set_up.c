@@ -6,44 +6,44 @@
 //   points to enable the horizon to deform.
 static const int MIN_INTERIOR_PTS = 4;
 
-static void setup_grid_r_min_interior_zero(const REAL r_min_interior, const REAL r_max_interior, const REAL max_search_radius, const int max_Nr,
-                                           int *restrict output_Nr_interp, REAL *restrict output_r_min, REAL *restrict output_dr) {
+static void setup_grid_r_min_interior_zero(const BHA_REAL r_min_interior, const BHA_REAL r_max_interior, const BHA_REAL max_search_radius, const int max_Nr,
+                                           int *restrict output_Nr_interp, BHA_REAL *restrict output_r_min, BHA_REAL *restrict output_dr) {
   // r_min_interior = r_min = 0
   // r_max_interior = r_min + Nr_interior * dr
   //                = Nr_interior * dr
   // Nr_interior = r_max_interior / max_search_radius * (max_Nr - BHAHAHA_NGHOSTS)
   *output_r_min = 0.0; // by assumption
   // Account for rounding in typecast:
-  int Nr_interior = (int)((1.0 + 1e-7) * r_max_interior / max_search_radius * ((REAL)(max_Nr - BHAHAHA_NGHOSTS)));
+  int Nr_interior = (int)((1.0 + 1e-7) * r_max_interior / max_search_radius * ((BHA_REAL)(max_Nr - BHAHAHA_NGHOSTS)));
   if (Nr_interior < MIN_INTERIOR_PTS) {
     Nr_interior = MIN_INTERIOR_PTS;
   }
-  *output_dr = r_max_interior / ((REAL)Nr_interior);
+  *output_dr = r_max_interior / ((BHA_REAL)Nr_interior);
   *output_Nr_interp = Nr_interior + BHAHAHA_NGHOSTS;
 } // END FUNCTION setup_grid_r_min_interior_zero()
 
-static void setup_grid_r_min_interior_gt_zero(const REAL r_min_interior, const REAL r_max_interior, const REAL max_search_radius, const int max_Nr,
-                                              int *restrict output_Nr_interp, REAL *restrict output_r_min, REAL *restrict output_dr) {
+static void setup_grid_r_min_interior_gt_zero(const BHA_REAL r_min_interior, const BHA_REAL r_max_interior, const BHA_REAL max_search_radius, const int max_Nr,
+                                              int *restrict output_Nr_interp, BHA_REAL *restrict output_r_min, BHA_REAL *restrict output_dr) {
   // r_min_interior = r_min + BHAHAHA_NGHOSTS * dr
   // r_max_interior = r_min + (BHAHAHA_NGHOSTS + Nr_interior) * dr
   // Nr_interior = (r_max_interior - r_min_interior) / max_search_radius * (max_Nr - BHAHAHA_NGHOSTS)
   // Account for rounding in typecast:
-  int Nr_interior = (int)(((1.0 + 1e-7) * r_max_interior - r_min_interior) / max_search_radius * ((REAL)(max_Nr - BHAHAHA_NGHOSTS)));
+  int Nr_interior = (int)(((1.0 + 1e-7) * r_max_interior - r_min_interior) / max_search_radius * ((BHA_REAL)(max_Nr - BHAHAHA_NGHOSTS)));
   if (Nr_interior >= MIN_INTERIOR_PTS) {
-    *output_dr = (r_max_interior - r_min_interior) / ((REAL)Nr_interior);
+    *output_dr = (r_max_interior - r_min_interior) / ((BHA_REAL)Nr_interior);
     *output_r_min = r_min_interior - BHAHAHA_NGHOSTS * (*output_dr);
   } else {
     const int Nr_interior_pts_to_add = MIN_INTERIOR_PTS - Nr_interior;
     Nr_interior = MIN_INTERIOR_PTS;
-    const REAL dr_min = 0.25 * r_max_interior / ((REAL)(max_Nr - BHAHAHA_NGHOSTS));
-    const REAL dr_fiducial = (r_max_interior - r_min_interior) / ((REAL)Nr_interior);
+    const BHA_REAL dr_min = 0.25 * r_max_interior / ((BHA_REAL)(max_Nr - BHAHAHA_NGHOSTS));
+    const BHA_REAL dr_fiducial = (r_max_interior - r_min_interior) / ((BHA_REAL)Nr_interior);
     if (dr_fiducial >= dr_min) {
       *output_dr = dr_fiducial;
       *output_r_min = r_min_interior - (BHAHAHA_NGHOSTS) * (*output_dr);
     } else {
       *output_dr = dr_min;
       *output_r_min = r_min_interior - (BHAHAHA_NGHOSTS + (Nr_interior_pts_to_add / 2)) * (*output_dr);
-      REAL implied_r_max_interior = *output_r_min + (BHAHAHA_NGHOSTS + Nr_interior - 1) * (*output_dr);
+      BHA_REAL implied_r_max_interior = *output_r_min + (BHAHAHA_NGHOSTS + Nr_interior - 1) * (*output_dr);
       while (implied_r_max_interior > max_search_radius) {
         *output_r_min -= (*output_dr);
         // Update implied_r_max_interior.
@@ -79,16 +79,16 @@ static void setup_grid_r_min_interior_gt_zero(const REAL r_min_interior, const R
  * @note Ensures the radial grid includes ghost cells and maintains non-negative radii.
  *
  */
-void bah_radial_grid_cell_centered_set_up(const int Nr_interp_max, const REAL max_search_radius, const REAL input_r_min, const REAL input_r_max,
-                                          int *restrict output_Nr_interp, REAL *restrict output_r_min_interior, REAL *restrict output_dr,
-                                          REAL radii[Nr_interp_max]) {
+void bah_radial_grid_cell_centered_set_up(const int Nr_interp_max, const BHA_REAL max_search_radius, const BHA_REAL input_r_min, const BHA_REAL input_r_max,
+                                          int *restrict output_Nr_interp, BHA_REAL *restrict output_r_min_interior, BHA_REAL *restrict output_dr,
+                                          BHA_REAL radii[Nr_interp_max]) {
 
   // Adjust radii to be within permissible range
-  REAL r_min_interior = input_r_min < 0.0 ? 0.0 : input_r_min;
-  REAL r_max_interior = input_r_max > max_search_radius ? max_search_radius : input_r_max;
+  BHA_REAL r_min_interior = input_r_min < 0.0 ? 0.0 : input_r_min;
+  BHA_REAL r_max_interior = input_r_max > max_search_radius ? max_search_radius : input_r_max;
 
   // Case 1: if r_min_interior == 0
-  REAL output_r_min;
+  BHA_REAL output_r_min;
   if (r_min_interior == 0) {
     setup_grid_r_min_interior_zero(r_min_interior, r_max_interior, max_search_radius, Nr_interp_max, output_Nr_interp, &output_r_min, output_dr);
   } else {
@@ -102,9 +102,9 @@ void bah_radial_grid_cell_centered_set_up(const int Nr_interp_max, const REAL ma
   // Set radii[] array for convenience; could be constructed from
   //   output_r_min, output_Nr_interp, and output_dr.
   for (int i = 0; i < (*output_Nr_interp); i++) {
-    radii[i] = (output_r_min) + ((REAL)(i) + 0.5) * (*output_dr);
+    radii[i] = (output_r_min) + ((BHA_REAL)(i) + 0.5) * (*output_dr);
   } // END LOOP: populating radii array for r_min > 0
-  *output_r_min_interior = output_r_min + ((REAL)(BHAHAHA_NGHOSTS)) * (*output_dr);
+  *output_r_min_interior = output_r_min + ((BHA_REAL)(BHAHAHA_NGHOSTS)) * (*output_dr);
 } // END FUNCTION bah_radial_grid_cell_centered_set_up
 
 #ifdef STANDALONE
@@ -119,7 +119,7 @@ void bah_radial_grid_cell_centered_set_up(const int Nr_interp_max, const REAL ma
  *
  * @return void
  */
-void print_input_parameters(const int Nr_interp_max, const REAL max_search_radius, const REAL input_r_min, const REAL input_r_max) {
+void print_input_parameters(const int Nr_interp_max, const BHA_REAL max_search_radius, const BHA_REAL input_r_min, const BHA_REAL input_r_max) {
   printf("Input parameters:\n");
   printf("  Nr_interp_max = %d\n", Nr_interp_max);
   printf("  max_search_radius = %f\n", max_search_radius);
@@ -137,7 +137,7 @@ void print_input_parameters(const int Nr_interp_max, const REAL max_search_radiu
  *
  * @return void
  */
-void print_output_parameters(const int output_Nr_interp, const REAL output_dr, const REAL output_r_min_interior, const REAL output_r_max_interior) {
+void print_output_parameters(const int output_Nr_interp, const BHA_REAL output_dr, const BHA_REAL output_r_min_interior, const BHA_REAL output_r_max_interior) {
   printf("Output parameters for cell-centered radial grid:\n");
   printf("  output_Nr_interp = %d\n", output_Nr_interp);
   printf("  output_dr = %f\n", output_dr);
@@ -153,7 +153,7 @@ void print_output_parameters(const int output_Nr_interp, const REAL output_dr, c
  *
  * @return void
  */
-void print_radii(const REAL radii[], const int output_Nr_interp) {
+void print_radii(const BHA_REAL radii[], const int output_Nr_interp) {
   printf("Radii:\n");
   for (int i = 0; i < output_Nr_interp; i++) {
     printf("  radii[%d] = %f\n", i, radii[i]);
@@ -172,22 +172,22 @@ void print_radii(const REAL radii[], const int output_Nr_interp) {
  *
  * @return void
  */
-void run_test_case(const char *test_case_description, int Nr_interp_max, REAL max_search_radius, REAL input_r_min, REAL input_r_max) {
+void run_test_case(const char *test_case_description, int Nr_interp_max, BHA_REAL max_search_radius, BHA_REAL input_r_min, BHA_REAL input_r_max) {
   printf("%s\n", test_case_description);
 
   // Display the input parameters for the current test case.
   print_input_parameters(Nr_interp_max, max_search_radius, input_r_min, input_r_max);
 
   int output_Nr_interp;
-  REAL output_r_min_interior, output_dr;
-  REAL radii[Nr_interp_max];
+  BHA_REAL output_r_min_interior, output_dr;
+  BHA_REAL radii[Nr_interp_max];
 
   // Set up the radial grid based on the input parameters.
   bah_radial_grid_cell_centered_set_up(Nr_interp_max, max_search_radius, input_r_min, input_r_max, &output_Nr_interp, &output_r_min_interior,
                                        &output_dr, radii);
 
   // Display the adjusted output parameters after grid setup.
-  const REAL output_r_max_interior = output_r_min_interior + output_dr * ((REAL)output_Nr_interp - BHAHAHA_NGHOSTS);
+  const BHA_REAL output_r_max_interior = output_r_min_interior + output_dr * ((BHA_REAL)output_Nr_interp - BHAHAHA_NGHOSTS);
   print_output_parameters(output_Nr_interp, output_dr, output_r_min_interior, output_r_max_interior);
 
   // Display the computed radial coordinates.

@@ -78,7 +78,7 @@ void bah_diagnostics(commondata_struct *restrict commondata, griddata_struct *re
       bhahaha_diagnostics_struct *restrict bhahaha_diags = commondata->bhahaha_diagnostics;
 
       // r_max_interior = r_min_external_input + ((Nr_external_input-BHAHAHA_NGHOSTS) + 0.5) * dr
-      const REAL r_max_interior =
+      const BHA_REAL r_max_interior =
           commondata->bhahaha_params_and_data->r_min_external_input +
           ((commondata->bhahaha_params_and_data->Nr_external_input - BHAHAHA_NGHOSTS) + 0.5) * commondata->bhahaha_params_and_data->dr_external_input;
 
@@ -123,7 +123,7 @@ void bah_diagnostics(commondata_struct *restrict commondata, griddata_struct *re
                bhahaha_diags->y_centroid_wrt_coord_origin, bhahaha_diags->z_centroid_wrt_coord_origin);
 
         {
-          REAL x_center, y_center, z_center, r_min, r_max;
+          BHA_REAL x_center, y_center, z_center, r_min, r_max;
           bah_xyz_center_r_minmax(commondata->bhahaha_params_and_data, &x_center, &y_center, &z_center, &r_min, &r_max);
 
           // Cycle data from previous horizon finds. _m1 data depend on centroids being computed in bah_diagnostics()

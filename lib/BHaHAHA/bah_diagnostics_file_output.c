@@ -23,7 +23,7 @@
  *
  */
 void bah_diagnostics_file_output(const bhahaha_diagnostics_struct *diags, const bhahaha_params_and_data_struct *bhahaha_params_and_data,
-                                 int N_horizons, const REAL x_center_input, const REAL y_center_input, const REAL z_center_input,
+                                 int N_horizons, const BHA_REAL x_center_input, const BHA_REAL y_center_input, const BHA_REAL z_center_input,
                                  const char *output_directory) {
 
   // For safety, ensure output_directory is valid; fallback to "."
@@ -32,7 +32,7 @@ void bah_diagnostics_file_output(const bhahaha_diagnostics_struct *diags, const 
   }
 
   // Current horizon radial data.
-  const REAL *restrict curr_horizon_h_of_theta_phi = bhahaha_params_and_data->prev_horizon_m1;
+  const BHA_REAL *restrict curr_horizon_h_of_theta_phi = bhahaha_params_and_data->prev_horizon_m1;
 
   char file_name_buffer[1024]; // Buffer for diagnostics & surface-data file names.
   FILE *fileptr = NULL;        // File pointer for output.
@@ -82,15 +82,15 @@ void bah_diagnostics_file_output(const bhahaha_diagnostics_struct *diags, const 
   } // END IF file size zero -> need to write header
 
   // Calculate irreducible mass from horizon area.
-  REAL M_irr = sqrt(diags->area / (16.0 * M_PI));
+  BHA_REAL M_irr = sqrt(diags->area / (16.0 * M_PI));
 
   // Assign spin magnitudes, using NaN to indicate undefined values.
-  const REAL a_x_xy_over_yz_spin = (diags->spin_a_x_from_xy_over_yz_prop_circumfs != -10.0) ? diags->spin_a_x_from_xy_over_yz_prop_circumfs : NAN;
-  const REAL a_x_xz_over_yz_spin = (diags->spin_a_x_from_xz_over_yz_prop_circumfs != -10.0) ? diags->spin_a_x_from_xz_over_yz_prop_circumfs : NAN;
-  const REAL a_y_yz_over_xz_spin = (diags->spin_a_y_from_yz_over_xz_prop_circumfs != -10.0) ? diags->spin_a_y_from_yz_over_xz_prop_circumfs : NAN;
-  const REAL a_y_xy_over_xz_spin = (diags->spin_a_y_from_xy_over_xz_prop_circumfs != -10.0) ? diags->spin_a_y_from_xy_over_xz_prop_circumfs : NAN;
-  const REAL a_z_xz_over_xy_spin = (diags->spin_a_z_from_xz_over_xy_prop_circumfs != -10.0) ? diags->spin_a_z_from_xz_over_xy_prop_circumfs : NAN;
-  const REAL a_z_yz_over_xy_spin = (diags->spin_a_z_from_yz_over_xy_prop_circumfs != -10.0) ? diags->spin_a_z_from_yz_over_xy_prop_circumfs : NAN;
+  const BHA_REAL a_x_xy_over_yz_spin = (diags->spin_a_x_from_xy_over_yz_prop_circumfs != -10.0) ? diags->spin_a_x_from_xy_over_yz_prop_circumfs : NAN;
+  const BHA_REAL a_x_xz_over_yz_spin = (diags->spin_a_x_from_xz_over_yz_prop_circumfs != -10.0) ? diags->spin_a_x_from_xz_over_yz_prop_circumfs : NAN;
+  const BHA_REAL a_y_yz_over_xz_spin = (diags->spin_a_y_from_yz_over_xz_prop_circumfs != -10.0) ? diags->spin_a_y_from_yz_over_xz_prop_circumfs : NAN;
+  const BHA_REAL a_y_xy_over_xz_spin = (diags->spin_a_y_from_xy_over_xz_prop_circumfs != -10.0) ? diags->spin_a_y_from_xy_over_xz_prop_circumfs : NAN;
+  const BHA_REAL a_z_xz_over_xy_spin = (diags->spin_a_z_from_xz_over_xy_prop_circumfs != -10.0) ? diags->spin_a_z_from_xz_over_xy_prop_circumfs : NAN;
+  const BHA_REAL a_z_yz_over_xy_spin = (diags->spin_a_z_from_yz_over_xy_prop_circumfs != -10.0) ? diags->spin_a_z_from_yz_over_xy_prop_circumfs : NAN;
 
   // Output diagnostic metrics to the diagnostics file.
   fprintf(fileptr,
@@ -150,24 +150,24 @@ void bah_diagnostics_file_output(const bhahaha_diagnostics_struct *diags, const 
 
   // Loop over theta and phi, writing out Cartesian coordinates of the horizon surface.
   for (int itheta = 0; itheta < NUM_THETA; itheta++) {
-    const REAL theta = ((REAL)itheta + 0.5) * M_PI / (REAL)NUM_THETA;
-    const REAL sintheta = sin(theta);
-    const REAL costheta = cos(theta);
+    const BHA_REAL theta = ((BHA_REAL)itheta + 0.5) * M_PI / (BHA_REAL)NUM_THETA;
+    const BHA_REAL sintheta = sin(theta);
+    const BHA_REAL costheta = cos(theta);
 
-    REAL first_x = NAN, first_y = NAN, first_z = NAN;
+    BHA_REAL first_x = NAN, first_y = NAN, first_z = NAN;
 
     for (int iphi = 0; iphi < NUM_PHI; iphi++) {
-      const REAL phi = -M_PI + ((REAL)iphi + 0.5) * (2.0 * M_PI / (REAL)NUM_PHI);
-      const REAL sinphi = sin(phi);
-      const REAL cosphi = cos(phi);
+      const BHA_REAL phi = -M_PI + ((BHA_REAL)iphi + 0.5) * (2.0 * M_PI / (BHA_REAL)NUM_PHI);
+      const BHA_REAL sinphi = sin(phi);
+      const BHA_REAL cosphi = cos(phi);
 
       // Retrieve the radial coordinate from horizon data (prev_horizon_m1).
-      const REAL r = curr_horizon_h_of_theta_phi[IDX2(itheta, iphi)];
+      const BHA_REAL r = curr_horizon_h_of_theta_phi[IDX2(itheta, iphi)];
 
       // Compute Cartesian coords; shift by input (global) centroid if desired.
-      const REAL x = r * sintheta * cosphi + x_center_input;
-      const REAL y = r * sintheta * sinphi + y_center_input;
-      const REAL z = r * costheta + z_center_input;
+      const BHA_REAL x = r * sintheta * cosphi + x_center_input;
+      const BHA_REAL y = r * sintheta * sinphi + y_center_input;
+      const BHA_REAL z = r * costheta + z_center_input;
 
       // Store first point, so we can close the loop at the end of the phi sweep.
       if (iphi == 0) {

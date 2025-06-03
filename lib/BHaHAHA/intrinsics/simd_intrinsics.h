@@ -198,7 +198,7 @@
 
 #else
 // If SIMD instructions are unavailable:
-#define REAL_SIMD_ARRAY REAL
+#define REAL_SIMD_ARRAY BHA_REAL
 #define simd_width 1 // 1 double per loop iteration
 
 // Basic Operations (Scalar)

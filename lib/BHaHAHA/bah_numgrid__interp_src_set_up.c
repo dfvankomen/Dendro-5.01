@@ -33,10 +33,10 @@ int bah_numgrid__interp_src_set_up(commondata_struct *restrict commondata, const
 
     // Set grid spacing based on external input and predefined angular ranges.
     commondata->interp_src_dxx0 = commondata->external_input_dxx0;
-    const REAL xxmin1 = 0.0, xxmax1 = M_PI;
-    const REAL xxmin2 = -M_PI, xxmax2 = M_PI;
-    commondata->interp_src_dxx1 = (xxmax1 - xxmin1) / ((REAL)commondata->interp_src_Nxx1);
-    commondata->interp_src_dxx2 = (xxmax2 - xxmin2) / ((REAL)commondata->interp_src_Nxx2);
+    const BHA_REAL xxmin1 = 0.0, xxmax1 = M_PI;
+    const BHA_REAL xxmin2 = -M_PI, xxmax2 = M_PI;
+    commondata->interp_src_dxx1 = (xxmax1 - xxmin1) / ((BHA_REAL)commondata->interp_src_Nxx1);
+    commondata->interp_src_dxx2 = (xxmax2 - xxmin2) / ((BHA_REAL)commondata->interp_src_Nxx2);
 
     // Precompute inverse grid spacings for efficiency in derivative calculations.
     commondata->interp_src_invdxx0 = 1.0 / commondata->interp_src_dxx0;
@@ -44,7 +44,7 @@ int bah_numgrid__interp_src_set_up(commondata_struct *restrict commondata, const
     commondata->interp_src_invdxx2 = 1.0 / commondata->interp_src_dxx2;
 
     // Allocate memory for interpolation source grid functions.
-    commondata->interp_src_gfs = malloc(sizeof(REAL) * commondata->interp_src_Nxx_plus_2NGHOSTS0 * commondata->interp_src_Nxx_plus_2NGHOSTS1 *
+    commondata->interp_src_gfs = malloc(sizeof(BHA_REAL) * commondata->interp_src_Nxx_plus_2NGHOSTS0 * commondata->interp_src_Nxx_plus_2NGHOSTS1 *
                                         commondata->interp_src_Nxx_plus_2NGHOSTS2 * NUM_INTERP_SRC_GFS);
     if (commondata->interp_src_gfs == NULL) {
       // Memory allocation failed for grid functions.
@@ -55,9 +55,9 @@ int bah_numgrid__interp_src_set_up(commondata_struct *restrict commondata, const
   // Step 2: Initialize coordinate arrays for the interpolation source grid.
   {
     // Step 2.a: Allocate memory for radial, theta, and phi coordinate arrays.
-    commondata->interp_src_r_theta_phi[0] = (REAL *)malloc(sizeof(REAL) * commondata->interp_src_Nxx_plus_2NGHOSTS0);
-    commondata->interp_src_r_theta_phi[1] = (REAL *)malloc(sizeof(REAL) * commondata->interp_src_Nxx_plus_2NGHOSTS1);
-    commondata->interp_src_r_theta_phi[2] = (REAL *)malloc(sizeof(REAL) * commondata->interp_src_Nxx_plus_2NGHOSTS2);
+    commondata->interp_src_r_theta_phi[0] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * commondata->interp_src_Nxx_plus_2NGHOSTS0);
+    commondata->interp_src_r_theta_phi[1] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * commondata->interp_src_Nxx_plus_2NGHOSTS1);
+    commondata->interp_src_r_theta_phi[2] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * commondata->interp_src_Nxx_plus_2NGHOSTS2);
     if (commondata->interp_src_r_theta_phi[0] == NULL || commondata->interp_src_r_theta_phi[1] == NULL ||
         commondata->interp_src_r_theta_phi[2] == NULL) {
       // Free previously allocated grid functions before exiting due to memory allocation failure.
@@ -66,8 +66,8 @@ int bah_numgrid__interp_src_set_up(commondata_struct *restrict commondata, const
     } // END IF memory allocation for coordinate arrays failed
 
     // Step 2.b: Populate coordinate arrays for a uniform, cell-centered spherical grid.
-    const REAL xxmin1 = 0.0;
-    const REAL xxmin2 = -M_PI;
+    const BHA_REAL xxmin1 = 0.0;
+    const BHA_REAL xxmin2 = -M_PI;
 
     // Initialize radial coordinates by copying from external input.
     for (int j = 0; j < commondata->interp_src_Nxx_plus_2NGHOSTS0; j++)
@@ -75,11 +75,11 @@ int bah_numgrid__interp_src_set_up(commondata_struct *restrict commondata, const
 
     // Initialize theta coordinates with cell-centered values.
     for (int j = 0; j < commondata->interp_src_Nxx_plus_2NGHOSTS1; j++)
-      commondata->interp_src_r_theta_phi[1][j] = xxmin1 + ((REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->interp_src_dxx1;
+      commondata->interp_src_r_theta_phi[1][j] = xxmin1 + ((BHA_REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->interp_src_dxx1;
 
     // Initialize phi coordinates with cell-centered values.
     for (int j = 0; j < commondata->interp_src_Nxx_plus_2NGHOSTS2; j++)
-      commondata->interp_src_r_theta_phi[2][j] = xxmin2 + ((REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->interp_src_dxx2;
+      commondata->interp_src_r_theta_phi[2][j] = xxmin2 + ((BHA_REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->interp_src_dxx2;
   } // END STEP 2: Initialize coordinate arrays for the interpolation source grid.
 
   // Step 2.c: Extract grid sizes for use in indexing macros.
@@ -93,32 +93,32 @@ int bah_numgrid__interp_src_set_up(commondata_struct *restrict commondata, const
 
   // Step 4: Transfer interpolated data from external grid functions to interpolation source grid functions.
   {
-    const REAL *restrict r_theta_phi[3] = {commondata->interp_src_r_theta_phi[0], commondata->interp_src_r_theta_phi[1],
+    const BHA_REAL *restrict r_theta_phi[3] = {commondata->interp_src_r_theta_phi[0], commondata->interp_src_r_theta_phi[1],
                                            commondata->interp_src_r_theta_phi[2]};
-    REAL *restrict in_gfs = commondata->interp_src_gfs;
+    BHA_REAL *restrict in_gfs = commondata->interp_src_gfs;
 
 #pragma omp parallel for
     for (int i2 = NGHOSTS; i2 < Nxx_plus_2NGHOSTS2 - NGHOSTS; i2++) {
-      const MAYBE_UNUSED REAL xx2 = r_theta_phi[2][i2];
+      const MAYBE_UNUSED BHA_REAL xx2 = r_theta_phi[2][i2];
       for (int i1 = NGHOSTS; i1 < Nxx_plus_2NGHOSTS1 - NGHOSTS; i1++) {
-        const MAYBE_UNUSED REAL xx1 = r_theta_phi[1][i1];
+        const MAYBE_UNUSED BHA_REAL xx1 = r_theta_phi[1][i1];
         for (int i0 = i0_min_shift; i0 < Nxx_plus_2NGHOSTS0; i0++) {
-          const MAYBE_UNUSED REAL xx0 = r_theta_phi[0][i0];
+          const MAYBE_UNUSED BHA_REAL xx0 = r_theta_phi[0][i0];
           // We perform this transformation in place; data read in will be written to the same points.
-          const REAL external_Sph_W = in_gfs[IDX4(EXTERNAL_SPHERICAL_WWGF, i0, i1, i2)];
-          const REAL external_Sph_trK = in_gfs[IDX4(EXTERNAL_SPHERICAL_TRKGF, i0, i1, i2)];
-          const REAL external_Sph_hDD00 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD00GF, i0, i1, i2)];
-          const REAL external_Sph_hDD01 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD01GF, i0, i1, i2)];
-          const REAL external_Sph_hDD02 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD02GF, i0, i1, i2)];
-          const REAL external_Sph_hDD11 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD11GF, i0, i1, i2)];
-          const REAL external_Sph_hDD12 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD12GF, i0, i1, i2)];
-          const REAL external_Sph_hDD22 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD22GF, i0, i1, i2)];
-          const REAL external_Sph_aDD00 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD00GF, i0, i1, i2)];
-          const REAL external_Sph_aDD01 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD01GF, i0, i1, i2)];
-          const REAL external_Sph_aDD02 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD02GF, i0, i1, i2)];
-          const REAL external_Sph_aDD11 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD11GF, i0, i1, i2)];
-          const REAL external_Sph_aDD12 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD12GF, i0, i1, i2)];
-          const REAL external_Sph_aDD22 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD22GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_W = in_gfs[IDX4(EXTERNAL_SPHERICAL_WWGF, i0, i1, i2)];
+          const BHA_REAL external_Sph_trK = in_gfs[IDX4(EXTERNAL_SPHERICAL_TRKGF, i0, i1, i2)];
+          const BHA_REAL external_Sph_hDD00 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD00GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_hDD01 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD01GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_hDD02 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD02GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_hDD11 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD11GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_hDD12 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD12GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_hDD22 = in_gfs[IDX4(EXTERNAL_SPHERICAL_HDD22GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_aDD00 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD00GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_aDD01 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD01GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_aDD02 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD02GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_aDD11 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD11GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_aDD12 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD12GF, i0, i1, i2)];
+          const BHA_REAL external_Sph_aDD22 = in_gfs[IDX4(EXTERNAL_SPHERICAL_ADD22GF, i0, i1, i2)];
 
           in_gfs[IDX4(SRC_WWGF, i0, i1, i2)] = external_Sph_W;
           in_gfs[IDX4(SRC_TRKGF, i0, i1, i2)] = external_Sph_trK;

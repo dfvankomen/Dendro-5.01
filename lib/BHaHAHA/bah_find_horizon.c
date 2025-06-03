@@ -10,7 +10,7 @@
  * @param end - The ending time.
  * @return - The elapsed time in milliseconds.
  */
-static REAL timeval_to_milliseconds(struct timeval start, struct timeval end) {
+static BHA_REAL timeval_to_milliseconds(struct timeval start, struct timeval end) {
   double start_ms = start.tv_sec * 1000.0 + start.tv_usec / 1000.0;
   double end_ms = end.tv_sec * 1000.0 + end.tv_usec / 1000.0;
   return end_ms - start_ms;
@@ -211,14 +211,14 @@ int bah_find_horizon(bhahaha_params_and_data_struct *restrict bhahaha_params_and
         commondata.error_flag = bah_interpolation_1d_radial_spokes_on_3d_src_grid(
             &griddata[0].params, &commondata, &griddata[grid].gridfuncs.y_n_gfs[IDX4(HHGF, 0, 0, 0)], griddata[0].gridfuncs.auxevol_gfs);
         bah_diagnostics_area_centroid_and_Theta_norms(&commondata, griddata);
-        REAL eta_min_times_M = 0.15;
-        REAL eta_max_times_M = 3.0;
+        BHA_REAL eta_min_times_M = 0.15;
+        BHA_REAL eta_max_times_M = 3.0;
         if (resolution == 1)
           eta_max_times_M = 3.0;
         if (resolution >= 2)
           eta_max_times_M = 30.0;
 
-        const REAL eta_damping_times_M = MAX(eta_min_times_M, eta_max_times_M * sqrt(bhahaha_diags->Theta_Linf_times_M));
+        const BHA_REAL eta_damping_times_M = MAX(eta_min_times_M, eta_max_times_M * sqrt(bhahaha_diags->Theta_Linf_times_M));
         commondata.eta_damping = eta_damping_times_M / bhahaha_params_and_data->M_scale;
 
         LOOP_OMP("omp parallel for", i0, NGHOSTS, NGHOSTS + 1, i1, 0, Nxx_plus_2NGHOSTS1, i2, 0, Nxx_plus_2NGHOSTS2) {
@@ -269,7 +269,7 @@ int bah_find_horizon(bhahaha_params_and_data_struct *restrict bhahaha_params_and
       if (resolution < n_resolutions - 1) {
         // Allocate memory for storing coarse horizon data.
         const int total_points = Nxx_plus_2NGHOSTS1 * Nxx_plus_2NGHOSTS2;
-        commondata.coarse_horizon = malloc(sizeof(REAL) * total_points);
+        commondata.coarse_horizon = malloc(sizeof(BHA_REAL) * total_points);
 
         // Store horizon data including ghost zones for interpolation in the next resolution.
         const int NUM_THETA = Nxx_plus_2NGHOSTS1; // NUM_THETA needed for IDX2() macro.
@@ -287,17 +287,17 @@ int bah_find_horizon(bhahaha_params_and_data_struct *restrict bhahaha_params_and
         commondata.coarse_horizon_Nxx_plus_2NGHOSTS2 = Nxx_plus_2NGHOSTS2;
 
         // Allocate and store coordinate arrays for the coarse horizon.
-        commondata.coarse_horizon_r_theta_phi[0] = malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS0);
+        commondata.coarse_horizon_r_theta_phi[0] = malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS0);
         for (int i0 = 0; i0 < Nxx_plus_2NGHOSTS0; i0++) {
           commondata.coarse_horizon_r_theta_phi[0][i0] = griddata[grid].xx[0][i0];
         } // END LOOP: radial coordinates
 
-        commondata.coarse_horizon_r_theta_phi[1] = malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS1);
+        commondata.coarse_horizon_r_theta_phi[1] = malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS1);
         for (int i1 = 0; i1 < Nxx_plus_2NGHOSTS1; i1++) {
           commondata.coarse_horizon_r_theta_phi[1][i1] = griddata[grid].xx[1][i1];
         } // END LOOP: theta coordinates
 
-        commondata.coarse_horizon_r_theta_phi[2] = malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS2);
+        commondata.coarse_horizon_r_theta_phi[2] = malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS2);
         for (int i2 = 0; i2 < Nxx_plus_2NGHOSTS2; i2++) {
           commondata.coarse_horizon_r_theta_phi[2][i2] = griddata[grid].xx[2][i2];
         } // END LOOP: phi coordinates
@@ -306,9 +306,9 @@ int bah_find_horizon(bhahaha_params_and_data_struct *restrict bhahaha_params_and
         // Store the final horizon data and perform a last diagnostic output.
         const int NUM_THETA = params->Nxx1; // Required for IDX2() macro.
         memcpy(commondata.bhahaha_params_and_data->prev_horizon_m3, commondata.bhahaha_params_and_data->prev_horizon_m2,
-               sizeof(REAL) * NUM_THETA * params->Nxx2);
+               sizeof(BHA_REAL) * NUM_THETA * params->Nxx2);
         memcpy(commondata.bhahaha_params_and_data->prev_horizon_m2, commondata.bhahaha_params_and_data->prev_horizon_m1,
-               sizeof(REAL) * NUM_THETA * params->Nxx2);
+               sizeof(BHA_REAL) * NUM_THETA * params->Nxx2);
 #pragma omp parallel for
         for (int i2 = 0; i2 < params->Nxx2; i2++) {
           for (int i1 = 0; i1 < params->Nxx1; i1++) {
@@ -323,11 +323,11 @@ int bah_find_horizon(bhahaha_params_and_data_struct *restrict bhahaha_params_and
       } // END IF/ELSE: Handling final resolution
     } else if (commondata.error_flag == INTERP1D_HORIZON_TOO_LARGE) {
       // Handle specific error when the horizon exceeds interpolation limits.
-      REAL max_radius = -1e10;
+      BHA_REAL max_radius = -1e10;
 #pragma omp parallel for reduction(max : max_radius)
       for (int i2 = 0; i2 < params->Nxx2; i2++) {
         for (int i1 = 0; i1 < params->Nxx1; i1++) {
-          REAL current_radius = griddata[grid].gridfuncs.y_n_gfs[IDX4(HHGF, NGHOSTS, i1 + NGHOSTS, i2 + NGHOSTS)];
+          BHA_REAL current_radius = griddata[grid].gridfuncs.y_n_gfs[IDX4(HHGF, NGHOSTS, i1 + NGHOSTS, i2 + NGHOSTS)];
           if (current_radius > max_radius) {
             max_radius = current_radius;
           }
@@ -336,7 +336,7 @@ int bah_find_horizon(bhahaha_params_and_data_struct *restrict bhahaha_params_and
 
       if (commondata.bhahaha_params_and_data->verbosity_level > 0) {
         // r_max_interior = r_min_external_input + ((Nr_external_input-BHAHAHA_NGHOSTS) + 0.5)*dr
-        const REAL r_max_interior =
+        const BHA_REAL r_max_interior =
             commondata.bhahaha_params_and_data->r_min_external_input +
             ((commondata.bhahaha_params_and_data->Nr_external_input - BHAHAHA_NGHOSTS) + 0.5) * commondata.bhahaha_params_and_data->dr_external_input;
         printf("ERROR: h_max = %#.4g too close to r_max_search = %#.4g. "

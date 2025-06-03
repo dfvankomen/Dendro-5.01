@@ -8,7 +8,7 @@
 void bah_MoL_malloc_y_n_gfs(const commondata_struct *restrict commondata, const params_struct *restrict params,
                             MoL_gridfunctions_struct *restrict gridfuncs) {
   const int Nxx_plus_2NGHOSTS_tot = params->Nxx_plus_2NGHOSTS0 * params->Nxx_plus_2NGHOSTS1 * params->Nxx_plus_2NGHOSTS2;
-  BHAH_MALLOC(gridfuncs->y_n_gfs, sizeof(REAL) * NUM_EVOL_GFS * Nxx_plus_2NGHOSTS_tot);
+  BHAH_MALLOC(gridfuncs->y_n_gfs, sizeof(BHA_REAL) * NUM_EVOL_GFS * Nxx_plus_2NGHOSTS_tot);
 
   gridfuncs->diagnostic_output_gfs = gridfuncs->k1_gfs;
   gridfuncs->diagnostic_output_gfs2 = gridfuncs->k2_gfs;

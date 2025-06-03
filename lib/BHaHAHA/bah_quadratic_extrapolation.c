@@ -12,11 +12,11 @@
  * time point if insufficient data is provided.
  *
  */
-REAL bah_quadratic_extrapolation(const REAL times[3], const REAL y_tm1, const REAL y_tm2, const REAL y_tm3, const REAL dst_time) {
+BHA_REAL bah_quadratic_extrapolation(const BHA_REAL times[3], const BHA_REAL y_tm1, const BHA_REAL y_tm2, const BHA_REAL y_tm3, const BHA_REAL dst_time) {
 
-  const REAL tm1 = times[0];
-  const REAL tm2 = times[1];
-  const REAL tm3 = times[2];
+  const BHA_REAL tm1 = times[0];
+  const BHA_REAL tm2 = times[1];
+  const BHA_REAL tm3 = times[2];
 
   // Check if all three time points are populated for quadratic extrapolation
   if (tm1 != -1.0 && tm2 != -1.0 && tm3 != -1.0) {

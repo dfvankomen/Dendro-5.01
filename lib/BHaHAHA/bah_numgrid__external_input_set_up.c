@@ -55,8 +55,8 @@ int bah_numgrid__external_input_set_up(commondata_struct *restrict commondata, c
   // x_i = min_i + (j + 0.5) * dx_i, where dx_i = (max_i - min_i) / N_i
 
   commondata->external_input_dxx0 = bhahaha_params_and_data->dr_external_input;
-  commondata->external_input_dxx1 = M_PI / ((REAL)commondata->external_input_Nxx1);
-  commondata->external_input_dxx2 = 2 * M_PI / ((REAL)commondata->external_input_Nxx2);
+  commondata->external_input_dxx1 = M_PI / ((BHA_REAL)commondata->external_input_Nxx1);
+  commondata->external_input_dxx2 = 2 * M_PI / ((BHA_REAL)commondata->external_input_Nxx2);
 
   // Precompute inverse grid spacings for performance optimization in calculations.
   commondata->external_input_invdxx0 = 1.0 / commondata->external_input_dxx0;
@@ -75,10 +75,10 @@ int bah_numgrid__external_input_set_up(commondata_struct *restrict commondata, c
       commondata->external_input_Nxx_plus_2NGHOSTS0 * commondata->external_input_Nxx_plus_2NGHOSTS1 * commondata->external_input_Nxx_plus_2NGHOSTS2;
 
   // Pointers to the external input gridfunctions without ghost zones.
-  REAL *restrict external_input_gfs_no_gzs = commondata->external_input_gfs_Cart_basis_no_gzs;
+  BHA_REAL *restrict external_input_gfs_no_gzs = commondata->external_input_gfs_Cart_basis_no_gzs;
 
   // Allocate memory for the external input gridfunctions with ghost zones.
-  REAL *restrict external_input_gfs = (REAL *)malloc(NUM_EXT_INPUT_CONFORMAL_GFS * total_elements_incl_gzs * sizeof(REAL));
+  BHA_REAL *restrict external_input_gfs = (BHA_REAL *)malloc(NUM_EXT_INPUT_CONFORMAL_GFS * total_elements_incl_gzs * sizeof(BHA_REAL));
   if (external_input_gfs == NULL) {
     return NUMGRID_EXTERN_MALLOC_ERROR_GFS;
   } // END IF memory allocation for external_input_gfs failed
@@ -104,9 +104,9 @@ int bah_numgrid__external_input_set_up(commondata_struct *restrict commondata, c
     const int Nxx_plus_2NGHOSTS2 = commondata->external_input_Nxx_plus_2NGHOSTS2;
 
     // Step 5.a: Allocate memory for coordinate arrays in radial, theta, and phi directions.
-    commondata->external_input_r_theta_phi[0] = (REAL *)malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS0);
-    commondata->external_input_r_theta_phi[1] = (REAL *)malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS1);
-    commondata->external_input_r_theta_phi[2] = (REAL *)malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS2);
+    commondata->external_input_r_theta_phi[0] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS0);
+    commondata->external_input_r_theta_phi[1] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS1);
+    commondata->external_input_r_theta_phi[2] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS2);
     if (commondata->external_input_r_theta_phi[0] == NULL || commondata->external_input_r_theta_phi[1] == NULL ||
         commondata->external_input_r_theta_phi[2] == NULL) {
       free(external_input_gfs);
@@ -115,16 +115,16 @@ int bah_numgrid__external_input_set_up(commondata_struct *restrict commondata, c
 
     // Step 5.b: Initialize coordinate arrays for a uniform, cell-centered spherical grid.
     // The coordinates are centered within each cell by adding 0.5 to the index before scaling.
-    const REAL xxmin0 = bhahaha_params_and_data->r_min_external_input;
-    const REAL xxmin1 = 0.0;
-    const REAL xxmin2 = -M_PI;
+    const BHA_REAL xxmin0 = bhahaha_params_and_data->r_min_external_input;
+    const BHA_REAL xxmin1 = 0.0;
+    const BHA_REAL xxmin2 = -M_PI;
 
     for (int j = 0; j < Nxx_plus_2NGHOSTS0; j++)
-      commondata->external_input_r_theta_phi[0][j] = xxmin0 + ((REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->external_input_dxx0;
+      commondata->external_input_r_theta_phi[0][j] = xxmin0 + ((BHA_REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->external_input_dxx0;
     for (int j = 0; j < Nxx_plus_2NGHOSTS1; j++)
-      commondata->external_input_r_theta_phi[1][j] = xxmin1 + ((REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->external_input_dxx1;
+      commondata->external_input_r_theta_phi[1][j] = xxmin1 + ((BHA_REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->external_input_dxx1;
     for (int j = 0; j < Nxx_plus_2NGHOSTS2; j++)
-      commondata->external_input_r_theta_phi[2][j] = xxmin2 + ((REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->external_input_dxx2;
+      commondata->external_input_r_theta_phi[2][j] = xxmin2 + ((BHA_REAL)(j - NGHOSTS) + (1.0 / 2.0)) * commondata->external_input_dxx2;
   } // END BLOCK: setting up coordinate arrays
 
   // Step 6: Transform the metric components (gamma_{ij}, K_{ij}) from Cartesian to spherical coordinates,
@@ -135,114 +135,114 @@ int bah_numgrid__external_input_set_up(commondata_struct *restrict commondata, c
     const int Nxx_plus_2NGHOSTS2 = commondata->external_input_Nxx_plus_2NGHOSTS2;
 
     // Step 6.a: Extract coordinate arrays for easier access during transformation.
-    REAL *restrict external_input_r_theta_phi[3];
+    BHA_REAL *restrict external_input_r_theta_phi[3];
     for (int ww = 0; ww < 3; ww++)
       external_input_r_theta_phi[ww] = commondata->external_input_r_theta_phi[ww];
 
     // Step 6.b: Metric components: basis transform from Cartesian to Spherical & convert ADM->rescaled BSSN.
 #pragma omp parallel for
     for (int i2 = NGHOSTS; i2 < commondata->external_input_Nxx2 + NGHOSTS; i2++) {
-      const REAL xx2 = external_input_r_theta_phi[2][i2];
+      const BHA_REAL xx2 = external_input_r_theta_phi[2][i2];
       for (int i1 = NGHOSTS; i1 < commondata->external_input_Nxx1 + NGHOSTS; i1++) {
-        const REAL xx1 = external_input_r_theta_phi[1][i1];
+        const BHA_REAL xx1 = external_input_r_theta_phi[1][i1];
         // Include all valid points, including those near r ~ r_max.
         for (int i0 = i0_min_shift; i0 < commondata->external_input_Nxx_plus_2NGHOSTS0; i0++) {
-          const REAL xx0 = external_input_r_theta_phi[0][i0];
+          const BHA_REAL xx0 = external_input_r_theta_phi[0][i0];
 
           // Read Cartesian metric components at the current grid point.
-          const REAL Cart_gammaDD00 = external_input_gfs[IDX4(INTERP_GAMMADDXXGF, i0, i1, i2)];
-          const REAL Cart_gammaDD01 = external_input_gfs[IDX4(INTERP_GAMMADDXYGF, i0, i1, i2)];
-          const REAL Cart_gammaDD02 = external_input_gfs[IDX4(INTERP_GAMMADDXZGF, i0, i1, i2)];
-          const REAL Cart_gammaDD11 = external_input_gfs[IDX4(INTERP_GAMMADDYYGF, i0, i1, i2)];
-          const REAL Cart_gammaDD12 = external_input_gfs[IDX4(INTERP_GAMMADDYZGF, i0, i1, i2)];
-          const REAL Cart_gammaDD22 = external_input_gfs[IDX4(INTERP_GAMMADDZZGF, i0, i1, i2)];
-          const REAL Cart_KDD00 = external_input_gfs[IDX4(INTERP_KDDXXGF, i0, i1, i2)];
-          const REAL Cart_KDD01 = external_input_gfs[IDX4(INTERP_KDDXYGF, i0, i1, i2)];
-          const REAL Cart_KDD02 = external_input_gfs[IDX4(INTERP_KDDXZGF, i0, i1, i2)];
-          const REAL Cart_KDD11 = external_input_gfs[IDX4(INTERP_KDDYYGF, i0, i1, i2)];
-          const REAL Cart_KDD12 = external_input_gfs[IDX4(INTERP_KDDYZGF, i0, i1, i2)];
-          const REAL Cart_KDD22 = external_input_gfs[IDX4(INTERP_KDDZZGF, i0, i1, i2)];
-          const REAL tmp0 = ((xx0) * (xx0) * (xx0) * (xx0));
-          const REAL tmp1 = sin(xx1);
-          const REAL tmp4 = sin(xx2);
-          const REAL tmp5 = cos(xx1);
-          const REAL tmp10 = cos(xx2);
-          const REAL tmp13 = Cart_gammaDD01 * xx0;
-          const REAL tmp22 = ((xx0) * (xx0));
-          const REAL tmp35 = 2 * Cart_gammaDD01;
-          const REAL tmp75 = 2 * Cart_KDD01;
-          const REAL tmp98 = (2.0 / 3.0) * Cart_gammaDD01;
-          const REAL tmp2 = ((tmp1) * (tmp1));
-          const REAL tmp6 = tmp1 * tmp5;
-          const REAL tmp11 = ((tmp4) * (tmp4));
-          const REAL tmp16 = tmp10 * tmp4;
-          const REAL tmp19 = ((tmp10) * (tmp10));
-          const REAL tmp25 = Cart_gammaDD02 * tmp10;
-          const REAL tmp28 = Cart_gammaDD12 * tmp4;
-          const REAL tmp29 = ((tmp5) * (tmp5));
-          const REAL tmp72 = Cart_KDD02 * tmp10;
-          const REAL tmp73 = Cart_KDD12 * tmp4;
-          const REAL tmp91 = (1.0 / (tmp1));
-          const REAL tmp93 = (1.0 / (tmp22));
-          const REAL tmp3 = (1.0 / (tmp2));
-          const REAL tmp7 = tmp6 * xx0;
-          const REAL tmp12 = tmp11 * tmp2;
-          const REAL tmp15 = tmp2 * xx0;
-          const REAL tmp20 = tmp19 * tmp2;
-          const REAL tmp23 = tmp2 * tmp22;
-          const REAL tmp26 = tmp22 * tmp6;
-          const REAL tmp30 = tmp22 * tmp29;
-          const REAL tmp39 = 2 * tmp6;
-          const REAL tmp42 = tmp16 * tmp2;
-          const REAL tmp53 = tmp29 * xx0;
-          const REAL tmp60 = tmp13 * tmp16;
-          const REAL tmp97 = (2.0 / 3.0) * tmp6;
-          const REAL tmp17 = tmp15 * tmp16;
-          const REAL tmp27 = 2 * tmp26;
-          const REAL tmp32 = Cart_gammaDD00 * tmp19 * tmp30;
-          const REAL tmp36 = tmp16 * tmp30;
-          const REAL tmp44 = tmp10 * tmp23;
-          const REAL tmp48 = tmp16 * tmp26;
-          const REAL tmp51 = Cart_gammaDD22 * tmp7;
-          const REAL tmp52 = tmp15 * tmp25;
-          const REAL tmp54 = tmp25 * tmp53;
-          const REAL tmp55 = tmp15 * tmp28;
-          const REAL tmp56 = tmp28 * tmp53;
-          const REAL tmp57 = Cart_gammaDD00 * tmp19 * tmp7;
-          const REAL tmp82 = Cart_KDD00 * tmp20 + Cart_KDD11 * tmp12 + Cart_KDD22 * tmp29 + tmp39 * tmp72 + tmp39 * tmp73 + tmp42 * tmp75;
-          const REAL tmp9 = Cart_gammaDD02 * tmp4 * tmp7;
-          const REAL tmp34 = Cart_gammaDD11 * tmp11 * tmp30;
-          const REAL tmp43 = Cart_gammaDD00 * tmp20 + Cart_gammaDD11 * tmp12 + Cart_gammaDD22 * tmp29 + tmp25 * tmp39 + tmp28 * tmp39 + tmp35 * tmp42;
-          const REAL tmp47 = Cart_gammaDD01 * tmp11 * tmp26;
-          const REAL tmp59 = Cart_gammaDD11 * tmp11 * tmp7;
-          const REAL tmp63 = Cart_gammaDD00 * tmp11 * tmp23;
-          const REAL tmp65 = Cart_gammaDD11 * tmp19 * tmp23;
-          const REAL tmp66 = tmp4 * tmp44;
-          const REAL tmp76 =
+          const BHA_REAL Cart_gammaDD00 = external_input_gfs[IDX4(INTERP_GAMMADDXXGF, i0, i1, i2)];
+          const BHA_REAL Cart_gammaDD01 = external_input_gfs[IDX4(INTERP_GAMMADDXYGF, i0, i1, i2)];
+          const BHA_REAL Cart_gammaDD02 = external_input_gfs[IDX4(INTERP_GAMMADDXZGF, i0, i1, i2)];
+          const BHA_REAL Cart_gammaDD11 = external_input_gfs[IDX4(INTERP_GAMMADDYYGF, i0, i1, i2)];
+          const BHA_REAL Cart_gammaDD12 = external_input_gfs[IDX4(INTERP_GAMMADDYZGF, i0, i1, i2)];
+          const BHA_REAL Cart_gammaDD22 = external_input_gfs[IDX4(INTERP_GAMMADDZZGF, i0, i1, i2)];
+          const BHA_REAL Cart_KDD00 = external_input_gfs[IDX4(INTERP_KDDXXGF, i0, i1, i2)];
+          const BHA_REAL Cart_KDD01 = external_input_gfs[IDX4(INTERP_KDDXYGF, i0, i1, i2)];
+          const BHA_REAL Cart_KDD02 = external_input_gfs[IDX4(INTERP_KDDXZGF, i0, i1, i2)];
+          const BHA_REAL Cart_KDD11 = external_input_gfs[IDX4(INTERP_KDDYYGF, i0, i1, i2)];
+          const BHA_REAL Cart_KDD12 = external_input_gfs[IDX4(INTERP_KDDYZGF, i0, i1, i2)];
+          const BHA_REAL Cart_KDD22 = external_input_gfs[IDX4(INTERP_KDDZZGF, i0, i1, i2)];
+          const BHA_REAL tmp0 = ((xx0) * (xx0) * (xx0) * (xx0));
+          const BHA_REAL tmp1 = sin(xx1);
+          const BHA_REAL tmp4 = sin(xx2);
+          const BHA_REAL tmp5 = cos(xx1);
+          const BHA_REAL tmp10 = cos(xx2);
+          const BHA_REAL tmp13 = Cart_gammaDD01 * xx0;
+          const BHA_REAL tmp22 = ((xx0) * (xx0));
+          const BHA_REAL tmp35 = 2 * Cart_gammaDD01;
+          const BHA_REAL tmp75 = 2 * Cart_KDD01;
+          const BHA_REAL tmp98 = (2.0 / 3.0) * Cart_gammaDD01;
+          const BHA_REAL tmp2 = ((tmp1) * (tmp1));
+          const BHA_REAL tmp6 = tmp1 * tmp5;
+          const BHA_REAL tmp11 = ((tmp4) * (tmp4));
+          const BHA_REAL tmp16 = tmp10 * tmp4;
+          const BHA_REAL tmp19 = ((tmp10) * (tmp10));
+          const BHA_REAL tmp25 = Cart_gammaDD02 * tmp10;
+          const BHA_REAL tmp28 = Cart_gammaDD12 * tmp4;
+          const BHA_REAL tmp29 = ((tmp5) * (tmp5));
+          const BHA_REAL tmp72 = Cart_KDD02 * tmp10;
+          const BHA_REAL tmp73 = Cart_KDD12 * tmp4;
+          const BHA_REAL tmp91 = (1.0 / (tmp1));
+          const BHA_REAL tmp93 = (1.0 / (tmp22));
+          const BHA_REAL tmp3 = (1.0 / (tmp2));
+          const BHA_REAL tmp7 = tmp6 * xx0;
+          const BHA_REAL tmp12 = tmp11 * tmp2;
+          const BHA_REAL tmp15 = tmp2 * xx0;
+          const BHA_REAL tmp20 = tmp19 * tmp2;
+          const BHA_REAL tmp23 = tmp2 * tmp22;
+          const BHA_REAL tmp26 = tmp22 * tmp6;
+          const BHA_REAL tmp30 = tmp22 * tmp29;
+          const BHA_REAL tmp39 = 2 * tmp6;
+          const BHA_REAL tmp42 = tmp16 * tmp2;
+          const BHA_REAL tmp53 = tmp29 * xx0;
+          const BHA_REAL tmp60 = tmp13 * tmp16;
+          const BHA_REAL tmp97 = (2.0 / 3.0) * tmp6;
+          const BHA_REAL tmp17 = tmp15 * tmp16;
+          const BHA_REAL tmp27 = 2 * tmp26;
+          const BHA_REAL tmp32 = Cart_gammaDD00 * tmp19 * tmp30;
+          const BHA_REAL tmp36 = tmp16 * tmp30;
+          const BHA_REAL tmp44 = tmp10 * tmp23;
+          const BHA_REAL tmp48 = tmp16 * tmp26;
+          const BHA_REAL tmp51 = Cart_gammaDD22 * tmp7;
+          const BHA_REAL tmp52 = tmp15 * tmp25;
+          const BHA_REAL tmp54 = tmp25 * tmp53;
+          const BHA_REAL tmp55 = tmp15 * tmp28;
+          const BHA_REAL tmp56 = tmp28 * tmp53;
+          const BHA_REAL tmp57 = Cart_gammaDD00 * tmp19 * tmp7;
+          const BHA_REAL tmp82 = Cart_KDD00 * tmp20 + Cart_KDD11 * tmp12 + Cart_KDD22 * tmp29 + tmp39 * tmp72 + tmp39 * tmp73 + tmp42 * tmp75;
+          const BHA_REAL tmp9 = Cart_gammaDD02 * tmp4 * tmp7;
+          const BHA_REAL tmp34 = Cart_gammaDD11 * tmp11 * tmp30;
+          const BHA_REAL tmp43 = Cart_gammaDD00 * tmp20 + Cart_gammaDD11 * tmp12 + Cart_gammaDD22 * tmp29 + tmp25 * tmp39 + tmp28 * tmp39 + tmp35 * tmp42;
+          const BHA_REAL tmp47 = Cart_gammaDD01 * tmp11 * tmp26;
+          const BHA_REAL tmp59 = Cart_gammaDD11 * tmp11 * tmp7;
+          const BHA_REAL tmp63 = Cart_gammaDD00 * tmp11 * tmp23;
+          const BHA_REAL tmp65 = Cart_gammaDD11 * tmp19 * tmp23;
+          const BHA_REAL tmp66 = tmp4 * tmp44;
+          const BHA_REAL tmp76 =
               Cart_KDD00 * tmp19 * tmp30 + Cart_KDD11 * tmp11 * tmp30 + Cart_KDD22 * tmp23 - tmp27 * tmp72 - tmp27 * tmp73 + tmp36 * tmp75;
-          const REAL tmp84 = Cart_KDD00 * tmp19 * tmp7 + Cart_KDD11 * tmp11 * tmp7 - Cart_KDD22 * tmp7 - tmp15 * tmp72 - tmp15 * tmp73 +
+          const BHA_REAL tmp84 = Cart_KDD00 * tmp19 * tmp7 + Cart_KDD11 * tmp11 * tmp7 - Cart_KDD22 * tmp7 - tmp15 * tmp72 - tmp15 * tmp73 +
                              tmp16 * tmp7 * tmp75 + tmp53 * tmp72 + tmp53 * tmp73;
-          const REAL tmp86 = Cart_KDD00 * tmp48 - Cart_KDD01 * tmp1 * tmp19 * tmp22 * tmp5 + Cart_KDD01 * tmp11 * tmp26 -
+          const BHA_REAL tmp86 = Cart_KDD00 * tmp48 - Cart_KDD01 * tmp1 * tmp19 * tmp22 * tmp5 + Cart_KDD01 * tmp11 * tmp26 -
                              Cart_KDD02 * tmp2 * tmp22 * tmp4 - Cart_KDD11 * tmp1 * tmp10 * tmp22 * tmp4 * tmp5 + Cart_KDD12 * tmp44;
-          const REAL tmp87 = Cart_KDD00 * tmp17 + Cart_KDD01 * tmp12 * xx0 - Cart_KDD01 * tmp19 * tmp2 * xx0 + Cart_KDD02 * tmp4 * tmp7 -
+          const BHA_REAL tmp87 = Cart_KDD00 * tmp17 + Cart_KDD01 * tmp12 * xx0 - Cart_KDD01 * tmp19 * tmp2 * xx0 + Cart_KDD02 * tmp4 * tmp7 -
                              Cart_KDD11 * tmp10 * tmp2 * tmp4 * xx0 - Cart_KDD12 * tmp1 * tmp10 * tmp5 * xx0;
-          const REAL tmp21 = Cart_gammaDD00 * tmp17 - Cart_gammaDD11 * tmp17 - Cart_gammaDD12 * tmp10 * tmp7 + tmp12 * tmp13 - tmp13 * tmp20 + tmp9;
-          const REAL tmp37 = Cart_gammaDD22 * tmp23 - tmp25 * tmp27 - tmp27 * tmp28 + tmp32 + tmp34 + tmp35 * tmp36;
-          const REAL tmp50 = Cart_gammaDD00 * tmp48 - Cart_gammaDD01 * tmp19 * tmp26 - Cart_gammaDD02 * tmp23 * tmp4 - Cart_gammaDD11 * tmp48 +
+          const BHA_REAL tmp21 = Cart_gammaDD00 * tmp17 - Cart_gammaDD11 * tmp17 - Cart_gammaDD12 * tmp10 * tmp7 + tmp12 * tmp13 - tmp13 * tmp20 + tmp9;
+          const BHA_REAL tmp37 = Cart_gammaDD22 * tmp23 - tmp25 * tmp27 - tmp27 * tmp28 + tmp32 + tmp34 + tmp35 * tmp36;
+          const BHA_REAL tmp50 = Cart_gammaDD00 * tmp48 - Cart_gammaDD01 * tmp19 * tmp26 - Cart_gammaDD02 * tmp23 * tmp4 - Cart_gammaDD11 * tmp48 +
                              Cart_gammaDD12 * tmp44 + tmp47;
-          const REAL tmp61 = -2 * tmp51 - 2 * tmp52 + 2 * tmp54 - 2 * tmp55 + 2 * tmp56 + 2 * tmp57 + 2 * tmp59 + 4 * tmp6 * tmp60;
-          const REAL tmp67 = -tmp35 * tmp66 + tmp63 + tmp65;
-          const REAL tmp68 = tmp39 * tmp60 - tmp51 - tmp52 + tmp54 - tmp55 + tmp56 + tmp57 + tmp59;
-          const REAL tmp83 = Cart_KDD00 * tmp11 * tmp23 + Cart_KDD11 * tmp19 * tmp23 - tmp66 * tmp75;
-          const REAL tmp71 = -tmp37 * tmp43 * tmp67 + tmp67 * ((tmp68) * (tmp68));
-          const REAL tmp81 = (1.0 / (-((tmp21) * (tmp21)) * tmp37 + tmp21 * tmp50 * tmp61 - tmp43 * ((tmp50) * (tmp50)) - tmp71));
-          const REAL tmp85 = 2 * tmp81;
-          const REAL tmp89 = cbrt(tmp0 * tmp2 * tmp81);
-          const REAL tmp88 = tmp76 * tmp81 * (-((tmp21) * (tmp21)) + tmp43 * tmp67) + tmp81 * tmp82 * (tmp37 * tmp67 - ((tmp50) * (tmp50))) +
+          const BHA_REAL tmp61 = -2 * tmp51 - 2 * tmp52 + 2 * tmp54 - 2 * tmp55 + 2 * tmp56 + 2 * tmp57 + 2 * tmp59 + 4 * tmp6 * tmp60;
+          const BHA_REAL tmp67 = -tmp35 * tmp66 + tmp63 + tmp65;
+          const BHA_REAL tmp68 = tmp39 * tmp60 - tmp51 - tmp52 + tmp54 - tmp55 + tmp56 + tmp57 + tmp59;
+          const BHA_REAL tmp83 = Cart_KDD00 * tmp11 * tmp23 + Cart_KDD11 * tmp19 * tmp23 - tmp66 * tmp75;
+          const BHA_REAL tmp71 = -tmp37 * tmp43 * tmp67 + tmp67 * ((tmp68) * (tmp68));
+          const BHA_REAL tmp81 = (1.0 / (-((tmp21) * (tmp21)) * tmp37 + tmp21 * tmp50 * tmp61 - tmp43 * ((tmp50) * (tmp50)) - tmp71));
+          const BHA_REAL tmp85 = 2 * tmp81;
+          const BHA_REAL tmp89 = cbrt(tmp0 * tmp2 * tmp81);
+          const BHA_REAL tmp88 = tmp76 * tmp81 * (-((tmp21) * (tmp21)) + tmp43 * tmp67) + tmp81 * tmp82 * (tmp37 * tmp67 - ((tmp50) * (tmp50))) +
                              tmp81 * tmp83 * (tmp37 * tmp43 - ((tmp68) * (tmp68))) + tmp84 * tmp85 * (tmp21 * tmp50 - tmp67 * tmp68) -
                              tmp85 * tmp86 * (-tmp21 * tmp68 + tmp43 * tmp50) - tmp85 * tmp87 * (tmp21 * tmp37 - tmp50 * tmp68);
-          const REAL tmp90 = tmp89 / xx0;
-          const REAL tmp95 = tmp89 * tmp91 * tmp93;
+          const BHA_REAL tmp90 = tmp89 / xx0;
+          const BHA_REAL tmp95 = tmp89 * tmp91 * tmp93;
           external_input_gfs[IDX4(EXTERNAL_SPHERICAL_WWGF, i0, i1, i2)] =
               (1.0 / (sqrt(cbrt(fabs(tmp3 * (((tmp21) * (tmp21)) * tmp37 - tmp21 * tmp50 * tmp61 + tmp43 * ((tmp50) * (tmp50)) + tmp71) / tmp0)))));
           external_input_gfs[IDX4(EXTERNAL_SPHERICAL_TRKGF, i0, i1, i2)] = tmp88;

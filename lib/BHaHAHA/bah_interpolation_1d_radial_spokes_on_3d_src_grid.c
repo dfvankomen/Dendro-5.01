@@ -27,7 +27,7 @@
  *
  */
 int bah_interpolation_1d_radial_spokes_on_3d_src_grid(const params_struct *restrict params, const commondata_struct *restrict commondata,
-                                                      const REAL *restrict dst_radii_aka_src_h_gf, REAL *restrict dst_interp_gfs) {
+                                                      const BHA_REAL *restrict dst_radii_aka_src_h_gf, BHA_REAL *restrict dst_interp_gfs) {
 
   // Define the interpolation order based on the number of ghost zones.
   const int INTERP_ORDER = (2 * NinterpGHOSTS + 1); // Interpolation order corresponds to the number of points in the stencil per dimension.
@@ -46,16 +46,16 @@ int bah_interpolation_1d_radial_spokes_on_3d_src_grid(const params_struct *restr
   const int dst_Nxx_plus_2NGHOSTS2 = params->Nxx_plus_2NGHOSTS2;
 
   // Source grid coordinates for r, theta, and phi.
-  const REAL *restrict interp_src_r_theta_phi[3] = {commondata->interp_src_r_theta_phi[0], commondata->interp_src_r_theta_phi[1],
+  const BHA_REAL *restrict interp_src_r_theta_phi[3] = {commondata->interp_src_r_theta_phi[0], commondata->interp_src_r_theta_phi[1],
                                                     commondata->interp_src_r_theta_phi[2]};
-  const REAL xxmin_incl_ghosts0 = interp_src_r_theta_phi[0][0];
+  const BHA_REAL xxmin_incl_ghosts0 = interp_src_r_theta_phi[0][0];
 
   // Precompute (1/(src_dr))^(INTERP_ORDER-1) normalization factor.
-  const REAL src_invdxx0 = commondata->interp_src_invdxx0;
-  const REAL src_invdxx0_INTERP_ORDERm1 = pow(commondata->interp_src_invdxx0, (INTERP_ORDER - 1));
+  const BHA_REAL src_invdxx0 = commondata->interp_src_invdxx0;
+  const BHA_REAL src_invdxx0_INTERP_ORDERm1 = pow(commondata->interp_src_invdxx0, (INTERP_ORDER - 1));
 
   // Source grid functions.
-  const REAL *restrict interp_src_gfs = commondata->interp_src_gfs;
+  const BHA_REAL *restrict interp_src_gfs = commondata->interp_src_gfs;
 
   // Perform sanity checks to ensure all required pointers are valid.
   if (interp_src_r_theta_phi[0] == NULL || interp_src_gfs == NULL || dst_radii_aka_src_h_gf == NULL || dst_interp_gfs == NULL)
@@ -66,13 +66,13 @@ int bah_interpolation_1d_radial_spokes_on_3d_src_grid(const params_struct *restr
     return INTERP1D_INTERP_ORDER_GT_NXX_PLUS_2NINTERPGHOSTS0; // Return error if interpolation order is too high.
 
   // Precompute inverse denominators for Lagrange interpolation coefficients to optimize performance.
-  REAL inv_denom[INTERP_ORDER];
+  BHA_REAL inv_denom[INTERP_ORDER];
   for (int i = 0; i < INTERP_ORDER; i++) {
-    REAL denom = 1.0;
+    BHA_REAL denom = 1.0;
     for (int j = 0; j < i; j++)
-      denom *= (REAL)(i - j);
+      denom *= (BHA_REAL)(i - j);
     for (int j = i + 1; j < INTERP_ORDER; j++)
-      denom *= (REAL)(i - j);
+      denom *= (BHA_REAL)(i - j);
     inv_denom[i] = 1.0 / denom; // Store the inverse to avoid repeated division operations.
   } // END LOOP: Precompute inverse denominators.
 
@@ -84,7 +84,7 @@ int bah_interpolation_1d_radial_spokes_on_3d_src_grid(const params_struct *restr
   for (int iphi = NGHOSTS; iphi < dst_Nxx2 + NGHOSTS; iphi++) {         // Iterate over phi indices, ignoring ghost zones.
     for (int itheta = NGHOSTS; itheta < dst_Nxx1 + NGHOSTS; itheta++) { // Iterate over theta indices, ignoring ghost zones.
       // Perform interpolation only at radial index i = NGHOSTS.
-      const REAL r_dst = dst_radii_aka_src_h_gf[DST_IDX3(NGHOSTS, itheta, iphi)];
+      const BHA_REAL r_dst = dst_radii_aka_src_h_gf[DST_IDX3(NGHOSTS, itheta, iphi)];
       // Calculate the central index for the stencil in the radial direction.
       const int idx_center0 = (int)((r_dst - xxmin_incl_ghosts0) * src_invdxx0 + 0.5);
 
@@ -119,8 +119,8 @@ int bah_interpolation_1d_radial_spokes_on_3d_src_grid(const params_struct *restr
       } // END SANITY CHECKS.
 
       // Arrays to store Lagrange interpolation coefficients and differences.
-      REAL coeff_r[INTERP_ORDER];
-      REAL diffs[INTERP_ORDER];
+      BHA_REAL coeff_r[INTERP_ORDER];
+      BHA_REAL diffs[INTERP_ORDER];
 
       // Step 1: Precompute all differences between destination radius and source grid points within the stencil.
 #pragma omp simd
@@ -131,7 +131,7 @@ int bah_interpolation_1d_radial_spokes_on_3d_src_grid(const params_struct *restr
       // Step 2: Compute Lagrange basis coefficients for the radial direction.
 #pragma omp simd
       for (int i = 0; i < INTERP_ORDER; i++) {
-        REAL numer_i = 1.0;
+        BHA_REAL numer_i = 1.0;
         // Compute product for j < i (scalar loop).
         for (int j = 0; j < i; j++) {
           numer_i *= diffs[j];
@@ -146,7 +146,7 @@ int bah_interpolation_1d_radial_spokes_on_3d_src_grid(const params_struct *restr
 
       // Perform the 1D Lagrange interpolation along the radial direction with SIMD optimizations.
       for (int gf = 0; gf < NUM_INTERP_SRC_GFS; gf++) {
-        REAL sum = 0.0;
+        BHA_REAL sum = 0.0;
         REAL_SIMD_ARRAY vec_sum = SetZeroSIMD; // Initialize vector sum to zero
 
         // Vectorized loop using SIMD
@@ -177,7 +177,7 @@ int bah_interpolation_1d_radial_spokes_on_3d_src_grid(const params_struct *restr
 
 #ifdef STANDALONE
 
-const REAL RADIAL_EXTENT = 10.0; // Radial domain [0, RADIAL_EXTENT].
+const BHA_REAL RADIAL_EXTENT = 10.0; // Radial domain [0, RADIAL_EXTENT].
 
 /**
  * Initializes the coordinate arrays for the source grid.
@@ -191,7 +191,7 @@ const REAL RADIAL_EXTENT = 10.0; // Radial domain [0, RADIAL_EXTENT].
  * @param src_dxx                    Array to store grid spacings in r, theta, and phi directions.
  * @param src_Nxx_plus_2NGHOSTS      Array containing the total number of grid points in each direction, including ghost zones.
  */
-void initialize_coordinates(const int N_r, const int N_theta, const int N_phi, REAL *src_r_theta_phi[3], REAL src_dxx[3],
+void initialize_coordinates(const int N_r, const int N_theta, const int N_phi, BHA_REAL *src_r_theta_phi[3], BHA_REAL src_dxx[3],
                             const int src_Nxx_plus_2NGHOSTS[3]) {
   // Calculate grid spacings based on the number of grid points.
   src_dxx[0] = RADIAL_EXTENT / N_r; // Radial grid spacing for domain [0, RADIAL_EXTENT].
@@ -199,9 +199,9 @@ void initialize_coordinates(const int N_r, const int N_theta, const int N_phi, R
   src_dxx[2] = 2.0 * M_PI / N_phi;  // Phi grid spacing for domain [-pi, pi).
 
   // Allocate memory for the coordinate arrays.
-  src_r_theta_phi[0] = (REAL *)malloc(sizeof(REAL) * src_Nxx_plus_2NGHOSTS[0]);
-  src_r_theta_phi[1] = (REAL *)malloc(sizeof(REAL) * src_Nxx_plus_2NGHOSTS[1]);
-  src_r_theta_phi[2] = (REAL *)malloc(sizeof(REAL) * src_Nxx_plus_2NGHOSTS[2]);
+  src_r_theta_phi[0] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * src_Nxx_plus_2NGHOSTS[0]);
+  src_r_theta_phi[1] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * src_Nxx_plus_2NGHOSTS[1]);
+  src_r_theta_phi[2] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * src_Nxx_plus_2NGHOSTS[2]);
 
   if (src_r_theta_phi[0] == NULL || src_r_theta_phi[1] == NULL || src_r_theta_phi[2] == NULL) {
     fprintf(stderr, "Memory allocation failed for coordinate arrays.\n");
@@ -214,15 +214,15 @@ void initialize_coordinates(const int N_r, const int N_theta, const int N_phi, R
   }
 
   // Initialize theta coordinate with ghost zones.
-  const REAL xxmin1 = 0.0;
+  const BHA_REAL xxmin1 = 0.0;
   for (int j = 0; j < src_Nxx_plus_2NGHOSTS[1]; j++) {
-    src_r_theta_phi[1][j] = xxmin1 + ((REAL)(j - NGHOSTS) + 0.5) * src_dxx[1];
+    src_r_theta_phi[1][j] = xxmin1 + ((BHA_REAL)(j - NGHOSTS) + 0.5) * src_dxx[1];
   }
 
   // Initialize phi coordinate with ghost zones.
-  const REAL xxmin2 = -M_PI;
+  const BHA_REAL xxmin2 = -M_PI;
   for (int k = 0; k < src_Nxx_plus_2NGHOSTS[2]; k++) {
-    src_r_theta_phi[2][k] = xxmin2 + ((REAL)(k - NGHOSTS) + 0.5) * src_dxx[2];
+    src_r_theta_phi[2][k] = xxmin2 + ((BHA_REAL)(k - NGHOSTS) + 0.5) * src_dxx[2];
   }
 } // END FUNCTION: initialize_coordinates.
 
@@ -235,31 +235,31 @@ void initialize_coordinates(const int N_r, const int N_theta, const int N_phi, R
  * @param src_r_theta_phi        Array containing coordinate values for r, theta, and phi.
  * @param src_gf                 Array to store the initialized source grid function values.
  */
-void initialize_src_gf(const int src_Nxx_plus_2NGHOSTS[3], REAL *src_r_theta_phi[3], REAL *src_gf) {
+void initialize_src_gf(const int src_Nxx_plus_2NGHOSTS[3], BHA_REAL *src_r_theta_phi[3], BHA_REAL *src_gf) {
   // Declare the variables used in SRC_IDX4 macro
   const int src_Nxx_plus_2NGHOSTS0 = src_Nxx_plus_2NGHOSTS[0];
   const int src_Nxx_plus_2NGHOSTS1 = src_Nxx_plus_2NGHOSTS[1];
   const int src_Nxx_plus_2NGHOSTS2 = src_Nxx_plus_2NGHOSTS[2];
   // Allocate memory to precompute r_func values for each radial position
-  REAL *r_func_values = (REAL *)malloc(sizeof(REAL) * src_Nxx_plus_2NGHOSTS0);
+  BHA_REAL *r_func_values = (BHA_REAL *)malloc(sizeof(BHA_REAL) * src_Nxx_plus_2NGHOSTS0);
   if (r_func_values == NULL) {
     fprintf(stderr, "Memory allocation failed for r_func_values.\n");
     exit(EXIT_FAILURE);
   }
   // Precompute r_func for each radial position
   for (int i = 0; i < src_Nxx_plus_2NGHOSTS0; i++) {
-    const REAL r = src_r_theta_phi[0][i];
+    const BHA_REAL r = src_r_theta_phi[0][i];
     r_func_values[i] = sin(r) * r * r;
   }
   // Set the analytic grid functions
 #pragma omp parallel for
   for (int gf = 0; gf < NUM_INTERP_SRC_GFS; gf++) {
     for (int k = 0; k < src_Nxx_plus_2NGHOSTS2; k++) {
-      const REAL phi = src_r_theta_phi[2][k];
-      const REAL cosphi = cos(phi);
+      const BHA_REAL phi = src_r_theta_phi[2][k];
+      const BHA_REAL cosphi = cos(phi);
       for (int j = 0; j < src_Nxx_plus_2NGHOSTS1; j++) {
-        const REAL theta = src_r_theta_phi[1][j];
-        const REAL sintheta = sin(theta);
+        const BHA_REAL theta = src_r_theta_phi[1][j];
+        const BHA_REAL sintheta = sin(theta);
         for (int i = 0; i < src_Nxx_plus_2NGHOSTS0; i++) {
           src_gf[SRC_IDX4(gf, i, j, k)] = r_func_values[i] * sintheta * cosphi;
         }
@@ -283,8 +283,8 @@ int main() {
   const int num_resolutions = 3;                    // Number of grid resolutions to test.
 
   int N_r_arr[num_resolutions];        // Array to hold the number of radial grid points for each resolution.
-  REAL h_arr[num_resolutions];         // Array to store grid spacings for convergence analysis.
-  REAL error_L2_norm[num_resolutions]; // Array to store L2 norms of interpolation errors.
+  BHA_REAL h_arr[num_resolutions];         // Array to store grid spacings for convergence analysis.
+  BHA_REAL error_L2_norm[num_resolutions]; // Array to store L2 norms of interpolation errors.
 
   // Define grid resolutions for the radial direction.
   N_r_arr[0] = 16;
@@ -309,8 +309,8 @@ int main() {
     src_Nxx_plus_2NGHOSTS[2] = N_phi + 2 * NGHOSTS;
 
     // Initialize coordinate arrays for the source grid.
-    REAL *src_r_theta_phi[3] = {NULL, NULL, NULL};
-    REAL src_dxx[3]; // Array to store grid spacings in r, theta, phi.
+    BHA_REAL *src_r_theta_phi[3] = {NULL, NULL, NULL};
+    BHA_REAL src_dxx[3]; // Array to store grid spacings in r, theta, phi.
 
     initialize_coordinates(N_r, N_theta, N_phi, src_r_theta_phi, src_dxx, src_Nxx_plus_2NGHOSTS); // Set up grid coordinates.
 
@@ -325,7 +325,7 @@ int main() {
 
     // Allocate memory for the source grid function data.
     int total_src_grid_points = src_Nxx_plus_2NGHOSTS[0] * src_Nxx_plus_2NGHOSTS[1] * src_Nxx_plus_2NGHOSTS[2];
-    REAL *src_gf = (REAL *)malloc(sizeof(REAL) * NUM_INTERP_SRC_GFS * total_src_grid_points);
+    BHA_REAL *src_gf = (BHA_REAL *)malloc(sizeof(BHA_REAL) * NUM_INTERP_SRC_GFS * total_src_grid_points);
     if (src_gf == NULL) {
       fprintf(stderr, "Memory allocation failed for source grid function.\n");
       return EXIT_FAILURE;
@@ -354,13 +354,13 @@ int main() {
     int total_dst_grid_points = dst_Nxx_plus_2NGHOSTS0 * dst_Nxx_plus_2NGHOSTS1 * dst_Nxx_plus_2NGHOSTS2;
 
     // Define a safe domain within the source grid to ensure all destination points lie within bounds.
-    REAL r_min_safe = src_r_theta_phi[0][NinterpGHOSTS] + 1e-6;
-    REAL r_max_safe = src_r_theta_phi[0][src_Nxx_plus_2NGHOSTS[0] - NinterpGHOSTS - 1] - 1e-6;
+    BHA_REAL r_min_safe = src_r_theta_phi[0][NinterpGHOSTS] + 1e-6;
+    BHA_REAL r_max_safe = src_r_theta_phi[0][src_Nxx_plus_2NGHOSTS[0] - NinterpGHOSTS - 1] - 1e-6;
 
     // Destination grid has the same number of gridpoints as the src grid.
-    REAL *dst_radii = (REAL *)malloc(sizeof(REAL) * src_Nxx_plus_2NGHOSTS[0] * src_Nxx_plus_2NGHOSTS[1] * src_Nxx_plus_2NGHOSTS[2]);
-    REAL *dst_interp_gfs =
-        (REAL *)malloc(sizeof(REAL) * NUM_INTERP_SRC_GFS * src_Nxx_plus_2NGHOSTS[0] * src_Nxx_plus_2NGHOSTS[1] * src_Nxx_plus_2NGHOSTS[2]);
+    BHA_REAL *dst_radii = (BHA_REAL *)malloc(sizeof(BHA_REAL) * src_Nxx_plus_2NGHOSTS[0] * src_Nxx_plus_2NGHOSTS[1] * src_Nxx_plus_2NGHOSTS[2]);
+    BHA_REAL *dst_interp_gfs =
+        (BHA_REAL *)malloc(sizeof(BHA_REAL) * NUM_INTERP_SRC_GFS * src_Nxx_plus_2NGHOSTS[0] * src_Nxx_plus_2NGHOSTS[1] * src_Nxx_plus_2NGHOSTS[2]);
     if (dst_radii == NULL || dst_interp_gfs == NULL) {
       fprintf(stderr, "Memory allocation failed for destination radii.\n");
       return EXIT_FAILURE;
@@ -370,7 +370,7 @@ int main() {
     for (int j = NGHOSTS; j < N_theta + NGHOSTS; j++) {
       for (int k = NGHOSTS; k < N_phi + NGHOSTS; k++) {
         // Generate a random value between r_min_safe and r_max_safe
-        dst_radii[DST_IDX3(NGHOSTS, j, k)] = r_min_safe + ((REAL)rand() / (REAL)RAND_MAX) * (r_max_safe - r_min_safe);
+        dst_radii[DST_IDX3(NGHOSTS, j, k)] = r_min_safe + ((BHA_REAL)rand() / (BHA_REAL)RAND_MAX) * (r_max_safe - r_min_safe);
       }
     }
 
@@ -384,23 +384,23 @@ int main() {
     }
 
     // Calculate the L2 norm of the interpolation error to assess accuracy.
-    REAL error_sum = 0.0;
+    BHA_REAL error_sum = 0.0;
 
     // Compute the exact solution and error at each (theta, phi) point.
 #pragma omp parallel for reduction(+ : error_sum)
     for (int k = NGHOSTS; k < N_phi + NGHOSTS; k++) {
-      const REAL phi = src_r_theta_phi[2][k];
-      const REAL cosphi = cos(phi);
+      const BHA_REAL phi = src_r_theta_phi[2][k];
+      const BHA_REAL cosphi = cos(phi);
       for (int j = NGHOSTS; j < N_theta + NGHOSTS; j++) {
-        const REAL theta = src_r_theta_phi[1][j];
-        const REAL sintheta = sin(theta);
-        const REAL r_dst = dst_radii[DST_IDX3(NGHOSTS, j, k)];
-        const REAL r_func = sin(r_dst) * r_dst * r_dst;
+        const BHA_REAL theta = src_r_theta_phi[1][j];
+        const BHA_REAL sintheta = sin(theta);
+        const BHA_REAL r_dst = dst_radii[DST_IDX3(NGHOSTS, j, k)];
+        const BHA_REAL r_func = sin(r_dst) * r_dst * r_dst;
 
-        REAL exact_value = r_func * sintheta * cosphi;
+        BHA_REAL exact_value = r_func * sintheta * cosphi;
         // Only need to check the zeroth gridfunction; all gridfunctions are the same.
-        REAL interp_value = dst_interp_gfs[DST_IDX4(0, NGHOSTS, j, k)];
-        REAL error = interp_value - exact_value;
+        BHA_REAL interp_value = dst_interp_gfs[DST_IDX4(0, NGHOSTS, j, k)];
+        BHA_REAL error = interp_value - exact_value;
         error_sum += error * error;
       }
     }
@@ -414,7 +414,7 @@ int main() {
 
   // Analyze and report the observed order of convergence between successive resolutions.
   for (int res = 1; res < num_resolutions; res++) {
-    REAL observed_order = log(error_L2_norm[res - 1] / error_L2_norm[res]) / log(h_arr[res - 1] / h_arr[res]);
+    BHA_REAL observed_order = log(error_L2_norm[res - 1] / error_L2_norm[res]) / log(h_arr[res - 1] / h_arr[res]);
     printf("Observed order of convergence between resolutions %d and %d: %.2f\n", res - 1, res, observed_order);
   }
 

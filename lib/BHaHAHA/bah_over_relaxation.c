@@ -19,7 +19,7 @@ void bah_over_relaxation(commondata_struct *restrict commondata, griddata_struct
 
   const int grid = 0;
   const params_struct *restrict params = &griddata[grid].params;
-  REAL *restrict in_gfs = griddata[grid].gridfuncs.y_n_gfs;
+  BHA_REAL *restrict in_gfs = griddata[grid].gridfuncs.y_n_gfs;
   bhahaha_diagnostics_struct *restrict bhahaha_diags = commondata->bhahaha_diagnostics;
 
   // Dimensions of the computational grid including ghost zones.
@@ -29,7 +29,7 @@ void bah_over_relaxation(commondata_struct *restrict commondata, griddata_struct
 
   // Initialize the previous horizon guess h_p and its associated time t_p on the first iteration.
   if (commondata->nn == 0) {
-    commondata->h_p = malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS0 * Nxx_plus_2NGHOSTS1 * Nxx_plus_2NGHOSTS2);
+    commondata->h_p = malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS0 * Nxx_plus_2NGHOSTS1 * Nxx_plus_2NGHOSTS2);
     LOOP_OMP("omp parallel for", i0, NGHOSTS, NGHOSTS + 1, i1, 0, Nxx_plus_2NGHOSTS1, i2, 0, Nxx_plus_2NGHOSTS2) {
       commondata->h_p[IDX3(i0, i1, i2)] = 0.0; //
     }
@@ -47,20 +47,20 @@ void bah_over_relaxation(commondata_struct *restrict commondata, griddata_struct
     // Compute horizon diagnostics (area, centroid, and Theta norms).
     bah_diagnostics_area_centroid_and_Theta_norms(commondata, griddata);
 
-    REAL M_irr_orig = bhahaha_diags->Theta_Linf_times_M; // Original irreducible mass diagnostic value.
-    REAL min_Theta_Linf_times_M = M_irr_orig;            // Track the minimum irreducible mass diagnostic value.
-    REAL best_overstep = 0.0;                            // Track the optimal overstep value.
+    BHA_REAL M_irr_orig = bhahaha_diags->Theta_Linf_times_M; // Original irreducible mass diagnostic value.
+    BHA_REAL min_Theta_Linf_times_M = M_irr_orig;            // Track the minimum irreducible mass diagnostic value.
+    BHA_REAL best_overstep = 0.0;                            // Track the optimal overstep value.
 
     // Explore potential overstep values to accelerate convergence.
-    for (REAL overstep = 2.0; overstep <= 1e4; overstep *= 1.2) {
+    for (BHA_REAL overstep = 2.0; overstep <= 1e4; overstep *= 1.2) {
       LOOP_OMP("omp parallel for", i0, NGHOSTS, NGHOSTS + 1, i1, 0, Nxx_plus_2NGHOSTS1, i2, 0, Nxx_plus_2NGHOSTS2) {
         const int idx3 = IDX3(i0, i1, i2);
         in_gfs[IDX4(HHGF, i0 + 1, i1, i2)] = in_gfs[IDX4(HHGF, i0, i1, i2)]; // Backup the current horizon value.
 
         // Perform linear extrapolation to compute an overstep for h(theta, phi).
-        const REAL y_prev = commondata->h_p[IDX3(i0, i1, i2)], y_curr = in_gfs[IDX4(HHGF, i0, i1, i2)];
-        const REAL t_prev = commondata->time_of_h_p, t_curr = commondata->time;
-        const REAL dst_time = t_prev + overstep * (t_curr - t_prev);
+        const BHA_REAL y_prev = commondata->h_p[IDX3(i0, i1, i2)], y_curr = in_gfs[IDX4(HHGF, i0, i1, i2)];
+        const BHA_REAL t_prev = commondata->time_of_h_p, t_curr = commondata->time;
+        const BHA_REAL dst_time = t_prev + overstep * (t_curr - t_prev);
         in_gfs[IDX4pt(HHGF, idx3)] = y_curr + (y_prev - y_curr) * (dst_time - t_curr) / (t_prev - t_curr);
       } // END LOOP: Apply overstep to gridpoints.
 
@@ -96,9 +96,9 @@ void bah_over_relaxation(commondata_struct *restrict commondata, griddata_struct
       LOOP_OMP("omp parallel for", i0, NGHOSTS, NGHOSTS + 1, i1, 0, Nxx_plus_2NGHOSTS1, i2, 0, Nxx_plus_2NGHOSTS2) {
         const int idx3 = IDX3(i0, i1, i2);
         // Perform linear extrapolation to compute an overstep for h(theta, phi).
-        const REAL y_prev = commondata->h_p[IDX3(i0, i1, i2)], y_curr = in_gfs[IDX4(HHGF, i0, i1, i2)];
-        const REAL t_prev = commondata->time_of_h_p, t_curr = commondata->time;
-        const REAL dst_time = t_prev + best_overstep * (t_curr - t_prev);
+        const BHA_REAL y_prev = commondata->h_p[IDX3(i0, i1, i2)], y_curr = in_gfs[IDX4(HHGF, i0, i1, i2)];
+        const BHA_REAL t_prev = commondata->time_of_h_p, t_curr = commondata->time;
+        const BHA_REAL dst_time = t_prev + best_overstep * (t_curr - t_prev);
         in_gfs[IDX4pt(HHGF, idx3)] = y_curr + (y_prev - y_curr) * (dst_time - t_curr) / (t_prev - t_curr);
 
         // Update v(theta, phi) to reset time dynamics.

@@ -10,7 +10,7 @@
  *
  */
 void bah_apply_bcs_inner_only(const commondata_struct *restrict commondata, const params_struct *restrict params, const bc_struct *restrict bcstruct,
-                              REAL *restrict gfs) {
+                              BHA_REAL *restrict gfs) {
 #include "set_CodeParameters.h"
 
   // Unpack bc_info from bcstruct

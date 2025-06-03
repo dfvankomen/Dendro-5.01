@@ -14,9 +14,9 @@ extern "C" {
   #define BHA_RESTRICT restrict
 #endif
 
-// Definition of REAL data type, using double by default.
-#ifndef REAL
-#define REAL double
+// Definition of BHA_REAL data type, using double by default.
+#ifndef BHA_REAL
+#define BHA_REAL double
 #endif
 
 // Number of external input Cartesian grid functions.
@@ -75,7 +75,7 @@ struct bhahaha_params_and_data_struct {
   //==========================
   // Metric and grid setup
   //==========================
-  REAL *BHA_RESTRICT input_metric_data; // Stores gamma_{ij} and K_{ij} in Cartesian
+  BHA_REAL *BHA_RESTRICT input_metric_data; // Stores gamma_{ij} and K_{ij} in Cartesian
                                     // basis on Nr x Ntheta x Nphi grid.
                                     // Indexing: input_metric_data[(i + Nr * (j
                                     // + Ntheta * (k + Nphi * gf)))], where gf
@@ -106,13 +106,13 @@ struct bhahaha_params_and_data_struct {
   //   r_min=0 and r_max=max_search_radius to bah_radial_grid_cell_centered_set_up().
   //
   // Time from external input grid, needed for quadratic extrapolation & diagnostic file output.
-  REAL time_external_input;
+  BHA_REAL time_external_input;
   int iteration_external_input; // External NR code iteration; needed for diagnostic file output.
   //                               Set to dummy value if not applicable.
 
   // Radial grid parameters
   int Nr_external_input; // Recommended default: 48
-  REAL r_min_external_input, dr_external_input;
+  BHA_REAL r_min_external_input, dr_external_input;
   // Angular multigrid parameters
   // Defaults:
   /*
@@ -135,22 +135,22 @@ struct bhahaha_params_and_data_struct {
   // - max(cfl_factor) = 1.05.
   // - The timestep is set from the cfl_factor at the start of each timestep.
   // - Strongly recommended value: 1.05.
-  REAL cfl_factor; // Courant-Friedrichs-Lewy (CFL) factor for time stepping.
+  BHA_REAL cfl_factor; // Courant-Friedrichs-Lewy (CFL) factor for time stepping.
 
-  REAL M_scale; // Mass scale for this horizon, in code units. This is the mass used for
+  BHA_REAL M_scale; // Mass scale for this horizon, in code units. This is the mass used for
   //               eta_damping_times_M, Theta_Linf_times_M, Theta_Linf_times_M_tolerance, etc.
-  REAL eta_damping_times_M; // Damping parameter for hyperbolic relaxation, recommended value = 1.6.
-  REAL KO_strength;         // Kreiss-Oliger dissipation strength, strongly recommended: set to 0 (disables KO).
+  BHA_REAL eta_damping_times_M; // Damping parameter for hyperbolic relaxation, recommended value = 1.6.
+  BHA_REAL KO_strength;         // Kreiss-Oliger dissipation strength, strongly recommended: set to 0 (disables KO).
 
   // Convergence thresholds for horizon finding: Horizon finding ceases when
   // EITHER max_iterations is hit, OR:
   // (Theta_Linf_times_M < Theta_Linf_times_M_tolerance AND Theta_L2_times_M < Theta_L2_times_M_tolerance)
   int max_iterations;                // Maximum iterations, recommended value = 10000.
-  REAL Theta_Linf_times_M_tolerance; // Theta Linf norm (max(|Theta|)), times mass scale. Recommended value = 1e-2,
+  BHA_REAL Theta_Linf_times_M_tolerance; // Theta Linf norm (max(|Theta|)), times mass scale. Recommended value = 1e-2,
   //                                    to defer to L2 norm for general horizon finding, as L2 norm is holistic,
   //                                    and general horizon finding cares mostly about holistic quantities:
   //                                    area, M_irr, and spins.
-  REAL Theta_L2_times_M_tolerance; // Theta L2 norm (max(|Theta|)), times mass scale. Recommended value = 2e-5.
+  BHA_REAL Theta_L2_times_M_tolerance; // Theta L2 norm (max(|Theta|)), times mass scale. Recommended value = 2e-5.
 
   //==========================
   // Diagnostic parameters
@@ -170,17 +170,17 @@ struct bhahaha_params_and_data_struct {
   // Previous horizons found:
   //    m1 = "minus 1" = most recent found; m2 = next-to-most-recent found; etc.
   // EXTERNAL NR CODE MUST ALLOCATE: max(Ntheta) x max(Nphi) doubles for each of these, but does not set them!
-  REAL *BHA_RESTRICT prev_horizon_m1, *BHA_RESTRICT prev_horizon_m2, *BHA_RESTRICT prev_horizon_m3;
+  BHA_REAL *BHA_RESTRICT prev_horizon_m1, *BHA_RESTRICT prev_horizon_m2, *BHA_RESTRICT prev_horizon_m3;
 
   // DO NOT TOUCH: Persistent quantities set by BHaHAHA.
   // External NR code times at which previous horizons were found.
-  REAL t_m1, t_m2, t_m3;
+  BHA_REAL t_m1, t_m2, t_m3;
   // Horizon min & max radii.
-  REAL r_min_m1, r_min_m2, r_min_m3, r_max_m1, r_max_m2, r_max_m3;
+  BHA_REAL r_min_m1, r_min_m2, r_min_m3, r_max_m1, r_max_m2, r_max_m3;
   // Horizon coordinate centers.
-  REAL x_center_m1, x_center_m2, x_center_m3;
-  REAL y_center_m1, y_center_m2, y_center_m3;
-  REAL z_center_m1, z_center_m2, z_center_m3;
+  BHA_REAL x_center_m1, x_center_m2, x_center_m3;
+  BHA_REAL y_center_m1, y_center_m2, y_center_m3;
+  BHA_REAL z_center_m1, z_center_m2, z_center_m3;
 };
 
 //===============================================
@@ -191,42 +191,42 @@ struct bhahaha_diagnostics_struct {
   //==========================
   // Convergence-related quantities
   //==========================
-  REAL Theta_Linf_times_M; // L-infinity norm of Theta (i.e., max(Theta)), times mass scale.
-  REAL Theta_L2_times_M;   // L2 of Theta, times mass scale.
-  REAL area;               // Surface area of the horizon.
+  BHA_REAL Theta_Linf_times_M; // L-infinity norm of Theta (i.e., max(Theta)), times mass scale.
+  BHA_REAL Theta_L2_times_M;   // L2 of Theta, times mass scale.
+  BHA_REAL area;               // Surface area of the horizon.
 
   //==========================
   // Horizon centroid coordinates (relative to input coordinate origin)
   //==========================
-  REAL x_centroid_wrt_coord_origin; // X-coordinate of the horizon's centroid.
-  REAL y_centroid_wrt_coord_origin; // Y-coordinate of the horizon's centroid.
-  REAL z_centroid_wrt_coord_origin; // Z-coordinate of the horizon's centroid.
+  BHA_REAL x_centroid_wrt_coord_origin; // X-coordinate of the horizon's centroid.
+  BHA_REAL y_centroid_wrt_coord_origin; // Y-coordinate of the horizon's centroid.
+  BHA_REAL z_centroid_wrt_coord_origin; // Z-coordinate of the horizon's centroid.
 
   //==========================
   // Horizon radius quantities (centroid-based)
   //==========================
-  REAL min_coord_radius_wrt_centroid;  // Minimum coordinate radius from the centroid.
-  REAL max_coord_radius_wrt_centroid;  // Maximum coordinate radius from the centroid.
-  REAL mean_coord_radius_wrt_centroid; // Mean coordinate radius from the centroid.
+  BHA_REAL min_coord_radius_wrt_centroid;  // Minimum coordinate radius from the centroid.
+  BHA_REAL max_coord_radius_wrt_centroid;  // Maximum coordinate radius from the centroid.
+  BHA_REAL mean_coord_radius_wrt_centroid; // Mean coordinate radius from the centroid.
 
   //==========================
   // Horizon proper circumferences (planes based on input coordinate origin)
   //==========================
-  REAL xy_plane_circumference; // Proper circumference in xy-plane
-  REAL xz_plane_circumference; // Proper circumference in xz-plane
-  REAL yz_plane_circumference; // Proper circumference in yz-plane
+  BHA_REAL xy_plane_circumference; // Proper circumference in xy-plane
+  BHA_REAL xz_plane_circumference; // Proper circumference in xz-plane
+  BHA_REAL yz_plane_circumference; // Proper circumference in yz-plane
 
   //==========================
   // Dimensionless spin parameters chi^i = |a^i/m|, based on proper circumferences in various planes.
   // These parameters are computed from specific proper circumference ratios as per
   //  Eq 5.2 of Alcubierre et al. (arXiv:gr-qc/0411149) and related references.
   // If the ratio is > 1 or the spin cannot be computed, -10.0 is returned as a placeholder value.
-  REAL spin_a_x_from_xz_over_yz_prop_circumfs;
-  REAL spin_a_x_from_xy_over_yz_prop_circumfs;
-  REAL spin_a_y_from_yz_over_xz_prop_circumfs;
-  REAL spin_a_y_from_xy_over_xz_prop_circumfs;
-  REAL spin_a_z_from_xz_over_xy_prop_circumfs;
-  REAL spin_a_z_from_yz_over_xy_prop_circumfs;
+  BHA_REAL spin_a_x_from_xz_over_yz_prop_circumfs;
+  BHA_REAL spin_a_x_from_xy_over_yz_prop_circumfs;
+  BHA_REAL spin_a_y_from_yz_over_xz_prop_circumfs;
+  BHA_REAL spin_a_y_from_xy_over_xz_prop_circumfs;
+  BHA_REAL spin_a_z_from_xz_over_xy_prop_circumfs;
+  BHA_REAL spin_a_z_from_yz_over_xy_prop_circumfs;
 
   // Benchmarking: Counts number of points where Theta is evaluated.
   long Theta_eval_points_counter;
@@ -244,21 +244,21 @@ void bah_poisoning_check_inputs(const bhahaha_params_and_data_struct *BHA_RESTRI
 // (required): Set up the (holey) spherical grid for BHaHAHA
 #if defined(__cplusplus) || !defined(__STDC_VERSION__) || (__STDC_VERSION__ < 199901L)
 // DFVK (May 2025) addition: C++ doesn't support variable length arrays
-void bah_radial_grid_cell_centered_set_up(const int Nr_interp_max, const REAL max_search_radius, const REAL input_r_min, const REAL input_r_max,
-                                          int *BHA_RESTRICT output_Nr_interp, REAL *BHA_RESTRICT output_r_min, REAL *BHA_RESTRICT output_dr,
-                                          REAL* radii);
+void bah_radial_grid_cell_centered_set_up(const int Nr_interp_max, const BHA_REAL max_search_radius, const BHA_REAL input_r_min, const BHA_REAL input_r_max,
+                                          int *BHA_RESTRICT output_Nr_interp, BHA_REAL *BHA_RESTRICT output_r_min, BHA_REAL *BHA_RESTRICT output_dr,
+                                          BHA_REAL* radii);
 #else
-void bah_radial_grid_cell_centered_set_up(const int Nr_interp_max, const REAL max_search_radius, const REAL input_r_min, const REAL input_r_max,
-                                          int *BHA_RESTRICT output_Nr_interp, REAL *BHA_RESTRICT output_r_min, REAL *BHA_RESTRICT output_dr,
-                                          REAL radii[Nr_interp_max]);
+void bah_radial_grid_cell_centered_set_up(const int Nr_interp_max, const BHA_REAL max_search_radius, const BHA_REAL input_r_min, const BHA_REAL input_r_max,
+                                          int *BHA_RESTRICT output_Nr_interp, BHA_REAL *BHA_RESTRICT output_r_min, BHA_REAL *BHA_RESTRICT output_dr,
+                                          BHA_REAL radii[Nr_interp_max]);
 #endif
-void bah_xyz_center_r_minmax(const bhahaha_params_and_data_struct *BHA_RESTRICT pars, REAL *BHA_RESTRICT x_center, REAL *BHA_RESTRICT y_center,
-                             REAL *BHA_RESTRICT z_center, REAL *BHA_RESTRICT r_min, REAL *BHA_RESTRICT r_max);
+void bah_xyz_center_r_minmax(const bhahaha_params_and_data_struct *BHA_RESTRICT pars, BHA_REAL *BHA_RESTRICT x_center, BHA_REAL *BHA_RESTRICT y_center,
+                             BHA_REAL *BHA_RESTRICT z_center, BHA_REAL *BHA_RESTRICT r_min, BHA_REAL *BHA_RESTRICT r_max);
 // (required): Core BHaHAHA horizon finder
 int bah_find_horizon(bhahaha_params_and_data_struct *BHA_RESTRICT bhahaha_params_and_data, bhahaha_diagnostics_struct *BHA_RESTRICT bhahaha_diags);
 // (optional): Diagnostic file output, similar to AHFinderDirect output files.
 void bah_diagnostics_file_output(const bhahaha_diagnostics_struct *diags, const bhahaha_params_and_data_struct *bhahaha_params_and_data,
-                                 int N_horizons, const REAL x_center_input, const REAL y_center_input, const REAL z_center_input,
+                                 int N_horizons, const BHA_REAL x_center_input, const BHA_REAL y_center_input, const BHA_REAL z_center_input,
                                  const char *output_directory);
 
 //===============================================

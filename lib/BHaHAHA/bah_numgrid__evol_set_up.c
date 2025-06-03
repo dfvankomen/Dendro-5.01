@@ -29,17 +29,17 @@ void bah_numgrid__evol_set_up(commondata_struct *restrict commondata, griddata_s
 
   // Step 4: Set grid boundaries
   params->RMAX = 1.0; // Completely arbitrary; must be set to some reasonable-sized number > 0, just so that BC set up doesn't error out.
-  const REAL xxmin0 = 0.0;
-  const REAL xxmax0 = params->RMAX;
-  const REAL xxmin1 = 0.0;
-  const REAL xxmax1 = M_PI;
-  const REAL xxmin2 = -M_PI;
-  const REAL xxmax2 = M_PI;
+  const BHA_REAL xxmin0 = 0.0;
+  const BHA_REAL xxmax0 = params->RMAX;
+  const BHA_REAL xxmin1 = 0.0;
+  const BHA_REAL xxmax1 = M_PI;
+  const BHA_REAL xxmin2 = -M_PI;
+  const BHA_REAL xxmax2 = M_PI;
 
   // Step 5: Compute dxx and invdxx
-  params->dxx0 = (xxmax0 - xxmin0) / ((REAL)params->Nxx0);
-  params->dxx1 = (xxmax1 - xxmin1) / ((REAL)params->Nxx1);
-  params->dxx2 = (xxmax2 - xxmin2) / ((REAL)params->Nxx2);
+  params->dxx0 = (xxmax0 - xxmin0) / ((BHA_REAL)params->Nxx0);
+  params->dxx1 = (xxmax1 - xxmin1) / ((BHA_REAL)params->Nxx1);
+  params->dxx2 = (xxmax2 - xxmin2) / ((BHA_REAL)params->Nxx2);
 
   params->invdxx0 = 1.0 / params->dxx0;
   params->invdxx1 = 1.0 / params->dxx1;
@@ -47,14 +47,14 @@ void bah_numgrid__evol_set_up(commondata_struct *restrict commondata, griddata_s
 
   // Arrays for simplifying loops
   const int Nxx_plus_2NGHOSTS[3] = {params->Nxx_plus_2NGHOSTS0, params->Nxx_plus_2NGHOSTS1, params->Nxx_plus_2NGHOSTS2};
-  const REAL xxmin[3] = {xxmin0, xxmin1, xxmin2};
-  const REAL dxx[3] = {params->dxx0, params->dxx1, params->dxx2};
+  const BHA_REAL xxmin[3] = {xxmin0, xxmin1, xxmin2};
+  const BHA_REAL dxx[3] = {params->dxx0, params->dxx1, params->dxx2};
 
   // Step 6: Allocate and initialize cell-centered grid coordinate arrays xx[0], xx[1], xx[2]
   for (int dir = 0; dir < 3; dir++) {
-    griddata[grid].xx[dir] = (REAL *restrict)malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS[dir]);
+    griddata[grid].xx[dir] = (BHA_REAL *restrict)malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS[dir]);
     for (int i = 0; i < Nxx_plus_2NGHOSTS[dir]; i++)
-      griddata[grid].xx[dir][i] = xxmin[dir] + ((REAL)(i - NGHOSTS) + (1.0 / 2.0)) * dxx[dir];
+      griddata[grid].xx[dir][i] = xxmin[dir] + ((BHA_REAL)(i - NGHOSTS) + (1.0 / 2.0)) * dxx[dir];
   }
 
   // Step 7: Allocate and define reference-metric precompute lookup arrays.

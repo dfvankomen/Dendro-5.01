@@ -26,13 +26,13 @@
  * and consistency in the transformation.
  *
  */
-static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commondata_struct *restrict commondata, REAL *restrict xx[3], const int i0,
-                                                                     const int i1, const int i2, REAL x0x1x2_inbounds[3], int i0i1i2_inbounds[3]) {
+static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commondata_struct *restrict commondata, BHA_REAL *restrict xx[3], const int i0,
+                                                                     const int i1, const int i2, BHA_REAL x0x1x2_inbounds[3], int i0i1i2_inbounds[3]) {
 
   // Step 0: Unpack grid spacings dxx0, dxx1, dxx2
-  const REAL dxx0 = commondata->bcstruct_dxx0;
-  const REAL dxx1 = commondata->bcstruct_dxx1;
-  const REAL dxx2 = commondata->bcstruct_dxx2;
+  const BHA_REAL dxx0 = commondata->bcstruct_dxx0;
+  const BHA_REAL dxx1 = commondata->bcstruct_dxx1;
+  const BHA_REAL dxx2 = commondata->bcstruct_dxx2;
 
   // This is a 3-step algorithm:
   // Step 1: (x0,x1,x2) -> (Cartx,Carty,Cartz)
@@ -56,12 +56,12 @@ static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commo
   //         If not, error out!
 
   // Step 1: Convert the (curvilinear) coordinate (x0,x1,x2) to Cartesian coordinates
-  REAL xCart[3]; // where (x,y,z) is output
+  BHA_REAL xCart[3]; // where (x,y,z) is output
   {
     // xx_to_Cart for EigenCoordinate Spherical (original coord = Spherical):
-    REAL xx0 = xx[0][i0];
-    REAL xx1 = xx[1][i1];
-    REAL xx2 = xx[2][i2];
+    BHA_REAL xx0 = xx[0][i0];
+    BHA_REAL xx1 = xx[1][i1];
+    BHA_REAL xx2 = xx[2][i2];
     /*
      *  Original SymPy expressions:
      *  "[xCart[0] = xx0*sin(xx1)*cos(xx2)]"
@@ -69,16 +69,16 @@ static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commo
      *  "[xCart[2] = xx0*cos(xx1)]"
      */
     {
-      const REAL tmp0 = xx0 * sin(xx1);
+      const BHA_REAL tmp0 = xx0 * sin(xx1);
       xCart[0] = tmp0 * cos(xx2);
       xCart[1] = tmp0 * sin(xx2);
       xCart[2] = xx0 * cos(xx1);
     }
   }
 
-  REAL Cartx = xCart[0];
-  REAL Carty = xCart[1];
-  REAL Cartz = xCart[2];
+  BHA_REAL Cartx = xCart[0];
+  BHA_REAL Carty = xCart[1];
+  BHA_REAL Cartz = xCart[2];
 
   // Step 2: Find the (i0_inbounds,i1_inbounds,i2_inbounds) corresponding to the above Cartesian coordinate.
   //   If (i0_inbounds,i1_inbounds,i2_inbounds) is in a ghost zone, then it must equal (i0,i1,i2), and
@@ -86,7 +86,7 @@ static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commo
   //   Otherwise (i0_inbounds,i1_inbounds,i2_inbounds) is in the grid interior, and data at (i0,i1,i2)
   //      must be replaced with data at (i0_inbounds,i1_inbounds,i2_inbounds), but multiplied by the
   //      appropriate parity condition (+/- 1).
-  REAL Cart_to_xx0_inbounds, Cart_to_xx1_inbounds, Cart_to_xx2_inbounds;
+  BHA_REAL Cart_to_xx0_inbounds, Cart_to_xx1_inbounds, Cart_to_xx2_inbounds;
   // Cart_to_xx for EigenCoordinate Spherical (original coord = Spherical):
   /*
    *  Original SymPy expressions:
@@ -95,22 +95,22 @@ static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commo
    *  "[Cart_to_xx2_inbounds = atan2(Carty, Cartx)]"
    */
   {
-    const REAL tmp0 = sqrt(((Cartx) * (Cartx)) + ((Carty) * (Carty)) + ((Cartz) * (Cartz)));
+    const BHA_REAL tmp0 = sqrt(((Cartx) * (Cartx)) + ((Carty) * (Carty)) + ((Cartz) * (Cartz)));
     Cart_to_xx0_inbounds = tmp0;
     Cart_to_xx1_inbounds = acos(Cartz / tmp0);
     Cart_to_xx2_inbounds = atan2(Carty, Cartx);
   }
 
   // Next compute xxmin[i]. By definition,
-  //    xx[i][j] = xxmin[i] + ((REAL)(j-NGHOSTS) + (1.0/2.0))*dxxi;
-  // -> xxmin[i] = xx[i][0] - ((REAL)(0-NGHOSTS) + (1.0/2.0))*dxxi
-  const REAL xxmin[3] = {xx[0][0] - ((REAL)(0 - NGHOSTS) + (1.0 / 2.0)) * dxx0, xx[1][0] - ((REAL)(0 - NGHOSTS) + (1.0 / 2.0)) * dxx1,
-                         xx[2][0] - ((REAL)(0 - NGHOSTS) + (1.0 / 2.0)) * dxx2};
+  //    xx[i][j] = xxmin[i] + ((BHA_REAL)(j-NGHOSTS) + (1.0/2.0))*dxxi;
+  // -> xxmin[i] = xx[i][0] - ((BHA_REAL)(0-NGHOSTS) + (1.0/2.0))*dxxi
+  const BHA_REAL xxmin[3] = {xx[0][0] - ((BHA_REAL)(0 - NGHOSTS) + (1.0 / 2.0)) * dxx0, xx[1][0] - ((BHA_REAL)(0 - NGHOSTS) + (1.0 / 2.0)) * dxx1,
+                         xx[2][0] - ((BHA_REAL)(0 - NGHOSTS) + (1.0 / 2.0)) * dxx2};
 
   // Finally compute i{0,1,2}_inbounds (add 0.5 to account for rounding down)
-  const int i0_inbounds = (int)((Cart_to_xx0_inbounds - xxmin[0] - (1.0 / 2.0) * dxx0 + ((REAL)NGHOSTS) * dxx0) / dxx0 + 0.5);
-  const int i1_inbounds = (int)((Cart_to_xx1_inbounds - xxmin[1] - (1.0 / 2.0) * dxx1 + ((REAL)NGHOSTS) * dxx1) / dxx1 + 0.5);
-  const int i2_inbounds = (int)((Cart_to_xx2_inbounds - xxmin[2] - (1.0 / 2.0) * dxx2 + ((REAL)NGHOSTS) * dxx2) / dxx2 + 0.5);
+  const int i0_inbounds = (int)((Cart_to_xx0_inbounds - xxmin[0] - (1.0 / 2.0) * dxx0 + ((BHA_REAL)NGHOSTS) * dxx0) / dxx0 + 0.5);
+  const int i1_inbounds = (int)((Cart_to_xx1_inbounds - xxmin[1] - (1.0 / 2.0) * dxx1 + ((BHA_REAL)NGHOSTS) * dxx1) / dxx1 + 0.5);
+  const int i2_inbounds = (int)((Cart_to_xx2_inbounds - xxmin[2] - (1.0 / 2.0) * dxx2 + ((BHA_REAL)NGHOSTS) * dxx2) / dxx2 + 0.5);
 
   // Step 3: Convert x0(i0_inbounds),x1(i1_inbounds),x2(i2_inbounds) -> (Cartx,Carty,Cartz),
   //         and check that
@@ -119,19 +119,19 @@ static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commo
 
   // Step 3.a: Compute {x,y,z}Cart_from_xx, as a
   //           function of i0,i1,i2
-  REAL xCart_from_xx, yCart_from_xx, zCart_from_xx;
+  BHA_REAL xCart_from_xx, yCart_from_xx, zCart_from_xx;
   {
     // xx_to_Cart for Coordinate Spherical:
-    REAL xx0 = xx[0][i0];
-    REAL xx1 = xx[1][i1];
-    REAL xx2 = xx[2][i2];
+    BHA_REAL xx0 = xx[0][i0];
+    BHA_REAL xx1 = xx[1][i1];
+    BHA_REAL xx2 = xx[2][i2];
     /*
      *  Original SymPy expressions:
      *  "[xCart_from_xx = xx0*sin(xx1)*cos(xx2)]"
      *  "[yCart_from_xx = xx0*sin(xx1)*sin(xx2)]"
      *  "[zCart_from_xx = xx0*cos(xx1)]"
      */
-    const REAL tmp0 = xx0 * sin(xx1);
+    const BHA_REAL tmp0 = xx0 * sin(xx1);
     xCart_from_xx = tmp0 * cos(xx2);
     yCart_from_xx = tmp0 * sin(xx2);
     zCart_from_xx = xx0 * cos(xx1);
@@ -139,19 +139,19 @@ static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commo
 
   // Step 3.b: Compute {x,y,z}Cart_from_xx_inbounds, as a
   //           function of i0_inbounds,i1_inbounds,i2_inbounds
-  REAL xCart_from_xx_inbounds, yCart_from_xx_inbounds, zCart_from_xx_inbounds;
+  BHA_REAL xCart_from_xx_inbounds, yCart_from_xx_inbounds, zCart_from_xx_inbounds;
   {
     // xx_to_Cart_inbounds for Coordinate Spherical:
-    REAL xx0 = xx[0][i0_inbounds];
-    REAL xx1 = xx[1][i1_inbounds];
-    REAL xx2 = xx[2][i2_inbounds];
+    BHA_REAL xx0 = xx[0][i0_inbounds];
+    BHA_REAL xx1 = xx[1][i1_inbounds];
+    BHA_REAL xx2 = xx[2][i2_inbounds];
     /*
      *  Original SymPy expressions:
      *  "[xCart_from_xx_inbounds = xx0*sin(xx1)*cos(xx2)]"
      *  "[yCart_from_xx_inbounds = xx0*sin(xx1)*sin(xx2)]"
      *  "[zCart_from_xx_inbounds = xx0*cos(xx1)]"
      */
-    const REAL tmp0 = xx0 * sin(xx1);
+    const BHA_REAL tmp0 = xx0 * sin(xx1);
     xCart_from_xx_inbounds = tmp0 * cos(xx2);
     yCart_from_xx_inbounds = tmp0 * sin(xx2);
     zCart_from_xx_inbounds = xx0 * cos(xx1);
@@ -162,7 +162,7 @@ static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commo
 
 #define EPS_REL 1e-8
 
-  const REAL norm_factor = sqrt(xCart_from_xx * xCart_from_xx + yCart_from_xx * yCart_from_xx + zCart_from_xx * zCart_from_xx) + 1e-15;
+  const BHA_REAL norm_factor = sqrt(xCart_from_xx * xCart_from_xx + yCart_from_xx * yCart_from_xx + zCart_from_xx * zCart_from_xx) + 1e-15;
   if (fabs((double)(xCart_from_xx - xCart_from_xx_inbounds)) > EPS_REL * norm_factor ||
       fabs((double)(yCart_from_xx - yCart_from_xx_inbounds)) > EPS_REL * norm_factor ||
       fabs((double)(zCart_from_xx - zCart_from_xx_inbounds)) > EPS_REL * norm_factor) {
@@ -199,16 +199,16 @@ static int EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(const commo
  * above for more details), here we compute the parity conditions
  * for all 10 tensor types supported by NRPy, plus 18 for h_{ij,k}.
  */
-static int set_parity_for_inner_boundary_single_pt(const commondata_struct *restrict commondata, const REAL xx0, const REAL xx1, const REAL xx2,
-                                                   const REAL x0x1x2_inbounds[3], const int idx, innerpt_bc_struct *restrict innerpt_bc_arr) {
+static int set_parity_for_inner_boundary_single_pt(const commondata_struct *restrict commondata, const BHA_REAL xx0, const BHA_REAL xx1, const BHA_REAL xx2,
+                                                   const BHA_REAL x0x1x2_inbounds[3], const int idx, innerpt_bc_struct *restrict innerpt_bc_arr) {
 
 #define EPS_REL 1e-8
 
-  const REAL xx0_inbounds = x0x1x2_inbounds[0];
-  const REAL xx1_inbounds = x0x1x2_inbounds[1];
-  const REAL xx2_inbounds = x0x1x2_inbounds[2];
+  const BHA_REAL xx0_inbounds = x0x1x2_inbounds[0];
+  const BHA_REAL xx1_inbounds = x0x1x2_inbounds[1];
+  const BHA_REAL xx2_inbounds = x0x1x2_inbounds[2];
 
-  REAL REAL_parity_array[28];
+  BHA_REAL REAL_parity_array[28];
   {
     // Evaluate dot products needed for setting parity
     //     conditions at a given point (xx0,xx1,xx2),
@@ -286,17 +286,17 @@ Documented in: Tutorial-Start_to_Finish-Curvilinear_BCs.ipynb
      *  "[REAL_parity_array[27] = (sin(xx2)*sin(xx2_inbounds) + cos(xx2)*cos(xx2_inbounds))**3]"
      */
     {
-      const REAL tmp0 = cos(xx1) * cos(xx1_inbounds);
-      const REAL tmp1 = sin(xx1) * sin(xx1_inbounds);
-      const REAL tmp2 = sin(xx2) * sin(xx2_inbounds);
-      const REAL tmp3 = cos(xx2) * cos(xx2_inbounds);
-      const REAL tmp4 = tmp0 + tmp1 * tmp2 + tmp1 * tmp3;
-      const REAL tmp5 = tmp0 * tmp2 + tmp0 * tmp3 + tmp1;
-      const REAL tmp6 = tmp2 + tmp3;
-      const REAL tmp7 = ((tmp4) * (tmp4));
-      const REAL tmp9 = ((tmp5) * (tmp5));
-      const REAL tmp10 = ((tmp6) * (tmp6));
-      const REAL tmp14 = tmp4 * tmp5 * tmp6;
+      const BHA_REAL tmp0 = cos(xx1) * cos(xx1_inbounds);
+      const BHA_REAL tmp1 = sin(xx1) * sin(xx1_inbounds);
+      const BHA_REAL tmp2 = sin(xx2) * sin(xx2_inbounds);
+      const BHA_REAL tmp3 = cos(xx2) * cos(xx2_inbounds);
+      const BHA_REAL tmp4 = tmp0 + tmp1 * tmp2 + tmp1 * tmp3;
+      const BHA_REAL tmp5 = tmp0 * tmp2 + tmp0 * tmp3 + tmp1;
+      const BHA_REAL tmp6 = tmp2 + tmp3;
+      const BHA_REAL tmp7 = ((tmp4) * (tmp4));
+      const BHA_REAL tmp9 = ((tmp5) * (tmp5));
+      const BHA_REAL tmp10 = ((tmp6) * (tmp6));
+      const BHA_REAL tmp14 = tmp4 * tmp5 * tmp6;
       REAL_parity_array[0] = 1;
       REAL_parity_array[1] = tmp4;
       REAL_parity_array[2] = tmp5;
@@ -401,7 +401,7 @@ Documented in: Tutorial-Start_to_Finish-Curvilinear_BCs.ipynb
  * *    the struct is set only at outer boundary points. This is slightly
  * *    wasteful, but only in memory, not in CPU.
  */
-int bah_bcstruct_set_up(const commondata_struct *restrict commondata, REAL *restrict xx[3], bc_struct *restrict bcstruct) {
+int bah_bcstruct_set_up(const commondata_struct *restrict commondata, BHA_REAL *restrict xx[3], bc_struct *restrict bcstruct) {
 
   const int Nxx_plus_2NGHOSTS0 = commondata->bcstruct_Nxx_plus_2NGHOSTS0;
   const int Nxx_plus_2NGHOSTS1 = commondata->bcstruct_Nxx_plus_2NGHOSTS1;
@@ -415,7 +415,7 @@ int bah_bcstruct_set_up(const commondata_struct *restrict commondata, REAL *rest
     LOOP_OMP("omp parallel for reduction(+:num_inner)", i0, 0, Nxx_plus_2NGHOSTS0, i1, 0, Nxx_plus_2NGHOSTS1, i2, 0, Nxx_plus_2NGHOSTS2) {
       const int i0i1i2[3] = {i0, i1, i2};
       if (!IS_IN_GRID_INTERIOR(i0i1i2, Nxx_plus_2NGHOSTS0, Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2, NGHOSTS)) {
-        REAL x0x1x2_inbounds[3];
+        BHA_REAL x0x1x2_inbounds[3];
         int i0i1i2_inbounds[3];
         if (EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(commondata, xx, i0, i1, i2, x0x1x2_inbounds, i0i1i2_inbounds)) {
 #pragma omp critical
@@ -449,7 +449,7 @@ int bah_bcstruct_set_up(const commondata_struct *restrict commondata, REAL *rest
     LOOP_NOOMP(i0, 0, Nxx_plus_2NGHOSTS0, i1, 0, Nxx_plus_2NGHOSTS1, i2, 0, Nxx_plus_2NGHOSTS2) {
       const int i0i1i2[3] = {i0, i1, i2};
       if (!IS_IN_GRID_INTERIOR(i0i1i2, Nxx_plus_2NGHOSTS0, Nxx_plus_2NGHOSTS1, Nxx_plus_2NGHOSTS2, NGHOSTS)) {
-        REAL x0x1x2_inbounds[3];
+        BHA_REAL x0x1x2_inbounds[3];
         int i0i1i2_inbounds[3];
         if (EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(commondata, xx, i0, i1, i2, x0x1x2_inbounds, i0i1i2_inbounds)) {
           return BCSTRUCT_EIGENCOORD_FAILURE;
@@ -565,7 +565,7 @@ int bah_bcstruct_set_up(const commondata_struct *restrict commondata, REAL *rest
         LOOP_NOOMP(i0, bcstruct->bc_info.bc_loop_bounds[which_gz][face][0], bcstruct->bc_info.bc_loop_bounds[which_gz][face][1], i1,
                    bcstruct->bc_info.bc_loop_bounds[which_gz][face][2], bcstruct->bc_info.bc_loop_bounds[which_gz][face][3], i2,
                    bcstruct->bc_info.bc_loop_bounds[which_gz][face][4], bcstruct->bc_info.bc_loop_bounds[which_gz][face][5]) {
-          REAL x0x1x2_inbounds[3];
+          BHA_REAL x0x1x2_inbounds[3];
           int i0i1i2_inbounds[3];
           if (EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(commondata, xx, i0, i1, i2, x0x1x2_inbounds, i0i1i2_inbounds)) {
             return BCSTRUCT_EIGENCOORD_FAILURE;
@@ -590,7 +590,7 @@ int bah_bcstruct_set_up(const commondata_struct *restrict commondata, REAL *rest
         LOOP_NOOMP(i0, bcstruct->bc_info.bc_loop_bounds[which_gz][face][0], bcstruct->bc_info.bc_loop_bounds[which_gz][face][1], i1,
                    bcstruct->bc_info.bc_loop_bounds[which_gz][face][2], bcstruct->bc_info.bc_loop_bounds[which_gz][face][3], i2,
                    bcstruct->bc_info.bc_loop_bounds[which_gz][face][4], bcstruct->bc_info.bc_loop_bounds[which_gz][face][5]) {
-          REAL x0x1x2_inbounds[3];
+          BHA_REAL x0x1x2_inbounds[3];
           int i0i1i2_inbounds[3];
           if (EigenCoord_set_x0x1x2_inbounds__i0i1i2_inbounds_single_pt(commondata, xx, i0, i1, i2, x0x1x2_inbounds, i0i1i2_inbounds)) {
             return BCSTRUCT_EIGENCOORD_FAILURE;

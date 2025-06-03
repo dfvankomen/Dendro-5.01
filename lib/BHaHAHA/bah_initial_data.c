@@ -10,11 +10,11 @@ int bah_initial_data(commondata_struct *restrict commondata, griddata_struct *re
 
 #include "set_CodeParameters.h"
   const int NUM_THETA = Nxx1;
-  REAL *restrict coarse_to_fine = NULL;
+  BHA_REAL *restrict coarse_to_fine = NULL;
   if (commondata->use_coarse_horizon) {
     const int num_dst_pts = Nxx1 * Nxx2;
-    REAL(*dst_pts)[2] = malloc(num_dst_pts * sizeof(*dst_pts));
-    coarse_to_fine = malloc(sizeof(REAL) * Nxx1 * Nxx2);
+    BHA_REAL(*dst_pts)[2] = malloc(num_dst_pts * sizeof(*dst_pts));
+    coarse_to_fine = malloc(sizeof(BHA_REAL) * Nxx1 * Nxx2);
     if (dst_pts == NULL || coarse_to_fine == NULL)
       return INITIAL_DATA_MALLOC_ERROR;
 
@@ -36,7 +36,7 @@ int bah_initial_data(commondata_struct *restrict commondata, griddata_struct *re
   }
 
   // Step 2.a: Use OpenMP to parallelize the loop over the entire grid, initializing the h(theta, phi) scalar.
-  const REAL times[3] = {commondata->bhahaha_params_and_data->t_m1, //
+  const BHA_REAL times[3] = {commondata->bhahaha_params_and_data->t_m1, //
                          commondata->bhahaha_params_and_data->t_m2, //
                          commondata->bhahaha_params_and_data->t_m3};
   LOOP_OMP("omp parallel for",            //
@@ -49,7 +49,7 @@ int bah_initial_data(commondata_struct *restrict commondata, griddata_struct *re
       griddata[grid].gridfuncs.y_n_gfs[IDX4(HHGF, i0, i1, i2)] = coarse_to_fine[IDX2(i1 - NGHOSTS, i2 - NGHOSTS)];
     } else if (commondata->bhahaha_params_and_data->use_fixed_radius_guess_on_full_sphere) {
       // r_max_interior = r_min_external_input + ((Nr_external_input-BHAHAHA_NGHOSTS) + 0.5) * dr
-      const REAL r_max_interior =
+      const BHA_REAL r_max_interior =
           commondata->bhahaha_params_and_data->r_min_external_input +
           ((commondata->bhahaha_params_and_data->Nr_external_input - BHAHAHA_NGHOSTS) + 0.5) * commondata->bhahaha_params_and_data->dr_external_input;
       griddata[grid].gridfuncs.y_n_gfs[IDX4(HHGF, i0, i1, i2)] = 0.8 * r_max_interior;

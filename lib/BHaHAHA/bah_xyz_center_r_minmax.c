@@ -26,13 +26,13 @@
  * based on the number of available data points to ensure flexibility and accuracy.
  *
  */
-void bah_xyz_center_r_minmax(const bhahaha_params_and_data_struct *restrict pars, REAL *restrict x_center, REAL *restrict y_center,
-                             REAL *restrict z_center, REAL *restrict r_min, REAL *restrict r_max) {
+void bah_xyz_center_r_minmax(const bhahaha_params_and_data_struct *restrict pars, BHA_REAL *restrict x_center, BHA_REAL *restrict y_center,
+                             BHA_REAL *restrict z_center, BHA_REAL *restrict r_min, BHA_REAL *restrict r_max) {
 
   // Initialize time points for extrapolation.
-  const REAL times[3] = {pars->t_m1, pars->t_m2, pars->t_m3};
+  const BHA_REAL times[3] = {pars->t_m1, pars->t_m2, pars->t_m3};
   // Destination time for extrapolation.
-  const REAL dst_time = pars->time_external_input;
+  const BHA_REAL dst_time = pars->time_external_input;
 
   // Extrapolate center coordinates using quadratic extrapolation.
   *x_center = bah_quadratic_extrapolation(times, pars->x_center_m1, pars->x_center_m2, pars->x_center_m3, dst_time);

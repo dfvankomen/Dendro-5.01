@@ -29,27 +29,27 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
   // UNPACK PARAMETERS:
   // src = external_input
   // dst = interp_src
-  const REAL src_dxx1 = commondata->external_input_dxx1;
-  const REAL src_dxx2 = commondata->external_input_dxx2;
-  const REAL src_invdxx1 = commondata->external_input_invdxx1;
-  const REAL src_invdxx2 = commondata->external_input_invdxx2;
+  const BHA_REAL src_dxx1 = commondata->external_input_dxx1;
+  const BHA_REAL src_dxx2 = commondata->external_input_dxx2;
+  const BHA_REAL src_invdxx1 = commondata->external_input_invdxx1;
+  const BHA_REAL src_invdxx2 = commondata->external_input_invdxx2;
   const int src_Nxx_plus_2NGHOSTS0 = commondata->external_input_Nxx_plus_2NGHOSTS0;
   const int src_Nxx_plus_2NGHOSTS1 = commondata->external_input_Nxx_plus_2NGHOSTS1;
   const int src_Nxx_plus_2NGHOSTS2 = commondata->external_input_Nxx_plus_2NGHOSTS2;
-  const REAL *restrict src_gfs = commondata->external_input_gfs;
+  const BHA_REAL *restrict src_gfs = commondata->external_input_gfs;
 
   const int dst_Nxx1 = commondata->interp_src_Nxx1;
   const int dst_Nxx2 = commondata->interp_src_Nxx2;
   const int dst_Nxx_plus_2NGHOSTS0 = commondata->interp_src_Nxx_plus_2NGHOSTS0;
   const int dst_Nxx_plus_2NGHOSTS1 = commondata->interp_src_Nxx_plus_2NGHOSTS1;
   const int dst_Nxx_plus_2NGHOSTS2 = commondata->interp_src_Nxx_plus_2NGHOSTS2;
-  REAL *restrict dst_gfs = commondata->interp_src_gfs;
+  BHA_REAL *restrict dst_gfs = commondata->interp_src_gfs;
 
   // Compute (1/(src_dtheta * src_dphi))^(INTERP_ORDER-1) normalization factor, as pow() is expensive.
   // Orig code: params.inv_dxx0_dxx1_ORDERm1 = pow(1.0 / (dxx0 * dxx1), ORDER - 1);
-  const REAL src_invdxx12_INTERP_ORDERm1 = pow(commondata->external_input_dxx1 * commondata->external_input_dxx2, -(INTERP_ORDER - 1));
+  const BHA_REAL src_invdxx12_INTERP_ORDERm1 = pow(commondata->external_input_dxx1 * commondata->external_input_dxx2, -(INTERP_ORDER - 1));
 
-  const REAL *restrict src_r_theta_phi[3] = {commondata->external_input_r_theta_phi[0], commondata->external_input_r_theta_phi[1],
+  const BHA_REAL *restrict src_r_theta_phi[3] = {commondata->external_input_r_theta_phi[0], commondata->external_input_r_theta_phi[1],
                                              commondata->external_input_r_theta_phi[2]};
 
   // Perform debug checks if DEBUG is defined
@@ -61,19 +61,19 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
     return INTERP2D_EXT_TO_INTERPSRC_INTERP_ORDER_GT_NXX_PLUS_2NINTERPGHOSTS12;
 
   // Precompute inverse denominators for Lagrange interpolation coefficients to optimize performance.
-  REAL inv_denom[INTERP_ORDER];
+  BHA_REAL inv_denom[INTERP_ORDER];
   for (int i = 0; i < INTERP_ORDER; i++) {
-    REAL denom = 1.0;
+    BHA_REAL denom = 1.0;
     for (int j = 0; j < i; j++)
-      denom *= (REAL)(i - j);
+      denom *= (BHA_REAL)(i - j);
     for (int j = i + 1; j < INTERP_ORDER; j++)
-      denom *= (REAL)(i - j);
+      denom *= (BHA_REAL)(i - j);
     inv_denom[i] = 1.0 / denom; // Divisions are expensive, so we do them only once.
   } // END LOOP: Precompute inverse denominators.
 
   // Perform interpolation for each destination angular point (theta, phi)
-  const REAL xxmin_incl_ghosts1 = src_r_theta_phi[1][0];
-  const REAL xxmin_incl_ghosts2 = src_r_theta_phi[2][0];
+  const BHA_REAL xxmin_incl_ghosts1 = src_r_theta_phi[1][0];
+  const BHA_REAL xxmin_incl_ghosts2 = src_r_theta_phi[2][0];
   int error_flag = BHAHAHA_SUCCESS;
   int i0_min_shift = 0;
   if (commondata->bhahaha_params_and_data->r_min_external_input == 0)
@@ -81,9 +81,9 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
 #pragma omp parallel for
   for (int ir = i0_min_shift; ir < dst_Nxx_plus_2NGHOSTS0; ir++) {
     for (int iphi = NGHOSTS; iphi < dst_Nxx2 + NGHOSTS; iphi++) { // Ignore ghost zones; these can be handled separately.
-      const REAL phi_dst = commondata->interp_src_r_theta_phi[2][iphi];
+      const BHA_REAL phi_dst = commondata->interp_src_r_theta_phi[2][iphi];
       for (int itheta = NGHOSTS; itheta < dst_Nxx1 + NGHOSTS; itheta++) {
-        const REAL theta_dst = commondata->interp_src_r_theta_phi[1][itheta];
+        const BHA_REAL theta_dst = commondata->interp_src_r_theta_phi[1][itheta];
 
         // printf("destination: (%e, %e, %e)\n", commondata->interp_src_r_theta_phi[0][ir], commondata->interp_src_r_theta_phi[1][itheta],
         //        commondata->interp_src_r_theta_phi[2][iphi]);
@@ -116,7 +116,7 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
 
 #ifdef DEBUG
           // Verify that the central index is the closest grid point to the destination radius
-          const REAL TOLERANCE = 1e-13; // The TOLERANCE is needed, as we often interpolate to points exactly midway between src points.
+          const BHA_REAL TOLERANCE = 1e-13; // The TOLERANCE is needed, as we often interpolate to points exactly midway between src points.
           if (fabs(src_r_theta_phi[1][idx_center_th] - theta_dst) > src_dxx1 * (0.5 + TOLERANCE)) {
             fprintf(stderr, "ERROR: theta center index too far from destination point! %.15e > %.15e\n",
                     fabs(src_r_theta_phi[1][idx_center_th] - theta_dst), src_dxx1 * (0.5 + TOLERANCE));
@@ -132,8 +132,8 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
         const int base_idx_ph = idx_center_ph - NinterpGHOSTS;
 
         // THETA:
-        REAL coeff_th[INTERP_ORDER];
-        REAL diffs_th[INTERP_ORDER];
+        BHA_REAL coeff_th[INTERP_ORDER];
+        BHA_REAL diffs_th[INTERP_ORDER];
 // Step 1: Precompute all differences (vectorized)
 #pragma omp simd
         for (int j = 0; j < INTERP_ORDER; j++) {
@@ -142,7 +142,7 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
 // Step 2: Vectorize the outer loop over i
 #pragma omp simd
         for (int i = 0; i < INTERP_ORDER; i++) {
-          REAL numer_i = 1.0;
+          BHA_REAL numer_i = 1.0;
           // Compute product for j < i (scalar loop)
           for (int j = 0; j < i; j++) {
             numer_i *= diffs_th[j];
@@ -155,8 +155,8 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
         } // END LOOP over i
 
         // PHI:
-        REAL coeff_ph[INTERP_ORDER];
-        REAL diffs_ph[INTERP_ORDER];
+        BHA_REAL coeff_ph[INTERP_ORDER];
+        BHA_REAL diffs_ph[INTERP_ORDER];
 // Step 1: Precompute all differences (vectorized)
 #pragma omp simd
         for (int j = 0; j < INTERP_ORDER; j++) {
@@ -165,7 +165,7 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
 // Step 2: Vectorize the outer loop over i
 #pragma omp simd
         for (int i = 0; i < INTERP_ORDER; i++) {
-          REAL numer_i = 1.0;
+          BHA_REAL numer_i = 1.0;
           // Compute product for j < i (scalar loop)
           for (int j = 0; j < i; j++) {
             numer_i *= diffs_ph[j];
@@ -178,16 +178,16 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
         } // END LOOP over i
 
         // Precompute combined Lagrange coefficients to reduce computations
-        REAL coeff_2d[INTERP_ORDER][INTERP_ORDER];
+        BHA_REAL coeff_2d[INTERP_ORDER][INTERP_ORDER];
         for (int iph = 0; iph < INTERP_ORDER; iph++) {
-          const REAL coeff_ph_i = coeff_ph[iph];
+          const BHA_REAL coeff_ph_i = coeff_ph[iph];
           for (int ith = 0; ith < INTERP_ORDER; ith++) {
             coeff_2d[iph][ith] = coeff_ph_i * coeff_th[ith];
           }
         }
 
         // Perform the 2D Lagrange interpolation, optimizing memory accesses and enabling vectorization
-        REAL sum[NUM_EXT_INPUT_CONFORMAL_GFS];
+        BHA_REAL sum[NUM_EXT_INPUT_CONFORMAL_GFS];
         for (int gf = 0; gf < NUM_EXT_INPUT_CONFORMAL_GFS; gf++) {
           sum[gf] = 0.0;
         }
@@ -195,7 +195,7 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
           const int idx_ph = base_idx_ph + iph;
           for (int ith = 0; ith < INTERP_ORDER; ith++) {
             const int idx_th = base_idx_th + ith;
-            const REAL coeff = coeff_2d[iph][ith];
+            const BHA_REAL coeff = coeff_2d[iph][ith];
 #pragma omp simd
             for (int gf = 0; gf < NUM_EXT_INPUT_CONFORMAL_GFS; gf++) {
               sum[gf] += src_gfs[SRC_IDX4(gf, ir, idx_th, idx_ph)] * coeff;
@@ -225,7 +225,7 @@ int bah_interpolation_2d_external_input_to_interp_src_grid(commondata_struct *re
  *
  * @return        The computed value of \( r^2 \sin(r) \sin(\theta) \cos(\phi) \).
  */
-static inline REAL analytic_function(REAL r, REAL theta, REAL phi) { return r * r * sin(r) * sin(theta) * cos(phi); }
+static inline BHA_REAL analytic_function(BHA_REAL r, BHA_REAL theta, BHA_REAL phi) { return r * r * sin(r) * sin(theta) * cos(phi); }
 
 /**
  * Initializes the coordinate arrays for a uniform, cell-centered grid.
@@ -243,7 +243,7 @@ static inline REAL analytic_function(REAL r, REAL theta, REAL phi) { return r * 
  * @param Nxx_plus_2NGHOSTS1     Total number of grid points in the theta direction, including ghost zones.
  * @param Nxx_plus_2NGHOSTS2     Total number of grid points in the phi direction, including ghost zones.
  */
-void initialize_coordinates(const int N_r, const int N_theta, const int N_phi, REAL *r_theta_phi[3], REAL *dxx0, REAL *dxx1, REAL *dxx2,
+void initialize_coordinates(const int N_r, const int N_theta, const int N_phi, BHA_REAL *r_theta_phi[3], BHA_REAL *dxx0, BHA_REAL *dxx1, BHA_REAL *dxx2,
                             const int Nxx_plus_2NGHOSTS0, const int Nxx_plus_2NGHOSTS1, const int Nxx_plus_2NGHOSTS2) {
   // Calculate grid spacings based on the number of grid points.
   *dxx0 = 1.0 / N_r;          // Grid spacing in the radial direction.
@@ -251,9 +251,9 @@ void initialize_coordinates(const int N_r, const int N_theta, const int N_phi, R
   *dxx2 = 2.0 * M_PI / N_phi; // Grid spacing in the phi direction.
 
   // Allocate memory for r, theta, and phi coordinate arrays.
-  r_theta_phi[0] = (REAL *)malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS0);
-  r_theta_phi[1] = (REAL *)malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS1);
-  r_theta_phi[2] = (REAL *)malloc(sizeof(REAL) * Nxx_plus_2NGHOSTS2);
+  r_theta_phi[0] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS0);
+  r_theta_phi[1] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS1);
+  r_theta_phi[2] = (BHA_REAL *)malloc(sizeof(BHA_REAL) * Nxx_plus_2NGHOSTS2);
 
   if (r_theta_phi[0] == NULL || r_theta_phi[1] == NULL || r_theta_phi[2] == NULL) {
     fprintf(stderr, "Memory allocation failed for coordinate arrays.\n");
@@ -288,8 +288,8 @@ void initialize_coordinates(const int N_r, const int N_theta, const int N_phi, R
  * @param src_gf                 Array to store the initialized source grid function values.
  * @param func                   Pointer to the analytic function used for initialization.
  */
-void initialize_src_gf(const int src_Nxx_plus_2NGHOSTS0, const int src_Nxx_plus_2NGHOSTS1, const int src_Nxx_plus_2NGHOSTS2, REAL *r_theta_phi[3],
-                       REAL *src_gf, REAL (*func)(REAL, REAL, REAL)) {
+void initialize_src_gf(const int src_Nxx_plus_2NGHOSTS0, const int src_Nxx_plus_2NGHOSTS1, const int src_Nxx_plus_2NGHOSTS2, BHA_REAL *r_theta_phi[3],
+                       BHA_REAL *src_gf, BHA_REAL (*func)(BHA_REAL, BHA_REAL, BHA_REAL)) {
   // Initialize all grid functions to zero.
 #pragma omp parallel for
   for (int i = 0; i < src_Nxx_plus_2NGHOSTS0 * src_Nxx_plus_2NGHOSTS1 * src_Nxx_plus_2NGHOSTS2 * NUM_EXT_INPUT_CONFORMAL_GFS; i++) {
@@ -338,16 +338,16 @@ int main() {
   const int dst_Nxx_plus_2NGHOSTS2 = Nphi_dst + 2 * NGHOSTS;   // phi-direction
 
   // Allocate memory for destination grid coordinates.
-  REAL *dst_r_theta_phi[3] = {NULL, NULL, NULL};
-  REAL dst_dxx0_val, dst_dxx1_val, dst_dxx2_val;
+  BHA_REAL *dst_r_theta_phi[3] = {NULL, NULL, NULL};
+  BHA_REAL dst_dxx0_val, dst_dxx1_val, dst_dxx2_val;
 
   // Initialize destination grid coordinates once, as they are fixed across resolutions.
   initialize_coordinates(N_r, Ntheta_dst, Nphi_dst, dst_r_theta_phi, &dst_dxx0_val, &dst_dxx1_val, &dst_dxx2_val, dst_Nxx_plus_2NGHOSTS0,
                          dst_Nxx_plus_2NGHOSTS1, dst_Nxx_plus_2NGHOSTS2);
 
   // Allocate memory for destination grid function data.
-  REAL *dst_gfs =
-      (REAL *)malloc(sizeof(REAL) * dst_Nxx_plus_2NGHOSTS0 * dst_Nxx_plus_2NGHOSTS1 * dst_Nxx_plus_2NGHOSTS2 * NUM_EXT_INPUT_CONFORMAL_GFS);
+  BHA_REAL *dst_gfs =
+      (BHA_REAL *)malloc(sizeof(BHA_REAL) * dst_Nxx_plus_2NGHOSTS0 * dst_Nxx_plus_2NGHOSTS1 * dst_Nxx_plus_2NGHOSTS2 * NUM_EXT_INPUT_CONFORMAL_GFS);
   if (dst_gfs == NULL) {
     fprintf(stderr, "Memory allocation failed for destination grid functions.\n");
     return EXIT_FAILURE;
@@ -360,8 +360,8 @@ int main() {
   }
 
   // Prepare arrays to store L2 errors and grid spacings for each resolution.
-  REAL error_L2_norm[num_resolutions];
-  REAL h_arr[num_resolutions];
+  BHA_REAL error_L2_norm[num_resolutions];
+  BHA_REAL h_arr[num_resolutions];
 
   // Loop over each source grid resolution.
   for (int res = 0; res < num_resolutions; res++) {
@@ -374,16 +374,16 @@ int main() {
     const int src_Nxx_plus_2NGHOSTS2 = Nphi_src + 2 * NGHOSTS;   // phi-direction
 
     // Allocate memory for source grid coordinates.
-    REAL *src_r_theta_phi[3] = {NULL, NULL, NULL};
-    REAL src_dxx0, src_dxx1, src_dxx2;
+    BHA_REAL *src_r_theta_phi[3] = {NULL, NULL, NULL};
+    BHA_REAL src_dxx0, src_dxx1, src_dxx2;
 
     // Initialize source grid coordinates.
     initialize_coordinates(N_r, Ntheta_src, Nphi_src, src_r_theta_phi, &src_dxx0, &src_dxx1, &src_dxx2, src_Nxx_plus_2NGHOSTS0,
                            src_Nxx_plus_2NGHOSTS1, src_Nxx_plus_2NGHOSTS2);
 
     // Allocate memory for source grid function data.
-    REAL *src_gf =
-        (REAL *)malloc(sizeof(REAL) * src_Nxx_plus_2NGHOSTS0 * src_Nxx_plus_2NGHOSTS1 * src_Nxx_plus_2NGHOSTS2 * NUM_EXT_INPUT_CONFORMAL_GFS);
+    BHA_REAL *src_gf =
+        (BHA_REAL *)malloc(sizeof(BHA_REAL) * src_Nxx_plus_2NGHOSTS0 * src_Nxx_plus_2NGHOSTS1 * src_Nxx_plus_2NGHOSTS2 * NUM_EXT_INPUT_CONFORMAL_GFS);
     if (src_gf == NULL) {
       fprintf(stderr, "Memory allocation failed for source grid function at resolution %d.\n", res);
       return EXIT_FAILURE;
@@ -436,25 +436,25 @@ int main() {
     h_arr[res] = src_dxx1;
 
     // Calculate the L2 norm of the interpolation error to assess accuracy.
-    REAL error_sum = 0.0;
+    BHA_REAL error_sum = 0.0;
 #pragma omp parallel for reduction(+ : error_sum)
     for (int gf = 0; gf < NUM_EXT_INPUT_CONFORMAL_GFS; gf++) {
       for (int i0 = NGHOSTS; i0 < dst_Nxx_plus_2NGHOSTS0 - NGHOSTS; i0++) {
-        const REAL r = dst_r_theta_phi[0][i0];
+        const BHA_REAL r = dst_r_theta_phi[0][i0];
         for (int i1 = NGHOSTS; i1 < dst_Nxx_plus_2NGHOSTS1 - NGHOSTS; i1++) {
-          const REAL theta = dst_r_theta_phi[1][i1];
+          const BHA_REAL theta = dst_r_theta_phi[1][i1];
           for (int i2 = NGHOSTS; i2 < dst_Nxx_plus_2NGHOSTS2 - NGHOSTS; i2++) {
-            const REAL phi = dst_r_theta_phi[2][i2];
+            const BHA_REAL phi = dst_r_theta_phi[2][i2];
             int idx = DST_IDX4(gf, i0, i1, i2);
-            REAL interpolated = dst_gfs[idx];
-            REAL exact = analytic_function(r, theta, phi);
-            REAL error = interpolated - exact;
+            BHA_REAL interpolated = dst_gfs[idx];
+            BHA_REAL exact = analytic_function(r, theta, phi);
+            BHA_REAL error = interpolated - exact;
             error_sum += error * error;
           }
         }
       }
     }
-    REAL L2_error = sqrt(
+    BHA_REAL L2_error = sqrt(
         error_sum / (dst_Nxx_plus_2NGHOSTS0 * dst_Nxx_plus_2NGHOSTS1 * dst_Nxx_plus_2NGHOSTS2 * NUM_EXT_INPUT_CONFORMAL_GFS)); // Compute the L2 norm.
 
     // Store the L2 error for this resolution.
@@ -466,7 +466,7 @@ int main() {
 
   // Compute and report the observed order of convergence between successive resolutions.
   for (int res = 1; res < num_resolutions; res++) {
-    REAL observed_order = log(error_L2_norm[res - 1] / error_L2_norm[res]) / log(h_arr[res - 1] / h_arr[res]);
+    BHA_REAL observed_order = log(error_L2_norm[res - 1] / error_L2_norm[res]) / log(h_arr[res - 1] / h_arr[res]);
     printf("Observed order of convergence between resolutions %d and %d: %.2f\n", res - 1, res, observed_order);
   }
   printf("Expected order of convergence: %d\n", INTERP_ORDER);
