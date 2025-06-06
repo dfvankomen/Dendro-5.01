@@ -14,7 +14,9 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
     unsigned int globalRank = mesh->getMPIRankGlobal();
     // this is the function where we're going to find everything
 
-    if (!rankActive)
+    if (!mesh->isActive()) return;
+
+    if (!globalRank)
         std::cout << "Now beginning BHaHAHA_find_horizons..." << std::endl;
 
     // need to update the data structures with the current step and time
