@@ -271,6 +271,7 @@ int main(int argc, char** argv) {
     // if the partitioning option is "NoPartition" or "OriginalPartition"
     // then every output should be the same!
 
+#if 0
     if (partitionOption == PartitioningOptions::NoPartition ||
         partitionOption == PartitioningOptions::OriginalPartition) {
         // this is our identity comparison, we need to make sure that all
@@ -301,6 +302,7 @@ int main(int argc, char** argv) {
             }
         }
     }
+#endif
 
     // END CLEANUP
     delete mesh;

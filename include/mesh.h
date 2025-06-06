@@ -1498,6 +1498,9 @@ class Mesh {
     void performBlocksSetup(unsigned int cLev, unsigned int *tag,
                             unsigned int tsz);
 
+    void performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
+                                         unsigned int tsz);
+
     /**
      * @brief computes the face to element map.
      * needs to be called after e2e and e2n maps has built.

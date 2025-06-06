@@ -21,6 +21,7 @@
 #include "octUtils.h"
 #include "parUtils.h"
 #include "waveletAMR.h"
+
 namespace ot {
 
 /**

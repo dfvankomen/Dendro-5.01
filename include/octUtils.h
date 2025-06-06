@@ -38,6 +38,9 @@ implementations are based on the previous implementation of dendro version 4.0
 #include "sfcSort.h"
 #include "skey.h"
 
+#define OCT2BLK_DEBUG_NEW
+#define OCT2BLK_DEBUG
+
 #define OCT2BLK_DECOMP_BLK_FILL_RATIO \
     0.5  // gurantees how fraction of the block covered by regular octants.
 #define OCT2BLK_DECOMP_LEV_GAP 0
@@ -148,6 +151,13 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                                DendroIntL localEnd, unsigned int eleOrder,
                                unsigned int coarsetLev = 0,
                                unsigned int* tag = NULL, unsigned int tsz = 0);
+
+void octree2BlockDecompositionRepartitioned(
+    std::vector<ot::TreeNode>& pNodes, std::vector<ot::Block>& blockList,
+    unsigned int maxDepth, unsigned int& d_min, unsigned int& d_max,
+    DendroIntL localBegin, DendroIntL localEnd, unsigned int eleOrder,
+    std::vector<unsigned int>& e2e_map, unsigned int coarsetLev = 0,
+    unsigned int* tag = NULL, unsigned int tsz = 0);
 
 /**
  * @author Milinda Fernando

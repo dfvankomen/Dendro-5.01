@@ -23,6 +23,10 @@
  * */
 
 #include "mesh.h"
+
+#include "TreeNode.h"
+#include "dendro.h"
+#include "octUtils.h"
 double t_e2e;  // e2e map generation time
 double t_e2n;  // e2n map generation time
 double t_sm;   // sm map generation time
@@ -9406,6 +9410,180 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     this->flagBlockGhostDependancies();
 }
 
+void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
+                                           unsigned int tsz) {
+    m_uiIsBlockSetup  = true;
+    m_uiCoarsetBlkLev = cLev;
+
+    if (!m_uiIsActive) return;
+
+    // just to make sure I got these numbers right
+    constexpr unsigned int VERTICES_PER_ELEMENT = 8;
+    constexpr unsigned int FACES_PER_ELEMENT    = 6;
+    // indices within the grid to get the actual vertices...
+    // but we can optimize this by doing the calculation *now*
+    // const unsigned int cornerIndices[8][3]      = {
+    //     {0, 0, 0},
+    //     {m_uiElementOrder, 0, 0},
+    //     {0, m_uiElementOrder, 0},
+    //     {m_uiElementOrder, m_uiElementOrder, 0},
+    //     {0, 0, m_uiElementOrder},
+    //     {m_uiElementOrder, 0, m_uiElementOrder},
+    //     {0, m_uiElementOrder, m_uiElementOrder},
+    //     {m_uiElementOrder, m_uiElementOrder, m_uiElementOrder},
+    // };
+    const unsigned int totalPointsPerDim        = m_uiElementOrder + 1;
+    const unsigned int totalPointsPer2D = totalPointsPerDim * totalPointsPerDim;
+    const unsigned int cornerIndices[8] = {
+        0,                                                          // 0,0,0
+        m_uiElementOrder,                                           // x,0,0
+        m_uiElementOrder * (totalPointsPerDim),                     // 0,y,0
+        m_uiElementOrder + m_uiElementOrder * (totalPointsPerDim),  // x,y,0
+        m_uiElementOrder * (totalPointsPer2D),                      // 0,0,z
+        m_uiElementOrder + m_uiElementOrder * (totalPointsPer2D),   // x,0,z
+        m_uiElementOrder * (totalPointsPerDim) +
+            m_uiElementOrder * (totalPointsPer2D),  // 0,y,z
+        m_uiElementOrder + m_uiElementOrder * (totalPointsPerDim) +
+            m_uiElementOrder * (totalPointsPer2D),  // x,y,z
+    };
+
+    // blkSz and offset vectors
+    std::vector<DendroIntL> blkSz;
+    std::vector<DendroIntL> blkSzOffset;
+
+    // construct the element to block map
+    m_uiE2BlkMap.resize(m_uiNumLocalElements, LOOK_UP_TABLE_DEFAULT);
+
+    blkSz.resize(m_uiLocalBlockList.size());
+    blkSzOffset.resize(m_uiLocalBlockList.size());
+
+    for (unsigned int k = 0; k < m_uiLocalBlockList.size(); k++) {
+        blkSz[k] = m_uiLocalBlockList[k].getAlignedBlockSz();
+    }
+
+    // calculate the offsets of how many blocks are within a single block list
+    blkSzOffset[0] = 0;
+    omp_par::scan(blkSz.data(), blkSzOffset.data(), m_uiLocalBlockList.size());
+
+    // put the offsets inside the local block list
+    for (unsigned int k = 0; k < m_uiLocalBlockList.size(); k++)
+        m_uiLocalBlockList[k].setOffset(blkSzOffset[k]);
+
+    // calculate the unzipped vec size now, which is based on the offsets!
+    m_uiUnZippedVecSz =
+        blkSzOffset[m_uiLocalBlockList.size() - 1] + blkSz.back();
+
+    // then we calculate a few additional things
+    const unsigned int dmin = 0;
+    const unsigned int dmax = 1u << (m_uiMaxDepth);
+    ot::TreeNode blkNode;
+
+    // now iterate through the blocks, there's no need to predeclare what we
+    // need, this saves space
+    for (unsigned int e = 0; e < m_uiLocalBlockList.size(); e++) {
+        blkNode = m_uiLocalBlockList[e].getBlockNode();
+
+        // update the element to block map
+        // BUG: (potentially) might need to double check block creation before
+        // assuiming this is the truth from the new method
+        for (unsigned int m = m_uiLocalBlockList[e].getLocalElementBegin();
+             m < m_uiLocalBlockList[e].getLocalElementEnd(); m++)
+            m_uiE2BlkMap[(m - m_uiElementLocalBegin)] = e;
+
+        // set the boundary flags!
+        if (blkNode.minX() == dmin) {
+            blkNode.setFlag(((blkNode.getFlag()) |
+                             ((1u << (OCT_DIR_LEFT + NUM_LEVEL_BITS)) |
+                              blkNode.getLevel())));
+            assert((blkNode.getFlag() >> NUM_LEVEL_BITS) &
+                   (1u << OCT_DIR_LEFT));
+        }
+
+        if (blkNode.minY() == dmin) {
+            blkNode.setFlag(((blkNode.getFlag()) |
+                             ((1u << (OCT_DIR_DOWN + NUM_LEVEL_BITS)) |
+                              blkNode.getLevel())));
+            assert((blkNode.getFlag() >> NUM_LEVEL_BITS) &
+                   (1u << OCT_DIR_DOWN));
+        }
+
+        if (blkNode.minZ() == dmin) {
+            blkNode.setFlag(((blkNode.getFlag()) |
+                             ((1u << (OCT_DIR_BACK + NUM_LEVEL_BITS)) |
+                              blkNode.getLevel())));
+            assert((blkNode.getFlag() >> NUM_LEVEL_BITS) &
+                   (1u << OCT_DIR_BACK));
+        }
+
+        if (blkNode.maxX() == dmax) {
+            blkNode.setFlag(((blkNode.getFlag()) |
+                             ((1u << (OCT_DIR_RIGHT + NUM_LEVEL_BITS)) |
+                              blkNode.getLevel())));
+            assert((blkNode.getFlag() >> NUM_LEVEL_BITS) &
+                   (1u << OCT_DIR_RIGHT));
+        }
+
+        if (blkNode.maxY() == dmax) {
+            blkNode.setFlag(
+                ((blkNode.getFlag()) |
+                 ((1u << (OCT_DIR_UP + NUM_LEVEL_BITS)) | blkNode.getLevel())));
+            assert((blkNode.getFlag() >> NUM_LEVEL_BITS) & (1u << OCT_DIR_UP));
+        }
+
+        if (blkNode.maxZ() == dmax) {
+            blkNode.setFlag(((blkNode.getFlag()) |
+                             ((1u << (OCT_DIR_FRONT + NUM_LEVEL_BITS)) |
+                              blkNode.getLevel())));
+            assert((blkNode.getFlag() >> NUM_LEVEL_BITS) &
+                   (1u << OCT_DIR_FRONT));
+        }
+
+        // run the assertion that our level for block node and block list level
+        // are the same
+        assert(blkNode.getLevel() ==
+               m_uiLocalBlockList[e].getBlockNode().getLevel());
+        m_uiLocalBlockList[e].setBlkNodeFlag(blkNode.getFlag());
+
+        // I removed the regLevel and sz stuff because they aren't called
+        // anywhere
+
+        // then we initialize the block maps
+        m_uiLocalBlockList[e].initializeBlkDiagMap(LOOK_UP_TABLE_DEFAULT);
+        m_uiLocalBlockList[e].initializeBlkVertexMap(LOOK_UP_TABLE_DEFAULT);
+
+        // get all elements inside this block
+        unsigned int begin = m_uiLocalBlockList[e].getLocalElementBegin();
+        unsigned int end   = m_uiLocalBlockList[e].getLocalElementEnd();
+
+        // the process the elements collected in each block
+        for (unsigned int m = begin; m < end; m++) {
+            unsigned int localElemIdx = m - m_uiElementLocalBegin;
+
+            // then set up the vertex data based on the E2N mapping
+            for (unsigned int v = 0; v < VERTICES_PER_ELEMENT; v++) {
+                // get the index for the vertex...
+
+                unsigned int vertexID =
+                    m_uiE2NMapping_CG[localElemIdx * m_uiNpE +
+                                      cornerIndices[v]];
+                m_uiLocalBlockList[e].setBlk2VertexMap(v, vertexID);
+            }
+
+            // and face neighbors
+            for (unsigned int f = 0; f < NUM_FACES; f++) {
+                unsigned int neighbor =
+                    m_uiE2NMapping_CG[localElemIdx * NUM_FACES + f];
+                if (neighbor != LOOK_UP_TABLE_DEFAULT) {
+                    m_uiLocalBlockList[e].setBlk2DiagMap(localElemIdx, f,
+                                                         neighbor);
+                }
+            }
+        }
+    }
+
+    this->flagBlockGhostDependancies();
+}
+
 bool Mesh::isEdgeHanging(unsigned int elementId, unsigned int edgeId,
                          unsigned int &cnum) const {
     // should not be called if the mesh is not active
@@ -14939,6 +15117,13 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             std::cout << rank << ": Now preparing to set up blocks..."
                       << std::endl;
         }
+
+        // start by doing octree2BlockDecomposition
+        octree2BlockDecompositionRepartitioned(
+            m_uiAllElements, m_uiLocalBlockList, m_uiMaxDepth, m_uiDmin,
+            m_uiDmax, m_uiElementLocalBegin, m_uiElementLocalEnd,
+            m_uiElementOrder, m_uiE2EMapping, m_uiCoarsetBlkLev, NULL, 0);
+
         performBlocksSetup(m_uiCoarsetBlkLev, NULL, 0);
         if (!rank) {
             std::cout << rank << ": Finished blocksetup after repartitioning..."

@@ -15,6 +15,7 @@
 #ifndef SFCSORTBENCH_TREENODE_H
 #define SFCSORTBENCH_TREENODE_H
 
+#include <cassert>
 static unsigned int MAX_LEVEL = 31;
 // #define m_uiMaxDepth 30
 extern unsigned int m_uiMaxDepth;
@@ -391,6 +392,49 @@ class TreeNode {
             children[7] = tmpNode7;
         }  // end if
         return 1;
+    }
+
+    int getChildIndex(const ot::TreeNode &node) const {
+        unsigned int dim = m_uiDim;
+        // various assertions
+        assert(dim == 1 || dim == 2 || dim == 3);
+        assert(this->isAncestor(node));
+        assert(this->getLevel() < node.getLevel());
+
+        unsigned int childLevel = this->getLevel() + 1;
+        unsigned int h          = 1u << (m_uiMaxDepth - childLevel);
+
+        if (dim == 3) {
+            unsigned int childX = ((node.getX() - this->getX()) >= h) ? 1 : 0;
+            unsigned int childY = ((node.getY() - this->getY()) >= h) ? 1 : 0;
+            unsigned int childZ = ((node.getZ() - this->getZ()) >= h) ? 1 : 0;
+
+            return (childZ << 2) | (childY << 1) | childX;
+        } else if (dim == 2) {
+            unsigned int childX = ((node.getX() - this->getX()) >= h) ? 1 : 0;
+            unsigned int childY = ((node.getY() - this->getY()) >= h) ? 1 : 0;
+
+            return (childY << 1) | childX;
+        } else {
+            return ((node.getX() - this->getX()) >= h) ? 1 : 0;
+        }
+    }
+
+    TreeNode createChildNode(int childIndex) {
+        unsigned int childLevel = this->getLevel() + 1;
+        unsigned int h          = 1u << (m_uiMaxDepth - childLevel);
+
+        // get the flags for the index
+        unsigned int childX     = (childIndex & 1u) ? 1 : 0;
+        unsigned int childY     = (childIndex & 2u) ? 1 : 0;
+        unsigned int childZ     = (childIndex & 4u) ? 1 : 0;
+
+        // this will still work for 2d/3d
+        unsigned int x          = this->getX() + childX * h;
+        unsigned int y          = this->getY() + childY * h;
+        unsigned int z          = this->getZ() + childZ * h;
+
+        return TreeNode(x, y, z, childLevel, m_uiDim, m_uiMaxDepth);
     }
 };
 
