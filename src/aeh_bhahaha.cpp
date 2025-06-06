@@ -379,11 +379,14 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
                     &bha_param_data_[which_horizon]);
 
                 // output horizon diagnostics
-                bah_diagnostics_file_output(
-                    &bhahaha_diags, &bha_param_data_[which_horizon],
-                    num_horizons_, x_guess_[which_horizon],
-                    y_guess_[which_horizon], z_guess_[which_horizon],
-                    out_dir_.c_str());
+
+                if (current_step % file_output_freq_ == 0) {
+                    bah_diagnostics_file_output(
+                        &bhahaha_diags, &bha_param_data_[which_horizon],
+                        num_horizons_, x_guess_[which_horizon],
+                        y_guess_[which_horizon], z_guess_[which_horizon],
+                        out_dir_.c_str());
+                }
 
                 // next time don't force full guess
                 bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 0;

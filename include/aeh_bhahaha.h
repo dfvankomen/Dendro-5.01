@@ -101,6 +101,8 @@ class AEH_BHaHAHA {
     unsigned int num_horizons_;
     bool is_bbh_;
 
+    unsigned int file_output_freq_;
+
     // this is the most important vector, it's what is fed in
     std::vector<bhahaha_params_and_data_struct> bha_param_data_;
     std::vector<double> x_guess_, y_guess_, z_guess_;
@@ -173,6 +175,7 @@ class AEH_BHaHAHA {
                 std::function<std::vector<double>(const std::vector<double>&)>
                     transform,
                 const Point grid_limits[2], const Point domain_limits[2],
+                const unsigned int file_output_freq,
                 const int num_resolutions_after_find = 3,
                 const std::vector<int>& ntheta_array = {8, 16, 32},
                 const std::vector<int>& nphi_array   = {16, 32, 64},
@@ -188,7 +191,8 @@ class AEH_BHaHAHA {
           max_nphi_(nphi_max),
           out_dir_(save_directory),
           variable_indices_(indices_extract),
-          transform_(transform) {
+          transform_(transform),
+          file_output_freq_(file_output_freq) {
         allocate_data_structures();
 
         grid_limits_[0]   = grid_limits[0];
