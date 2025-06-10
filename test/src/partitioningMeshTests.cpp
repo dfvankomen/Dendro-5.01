@@ -223,6 +223,9 @@ int main(int argc, char** argv) {
     ot::Mesh* mesh = ot::createMesh(tmpNodes.data(), tmpNodes.size(), eOrder,
                                     comm, 1, ot::SM_TYPE::FDM, DENDRO_GRAIN_SZ,
                                     LOAD_IMB_TOL, SPLIT_FIX);
+
+    MPI_Barrier(comm);
+
     // create a "copy" of the mesh (which will use the exact same
     // information as inputs)
     ot::Mesh* mesh_repartitioned = ot::createMesh(

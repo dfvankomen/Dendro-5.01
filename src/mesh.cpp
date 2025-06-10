@@ -4372,6 +4372,7 @@ void Mesh::buildE2BlockMap() {
     std::vector<unsigned int> eid;
     eid.reserve((NUM_CHILDREN + NUM_EDGES + NUM_FACES + 1) * 4);
 
+    // 1: count block-element relationships
     for (unsigned int blk = 0; blk < m_uiLocalBlockList.size(); blk++) {
         this->blkUnzipElementIDs(blk, eid);
         const unsigned int eLocalB =
@@ -4381,6 +4382,8 @@ void Mesh::buildE2BlockMap() {
         for (unsigned int elem = eLocalB; elem < eLocalE; elem++)
             m_e2b_unzip_counts[elem]++;
 
+        // after calling the blkUnzipElementIDs, this counts what's stored
+        // inside the unzipped
         for (unsigned int i = 0; i < eid.size(); i++) {
             const unsigned int elem = eid[i];
             m_e2b_unzip_counts[elem]++;
@@ -9133,7 +9136,6 @@ void Mesh::flagBlockGhostDependancies() {
                     }
 
                     if (ei == emax) {  // OCT_DIR_RIGHT
-
                         lookup =
                             m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_RIGHT];
                         if (lookup != LOOK_UP_TABLE_DEFAULT &&
@@ -9639,35 +9641,6 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
 
     if (!m_uiIsActive) return;
 
-    // just to make sure I got these numbers right
-    // indices within the grid to get the actual vertices...
-    // but we can optimize this by doing the calculation *now*
-    // const unsigned int cornerIndices[8][3]      = {
-    //     {0, 0, 0},
-    //     {m_uiElementOrder, 0, 0},
-    //     {0, m_uiElementOrder, 0},
-    //     {m_uiElementOrder, m_uiElementOrder, 0},
-    //     {0, 0, m_uiElementOrder},
-    //     {m_uiElementOrder, 0, m_uiElementOrder},
-    //     {0, m_uiElementOrder, m_uiElementOrder},
-    //     {m_uiElementOrder, m_uiElementOrder, m_uiElementOrder},
-    // };
-    const unsigned int totalPointsPerDim = m_uiElementOrder + 1;
-    const unsigned int totalPointsPer2D = totalPointsPerDim * totalPointsPerDim;
-    // These corner indices are based on **element**!
-    const unsigned int cornerIndices[8] = {
-        0,                                                          // 0,0,0
-        m_uiElementOrder,                                           // x,0,0
-        m_uiElementOrder * (totalPointsPerDim),                     // 0,y,0
-        m_uiElementOrder + m_uiElementOrder * (totalPointsPerDim),  // x,y,0
-        m_uiElementOrder * (totalPointsPer2D),                      // 0,0,z
-        m_uiElementOrder + m_uiElementOrder * (totalPointsPer2D),   // x,0,z
-        m_uiElementOrder * (totalPointsPerDim) +
-            m_uiElementOrder * (totalPointsPer2D),  // 0,y,z
-        m_uiElementOrder + m_uiElementOrder * (totalPointsPerDim) +
-            m_uiElementOrder * (totalPointsPer2D),  // x,y,z
-    };
-
     // blkSz and offset vectors
     std::vector<DendroIntL> blkSz(m_uiLocalBlockList.size());
     std::vector<DendroIntL> blkSzOffset(m_uiLocalBlockList.size());
@@ -9690,9 +9663,6 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
     // calculate the unzipped vec size now, which is based on the offsets!
     m_uiUnZippedVecSz =
         blkSzOffset[m_uiLocalBlockList.size() - 1] + blkSz.back();
-
-    std::cout << m_uiGlobalRank
-              << ": NEW UNZIPPED VEC SIZE: " << m_uiUnZippedVecSz << std::endl;
 
     // then we calculate a few additional things
     const unsigned int dmin = 0;
@@ -15318,13 +15288,34 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             m_uiElementOrder, m_uiE2EMapping, m_uiCoarsetBlkLev, NULL, 0);
 
         performBlocksSetupRepartitioned(m_uiCoarsetBlkLev, NULL, 0);
+
+        // then build the E2BlockMap
+        buildE2BlockMap();
         if (!rank) {
             std::cout << rank << ": Finished blocksetup after repartitioning..."
                       << std::endl;
         }
         // this sets up m_uiUnZippedVecSz
 
-        // buildE2BlockMap();
+        // finally we need to adjust the send and receive information
+        if (m_uiActiveNpes > 1) {
+            for (unsigned int p = 0; p < m_uiActiveNpes; p++) {
+                if (m_uiSendNodeCount[p] != 0) m_uiSendProcList.push_back(p);
+
+                if (m_uiRecvNodeCount[p] != 0) m_uiRecvProcList.push_back(p);
+            }
+
+            m_uiSendBufferNodes.resize(m_uiSendNodeOffset[m_uiActiveNpes - 1] +
+                                       m_uiSendNodeCount[m_uiActiveNpes - 1]);
+            m_uiRecvBufferNodes.resize(m_uiRecvNodeOffset[m_uiActiveNpes - 1] +
+                                       m_uiRecvNodeCount[m_uiActiveNpes - 1]);
+        }
+
+        std::cout << m_uiGlobalRank << ": SEND COUNTS: ";
+        for (auto &s : m_uiSendNodeCount) {
+            std::cout << s << ", ";
+        }
+        std::cout << std::endl;
     }
     if (!rank) {
         std::cout << rank << ": Now finished with the repartitioning scheme!"
