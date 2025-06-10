@@ -9290,6 +9290,10 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     m_uiUnZippedVecSz =
         blkSzOffset[m_uiLocalBlockList.size() - 1] + blkSz.back();
 
+    std::cout << m_uiGlobalRank
+              << ": ORIGINAL UNZIPPED VEC SIZE: " << m_uiUnZippedVecSz
+              << std::endl;
+
     const unsigned int dmin = 0;
     const unsigned int dmax = 1u << (m_uiMaxDepth);
     ot::TreeNode blkNode;
@@ -9410,6 +9414,224 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     this->flagBlockGhostDependancies();
 }
 
+void Mesh::findBlockNeighborsWithoutSFC(ot::Block &blk) {
+    const unsigned int domain_max = 1u << (m_uiMaxDepth);
+    const ot::TreeNode blkNode    = blk.getBlockNode();
+    const unsigned int regLev     = blk.getRegularGridLev();
+
+    const unsigned int blkElem_1D = (1u << (regLev - blkNode.getLevel())) * 2;
+
+    const unsigned int myX        = blkNode.getX();
+    const unsigned int myY        = blkNode.getY();
+    const unsigned int myZ        = blkNode.getZ();
+    const unsigned int mySz       = 1u << (m_uiMaxDepth - blkNode.getLevel());
+    const unsigned int hsz        = 1u << (m_uiMaxDepth - regLev - 1);  // hx/2
+
+    // potential neighbor coordinates
+    std::vector<std::tuple<unsigned int, unsigned int, unsigned int,
+                           unsigned int, unsigned int>>
+        neighborCoordsDirAndOwner;
+
+    // then we get the edge neighbors (all 12!)
+    if (myX > 0 && myY > 0) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX - 1, myY - 1, myZ + k * hsz, OCT_DIR_LEFT_DOWN, k);
+        }
+    }
+
+    if (myX > 0 && (myY + mySz) < domain_max) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX - 1, myY + mySz, myZ + k * hsz, OCT_DIR_LEFT_UP, k);
+        }
+    }
+
+    if (myX > 0 && myZ > 0) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX - 1, myY + k * hsz, myZ - 1, OCT_DIR_LEFT_BACK, k);
+        }
+    }
+
+    if (myX > 0 && (myZ + mySz) < domain_max) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX - 1, myY + k * hsz, myZ + mySz, OCT_DIR_LEFT_FRONT, k);
+        }
+    }
+
+    if ((myX + mySz) < domain_max && myY > 0) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX + mySz, myY - 1, myZ + k + hsz, OCT_DIR_RIGHT_DOWN, k);
+        }
+    }
+
+    if ((myX + mySz) < domain_max && (myY + mySz) < domain_max) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX + mySz, myY + mySz, myZ + k + hsz, OCT_DIR_RIGHT_UP, k);
+        }
+    }
+
+    if ((myX + mySz) < domain_max && myZ > 0) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX + mySz, myY + k * hsz, myZ - 1, OCT_DIR_RIGHT_BACK, k);
+        }
+    }
+
+    if ((myX + mySz) < domain_max && (myZ + mySz) < domain_max) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX + mySz, myY + k * hsz, myZ + mySz, OCT_DIR_RIGHT_FRONT, k);
+        }
+    }
+
+    if (myY > 0 && myZ > 0) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX + k * hsz, myY - 1, myZ - 1, OCT_DIR_DOWN_BACK, k);
+        }
+    }
+
+    if (myY > 0 && (myZ + mySz) < domain_max) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX + k * hsz, myY - 1, myZ + mySz, OCT_DIR_DOWN_FRONT, k);
+        }
+    }
+
+    if ((myY + mySz) < domain_max && myZ > 0) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(myX + k * hsz, myY + mySz,
+                                                   myZ - 1, OCT_DIR_UP_BACK, k);
+        }
+    }
+
+    if ((myY + mySz) < domain_max && (myZ + mySz) < domain_max) {
+        for (unsigned int k = 0; k < blkElem_1D; k++) {
+            neighborCoordsDirAndOwner.emplace_back(
+                myX + k * hsz, myY + mySz, myZ + mySz, OCT_DIR_UP_FRONT, k);
+        }
+    }
+
+    // NOW we add in the vertex neighbors, which is 8 directions!
+    if ((myX > 0) && (myY > 0) && (myZ > 0)) {
+        neighborCoordsDirAndOwner.emplace_back(myX - 1, myY - 1, myZ - 1,
+                                               OCT_DIR_LEFT_DOWN_BACK, 0);
+    }
+    if (((myX + mySz) < domain_max) && (myY > 0) && (myZ > 0)) {
+        neighborCoordsDirAndOwner.emplace_back(myX + mySz, myY - 1, myZ - 1,
+                                               OCT_DIR_RIGHT_DOWN_BACK, 1);
+    }
+    if ((myX > 0) && ((myY + mySz) < domain_max) && (myZ > 0)) {
+        neighborCoordsDirAndOwner.emplace_back(myX - 1, myY + mySz, myZ - 1,
+                                               OCT_DIR_LEFT_UP_BACK, 2);
+    }
+    if (((myX + mySz) < domain_max) && ((myY + mySz) < domain_max) &&
+        (myZ > 0)) {
+        neighborCoordsDirAndOwner.emplace_back(myX + mySz, myY + mySz, myZ - 1,
+                                               OCT_DIR_RIGHT_UP_BACK, 3);
+    }
+    if ((myX > 0) && (myY > 0) && ((myZ + mySz) < domain_max)) {
+        neighborCoordsDirAndOwner.emplace_back(myX - 1, myY - 1, myZ + mySz,
+                                               OCT_DIR_LEFT_DOWN_FRONT, 4);
+    }
+    if (((myX + mySz) < domain_max) && (myY > 0) &&
+        ((myZ + mySz) < domain_max)) {
+        neighborCoordsDirAndOwner.emplace_back(myX + mySz, myY - 1, myZ + mySz,
+                                               OCT_DIR_RIGHT_DOWN_FRONT, 5);
+    }
+    if ((myX > 0) && ((myY + mySz) < domain_max) &&
+        ((myZ + mySz) < domain_max)) {
+        neighborCoordsDirAndOwner.emplace_back(myX - 1, myY + mySz, myZ + mySz,
+                                               OCT_DIR_LEFT_UP_FRONT, 6);
+    }
+    if (((myX + mySz) < domain_max) && ((myY + mySz) < domain_max) &&
+        ((myZ + mySz) < domain_max)) {
+        neighborCoordsDirAndOwner.emplace_back(
+            myX + mySz, myY + mySz, myZ + mySz, OCT_DIR_RIGHT_UP_FRONT, 7);
+    }
+
+    unsigned int totalFound = 0;
+
+    // now find the actual neighbors using the E2E map
+    for (const auto &coord : neighborCoordsDirAndOwner) {
+        unsigned int x_new     = std::get<0>(coord);
+        unsigned int y_new     = std::get<1>(coord);
+        unsigned int z_new     = std::get<2>(coord);
+        unsigned int dir_new   = std::get<3>(coord);
+        unsigned int owner_new = std::get<4>(coord);
+
+        // we can create a temporary node for searching (this isn't as fast as
+        // sfcPartitioning... but it'll do for now)
+        // make sure the level input is m_uiMaxDepth
+        ot::TreeNode searchNode(x_new, y_new, z_new, m_uiMaxDepth, m_uiDim,
+                                m_uiMaxDepth);
+        // so now we find the element that contains this point...
+        unsigned int result = LOOK_UP_TABLE_DEFAULT;
+        bool found = findContainingElementInAllNodes(searchNode, result);
+
+        if (found) {
+            if (dir_new < VERTEX_OFFSET) {
+                // we have an edge neighbor!
+                unsigned int edgeIdx = dir_new - EDGE_OFFSET;
+                blk.setBlk2DiagMap(owner_new, edgeIdx, result);
+            } else {
+                // otherwise this is a vertex neighbor
+                unsigned int vertexIdx = dir_new - VERTEX_OFFSET;
+                blk.setBlk2VertexMap(vertexIdx, result);
+            }
+            totalFound++;
+        } else {
+            // std::cout << m_uiGlobalRank
+            //           << ": WARNING: couldn't find vertex/edge offset "
+            //           << searchNode.getX() << " " << searchNode.getY() << " "
+            //           << searchNode.getZ() << std::endl;
+        }
+    }
+
+    std::cout << m_uiGlobalRank << ": found " << totalFound << "/"
+              << neighborCoordsDirAndOwner.size() << " vertex/edges"
+              << std::endl;
+}
+
+bool Mesh::findContainingElementInAllNodes(const ot::TreeNode &searchNode,
+                                           unsigned int &result) {
+    // first search the local elements, because it's more likely our target will
+    // be there
+    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
+        if (m_uiAllElements[e].contains(searchNode)) {
+            result = e;
+            return true;
+        }
+    }
+
+    // now search through pre-ghosts
+    for (unsigned int e = m_uiElementPreGhostBegin; e < m_uiElementPreGhostEnd;
+         e++) {
+        if (m_uiAllElements[e].contains(searchNode)) {
+            result = e;
+            return true;
+        }
+    }
+
+    // finally search through post-ghosts
+    for (unsigned int e = m_uiElementPostGhostBegin;
+         e < m_uiElementPostGhostEnd; e++) {
+        if (m_uiAllElements[e].contains(searchNode)) {
+            result = e;
+            return true;
+        }
+    }
+
+    // search failed, returns lookup_table_default
+    result = LOOK_UP_TABLE_DEFAULT;
+    return false;
+}
+
 void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
                                            unsigned int tsz) {
     m_uiIsBlockSetup  = true;
@@ -9418,8 +9640,6 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
     if (!m_uiIsActive) return;
 
     // just to make sure I got these numbers right
-    constexpr unsigned int VERTICES_PER_ELEMENT = 8;
-    constexpr unsigned int FACES_PER_ELEMENT    = 6;
     // indices within the grid to get the actual vertices...
     // but we can optimize this by doing the calculation *now*
     // const unsigned int cornerIndices[8][3]      = {
@@ -9432,8 +9652,9 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
     //     {0, m_uiElementOrder, m_uiElementOrder},
     //     {m_uiElementOrder, m_uiElementOrder, m_uiElementOrder},
     // };
-    const unsigned int totalPointsPerDim        = m_uiElementOrder + 1;
+    const unsigned int totalPointsPerDim = m_uiElementOrder + 1;
     const unsigned int totalPointsPer2D = totalPointsPerDim * totalPointsPerDim;
+    // These corner indices are based on **element**!
     const unsigned int cornerIndices[8] = {
         0,                                                          // 0,0,0
         m_uiElementOrder,                                           // x,0,0
@@ -9448,14 +9669,11 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
     };
 
     // blkSz and offset vectors
-    std::vector<DendroIntL> blkSz;
-    std::vector<DendroIntL> blkSzOffset;
+    std::vector<DendroIntL> blkSz(m_uiLocalBlockList.size());
+    std::vector<DendroIntL> blkSzOffset(m_uiLocalBlockList.size());
 
     // construct the element to block map
     m_uiE2BlkMap.resize(m_uiNumLocalElements, LOOK_UP_TABLE_DEFAULT);
-
-    blkSz.resize(m_uiLocalBlockList.size());
-    blkSzOffset.resize(m_uiLocalBlockList.size());
 
     for (unsigned int k = 0; k < m_uiLocalBlockList.size(); k++) {
         blkSz[k] = m_uiLocalBlockList[k].getAlignedBlockSz();
@@ -9473,21 +9691,23 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
     m_uiUnZippedVecSz =
         blkSzOffset[m_uiLocalBlockList.size() - 1] + blkSz.back();
 
+    std::cout << m_uiGlobalRank
+              << ": NEW UNZIPPED VEC SIZE: " << m_uiUnZippedVecSz << std::endl;
+
     // then we calculate a few additional things
     const unsigned int dmin = 0;
     const unsigned int dmax = 1u << (m_uiMaxDepth);
-    ot::TreeNode blkNode;
 
     // now iterate through the blocks, there's no need to predeclare what we
     // need, this saves space
     for (unsigned int e = 0; e < m_uiLocalBlockList.size(); e++) {
-        blkNode = m_uiLocalBlockList[e].getBlockNode();
+        // easier referencing into the blk
+        ot::Block &blk       = m_uiLocalBlockList[e];
+        ot::TreeNode blkNode = blk.getBlockNode();
 
-        // update the element to block map
-        // BUG: (potentially) might need to double check block creation before
-        // assuiming this is the truth from the new method
-        for (unsigned int m = m_uiLocalBlockList[e].getLocalElementBegin();
-             m < m_uiLocalBlockList[e].getLocalElementEnd(); m++)
+        // update the element to block map (E2Blk)
+        for (unsigned int m = blk.getLocalElementBegin();
+             m < blk.getLocalElementEnd(); m++)
             m_uiE2BlkMap[(m - m_uiElementLocalBegin)] = e;
 
         // set the boundary flags!
@@ -9540,45 +9760,18 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
 
         // run the assertion that our level for block node and block list level
         // are the same
-        assert(blkNode.getLevel() ==
-               m_uiLocalBlockList[e].getBlockNode().getLevel());
-        m_uiLocalBlockList[e].setBlkNodeFlag(blkNode.getFlag());
+        assert(blkNode.getLevel() == blk.getBlockNode().getLevel());
+        blk.setBlkNodeFlag(blkNode.getFlag());
 
         // I removed the regLevel and sz stuff because they aren't called
         // anywhere
 
         // then we initialize the block maps
-        m_uiLocalBlockList[e].initializeBlkDiagMap(LOOK_UP_TABLE_DEFAULT);
-        m_uiLocalBlockList[e].initializeBlkVertexMap(LOOK_UP_TABLE_DEFAULT);
+        blk.initializeBlkDiagMap(LOOK_UP_TABLE_DEFAULT);
+        blk.initializeBlkVertexMap(LOOK_UP_TABLE_DEFAULT);
 
-        // get all elements inside this block
-        unsigned int begin = m_uiLocalBlockList[e].getLocalElementBegin();
-        unsigned int end   = m_uiLocalBlockList[e].getLocalElementEnd();
-
-        // the process the elements collected in each block
-        for (unsigned int m = begin; m < end; m++) {
-            unsigned int localElemIdx = m - m_uiElementLocalBegin;
-
-            // then set up the vertex data based on the E2N mapping
-            for (unsigned int v = 0; v < VERTICES_PER_ELEMENT; v++) {
-                // get the index for the vertex...
-
-                unsigned int vertexID =
-                    m_uiE2NMapping_CG[localElemIdx * m_uiNpE +
-                                      cornerIndices[v]];
-                m_uiLocalBlockList[e].setBlk2VertexMap(v, vertexID);
-            }
-
-            // and face neighbors
-            for (unsigned int f = 0; f < NUM_FACES; f++) {
-                unsigned int neighbor =
-                    m_uiE2NMapping_CG[localElemIdx * NUM_FACES + f];
-                if (neighbor != LOOK_UP_TABLE_DEFAULT) {
-                    m_uiLocalBlockList[e].setBlk2DiagMap(localElemIdx, f,
-                                                         neighbor);
-                }
-            }
-        }
+        // split into a function to make it far easier to read
+        findBlockNeighborsWithoutSFC(m_uiLocalBlockList[e]);
     }
 
     this->flagBlockGhostDependancies();
@@ -15124,14 +15317,14 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             m_uiDmax, m_uiElementLocalBegin, m_uiElementLocalEnd,
             m_uiElementOrder, m_uiE2EMapping, m_uiCoarsetBlkLev, NULL, 0);
 
-        performBlocksSetup(m_uiCoarsetBlkLev, NULL, 0);
+        performBlocksSetupRepartitioned(m_uiCoarsetBlkLev, NULL, 0);
         if (!rank) {
             std::cout << rank << ": Finished blocksetup after repartitioning..."
                       << std::endl;
         }
         // this sets up m_uiUnZippedVecSz
 
-        buildE2BlockMap();
+        // buildE2BlockMap();
     }
     if (!rank) {
         std::cout << rank << ": Now finished with the repartitioning scheme!"

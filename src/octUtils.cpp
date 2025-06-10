@@ -1083,7 +1083,8 @@ void octree2BlockDecompositionRepartitioned(
 
         double blockFillRatio = (double)numRegGridOcts / numIdealRegGridOct;
 
-#ifdef OCT2BLK_DEBUG_NEW
+// #ifdef OCT2BLK_DEBUG_NEW
+#if 0
         std::cout << rank << ": on block: " << parent.getX() << " "
                   << parent.getY() << " " << parent.getZ() << std::endl;
         if (parent.getLevel() < coarsetLev)

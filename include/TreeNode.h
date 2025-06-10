@@ -436,6 +436,26 @@ class TreeNode {
 
         return TreeNode(x, y, z, childLevel, m_uiDim, m_uiMaxDepth);
     }
+
+    unsigned int getSize() const { return (1u << (m_uiMaxDepth - m_uiLevel)); }
+
+    bool contains(unsigned int x, unsigned int y, unsigned int z) const {
+        unsigned int size = getSize();
+        return (x >= m_uiX) && (x < (m_uiX + size)) && (x >= m_uiX) &&
+               (x < (m_uiX + size)) && (x >= m_uiX) && (x < (m_uiX + size));
+    }
+
+    bool contains(const TreeNode &other) const {
+        unsigned int mySize    = getSize();
+        unsigned int otherSize = other.getSize();
+
+        return (other.getX() >= m_uiX) &&
+               ((other.getX() + otherSize) <= (m_uiX + mySize)) &&
+               (other.getY() >= m_uiY) &&
+               ((other.getY() + otherSize) <= (m_uiY + mySize)) &&
+               (other.getZ() >= m_uiZ) &&
+               ((other.getZ() + otherSize) <= (m_uiZ + mySize));
+    }
 };
 
 inline unsigned int TreeNode::getX() const { return m_uiX; }
