@@ -9387,6 +9387,9 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
             blkKeys.size(), 0, m_uiAllElements.size(), m_uiMaxDepth,
             m_uiMaxDepth, ROOT_ROTATION);
 
+        std::cout << m_uiGlobalRank << ": SEARCHING FOR: " << blkKeys.size()
+                  << " blocks" << std::endl;
+
         for (unsigned int i = 0; i < blkKeys.size(); i++) {
             assert(blkKeys[i].getFlag() & OCT_FOUND);
             if (!(blkKeys[i].getFlag() & OCT_FOUND)) {
@@ -15291,11 +15294,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         // then build the E2BlockMap
         buildE2BlockMap();
-        if (!rank) {
-            std::cout << rank << ": Finished blocksetup after repartitioning..."
-                      << std::endl;
-        }
-        // this sets up m_uiUnZippedVecSz
 
         // finally we need to adjust the send and receive information
         if (m_uiActiveNpes > 1) {
@@ -15310,12 +15308,13 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             m_uiRecvBufferNodes.resize(m_uiRecvNodeOffset[m_uiActiveNpes - 1] +
                                        m_uiRecvNodeCount[m_uiActiveNpes - 1]);
         }
+        // and that's it?
 
-        std::cout << m_uiGlobalRank << ": SEND COUNTS: ";
-        for (auto &s : m_uiSendNodeCount) {
-            std::cout << s << ", ";
-        }
-        std::cout << std::endl;
+        // std::cout << m_uiGlobalRank << ": SEND COUNTS: ";
+        // for (auto &s : m_uiSendNodeCount) {
+        //     std::cout << s << ", ";
+        // }
+        // std::cout << std::endl;
     }
     if (!rank) {
         std::cout << rank << ": Now finished with the repartitioning scheme!"

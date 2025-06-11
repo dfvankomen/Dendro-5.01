@@ -212,11 +212,10 @@ int main(int argc, char** argv) {
     unsigned int maxDepthIn;
 
     std::vector<ot::TreeNode> tmpNodes;
-    // function2Octree(func_alt, tmpNodes, m_uiMaxDepth, wavelet_tol,
-    // eOrder,
-    //                 comm);
-    function2Octree(func_sine, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder,
+    function2Octree(func_alt, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder,
                     comm);
+    // function2Octree(func_sine, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder,
+    //                 comm);
 
     // THIS MESH WILL NOT BE AFFECTED
     // MESH DEFAULT DATA
@@ -224,6 +223,11 @@ int main(int argc, char** argv) {
                                     comm, 1, ot::SM_TYPE::FDM, DENDRO_GRAIN_SZ,
                                     LOAD_IMB_TOL, SPLIT_FIX);
 
+    MPI_Barrier(MPI_COMM_WORLD);
+    if (rank == 0) {
+        std::cout << " ============================== FINISHED MESH 1 "
+                     "========================\n";
+    }
     MPI_Barrier(comm);
 
     // create a "copy" of the mesh (which will use the exact same
@@ -310,6 +314,8 @@ int main(int argc, char** argv) {
     // END CLEANUP
     delete mesh;
     delete mesh_repartitioned;
+
+    MPI_Barrier(comm);
 
     if (!rank) {
         std::cout << "---------------------------------------" << std::endl;

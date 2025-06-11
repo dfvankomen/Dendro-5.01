@@ -28,8 +28,9 @@ template <typename T>
 void treeNodesTovtk(std::vector<T>& nodes, int mpi_rank,
                     std::string vtk_file_name, bool hsorted) {
     // std::sort(nodes.begin(), nodes.end());
-    if (!mpi_rank)
-        std::cout << "writing mesh to VTK file: " << vtk_file_name << std::endl;
+    // if (!mpi_rank)
+    //     std::cout << "writing mesh to VTK file: " << vtk_file_name <<
+    //     std::endl;
     std::ostringstream convert;
 
 #ifdef HILBERT_ORDERING

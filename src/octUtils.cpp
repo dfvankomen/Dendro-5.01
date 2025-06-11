@@ -881,16 +881,39 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
     std::cout << "rank: " << rank << " singleOctBlocks: " << singleOctBlockCount
               << " pNodes size: " << pNodes.size()
               << " ratio: " << (double(singleOctBlockCount) / pNodes.size())
-              << std::endl;
+              << " size blklist: " << blockList.size() << std::endl;
 #endif
 }
 
 void assignNodesToChildren(
     const ot::TreeNode& parent, const std::vector<ot::TreeNode>& nodes,
     const std::vector<DendroIntL>& nodeIndices,
-    std::vector<std::vector<DendroIntL>>& childNodeIndices) {
+    std::vector<std::vector<DendroIntL>>& childNodeIndices,
+    unsigned int currRegGridLev) {
+    // childNodeIndices.clear();
     childNodeIndices.resize(NUM_CHILDREN);
     for (auto idx : nodeIndices) {
+        // const ot::TreeNode& node = nodes[idx];
+        //
+        // if (!parent.isAncestor(node)) {
+        //     // we want to skip descendants or invalid nodes
+        //     continue;
+        // }
+        //
+        // ot::TreeNode tmp = node;
+        // while (tmp.getParent() != parent) {
+        //     tmp = tmp.getParent();
+        // }
+        // int childIdx = parent.getChildIndex(tmp);
+        //
+        // childNodeIndices[childIdx].push_back(idx);
+
+        // int childIndex = parent.getChildIndex(node);
+        //
+        // if (node.getLevel() == currRegGridLev) {
+        //     childNodeIndices[childIndex].push_back(idx);
+        // }
+
         if (parent.isAncestor(nodes[idx])) {
             int childIdx = parent.getChildIndex(nodes[idx]);
             childNodeIndices[childIdx].push_back(idx);
@@ -968,6 +991,9 @@ void octree2BlockDecompositionRepartitioned(
     treeNodesTovtk(pNodes, rank, "balOct_repartitioned");
 #endif
 
+    std::cout << rank << ": localBegin - localEnd: " << localBegin << " "
+              << localEnd << std::endl;
+
     unsigned int x, y, z, hindex, hindexN, index;
 
     std::vector<ot::Block> initialBlocks;
@@ -1006,33 +1032,35 @@ void octree2BlockDecompositionRepartitioned(
     DendroUInt_128 octVolume =
         0;  // 128-bit integer to store oct volume inside a block.
 
-    std::cout << rank << ": now entering the while loop..." << std::endl;
     while (!initialBlocks.empty()) {
         // get the information from the original blocks
         ot::Block tmpBlock = initialBlocks.back();
         initialBlocks.pop_back();
-        ot::TreeNode parent         = tmpBlock.getBlockNode();
-        unsigned int currRegGridLev = tmpBlock.getRegularGridLev();
 
+        ot::TreeNode parent         = tmpBlock.getBlockNode();
+
+        unsigned int currRegGridLev = tmpBlock.getRegularGridLev();
         unsigned int rot_id         = tmpBlock.getRotationID();
         nBegin                      = tmpBlock.getLocalElementBegin();
         nEnd                        = tmpBlock.getLocalElementEnd();
+        assert(parent.getLevel() <= currRegGridLev);
 
         // collect the nodes inside this block, note it's NOT contiguous
         std::vector<DendroIntL> blockNodeIndices;
         // i have an alternate here, where we go from i to pNodes size
         // for (DendroIntL i = 0; i < pNodes.size(); i++) {
+        // for (DendroIntL i = localBegin; i < localEnd; i++) {
         for (DendroIntL i = tmpBlock.getLocalElementBegin();
              i < tmpBlock.getLocalElementEnd(); i++) {
             if (parent.isAncestor(pNodes[i])) {
                 blockNodeIndices.push_back(i);
             }
         }
+        assert(blockNodeIndices.size() <= (localEnd - localBegin));
 
         // case 1, the block is a leaf, single node
         if (parent.getLevel() == currRegGridLev) {
             if (!blockNodeIndices.empty()) {
-                std::cout << "PUSHING BACK A BLOCK" << std::endl;
                 blockList.push_back(tmpBlock);
             }
             continue;
@@ -1083,8 +1111,7 @@ void octree2BlockDecompositionRepartitioned(
 
         double blockFillRatio = (double)numRegGridOcts / numIdealRegGridOct;
 
-// #ifdef OCT2BLK_DEBUG_NEW
-#if 0
+#ifdef OCT2BLK_DEBUG_NEW
         std::cout << rank << ": on block: " << parent.getX() << " "
                   << parent.getY() << " " << parent.getZ() << std::endl;
         if (parent.getLevel() < coarsetLev)
@@ -1124,7 +1151,16 @@ void octree2BlockDecompositionRepartitioned(
             // otherwise we need to split into child blocks!
             std::vector<std::vector<DendroIntL>> childNodeIndices;
             assignNodesToChildren(parent, pNodes, blockNodeIndices,
-                                  childNodeIndices);
+                                  childNodeIndices, currRegGridLev);
+
+#ifdef OCT2BLK_DEBUG_NEW
+            // check to make sure we have all of the indices
+            size_t total_assigned = 0;
+            for (const auto& vec : childNodeIndices)
+                total_assigned += vec.size();
+            assert(total_assigned == blockNodeIndices.size() &&
+                   "Nodes lost during assignment!");
+#endif
 
             // now we need to add in each block
             for (int i = 0; i < NUM_CHILDREN; i++) {
@@ -1171,13 +1207,13 @@ void octree2BlockDecompositionRepartitioned(
     std::vector<ot::TreeNode> blockNodes;
     blockNodes.resize(blockList.size());
     for (unsigned int k = 0; k < blockList.size(); k++) {
-        std::cout << rank << " FOUND BLOCKS: " << k << std::endl;
+        // std::cout << rank << " FOUND BLOCKS: " << k << std::endl;
         blockNodes[k] = blockList[k].getBlockNode();
     }
 
-    std::cout << "Now writing the block nodes..." << std::endl;
+    // std::cout << "Now writing the block nodes..." << std::endl;
     treeNodesTovtk(blockNodes, rank, "blockNodes_repartitioned");
-    std::cout << "FINISHED WRITING TREE NODES TO VTK" << std::endl;
+    // std::cout << "FINISHED WRITING TREE NODES TO VTK" << std::endl;
 #endif
 
 #ifdef OCT2BLK_DEBUG_NEW
@@ -1208,7 +1244,7 @@ void octree2BlockDecompositionRepartitioned(
     std::cout << "rank: " << rank << " singleOctBlocks: " << singleOctBlockCount
               << " pNodes size: " << pNodes.size()
               << " ratio: " << (double(singleOctBlockCount) / pNodes.size())
-              << std::endl;
+              << " size blklist: " << blockList.size() << std::endl;
 #endif
 }
 
