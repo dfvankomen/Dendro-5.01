@@ -45,6 +45,10 @@ enum DerivType {
     D_K4_07,
     D_K4_16,
     D_KB4,
+    D_KIMBYU_162,
+    D_KIMBYU_195,
+    D_KIMBYU_99,
+    D_KIMBYU_69,
     // Brady Livescue Derivatives
     D_BL6,
     // BORIS derivatives

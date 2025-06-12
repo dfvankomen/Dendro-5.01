@@ -1687,7 +1687,7 @@ void deriv8666_y(double *const Dyu, const double *const u, const double dy,
                      450.0 * u[IDX(i, je - 3, k)] -
                      360.0 * u[IDX(i, je - 2, k)] +
                      147.0 * u[IDX(i, je - 1, k)]) *
-                    idy_by_12;
+                    idy_by_60;
             }
         }
     }

@@ -3,6 +3,78 @@
 #include "derivatives/derivs_compact.h"
 
 namespace dendroderivs {
+    MatrixDiagonalEntries* BYUDerivsT8R3DiagonalsFirstOrder(
+	const std::vector<double>& D_coeffs) {
+		double alpha0 = 3.0 / 8.0;
+		double alpha = alpha0 + D_coeffs[0];
+		double a08 = D_coeffs[1];
+		double a18 = D_coeffs[2];
+		double a28 = D_coeffs[3];
+
+		double a1 = 25.0 / 16.0;
+		double a2 = 1.0 / 5.0;
+		double a3 =  - 1.0 / 80.0;
+		double a00 = ( - 503.0 - 980.0 * a08) / 140.0;
+		double a01 = ( - 63.0 - 1784.0 * a08) / 20.0;
+		double a02 = (7.0 * (3.0 + 56.0 * a08)) / 2.0;
+		double a03 = ( - 7.0 * (5.0 + 168.0 * a08)) / 6.0;
+		double a04 = (35.0 * (1.0 + 56.0 * a08)) / 12.0;
+		double a05 = ( - 7.0 * (3.0 + 280.0 * a08)) / 20.0;
+		double a06 = (7.0 * (1.0 + 168.0 * a08)) / 30.0;
+		double a07 = ( - 1.0 - 392.0 * a08) / 42.0;
+		double a10 = ( - 3.0 * (191.0 + 50456.0 * a18)) / 1960.0;
+		double a11 = ( - 29.0 + 7680.0 * a18) / 20.0;
+		double a12 = (43.0 + 12096.0 * a18) / 40.0;
+		double a13 = (5.0 - 5376.0 * a18) / 6.0;
+		double a14 = (5.0 * ( - 1.0 + 2016.0 * a18)) / 24.0;
+		double a15 = (1.0 - 3584.0 * a18) / 20.0;
+		double a16 = ( - 1.0 + 6720.0 * a18) / 120.0;
+		double a17 = (1.0 - 16128.0 * a18) / 1470.0;
+		double a20 = ( - 1.0 + 1470.0 * a28) / 126.0;
+		double a21 = ( - 59.0 + 35160.0 * a28) / 120.0;
+		double a22 = ( - 47.0 - 58800.0 * a28) / 60.0;
+		double a23 = (25.0 + 1176.0 * a28) / 24.0;
+		double a24 = (5.0 * (1.0 + 2940.0 * a28)) / 18.0;
+		double a25 = ( - 1.0 - 5880.0 * a28) / 24.0;
+		double a26 = (1.0 + 11760.0 * a28) / 180.0;
+		double a27 = ( - 1.0 - 29400.0 * a28) / 2520.0;
+		double gamma01 = 7.0 * (1.0 + 8.0 * a08);
+		double gamma10 = (1.0 + 336.0 * a18) / 14.0;
+		double gamma12 = ( - 3.0 * ( - 1.0 + 448.0 * a18)) / 2.0;
+		double gamma21 = (1.0 - 840.0 * a28) / 6.0;
+		double gamma23 = (5.0 * (1.0 + 1176.0 * a28)) / 6.0;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01},
+			{gamma10, 1.0, gamma12},
+			{0.0, gamma21, 1.0, gamma23}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			alpha, 1.0, alpha
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06, a07, a08},
+			{a10, a11, a12, a13, a14, a15, a16, a17, a18},
+			{a20, a21, a22, a23, a24, a25, a26, a27, a28}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
 MatrixDiagonalEntries* BYUDerivsT64R3DiagonalsFirstOrder(
 	const std::vector<double>& D_coeffs) {
 		double alpha0 = 1.0 / 3.0;

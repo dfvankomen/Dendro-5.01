@@ -11,6 +11,10 @@ namespace dendroderivs {
 MatrixDiagonalEntries* createKimDiagonals();
 MatrixDiagonalEntries* createKim07Diagonals();
 MatrixDiagonalEntries* createKim16Diagonals();
+MatrixDiagonalEntries* createBYU_KIM_162_Diagonals();
+MatrixDiagonalEntries* createBYU_KIM_195_Diagonals();
+MatrixDiagonalEntries* createBYU_KIM_99_Diagonals();
+MatrixDiagonalEntries* createBYU_KIM_69_Diagonals();
 
 /** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
 class KimBoundO4_FirstOrder : public MatrixCompactDerivs<1> {
@@ -43,6 +47,8 @@ class KimBoundO4_FirstOrder : public MatrixCompactDerivs<1> {
     std::string toString() const override { return "KimBoundO4_FirstOrder"; };
 };
 
+
+
 /** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
 class Kim_07_BoundO4_FirstOrder : public MatrixCompactDerivs<1> {
    public:
@@ -73,6 +79,132 @@ class Kim_07_BoundO4_FirstOrder : public MatrixCompactDerivs<1> {
 
     std::string toString() const override { return "Kim_07BoundO4_FirstOrder"; };
 };
+
+/** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
+class BYU_KIM_162_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+   public:
+   BYU_KIM_162_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter,
+                                 in_filter_coeffs} {
+        diagEntries = createBYU_KIM_162_Diagonals();
+
+        this->init();
+    }
+    ~BYU_KIM_162_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in BandedCompactDerivs_KimBound4 deconstructor"
+                  << std::endl;
+#endif
+    };
+
+    std::unique_ptr<Derivs> clone() const override {
+    return std::make_unique<BYU_KIM_162_DiagonalsFirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_KIMBYU_162; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override { return "BYU_KIM_162_DiagonalsFirstOrder"; };
+};
+
+
+/** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
+class BYU_KIM_195_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+   public:
+   BYU_KIM_195_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter,
+                                 in_filter_coeffs} {
+        diagEntries = createBYU_KIM_195_Diagonals();
+        this->init();
+    }
+    ~BYU_KIM_195_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in BandedCompactDerivs_KimBound4 deconstructor"
+                  << std::endl;
+#endif
+    };
+
+    std::unique_ptr<Derivs> clone() const override {
+    return std::make_unique<BYU_KIM_195_DiagonalsFirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_KIMBYU_195; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override { return "BYU_KIM_195_DiagonalsFirstOrder"; };
+};
+
+
+/** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
+class BYU_KIM_99_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+   public:
+   BYU_KIM_99_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter,
+                                 in_filter_coeffs} {
+        diagEntries = createBYU_KIM_99_Diagonals();
+
+        this->init();
+    }
+    ~BYU_KIM_99_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in BandedCompactDerivs_KimBound4 deconstructor"
+                  << std::endl;
+#endif
+    };
+
+    std::unique_ptr<Derivs> clone() const override {
+    return std::make_unique<BYU_KIM_99_DiagonalsFirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_KIMBYU_99; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override { return "BYU_KIM_99_DiagonalsFirstOrder"; };
+};
+
+/** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
+class BYU_KIM_69_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+   public:
+   BYU_KIM_69_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter,
+                                 in_filter_coeffs} {
+        diagEntries =createBYU_KIM_69_Diagonals();
+
+        this->init();
+    }
+    ~BYU_KIM_69_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in BandedCompactDerivs_KimBound4 deconstructor"
+                  << std::endl;
+#endif
+    };
+
+    std::unique_ptr<Derivs> clone() const override {
+    return std::make_unique<BYU_KIM_69_DiagonalsFirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_KIMBYU_69; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override { return "BYU_KIM_69_DiagonalsFirstOrder"; };
+};
+
 
 /** 4th order tridiagonal Kim Derivative, First Order, Pure Matrix System */
 class Kim_16_BoundO4_FirstOrder : public MatrixCompactDerivs<1> {

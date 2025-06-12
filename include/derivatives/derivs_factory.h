@@ -50,7 +50,19 @@ class DerivsFactory {
         }else if (name == "KIM407") {
             return std::unique_ptr<Derivs>(new Kim_07_BoundO4_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
-        } else if (name == "KIM416") {
+        } else if (name == "KIMBYU_162") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_162_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "KIMBYU_195") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_195_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "KIMBYU_99") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_99_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "KIMBYU_69") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_69_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "KIM416") {
             return std::unique_ptr<Derivs>(new Kim_16_BoundO4_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
         } else if (name == "JTT4") {

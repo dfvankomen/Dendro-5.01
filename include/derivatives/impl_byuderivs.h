@@ -81,7 +81,11 @@ MatrixDiagonalEntries* BYUDerivsP6R2DiagonalsFirstOrder(
 MatrixDiagonalEntries* BYUDerivsP6R3DiagonalsFirstOrder(
     const std::vector<double>& D_coeffs);
 
+<<<<<<< HEAD
 MatrixDiagonalEntries* BYUDerivsP6R32DiagonalsFirstOrder(
+=======
+MatrixDiagonalEntries* BYUDerivsT8R3DiagonalsFirstOrder(
+>>>>>>> 4e5fae0 (Added a few new operators)
     const std::vector<double>& D_coeffs);
 
 MatrixDiagonalEntries* BYUDerivsP6R3DiagonalsSecondOrder(
@@ -324,7 +328,47 @@ class BYUDerivsT4_R42_FirstOrder : public MatrixCompactDerivs<1> {
     }
 };
 
+<<<<<<< HEAD
 
+=======
+class BYUDerivsT8_R3_FirstOrder : public MatrixCompactDerivs<1> {
+   private:
+    std::vector<double> D_coeffs_;
+
+    static constexpr unsigned int n_D_coeffs_ = 5;
+
+   public:
+    template <typename... Args>
+    BYUDerivsT8_R3_FirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in        = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        // check the coefficients
+
+        D_coeffs_ =
+            clean_coeffs(coeffs_in, BYUDerivsT8_R3_FirstOrder::n_D_coeffs_);
+
+        diagEntries = BYUDerivsT8R3DiagonalsFirstOrder(D_coeffs_);
+
+        this->init();
+    }
+    ~BYUDerivsT8_R3_FirstOrder() {}
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<BYUDerivsT8_R3_FirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_BYUT8; }
+    DerivOrder getDerivOrder() const override {
+        return DerivOrder::D_FIRST_ORDER;
+    }
+
+    std::string toString() const override {
+        return "BYUDerivsT8_R3_FirstOrder";
+    }
+};
+>>>>>>> 4e5fae0 (Added a few new operators)
 
 class BYUDerivsT4_R3_SecondOrder : public MatrixCompactDerivs<2> {
    private:
