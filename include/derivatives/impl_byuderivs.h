@@ -81,11 +81,7 @@ MatrixDiagonalEntries* BYUDerivsP6R2DiagonalsFirstOrder(
 MatrixDiagonalEntries* BYUDerivsP6R3DiagonalsFirstOrder(
     const std::vector<double>& D_coeffs);
 
-<<<<<<< HEAD
-MatrixDiagonalEntries* BYUDerivsP6R32DiagonalsFirstOrder(
-=======
 MatrixDiagonalEntries* BYUDerivsT8R3DiagonalsFirstOrder(
->>>>>>> 4e5fae0 (Added a few new operators)
     const std::vector<double>& D_coeffs);
 
 MatrixDiagonalEntries* BYUDerivsP6R3DiagonalsSecondOrder(
@@ -328,9 +324,6 @@ class BYUDerivsT4_R42_FirstOrder : public MatrixCompactDerivs<1> {
     }
 };
 
-<<<<<<< HEAD
-
-=======
 class BYUDerivsT8_R3_FirstOrder : public MatrixCompactDerivs<1> {
    private:
     std::vector<double> D_coeffs_;
@@ -368,7 +361,6 @@ class BYUDerivsT8_R3_FirstOrder : public MatrixCompactDerivs<1> {
         return "BYUDerivsT8_R3_FirstOrder";
     }
 };
->>>>>>> 4e5fae0 (Added a few new operators)
 
 class BYUDerivsT4_R3_SecondOrder : public MatrixCompactDerivs<2> {
    private:
@@ -602,7 +594,7 @@ class BYUDerivsP6_R32_FirstOrder : public MatrixCompactDerivs<1> {
         D_coeffs_ =
             clean_coeffs(coeffs_in, BYUDerivsP6_R32_FirstOrder::n_D_coeffs_);
 
-        diagEntries = BYUDerivsP6R32DiagonalsFirstOrder(D_coeffs_);
+        diagEntries = BYUDerivsP6R3DiagonalsFirstOrder(D_coeffs_);
 
         this->init();
     }
