@@ -44,6 +44,38 @@ inline std::vector<T> b91_decode(const std::string& input) {
     return output;
 }
 
+#define PRINT_BAH_VAR(var) \
+    std::cout << "    " << #var << " = " << var << std::endl;
+
+inline void print_bha_param_data(bhahaha_params_and_data_struct* bha_param_data,
+                                 unsigned int which_horizon) {
+    // TODO: check to make sure input_metric_data isn't bad
+
+    std::cout << "PARAMETER DUMP FOR PARAM DATA FOR HORIZON " << which_horizon
+              << std::endl;
+    PRINT_BAH_VAR(bha_param_data->time_external_input);
+    PRINT_BAH_VAR(bha_param_data->iteration_external_input);
+    PRINT_BAH_VAR(bha_param_data->Nr_external_input);
+    PRINT_BAH_VAR(bha_param_data->r_min_external_input);
+    PRINT_BAH_VAR(bha_param_data->dr_external_input);
+    PRINT_BAH_VAR(bha_param_data->num_resolutions_multigrid);
+    // TODO: ntheta array and nphi array
+    PRINT_BAH_VAR(bha_param_data->use_fixed_radius_guess_on_full_sphere);
+    PRINT_BAH_VAR(bha_param_data->cfl_factor);
+    PRINT_BAH_VAR(bha_param_data->M_scale);
+    PRINT_BAH_VAR(bha_param_data->eta_damping_times_M);
+    PRINT_BAH_VAR(bha_param_data->KO_strength);
+    PRINT_BAH_VAR(bha_param_data->max_iterations);
+    PRINT_BAH_VAR(bha_param_data->Theta_Linf_times_M_tolerance);
+    PRINT_BAH_VAR(bha_param_data->Theta_L2_times_M_tolerance);
+    PRINT_BAH_VAR(bha_param_data->which_horizon);
+    PRINT_BAH_VAR(bha_param_data->num_horizons);
+    PRINT_BAH_VAR(bha_param_data->verbosity_level);
+    PRINT_BAH_VAR(
+        bha_param_data->enable_eta_varying_alg_for_precision_common_horizon);
+    // TODO: t_m1, t_m2, and rmin, rmax, x, y, and z
+}
+
 template <typename T>
 inline void restore_vector(std::vector<T>& original,
                            const std::vector<T>& restored,
@@ -338,6 +370,11 @@ class AEH_BHaHAHA {
             // set based on mass scale
             bah_m_scale_[0]        = blackholes[0].mass;
             bah_m_scale_[1]        = blackholes[1].mass;
+
+            // NOTE: this is a temporary measure until we verify this is
+            // correct, but the common horizon can just be a simple addition of
+            // the masses
+            bah_m_scale_[2]        = blackholes[0].mass + blackholes[1].mass;
         }
 
         // now we populate data for each horizon, may need to be parameterized,

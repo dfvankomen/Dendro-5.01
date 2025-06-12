@@ -369,6 +369,13 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
         if (rankActive == which_rank) {
             bhahaha_diagnostics_struct bhahaha_diags;
 
+#if 0
+            if (which_horizon == common_horizon) {
+                print_bha_param_data(&bha_param_data_[which_horizon],
+                                     which_horizon);
+            }
+#endif
+
             const int bah_return_code = bah_find_horizon(
                 &bha_param_data_[which_horizon], &bhahaha_diags);
 
