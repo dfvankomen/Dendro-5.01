@@ -813,7 +813,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                 z = parent.getZ() +
                     (((int)((bool)(hindex & 4u))) << (pMaxDepthBit));
 
-                if ((childHasRegLev[i] == 1)) {
+                if (childHasRegLev[i] == 1) {
                     if ((parent.getLevel() + 1) <= currRegGridLev) {
                         tmpBlock = ot::Block(
                             ot::TreeNode(x, y, z, parent.getLevel() + 1,
@@ -824,7 +824,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                     }
                 } else if (((childHasRegLev[i] == 0 &&
                              (splitters[hindex] != splitters[hindexN])))) {
-                    if ((currRegGridLev + 1) <= d_max &&
+                    if (currRegGridLev <= d_max &&
                         ((parent.getLevel() + 1) <= (currRegGridLev + 1))) {
                         tmpBlock = ot::Block(
                             ot::TreeNode(x, y, z, parent.getLevel() + 1,
@@ -1136,11 +1136,17 @@ void octree2BlockDecompositionRepartitioned(
                       << std::endl;
 #endif
 
+        bool isCoarseLevelForced = (currRegGridLev == d_min);
+        bool isBlockValid =
+            ((parent.getLevel() >= coarsetLev) && (isTagValid) &&
+             (octLevelGap) &&
+             isBlockConnected(pNodes, blockNodeIndices, e2e_map) &&
+             octVolume == blockVolume &&
+             (blockFillRatio >= OCT2BLK_DECOMP_BLK_FILL_RATIO ||
+              isCoarseLevelForced));
+
         // accept or split the block now!
-        if (parent.getLevel() >= coarsetLev && isTagValid && octLevelGap &&
-            blockFillRatio >= OCT2BLK_DECOMP_BLK_FILL_RATIO &&
-            octVolume == blockVolume &&
-            isBlockConnected(pNodes, blockNodeIndices, e2e_map)) {
+        if (isBlockValid) {
             blockList.push_back(tmpBlock);
             if (currRegGridLev + 1 <= d_max) {
                 initialBlocks.push_back(ot::Block(parent, rot_id,
