@@ -9598,9 +9598,9 @@ void Mesh::findBlockNeighborsWithoutSFC(ot::Block &blk) {
         }
     }
 
-    std::cout << m_uiGlobalRank << ": found " << totalFound << "/"
-              << neighborCoordsDirAndOwner.size() << " vertex/edges"
-              << std::endl;
+    // std::cout << m_uiGlobalRank << ": found " << totalFound << "/"
+    //           << neighborCoordsDirAndOwner.size() << " vertex/edges"
+    //           << std::endl;
 }
 
 bool Mesh::findContainingElementInAllNodes(const ot::TreeNode &searchNode,

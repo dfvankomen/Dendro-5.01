@@ -1033,6 +1033,11 @@ void octree2BlockDecompositionRepartitioned(
         unsigned int currRegGridLev     = tmpBlock.getRegularGridLev();
         const auto& blockElementIndices = tmpBlock.getLocalElementIndices();
 
+        // std::cout << rank << "-iter " << numIterations
+        //           << ": blockElementIndices size " <<
+        //           blockElementIndices.size()
+        //           << std::endl;
+
         assert(parent.getLevel() <= currRegGridLev);
 
         // Step 3a: Collect the local nodes inside the block we're looking at
@@ -1041,11 +1046,6 @@ void octree2BlockDecompositionRepartitioned(
             //           << parent << std::endl;
             continue;
         }
-#if 0
-        std::cout << rank << ": iter " << numIterations << " COLLECTED "
-                  << blockNodeIndices.size() << " for parent " << parent
-                  << std::endl;
-#endif
 
         // Step 3b: Handle single-node blocks explicitly
         if (parent.getLevel() == currRegGridLev) {
@@ -1083,7 +1083,7 @@ void octree2BlockDecompositionRepartitioned(
                      OCT2BLK_DECOMP_LEV_GAP) {
                 octLevelGap = false;
             }
-            octVolume += 1u << (maxDepth - nodeLevel);
+            octVolume += 1u << (3 * (maxDepth - nodeLevel));
         }
 
         // ACCEPTANCE CRITERIA
@@ -1097,7 +1097,6 @@ void octree2BlockDecompositionRepartitioned(
         double blockFillRatio = (double)numRegGridOcts / numIdealRegGridOct;
         DendroUInt_128 blockVolume = 1u << ((maxDepth - parent.getLevel()) * 3);
 
-        // #ifdef OCT2BLK_DEBUG_NEW
 #if 0
         std::cout << rank << ": on block: " << parent.getX() << " "
                   << parent.getY() << " " << parent.getZ() << std::endl;
@@ -1118,17 +1117,17 @@ void octree2BlockDecompositionRepartitioned(
                       << toHexString(octVolume)
                       << ", block=" << toHexString(blockVolume) << ")"
                       << std::endl;
-        if (!isBlockConnected(pNodes, blockNodeIndices, e2e_map))
+        if (!isBlockConnected(pNodes, blockElementIndices, e2e_map))
             std::cout << rank << ": Rejected: Block is disconnected"
                       << std::endl;
 #endif
 
         bool isBlockValid =
-            isSingleNode ||
             ((parent.getLevel() >= coarsetLev) && isTagValid && octLevelGap &&
              (blockFillRatio >= OCT2BLK_DECOMP_BLK_FILL_RATIO) &&
              (octVolume == blockVolume) &&
-             isBlockConnected(pNodes, blockElementIndices, e2e_map));
+             isBlockConnected(pNodes, blockElementIndices,
+                              e2e_map));  // || isSingleNode
 
         if (isBlockValid) {
             // Step 3d: Block is accepted, handle next piece
@@ -1173,11 +1172,18 @@ void octree2BlockDecompositionRepartitioned(
                 }
 
                 ot::TreeNode childNode = parent.createChildNode(i);
+
+#if 0
+                std::cout << rank << "-iter " << numIterations
+                          << ": childNodeIndices[i][0]="
+                          << childNodeIndices[i].front()
+                          << " [end]=" << childNodeIndices[i].back()
+                          << std::endl;
+#endif
                 initialBlocks.emplace_back(
                     childNode,
                     computeChildRotationID(tmpBlock.getRotationID(), i),
-                    childRegLevel, childNodeIndices[i].front(),
-                    childNodeIndices[i].back() + 1, eleOrder);
+                    childRegLevel, childNodeIndices[i], eleOrder);
             }
         }
     }
@@ -1209,8 +1215,7 @@ void octree2BlockDecompositionRepartitioned(
 
         numActualRegOcts = 0;
 
-        for (unsigned int j = blockList[i].getLocalElementBegin();
-             j < (blockList[i].getLocalElementEnd()); j++) {
+        for (auto j : blockList[i].getLocalElementIndices()) {
             if (pNodes[j].getLevel() == blockList[i].getRegularGridLev())
                 numActualRegOcts++;
         }
@@ -1226,15 +1231,16 @@ void octree2BlockDecompositionRepartitioned(
     }
     std::cout << "rank: " << rank << " singleOctBlocks: " << singleOctBlockCount
               << " pNodes size: " << pNodes.size()
+              << " localEnd-localBegin: " << localEnd - localBegin
               << " ratio: " << (double(singleOctBlockCount) / pNodes.size())
               << " size blklist: " << blockList.size() << std::endl;
 
     DendroIntL totalNodes = 0;
     for (const auto& block : blockList) {
-        totalNodes +=
-            (block.getLocalElementEnd() - block.getLocalElementBegin());
+        totalNodes += block.getLocalElementIndices().size();
     }
-    assert(totalNodes == pNodes.size() && "Nodes lost during decomposition!");
+    assert(totalNodes == (localEnd - localBegin) &&
+           "Nodes lost during decomposition!");
 #endif
 }
 
