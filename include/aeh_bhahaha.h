@@ -185,6 +185,9 @@ class AEH_BHaHAHA {
     std::vector<int> variable_indices_;
     std::function<std::vector<double>(const std::vector<double>&)> transform_;
 
+    // internal flag to let us know if the first step has passed
+    bool have_done_initial_test_ = false;
+
    public:
     // add more input types for data...
     AEH_BHaHAHA(const unsigned int n_horizons, const bool is_binary_black_hole,
@@ -284,10 +287,8 @@ class AEH_BHaHAHA {
     ~AEH_BHaHAHA() = default;
 
     void allocate_data_structures() {
-        // initialize all internal structures that will store the data
-        bha_param_data_ =
-            std::vector<bhahaha_params_and_data_struct>(num_horizons_);
-
+        // initialize all internal structures that will store the persistent
+        // data
         x_guess_     = std::vector<double>(num_horizons_, 0.0);
         y_guess_     = std::vector<double>(num_horizons_, 0.0);
         z_guess_     = std::vector<double>(num_horizons_, 0.0);
@@ -377,58 +378,81 @@ class AEH_BHaHAHA {
             bah_m_scale_[2]        = blackholes[0].mass + blackholes[1].mass;
         }
 
-        // now we populate data for each horizon, may need to be parameterized,
-        // or restored
+        // this is everything that is done the first time, we're not initialized
+        // the creation of the param_structs and copying of data now happens in
+        // find_horizons
+        initialized_ = true;
+    }
+
+    void clear_bhahaha_param_structs() {
+        // this fully clears and deletes everything in the bah_param_data_
+        // vector
+        bha_param_data_.clear();
+
+        // the main find_horizons loop deletes allocated memory, everything else
+        // is persistently stored
+    }
+
+    void create_bhahaha_param_structs() {
+        // this allocates our vector to store the data we're using
+        bha_param_data_ =
+            std::vector<bhahaha_params_and_data_struct>(num_horizons_);
+
         for (int which_horizon = 0; which_horizon < num_horizons_;
              which_horizon++) {
             auto* bah_params_and_data = &bha_param_data_[which_horizon];
 
-            // initialize each data structure
-            bah_poisoning_set_inputs(bah_params_and_data);
-            // input metric data needs to be null!
-            bah_params_and_data->input_metric_data        = NULL;
+            // call the setting of parameters, which takes the data we're
+            // storing here
+            set_bhahaha_parameters(bah_params_and_data, which_horizon);
+        }
+    }
 
-            // basic horizon metadata
-            bah_params_and_data->which_horizon            = which_horizon + 1;
-            bah_params_and_data->num_horizons             = num_horizons_;
-            // this is the iteration number!
-            bah_params_and_data->iteration_external_input = 0;
-            bah_params_and_data->num_resolutions_multigrid =
-                num_resolutions_multigrid_;
+    void set_bhahaha_parameters(
+        bhahaha_params_and_data_struct* bah_params_and_data,
+        int which_horizon) {
+        // initialize each data structure
+        bah_poisoning_set_inputs(bah_params_and_data);
+        // input metric data needs to be null!
+        bah_params_and_data->input_metric_data        = NULL;
 
-            for (int res = 0; res < num_resolutions_multigrid_; res++) {
-                bah_params_and_data->Ntheta_array_multigrid[res] =
-                    ntheta_array_multigrid_[res];
-                bah_params_and_data->Nphi_array_multigrid[res] =
-                    nphi_array_multigrid_[res];
-            }
+        // basic horizon metadata
+        bah_params_and_data->which_horizon            = which_horizon + 1;
+        bah_params_and_data->num_horizons             = num_horizons_;
+        // this is the iteration number!
+        bah_params_and_data->iteration_external_input = 0;
+        bah_params_and_data->num_resolutions_multigrid =
+            num_resolutions_multigrid_;
 
-            bah_params_and_data->verbosity_level = bah_verbosity_level_;
-            bah_params_and_data
-                ->enable_eta_varying_alg_for_precision_common_horizon =
-                bah_enable_eta_varying_alg_for_precision_common_horizon_;
-
-            // per-horizon parameters
-            bah_params_and_data->M_scale    = bah_m_scale_[which_horizon];
-            bah_params_and_data->cfl_factor = bah_cfl_factor_[which_horizon];
-            bah_params_and_data->use_fixed_radius_guess_on_full_sphere =
-                bah_use_fixed_radius_guess_on_full_sphere_[which_horizon];
-            bah_params_and_data->max_iterations =
-                bah_max_iterations_[which_horizon];
-            bah_params_and_data->Theta_L2_times_M_tolerance =
-                bah_theta_l2_times_m_tolerance_[which_horizon];
-            bah_params_and_data->Theta_Linf_times_M_tolerance =
-                bah_theta_linf_times_m_tolerance_[which_horizon];
-            bah_params_and_data->eta_damping_times_M =
-                bah_eta_damping_times_m_[which_horizon];
-            bah_params_and_data->KO_strength = bah_ko_strength_[which_horizon];
-
-            // TODO: read persistent data store, though with our control i don't
-            // think this is really necessary!
-            transfer_to_bhahaha_from_persistent(bah_params_and_data);
+        for (int res = 0; res < num_resolutions_multigrid_; res++) {
+            bah_params_and_data->Ntheta_array_multigrid[res] =
+                ntheta_array_multigrid_[res];
+            bah_params_and_data->Nphi_array_multigrid[res] =
+                nphi_array_multigrid_[res];
         }
 
-        initialized_ = true;
+        bah_params_and_data->verbosity_level = bah_verbosity_level_;
+        bah_params_and_data
+            ->enable_eta_varying_alg_for_precision_common_horizon =
+            bah_enable_eta_varying_alg_for_precision_common_horizon_;
+
+        // per-horizon parameters
+        bah_params_and_data->M_scale    = bah_m_scale_[which_horizon];
+        bah_params_and_data->cfl_factor = bah_cfl_factor_[which_horizon];
+        bah_params_and_data->use_fixed_radius_guess_on_full_sphere =
+            bah_use_fixed_radius_guess_on_full_sphere_[which_horizon];
+        bah_params_and_data->max_iterations =
+            bah_max_iterations_[which_horizon];
+        bah_params_and_data->Theta_L2_times_M_tolerance =
+            bah_theta_l2_times_m_tolerance_[which_horizon];
+        bah_params_and_data->Theta_Linf_times_M_tolerance =
+            bah_theta_linf_times_m_tolerance_[which_horizon];
+        bah_params_and_data->eta_damping_times_M =
+            bah_eta_damping_times_m_[which_horizon];
+        bah_params_and_data->KO_strength = bah_ko_strength_[which_horizon];
+
+        // then make sure we get the data from persistent
+        transfer_to_bhahaha_from_persistent(bah_params_and_data);
     }
 
     void transfer_to_bhahaha_from_persistent(

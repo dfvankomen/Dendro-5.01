@@ -19,13 +19,6 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
     if (!globalRank)
         std::cout << "Now beginning BHaHAHA_find_horizons..." << std::endl;
 
-    // need to update the data structures with the current step and time
-    for (unsigned int which_horizon = 0; which_horizon < num_horizons_;
-         which_horizon++) {
-        bha_param_data_[which_horizon].time_external_input      = current_time;
-        bha_param_data_[which_horizon].iteration_external_input = current_step;
-    }
-
     // Function flow is:
     // -------------------------
     // 1: Initialization and Parameter Setup
@@ -38,6 +31,19 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
 
     if (!initialized_) {
         throw std::runtime_error("BHaHAHA Was not initialized correctly!");
+    }
+
+    // start by reconstructing the bha_param_data_ vector and populate with
+    // input parameters
+    create_bhahaha_param_structs();
+
+    // then update with the current times and steps
+
+    // need to update the data structures with the current step and time
+    for (unsigned int which_horizon = 0; which_horizon < num_horizons_;
+         which_horizon++) {
+        bha_param_data_[which_horizon].time_external_input      = current_time;
+        bha_param_data_[which_horizon].iteration_external_input = current_step;
     }
     // ------- END STEP 1 --------
 
@@ -118,19 +124,22 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
             if (rankActive != which_MPI_rank) {
                 bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 0;
                 bah_horizon_active_[which_horizon]                        = 0;
+
+                x_center_m1_[which_horizon]                               = 0.0;
+                y_center_m1_[which_horizon]                               = 0.0;
+                z_center_m1_[which_horizon]                               = 0.0;
+
                 x_guess_[which_horizon]                                   = 0.0;
                 y_guess_[which_horizon]                                   = 0.0;
                 z_guess_[which_horizon]                                   = 0.0;
 
                 // NOTE: r_min_guess doesn't need to be set to zero to trigger
                 // common horizon search
-                r_max_guess_[which_horizon]                               = 0.0;
 
-                x_center_m1_[which_horizon]                               = 0.0;
-                y_center_m1_[which_horizon]                               = 0.0;
-                z_center_m1_[which_horizon]                               = 0.0;
                 r_max_m1_[which_horizon]                                  = 0.0;
                 t_m1_[which_horizon]                                      = 0.0;
+                r_max_guess_[which_horizon]                               = 0.0;
+                r_min_guess_[which_horizon]                               = 0.0;
             } else {
 #if 0
                 std::cout
@@ -367,6 +376,9 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
         // round-robin assign ranks for horizon finding
         const int which_rank = which_horizon % npesActive;
         if (rankActive == which_rank) {
+            // check for poisoning before solving
+            bah_poisoning_check_inputs(&bha_param_data_[which_horizon]);
+
             bhahaha_diagnostics_struct bhahaha_diags;
 
 #if 0
@@ -413,6 +425,9 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
         // free metric data
         free(bha_param_data_[which_horizon].input_metric_data);
     }
+
+    // now that we're done we can delete the whole param_data
+    bha_param_data_.clear();
 
     bhahaha_profiler_.stop();
     // TODO: print info
@@ -512,6 +527,8 @@ void AEH_BHaHAHA::bah_sum_shared_arrays(const ot::Mesh* mesh) {
     MPI_Allreduce(MPI_IN_PLACE, t_m1_.data(), t_m1_.size(), MPI_DOUBLE, MPI_SUM,
                   commActive);
     MPI_Allreduce(MPI_IN_PLACE, r_max_guess_.data(), r_max_guess_.size(),
+                  MPI_DOUBLE, MPI_SUM, commActive);
+    MPI_Allreduce(MPI_IN_PLACE, r_min_guess_.data(), r_min_guess_.size(),
                   MPI_DOUBLE, MPI_SUM, commActive);
 #endif
 }
@@ -893,9 +910,9 @@ void AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
     // use rank 3 to try and free up other procs?
     const unsigned int procUse = npesActive < 3 ? 0 : 3;
 
-    for (unsigned int i = 0; i < num_horizons_; ++i) {
-        transfer_to_persistent_from_bhahaha(&bha_param_data_[i]);
-    }
+    // for (unsigned int i = 0; i < num_horizons_; ++i) {
+    //     transfer_to_persistent_from_bhahaha(&bha_param_data_[i]);
+    // }
 
     // make sure we synchronize to root
     this->synchronize_to_root(mesh, procUse);
@@ -1048,10 +1065,10 @@ void AEH_BHaHAHA::restore_checkpoint(const ot::Mesh* mesh,
 
     // unpack back into the bah struct to ensure we're all on the same page
     // here
-    for (unsigned int which_horizon = 0; which_horizon < num_horizons_;
-         ++which_horizon) {
-        transfer_to_bhahaha_from_persistent(&bha_param_data_[which_horizon]);
-    }
+    // for (unsigned int which_horizon = 0; which_horizon < num_horizons_;
+    //      ++which_horizon) {
+    //     transfer_to_bhahaha_from_persistent(&bha_param_data_[which_horizon]);
+    // }
 }
 
 }  // namespace dendro_aeh
