@@ -88,6 +88,11 @@ class Block {
     /** block type*/
     BlockType m_uiBlkType;
 
+    /** the non-contiguous node indices */
+    std::vector<DendroIntL> m_elementIndices;
+
+    bool m_isNonSFC = false;
+
    public:
     /**@brief Default constructor*/
     Block();
@@ -106,6 +111,9 @@ class Block {
     Block(ot::TreeNode pNode, unsigned int rotID, unsigned int regLev,
           unsigned int regEleBegin, unsigned int regEleEnd,
           unsigned int eleOrder);
+
+    Block(ot::TreeNode pNode, unsigned int rotID, unsigned int regLev,
+          const std::vector<DendroIntL>& regEleIndices, unsigned int eleOrder);
 
     ~Block();
 
@@ -222,6 +230,11 @@ class Block {
     inline const std::vector<unsigned int>& getBlk2VertexMap_vec() const {
         return m_uiBLKVERTX;
     }
+
+    inline const std::vector<DendroIntL>& getLocalElementIndices() const {
+        return m_elementIndices;
+    }
+    DendroIntL getNumLocalElements() const { return m_elementIndices.size(); }
 
     /**@brief computes and returns the space discretization (grid domain) */
     double computeGridDx() const;

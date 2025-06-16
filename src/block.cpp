@@ -59,6 +59,35 @@ ot::Block::Block(ot::TreeNode pNode, unsigned int rotID, unsigned int regLev,
     m_uiBlkType    = BlockType::UNSPECIFIED;
 }
 
+ot::Block::Block(ot::TreeNode pNode, unsigned int rotID, unsigned int regLev,
+                 const std::vector<DendroIntL>& regEleIndices,
+                 unsigned int eleOrder) {
+    m_uiBlockNode         = pNode;
+    m_uiRotID             = rotID;
+    m_uiRegGridLev        = regLev;
+    m_uiLocalElementBegin = 0;
+    m_uiLocalElementEnd   = 0;
+
+    m_uiPaddingWidth      = (eleOrder >> 1u);
+
+    m_uiEleOrder          = eleOrder;
+    m_uiSize1D =
+        m_uiEleOrder * (1u << (m_uiRegGridLev - m_uiBlockNode.getLevel())) + 1 +
+        2 * m_uiPaddingWidth;
+
+    m_uiSzX          = m_uiSize1D;
+    m_uiSzY          = m_uiSize1D;
+    m_uiSzZ          = m_uiSize1D;
+
+    m_uiBlkElem_1D   = 1u << (m_uiRegGridLev - m_uiBlockNode.getLevel());
+
+    m_uiIsInternal   = false;
+    m_uiBlkType      = BlockType::UNSPECIFIED;
+
+    m_elementIndices = regEleIndices;
+    m_isNonSFC       = true;
+}
+
 ot::Block::~Block() { m_uiBLK2DIAG.clear(); }
 
 double ot::Block::computeGridDx() const {

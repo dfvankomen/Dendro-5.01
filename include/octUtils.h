@@ -155,9 +155,10 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
 void octree2BlockDecompositionRepartitioned(
     std::vector<ot::TreeNode>& pNodes, std::vector<ot::Block>& blockList,
     unsigned int maxDepth, unsigned int& d_min, unsigned int& d_max,
-    DendroIntL localBegin, DendroIntL localEnd, unsigned int eleOrder,
-    std::vector<unsigned int>& e2e_map, unsigned int coarsetLev = 0,
-    unsigned int* tag = NULL, unsigned int tsz = 0);
+    const DendroIntL localBegin, const DendroIntL localEnd,
+    const unsigned int eleOrder, std::vector<unsigned int>& e2e_map,
+    const unsigned int coarsetLev = 0, unsigned int* tag = NULL,
+    unsigned int tsz = 0);
 
 /**
  * @author Milinda Fernando

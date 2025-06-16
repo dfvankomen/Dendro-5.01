@@ -16,9 +16,11 @@ implementations are based on the previous implementation of dendro version 4.0
 
 #include "octUtils.h"
 
+#include <numeric>
 #include <queue>
 #include <unordered_set>
 
+#include "TreeNode.h"
 #include "dendro.h"
 #include "hcurvedata.h"
 
@@ -978,9 +980,9 @@ std::string toHexString(DendroUInt_128 value) {
 void octree2BlockDecompositionRepartitioned(
     std::vector<ot::TreeNode>& pNodes, std::vector<ot::Block>& blockList,
     unsigned int maxDepth, unsigned int& d_min, unsigned int& d_max,
-    DendroIntL localBegin, DendroIntL localEnd, unsigned int eleOrder,
-    std::vector<unsigned int>& e2e_map, unsigned int coarsetLev,
-    unsigned int* tag, unsigned int tsz) {
+    const DendroIntL localBegin, const DendroIntL localEnd,
+    const unsigned int eleOrder, std::vector<unsigned int>& e2e_map,
+    const unsigned int coarsetLev, unsigned int* tag, unsigned int tsz) {
     // Note that we assume that they're sorted, since they're sorted by global
     // ID
 
@@ -999,88 +1001,81 @@ void octree2BlockDecompositionRepartitioned(
     std::vector<ot::Block> initialBlocks;
     ot::TreeNode rootNode(0, 0, 0, 0, m_uiDim, maxDepth);
 
+    // Step 1: compute minimum and maximum depths across all levels for this
+    // partition
     d_min = maxDepth;
     d_max = 0;
-    // Computes the dmin and dmax of the tree.
     for (unsigned int k = 0; k < pNodes.size(); k++) {
         if (d_min > pNodes[k].getLevel()) d_min = pNodes[k].getLevel();
         if (d_max < pNodes[k].getLevel()) d_max = pNodes[k].getLevel();
     }
 
-    DendroIntL nBegin, nEnd;
-    // set up our initial block
-    initialBlocks.push_back(ot::Block(rootNode, ROOT_ROTATION, d_min,
-                                      localBegin, localEnd, eleOrder));
+    std::vector<DendroIntL> initialBlockIndices(localEnd - localBegin);
+    // fill beginning at localBegin, end at localEnd - 1
+    std::iota(initialBlockIndices.begin(), initialBlockIndices.end(),
+              localBegin);
 
-    DendroIntL splitters[NUM_CHILDREN + 1];
-    unsigned int
-        childHasRegLev[NUM_CHILDREN];  // 0 if child i does not have any octants
-                                       // at the reg grid lev , and 1 otherwise.
-    // unsigned int numChildHasRegLev=0;
-    unsigned int numRegGridOcts =
-        0;  // total number of children that has given reg grid levels.
-    unsigned int pMaxDepthBit     = 0;
+    // Step 2: Initialize the blocks with the "root" block at 0,0,0
+    initialBlocks.emplace_back(rootNode, ROOT_ROTATION, d_min,
+                               initialBlockIndices, eleOrder);
 
-    // unsigned  int debug_rank=1;
+    unsigned int numIterations = 0;
 
-    DendroIntL numIdealRegGridOct = 0;
-    double blockFillRatio = 0.0;  // ratio between number of octants in ideal
-                                  // regular grid and actually available.
-
-    DendroUInt_128 blockVolume =
-        0;  // 128-bit integer to store the volume of the block. .
-    DendroUInt_128 octVolume =
-        0;  // 128-bit integer to store oct volume inside a block.
-
+    // Step 3: Parse through all of the blocks (while the initialBlocks is
+    // empty)
     while (!initialBlocks.empty()) {
+        numIterations++;
         // get the information from the original blocks
         ot::Block tmpBlock = initialBlocks.back();
         initialBlocks.pop_back();
 
-        ot::TreeNode parent         = tmpBlock.getBlockNode();
+        ot::TreeNode parent             = tmpBlock.getBlockNode();
+        unsigned int currRegGridLev     = tmpBlock.getRegularGridLev();
+        const auto& blockElementIndices = tmpBlock.getLocalElementIndices();
 
-        unsigned int currRegGridLev = tmpBlock.getRegularGridLev();
-        unsigned int rot_id         = tmpBlock.getRotationID();
-        nBegin                      = tmpBlock.getLocalElementBegin();
-        nEnd                        = tmpBlock.getLocalElementEnd();
         assert(parent.getLevel() <= currRegGridLev);
 
-        // collect the nodes inside this block, note it's NOT contiguous
-        std::vector<DendroIntL> blockNodeIndices;
-        // i have an alternate here, where we go from i to pNodes size
-        // for (DendroIntL i = 0; i < pNodes.size(); i++) {
-        // for (DendroIntL i = localBegin; i < localEnd; i++) {
-        for (DendroIntL i = tmpBlock.getLocalElementBegin();
-             i < tmpBlock.getLocalElementEnd(); i++) {
-            if (parent.isAncestor(pNodes[i])) {
-                blockNodeIndices.push_back(i);
-            }
-        }
-        assert(blockNodeIndices.size() <= (localEnd - localBegin));
-
-        // case 1, the block is a leaf, single node
-        if (parent.getLevel() == currRegGridLev) {
-            if (!blockNodeIndices.empty()) {
-                blockList.push_back(tmpBlock);
-            }
+        // Step 3a: Collect the local nodes inside the block we're looking at
+        if (blockElementIndices.empty()) {
+            // std::cout << rank << ": Found no block node indices for parent "
+            //           << parent << std::endl;
             continue;
         }
+#if 0
+        std::cout << rank << ": iter " << numIterations << " COLLECTED "
+                  << blockNodeIndices.size() << " for parent " << parent
+                  << std::endl;
+#endif
 
-        // case 2, we need to evalulate the block validity, this is a code
-        // improvement over the old way
-        bool isTagValid = (tag == nullptr) || [&]() {
-            unsigned int refTag = tag[blockNodeIndices[0] - localBegin];
-            for (auto idx : blockNodeIndices) {
+        // Step 3b: Handle single-node blocks explicitly
+        if (parent.getLevel() == currRegGridLev) {
+            if (blockElementIndices.size() == 1) {
+                // single node at target level means we accept it immediately
+                blockList.push_back(tmpBlock);
+                continue;
+            } else {
+                // multiple nodes at the target level means we split further
+            }
+        }
+
+        // Step 3c: Calculate the block validity
+        //
+        // first step is checking if we've got a single node
+        bool isSingleNode = (blockElementIndices.size() == 1);
+        // then we check for a valid tag
+        bool isTagValid   = (tag == nullptr) || [&]() {
+            unsigned int refTag = tag[blockElementIndices[0] - localBegin];
+            for (auto idx : blockElementIndices) {
                 if (tag[idx - localBegin] != refTag) return false;
             }
             return true;
         }();
 
-        // calculate the volume of the oct
         bool octLevelGap            = true;
         DendroUInt_128 octVolume    = 0;
         unsigned int numRegGridOcts = 0;
-        for (auto idx : blockNodeIndices) {
+
+        for (auto idx : blockElementIndices) {
             unsigned int nodeLevel = pNodes[idx].getLevel();
             if (nodeLevel == currRegGridLev)
                 numRegGridOcts++;
@@ -1088,30 +1083,22 @@ void octree2BlockDecompositionRepartitioned(
                      OCT2BLK_DECOMP_LEV_GAP) {
                 octLevelGap = false;
             }
-            octVolume += 1u << (3 * (maxDepth - nodeLevel));
+            octVolume += 1u << (maxDepth - nodeLevel);
         }
 
-        // finally block volume
-        // DendroUInt_128 blockVolume = 1u << (3 * (maxDepth -
-        // parent.getLevel()));
-        //  double fillRatio =
-        //     (double)numRegGridOcts /
-        //     (1u << (3 * currRegGridLev - parent.getLevel()));
-
-        DendroIntL numIdealRegGridOct =
-            (1u << (currRegGridLev - parent.getLevel()));
-        DendroUInt_128 blockVolume = 1u << ((maxDepth - parent.getLevel()) * 3);
-
-        if (m_uiDim == 3) {
-            numIdealRegGridOct =
-                numIdealRegGridOct * numIdealRegGridOct * numIdealRegGridOct;
-        } else {
-            numIdealRegGridOct = numIdealRegGridOct * numIdealRegGridOct;
-        }
+        // ACCEPTANCE CRITERIA
+        DendroIntL numIdealRegGridOct = 1u
+                                        << (currRegGridLev - parent.getLevel());
+        numIdealRegGridOct =
+            (m_uiDim == 3)
+                ? numIdealRegGridOct * numIdealRegGridOct * numIdealRegGridOct
+                : numIdealRegGridOct * numIdealRegGridOct;
 
         double blockFillRatio = (double)numRegGridOcts / numIdealRegGridOct;
+        DendroUInt_128 blockVolume = 1u << ((maxDepth - parent.getLevel()) * 3);
 
-#ifdef OCT2BLK_DEBUG_NEW
+        // #ifdef OCT2BLK_DEBUG_NEW
+#if 0
         std::cout << rank << ": on block: " << parent.getX() << " "
                   << parent.getY() << " " << parent.getZ() << std::endl;
         if (parent.getLevel() < coarsetLev)
@@ -1136,27 +1123,27 @@ void octree2BlockDecompositionRepartitioned(
                       << std::endl;
 #endif
 
-        bool isCoarseLevelForced = (currRegGridLev == d_min);
         bool isBlockValid =
-            ((parent.getLevel() >= coarsetLev) && (isTagValid) &&
-             (octLevelGap) &&
-             isBlockConnected(pNodes, blockNodeIndices, e2e_map) &&
-             octVolume == blockVolume &&
-             (blockFillRatio >= OCT2BLK_DECOMP_BLK_FILL_RATIO ||
-              isCoarseLevelForced));
+            isSingleNode ||
+            ((parent.getLevel() >= coarsetLev) && isTagValid && octLevelGap &&
+             (blockFillRatio >= OCT2BLK_DECOMP_BLK_FILL_RATIO) &&
+             (octVolume == blockVolume) &&
+             isBlockConnected(pNodes, blockElementIndices, e2e_map));
 
-        // accept or split the block now!
         if (isBlockValid) {
+            // Step 3d: Block is accepted, handle next piece
             blockList.push_back(tmpBlock);
             if (currRegGridLev + 1 <= d_max) {
-                initialBlocks.push_back(ot::Block(parent, rot_id,
-                                                  currRegGridLev + 1, nBegin,
-                                                  nEnd, eleOrder));
+                // create the next level block
+                initialBlocks.emplace_back(
+                    parent, tmpBlock.getRotationID(), currRegGridLev + 1,
+                    tmpBlock.getLocalElementBegin(),
+                    tmpBlock.getLocalElementEnd(), eleOrder);
             }
         } else {
-            // otherwise we need to split into child blocks!
-            std::vector<std::vector<DendroIntL>> childNodeIndices;
-            assignNodesToChildren(parent, pNodes, blockNodeIndices,
+            // Step 3e: Block is rejected, time to split
+            std::vector<std::vector<DendroIntL>> childNodeIndices(NUM_CHILDREN);
+            assignNodesToChildren(parent, pNodes, blockElementIndices,
                                   childNodeIndices, currRegGridLev);
 
 #ifdef OCT2BLK_DEBUG_NEW
@@ -1164,49 +1151,38 @@ void octree2BlockDecompositionRepartitioned(
             size_t total_assigned = 0;
             for (const auto& vec : childNodeIndices)
                 total_assigned += vec.size();
-            assert(total_assigned == blockNodeIndices.size() &&
+            assert(total_assigned == blockElementIndices.size() &&
                    "Nodes lost during assignment!");
 #endif
 
-            // now we need to add in each block
+            // parse through all children
             for (int i = 0; i < NUM_CHILDREN; i++) {
-                if (childNodeIndices[i].empty()) {
-                    continue;
-                }
+                if (childNodeIndices[i].empty()) continue;
 
-                // the if statement will take care of this assertion, but it's
-                // here for convenience
-                assert(!childNodeIndices[i].empty());
+                // Key changes here, target current reg grid level first
+                unsigned int childRegLevel = currRegGridLev;
 
-                // grab the begin and end indices, note that childEnd is
-                // exclusive
-                DendroIntL childBegin    = childNodeIndices[i].front();
-                DendroIntL childEnd      = childNodeIndices[i].back() + 1;
-
-                unsigned int childRotID  = computeChildRotationID(rot_id, i);
-                ot::TreeNode childNode   = parent.createChildNode(i);
-
-                // determine child's reg grid level, this is a modification of
-                // the other code as well, this simplifies the logic to use std
-                // any of, rather than having to write out the loop earlier
-                bool hasNodesAtCurrLevel = std::any_of(
+                bool hasNodesAtCurrLevel   = std::any_of(
                     childNodeIndices[i].begin(), childNodeIndices[i].end(),
                     [&](DendroIntL idx) {
                         return pNodes[idx].getLevel() == currRegGridLev;
-                    }
+                    });
 
-                );
+                if (!hasNodesAtCurrLevel && (currRegGridLev + 1 <= d_max)) {
+                    childRegLevel = currRegGridLev + 1;
+                }
 
-                unsigned int childRegLevel =
-                    hasNodesAtCurrLevel ? currRegGridLev : currRegGridLev + 1;
-
-                initialBlocks.push_back(ot::Block(childNode, childRotID,
-                                                  childRegLevel, childBegin,
-                                                  childEnd, eleOrder));
+                ot::TreeNode childNode = parent.createChildNode(i);
+                initialBlocks.emplace_back(
+                    childNode,
+                    computeChildRotationID(tmpBlock.getRotationID(), i),
+                    childRegLevel, childNodeIndices[i].front(),
+                    childNodeIndices[i].back() + 1, eleOrder);
             }
         }
     }
 
+    // Reverse here to match convention from original code
     std::reverse(blockList.begin(), blockList.end());
 
 #ifdef OCT2BLK_DEBUG_NEW
@@ -1219,7 +1195,7 @@ void octree2BlockDecompositionRepartitioned(
 
     // std::cout << "Now writing the block nodes..." << std::endl;
     treeNodesTovtk(blockNodes, rank, "blockNodes_repartitioned");
-    // std::cout << "FINISHED WRITING TREE NODES TO VTK" << std::endl;
+// std::cout << "FINISHED WRITING TREE NODES TO VTK" << std::endl;
 #endif
 
 #ifdef OCT2BLK_DEBUG_NEW
@@ -1244,13 +1220,21 @@ void octree2BlockDecompositionRepartitioned(
         // std::cout<<"rank: "<<rank<<" block ID: "<<i<<" :
         // "<<blockList[i].getBlockNode()<<" reg lev:
         // "<<blockList[i].getRegularGridLev()<<" ideal reg:
-        // "<<numIdealRegOcts<<" actual reg oct: "<<numActualRegOcts<<" ratio:
+        // "<<numIdealRegOcts<<" actual reg oct: "<<numActualRegOcts<<"
+        // ratio:
         // "<<((double)numActualRegOcts/numIdealRegOcts)<<std::endl;
     }
     std::cout << "rank: " << rank << " singleOctBlocks: " << singleOctBlockCount
               << " pNodes size: " << pNodes.size()
               << " ratio: " << (double(singleOctBlockCount) / pNodes.size())
               << " size blklist: " << blockList.size() << std::endl;
+
+    DendroIntL totalNodes = 0;
+    for (const auto& block : blockList) {
+        totalNodes +=
+            (block.getLocalElementEnd() - block.getLocalElementBegin());
+    }
+    assert(totalNodes == pNodes.size() && "Nodes lost during decomposition!");
 #endif
 }
 
@@ -1350,7 +1334,8 @@ void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
         par::Mpi_Sendrecv(&(*(in.begin())), sendCount, prev, 2,
                           &(*(recvBuffer.begin())), recvCount, next, 2, comm,
                           &status);
-        // std::cout<<"rank: "<<m_uiActiveRank<<" send recv ended "<<std::endl;
+        // std::cout<<"rank: "<<m_uiActiveRank<<" send recv ended
+        // "<<std::endl;
 
         if (sendCount) {
             std::vector<ot::TreeNode> tmpElements;
@@ -1657,8 +1642,8 @@ unsigned int rankSelectRule(unsigned int size_global, unsigned int rank_global,
 #ifdef BSSN_CONSEC_COMM_SELECT
     return rank_i;
 #else
-    // Rule 2 [select ranks which is equivalent to complete binary tree fashion
-    // (size_global) & (rank_global) needs to be power of two.]
+    // Rule 2 [select ranks which is equivalent to complete binary tree
+    // fashion (size_global) & (rank_global) needs to be power of two.]
     if ((!binOp::isPowerOfTwo(size_global)) ||
         (!binOp::isPowerOfTwo(size_local)))
         return rank_i;
