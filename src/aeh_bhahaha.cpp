@@ -441,63 +441,6 @@ void AEH_BHaHAHA::bah_sum_shared_arrays(const ot::Mesh* mesh) {
     MPI_Comm commActive     = mesh->getMPICommunicator();
     unsigned int globalRank = mesh->getMPIRankGlobal();
 
-#if 0
-    // get the size here, generalized for multiple horizons and multiple black
-    // holes, possibly
-    int totalSize           = BAH_USE_FIXED_RADIUS_GUESS_ON_FULL_SPHERE.size() +
-                    bah_horizon_active.size() + x_center_m1.size() +
-                    y_center_m1.size() + z_center_m1.size() + r_max_m1.size() +
-                    t_m1.size() + r_max_guess.size();
-
-    // send/recv buffers of this size
-    std::vector<double> sendBuffer(totalSize);
-    std::vector<double> recvBuffer(totalSize);
-
-    // pack the data into the send buffer
-    int offset = 0;
-    for (int i = 0; i < BAH_USE_FIXED_RADIUS_GUESS_ON_FULL_SPHERE.size(); ++i) {
-        reinterpret_cast<int*>(sendBuffer.data())[offset + i] =
-            BAH_USE_FIXED_RADIUS_GUESS_ON_FULL_SPHERE[i];
-    }
-    offset += BAH_USE_FIXED_RADIUS_GUESS_ON_FULL_SPHERE.size();
-    for (int i = 0; i < bah_horizon_active.size(); ++i) {
-        reinterpret_cast<int*>(sendBuffer.data())[offset + i] =
-            bah_horizon_active[i];
-    }
-    offset += bah_horizon_active.size();
-
-    // then do the double arrays
-    for (const auto& arr :
-         {x_center_m1, y_center_m1, z_center_m1, r_max_m1, t_m1, r_max_guess}) {
-        std::copy(arr.begin(), arr.end(), sendBuffer.begin() + offset);
-        offset += arr.size();
-    }
-
-    // *full* reduce!
-    par::Mpi_Allreduce(sendBuffer.data(), recvBuffer.data(), totalSize, MPI_SUM,
-                       commActive);
-
-    // then unpack
-    offset = 0;
-    offset = 0;
-    for (int i = 0; i < BAH_USE_FIXED_RADIUS_GUESS_ON_FULL_SPHERE.size(); ++i) {
-        BAH_USE_FIXED_RADIUS_GUESS_ON_FULL_SPHERE[i] =
-            static_cast<int>(recvBuffer[offset + i]);
-    }
-    offset += BAH_USE_FIXED_RADIUS_GUESS_ON_FULL_SPHERE.size();
-    for (int i = 0; i < bah_horizon_active.size(); ++i) {
-        bah_horizon_active[i] = static_cast<int>(recvBuffer[offset + i]);
-    }
-    offset += bah_horizon_active.size();
-    std::vector<std::vector<double>*> doubleArrays = {
-        &x_center_m1, &y_center_m1, &z_center_m1,
-        &r_max_m1,    &t_m1,        &r_max_guess};
-    for (auto& arr : doubleArrays) {
-        std::memcpy(arr->data(), recvBuffer.data() + offset,
-                    arr->size() * sizeof(double));
-        offset += arr->size();
-    }
-#else
     // this is really only for the BBH case
     MPI_Allreduce(MPI_IN_PLACE,
                   bah_use_fixed_radius_guess_on_full_sphere_.data(),
@@ -507,30 +450,53 @@ void AEH_BHaHAHA::bah_sum_shared_arrays(const ot::Mesh* mesh) {
     MPI_Allreduce(MPI_IN_PLACE, bah_horizon_active_.data(),
                   bah_horizon_active_.size(), MPI_INT, MPI_SUM, commActive);
 
-    MPI_Allreduce(MPI_IN_PLACE, x_center_m1_.data(), x_center_m1_.size(),
-                  MPI_DOUBLE, MPI_SUM, commActive);
-    MPI_Allreduce(MPI_IN_PLACE, y_center_m1_.data(), y_center_m1_.size(),
-                  MPI_DOUBLE, MPI_SUM, commActive);
-    MPI_Allreduce(MPI_IN_PLACE, z_center_m1_.data(), z_center_m1_.size(),
-                  MPI_DOUBLE, MPI_SUM, commActive);
-    // NOTE: I'm not sure if x_guess, y_guess, and z_guess need to be
-    // synchronized directly... but i'm doing it anyway
-    MPI_Allreduce(MPI_IN_PLACE, x_guess_.data(), x_guess_.size(), MPI_DOUBLE,
-                  MPI_SUM, commActive);
-    MPI_Allreduce(MPI_IN_PLACE, y_guess_.data(), y_guess_.size(), MPI_DOUBLE,
-                  MPI_SUM, commActive);
-    MPI_Allreduce(MPI_IN_PLACE, z_guess_.data(), z_guess_.size(), MPI_DOUBLE,
-                  MPI_SUM, commActive);
-    // NOTE: these must be synced
-    MPI_Allreduce(MPI_IN_PLACE, r_max_m1_.data(), r_max_m1_.size(), MPI_DOUBLE,
-                  MPI_SUM, commActive);
-    MPI_Allreduce(MPI_IN_PLACE, t_m1_.data(), t_m1_.size(), MPI_DOUBLE, MPI_SUM,
+    std::vector<double> combined_double_buffer;
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  x_center_m1_.begin(), x_center_m1_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  y_center_m1_.begin(), y_center_m1_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  z_center_m1_.begin(), z_center_m1_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  x_guess_.begin(), x_guess_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  y_guess_.begin(), y_guess_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  z_guess_.begin(), z_guess_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  r_max_m1_.begin(), r_max_m1_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(), t_m1_.begin(),
+                                  t_m1_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  r_max_guess_.begin(), r_max_guess_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  r_min_guess_.begin(), r_min_guess_.end());
+
+    MPI_Allreduce(MPI_IN_PLACE, combined_double_buffer.data(),
+                  combined_double_buffer.size(), MPI_DOUBLE, MPI_SUM,
                   commActive);
-    MPI_Allreduce(MPI_IN_PLACE, r_max_guess_.data(), r_max_guess_.size(),
-                  MPI_DOUBLE, MPI_SUM, commActive);
-    MPI_Allreduce(MPI_IN_PLACE, r_min_guess_.data(), r_min_guess_.size(),
-                  MPI_DOUBLE, MPI_SUM, commActive);
-#endif
+
+    // then unpack
+    auto it = combined_double_buffer.begin();
+    std::copy(it, it + x_center_m1_.size(), x_center_m1_.begin());
+    it += x_center_m1_.size();
+    std::copy(it, it + y_center_m1_.size(), y_center_m1_.begin());
+    it += y_center_m1_.size();
+    std::copy(it, it + z_center_m1_.size(), z_center_m1_.begin());
+    it += z_center_m1_.size();
+    std::copy(it, it + x_guess_.size(), x_guess_.begin());
+    it += x_guess_.size();
+    std::copy(it, it + y_guess_.size(), y_guess_.begin());
+    it += y_guess_.size();
+    std::copy(it, it + z_guess_.size(), z_guess_.begin());
+    it += z_guess_.size();
+    std::copy(it, it + r_max_m1_.size(), r_max_m1_.begin());
+    it += r_max_m1_.size();
+    std::copy(it, it + t_m1_.size(), t_m1_.begin());
+    it += t_m1_.size();
+    std::copy(it, it + r_max_guess_.size(), r_max_guess_.begin());
+    it += r_max_guess_.size();
+    std::copy(it, it + r_min_guess_.size(), r_min_guess_.begin());
 }
 
 void AEH_BHaHAHA::fill_domain_coords(const int which_horizon, const int n_r,
