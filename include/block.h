@@ -19,8 +19,11 @@
 #include <assert.h>
 #include <treenode2vtk.h>
 
+#include <iterator>
+
 #include "TreeNode.h"
 #include "dendro.h"
+#include "point.h"
 
 namespace ot {
 /**
@@ -266,6 +269,164 @@ class Block {
 
     /**@brief: returns true if the pNode is inside the current block*/
     bool isBlockInternalEle(ot::TreeNode pNode) const;
+
+    // iterator to handle the scenarios
+    class iterator {
+       public:
+        using iterator_category = std::bidirectional_iterator_tag;
+        using value_type        = DendroIntL;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = DendroIntL*;
+        using reference         = DendroIntL&;
+
+       private:
+        Block* m_block;
+        DendroIntL m_current;
+        size_t m_elementIndicesIdx;
+
+       public:
+        iterator(Block* block, bool end = false)
+            : m_block(block), m_current(0), m_elementIndicesIdx(0) {
+            if (m_block->m_isNonSFC) {
+                if (end) {
+                    m_elementIndicesIdx = m_block->m_elementIndices.size();
+                } else {
+                    m_current = m_block->m_elementIndices.empty()
+                                    ? 0
+                                    : m_block->m_elementIndices[0];
+                }
+            } else {
+                if (end) {
+                    m_current = m_block->m_uiLocalElementEnd;
+                } else {
+                    m_current = m_block->m_uiLocalElementBegin;
+                }
+            }
+        }
+
+        DendroIntL operator*() const {
+            if (m_block->m_isNonSFC) {
+                return m_block->m_elementIndices[m_elementIndicesIdx];
+            }
+            return m_current;
+        }
+
+        iterator& operator++() {
+            if (m_block->m_isNonSFC) {
+                ++m_elementIndicesIdx;
+            } else {
+                ++m_current;
+            }
+            return *this;
+        }
+
+        iterator& operator--() {
+            if (m_block->m_isNonSFC) {
+                --m_elementIndicesIdx;
+            } else {
+                --m_current;
+            }
+            return *this;
+        }
+
+        bool operator!=(const iterator& other) const {
+            if (m_block->m_isNonSFC) {
+                return m_elementIndicesIdx != other.m_elementIndicesIdx;
+            }
+            return m_current != other.m_current;
+        }
+    };
+
+    class const_iterator {
+       public:
+        using iterator_category = std::bidirectional_iterator_tag;
+        using value_type        = DendroIntL;
+        using difference_type   = std::ptrdiff_t;
+        using pointer           = DendroIntL*;
+        using reference         = DendroIntL&;
+
+       private:
+        const Block* m_block;
+        DendroIntL m_current;
+        size_t m_elementIndicesIdx;
+
+       public:
+        const_iterator(const Block* block, bool end = false)
+            : m_block(block), m_current(0), m_elementIndicesIdx(0) {
+            if (m_block->m_isNonSFC) {
+                if (end) {
+                    m_elementIndicesIdx = m_block->m_elementIndices.size();
+                } else {
+                    m_current = m_block->m_elementIndices.empty()
+                                    ? 0
+                                    : m_block->m_elementIndices[0];
+                }
+            } else {
+                if (end) {
+                    m_current = m_block->m_uiLocalElementEnd;
+                } else {
+                    m_current = m_block->m_uiLocalElementBegin;
+                }
+            }
+        }
+
+        DendroIntL operator*() const {
+            if (m_block->m_isNonSFC) {
+                return m_block->m_elementIndices[m_elementIndicesIdx];
+            }
+            return m_current;
+        }
+
+        const_iterator& operator++() {
+            if (m_block->m_isNonSFC) {
+                ++m_elementIndicesIdx;
+            } else {
+                ++m_current;
+            }
+            return *this;
+        }
+
+        const_iterator& operator--() {
+            if (m_block->m_isNonSFC) {
+                --m_elementIndicesIdx;
+            } else {
+                --m_current;
+            }
+            return *this;
+        }
+
+        bool operator!=(const const_iterator& other) const {
+            if (m_block->m_isNonSFC) {
+                return m_elementIndicesIdx != other.m_elementIndicesIdx;
+            }
+            return m_current != other.m_current;
+        }
+    };
+
+    // non-const iterator
+    iterator begin() { return iterator(this); }
+    iterator end() { return iterator(this, true); }
+
+    // const iterator
+    const_iterator begin() const { return const_iterator(this); }
+    const_iterator end() const { return const_iterator(this, true); }
+
+    // NOTE: we can add more support for other iterator options and operations
+    // if we need to
+
+    // non-const reverse iterator
+    using reverse_iterator = std::reverse_iterator<iterator>;
+    reverse_iterator rbegin() { return reverse_iterator(end()); }
+    reverse_iterator rend() { return reverse_iterator(begin()); }
+
+    // const reverse iterator
+    using const_reverse_iterator = std::reverse_iterator<const_iterator>;
+    const_reverse_iterator rbegin() const {
+        return const_reverse_iterator(end());
+    }
+    const_reverse_iterator rend() const {
+        return const_reverse_iterator(begin());
+    }
 };
 
 }  // end of namespace ot

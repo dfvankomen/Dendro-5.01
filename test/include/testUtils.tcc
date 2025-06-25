@@ -1519,8 +1519,7 @@ bool isBlockListValid(const std::vector<T>& pNodes, std::vector<B>& blockList,
 
         for (unsigned int k = 0; k < blockList.size(); k++) {
             if (blockList[k].getRegularGridLev() == lev) {
-                for (unsigned int j = blockList[k].getLocalElementBegin();
-                     j < blockList[k].getLocalElementEnd(); j++) {
+                for (DendroIntL j : blockList[k]) {
                     if (pNodes[j].getLevel() == lev) {
                         numOctLevBlock++;
                         // blockLevOcts.push_back(pNodes[j]);

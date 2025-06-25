@@ -204,6 +204,27 @@ int main(int argc, char** argv) {
             return a * (pow(x0, 2) * x1 * pow(sin(f * sqrt(x0)), 2) + x0 * x1);
         };
 
+    std::function<double(double, double, double)> func_alt_dx =
+        [d_min, d_max](const double x, const double y, const double z) {
+            double xx = (x / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            double yy = (y / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            double zz = (z / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            // squared radial oscillation
+            const double f         = (1.6 / 2.0) * 3.1415926;
+            const double a         = 10.0;
+
+            const double x0        = xx * xx + yy * yy + zz * zz;
+            const double exp_x0    = exp(-x0);
+            const double sqrt_x0   = sqrt(x0);
+            const double sin_term  = sin(f * sqrt_x0);
+            const double sin2_term = sin(2.0 * f * sqrt_x0);
+
+            double derivative = (2.0 * x0 - x0 * x0) * sin_term * sin_term +
+                                x0 * sqrt_x0 * f * sin2_term + (1.0 - x0);
+
+            return 2.0 * a * xx * exp_x0 * derivative;
+        };
+
     // call function to octree
 
     // f2olmin is like the max depth we want to refine to.
@@ -212,8 +233,7 @@ int main(int argc, char** argv) {
     unsigned int maxDepthIn;
 
     std::vector<ot::TreeNode> tmpNodes;
-    function2Octree(func_alt, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder,
-                    comm);
+    function2Octree(func, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder, comm);
     // function2Octree(func_sine, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder,
     //                 comm);
 
@@ -277,6 +297,73 @@ int main(int argc, char** argv) {
      */
     // if the partitioning option is "NoPartition" or "OriginalPartition"
     // then every output should be the same!
+
+    // create a few vectors for quick tests
+    std::vector<double> funcVal;
+    std::vector<double> funcValUnZip;
+    std::vector<double> dx_funcVal;
+    std::vector<double> dx_funcVal1;
+
+    std::vector<double> funcVal_repartitioned;
+    std::vector<double> funcValUnZip_repartitioned;
+    std::vector<double> dx_funcVal_repartitoined;
+    std::vector<double> dx_funcVal1_repartitioned;
+
+    // mesh->createVector(funcVal, func_alt);
+    // mesh->createUnZippedVector(funcValUnZip);
+    // mesh->performGhostExchange(funcVal);
+    mesh_repartitioned->createVector(funcVal_repartitioned, func);
+    // mesh_repartitioned->createUnZippedVector(funcValUnZip_repartitioned);
+
+//  nodal value check!
+#if 0
+    ot::test::isElementalNodalValuesValid(mesh, &(*(funcVal.begin())), func_alt,
+                                          1e-3);
+#endif
+#if 0
+    ot::test::isElementalNodalValuesValid(mesh_repartitioned,
+                                          &(*(funcVal_repartitioned.begin())),
+                                          func_alt, 1e-3);
+#endif
+
+    // go through the blocks in the repartitioned mesh and make sure they're
+    // valid
+
+#if 0
+    for (int turn = 0; turn < npes; turn++) {
+        if (rank == turn) {
+            std::cout << "------- MPI PROC " << rank << " ------" << std::endl;
+            unsigned int ii = 0;
+            for (auto& blk : mesh->getLocalBlockList()) {
+                std::cout << "BLOCK ID: " << ii << " - ";
+                for (auto elemId : blk) {
+                    std::cout << elemId << " ";
+                }
+                std::cout << std::endl;
+                ii++;
+            }
+            std::cout << "-----------------------------------" << std::endl;
+        }
+        MPI_Barrier(comm);
+    }
+
+    for (int turn = 0; turn < npes; turn++) {
+        if (rank == turn) {
+            std::cout << "------- MPI PROC " << rank << " ------" << std::endl;
+            unsigned int ii = 0;
+            for (auto& blk : mesh_repartitioned->getLocalBlockList()) {
+                std::cout << "BLOCK ID: " << ii << " - ";
+                for (auto elemId : blk) {
+                    std::cout << elemId << " ";
+                }
+                std::cout << std::endl;
+                ii++;
+            }
+            std::cout << "-----------------------------------" << std::endl;
+        }
+        MPI_Barrier(comm);
+    }
+#endif
 
 #if 0
     if (partitionOption == PartitioningOptions::NoPartition ||
