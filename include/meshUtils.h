@@ -225,6 +225,24 @@ T integrateScalarFieldOnMesh(ot::Mesh* mesh, T* in) {
 }
 
 template <typename T>
+T calculateL2ErrorFullMeshIntegration(ot::Mesh* mesh, T* in, T* truth) {
+    if (!mesh->isActive()) return 0.0;
+
+    // create a new vector that's the same size as the in and truth, since we're
+    // using mesh we'll have the same size as a "zipped" vector
+    std::vector<T> squaredDiffVector;
+    mesh->createVector(squaredDiffVector);
+
+    // then iterate through the values
+    for (size_t i = 0; i < mesh->getDegOfFreedom(); i++) {
+        squaredDiffVector[i] = (in[i] - truth[i]) * (in[i] - truth[i]);
+    }
+
+    // NOTE: performGhostExchange happens inside this function
+    return integrateScalarFieldOnMesh(mesh, squaredDiffVector.data());
+}
+
+template <typename T>
 void alloc_mpi_ctx(const Mesh* pMesh,
                    std::vector<AsyncExchangeContex>& ctx_list, int dof,
                    int async_k) {
