@@ -178,10 +178,6 @@ double computeElementIntegral(T* elementalVec, const ot::TreeNode& node,
     return elementIntegral;
 }
 
-inline bool isclose(double a, double b, double tolerance = 1e-8) {
-    return std::abs(a - b) <= tolerance;
-}
-
 template <typename T>
 T integrateScalarFieldOnMesh(ot::Mesh* mesh, T* in) {
     // just return 0.0 if inactive mesh
@@ -218,8 +214,8 @@ T integrateScalarFieldOnMesh(ot::Mesh* mesh, T* in) {
 
     // then all reduce to root
     T globalIntegral = 0.0;
-    par::Mpi_Reduce(&localIntegral, &globalIntegral, 1, MPI_SUM, 0,
-                    mesh->getMPICommunicator());
+    par::Mpi_Allreduce(&localIntegral, &globalIntegral, 1, MPI_SUM,
+                       mesh->getMPICommunicator());
 
     return globalIntegral;
 }
@@ -240,6 +236,24 @@ T calculateL2ErrorFullMeshIntegration(ot::Mesh* mesh, T* in, T* truth) {
 
     // NOTE: performGhostExchange happens inside this function
     return integrateScalarFieldOnMesh(mesh, squaredDiffVector.data());
+}
+
+template <typename T>
+T calculateL2FullMeshIntegration(ot::Mesh* mesh, T* in) {
+    if (!mesh->isActive()) return 0.0;
+
+    // create a new vector that's the same size as the in, since we're
+    // using mesh we'll have the same size as a "zipped" vector
+    std::vector<T> squaredVector;
+    mesh->createVector(squaredVector);
+
+    // then iterate through the values
+    for (size_t i = 0; i < mesh->getDegOfFreedom(); i++) {
+        squaredVector[i] = (in[i]) * (in[i]);
+    }
+
+    // NOTE: performGhostExchange happens inside this function
+    return integrateScalarFieldOnMesh(mesh, squaredVector.data());
 }
 
 template <typename T>
