@@ -50,17 +50,23 @@ class DerivsFactory {
         }else if (name == "KIM407") {
             return std::unique_ptr<Derivs>(new Kim_07_BoundO4_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
-        } else if (name == "KIMBYU_162") {
-            return std::unique_ptr<Derivs>(new BYU_KIM_162_DiagonalsFirstOrder(
+        } else if (name == "KIMBYU_1") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_1_DiagonalsFirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
-        }else if (name == "KIMBYU_195") {
-            return std::unique_ptr<Derivs>(new BYU_KIM_195_DiagonalsFirstOrder(
+        }else if (name == "KIMBYU_3") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_3_DiagonalsFirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
-        }else if (name == "KIMBYU_99") {
-            return std::unique_ptr<Derivs>(new BYU_KIM_99_DiagonalsFirstOrder(
+        }else if (name == "KIMBYU_4") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_4_DiagonalsFirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
-        }else if (name == "KIMBYU_69") {
-            return std::unique_ptr<Derivs>(new BYU_KIM_69_DiagonalsFirstOrder(
+        }else if (name == "KIMBYU_8") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_8_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "KIMBYU_12") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_12_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "KIMBYU_17") {
+            return std::unique_ptr<Derivs>(new BYU_KIM_17_DiagonalsFirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
         }else if (name == "KIM416") {
             return std::unique_ptr<Derivs>(new Kim_16_BoundO4_FirstOrder(
@@ -239,7 +245,7 @@ class FilterFactory {
                 new ExplicitKODissO4(std::forward<Args>(args)...));
         } else if (name == "KO6") {
             return std::unique_ptr<Filters>(
-                new ExplicitKODissO4(std::forward<Args>(args)...));
+                new ExplicitKODissO6(std::forward<Args>(args)...));
         }
 
         return nullptr;
