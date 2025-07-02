@@ -4,15 +4,20 @@
 #include "daUtils.h"
 
 namespace dendro_aeh {
-void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
-                                const unsigned int current_step,
-                                const double current_time) {
+void AEH_BHaHAHA::find_horizons(
+    const ot::Mesh* mesh, const double** var, const unsigned int current_step,
+    const double current_time, const std::vector<Point> tracked_location_data) {
     // get the active comm and information about it
-    unsigned int rankActive = mesh->getMPIRank();
-    unsigned int npesActive = mesh->getMPICommSize();
-    MPI_Comm commActive     = mesh->getMPICommunicator();
-    unsigned int globalRank = mesh->getMPIRankGlobal();
+    unsigned int rankActive  = mesh->getMPIRank();
+    unsigned int npesActive  = mesh->getMPICommSize();
+    MPI_Comm commActive      = mesh->getMPICommunicator();
+    unsigned int globalRank  = mesh->getMPIRankGlobal();
     // this is the function where we're going to find everything
+
+    // then indices for BH1, BH2 (inspiral horizons) and common horizon
+    const int inspiral_bh1   = 0;
+    const int inspiral_bh2   = 1;
+    const int common_horizon = 2;
 
     if (!mesh->isActive()) return;
 
@@ -153,6 +158,29 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
                     << " " << z_guess[which_horizon] << " "
                     << r_max_guess[which_horizon] << std::endl;
 #endif
+
+                // if we failed last find, then we can just set the x_guess
+                // directly to our black holes, but don't override for common
+                // horizons
+                if (failed_last_find_[which_horizon] &&
+                    which_horizon != common_horizon) {
+                    if (!tracked_location_data.empty()) {
+                        std::cout
+                            << "\tAEH NOTICE rank " << std::setw(4)
+                            << rankActive << " horizon " << std::setw(4)
+                            << (which_horizon + 1)
+                            << ": Last find failed, overwriting guess points "
+                               "to tracked puncture location: "
+                            << tracked_location_data[which_horizon]
+                            << std::endl;
+                        x_guess_[which_horizon] =
+                            tracked_location_data[which_horizon].x();
+                        y_guess_[which_horizon] =
+                            tracked_location_data[which_horizon].y();
+                        z_guess_[which_horizon] =
+                            tracked_location_data[which_horizon].z();
+                    }
+                }
             }
         }
 
@@ -176,11 +204,6 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
             }
         }
 #endif
-
-        // then indices for BH1, BH2 (inspiral horizons) and common horizon
-        const int inspiral_bh1   = 0;
-        const int inspiral_bh2   = 1;
-        const int common_horizon = 2;
 
         // if use_fixed_radius_guess_on_full_sphere=0 then we've found a common
         // horizon
@@ -409,6 +432,7 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
 
                 // next time don't force full guess
                 bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 0;
+                failed_last_find_[which_horizon] = false;
             } else {
                 std::cerr << "ERROR[HORIZON]: Failure to find horizon "
                           << which_horizon << " with error code "
@@ -419,6 +443,9 @@ void AEH_BHaHAHA::find_horizons(const ot::Mesh* mesh, const double** var,
 
                 // make sure we revert to full-sphere guess
                 bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 1;
+
+                // update the guess with the BH data for this horizon
+                failed_last_find_[which_horizon] = true;
             }
         }
 

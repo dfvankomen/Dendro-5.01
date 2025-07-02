@@ -14,6 +14,7 @@
 #include "json.hpp"
 #include "mesh.h"
 #include "mpi.h"
+#include "point.h"
 #include "profiler.h"
 
 namespace dendro_aeh {
@@ -188,6 +189,8 @@ class AEH_BHaHAHA {
     // internal flag to let us know if the first step has passed
     bool have_done_initial_test_ = false;
 
+    std::vector<bool> failed_last_find_;
+
    public:
     // add more input types for data...
     AEH_BHaHAHA(const unsigned int n_horizons, const bool is_binary_black_hole,
@@ -289,31 +292,32 @@ class AEH_BHaHAHA {
     void allocate_data_structures() {
         // initialize all internal structures that will store the persistent
         // data
-        x_guess_     = std::vector<double>(num_horizons_, 0.0);
-        y_guess_     = std::vector<double>(num_horizons_, 0.0);
-        z_guess_     = std::vector<double>(num_horizons_, 0.0);
-        r_min_guess_ = std::vector<double>(num_horizons_, 0.0);
-        r_max_guess_ = std::vector<double>(num_horizons_, 0.0);
+        x_guess_          = std::vector<double>(num_horizons_, 0.0);
+        y_guess_          = std::vector<double>(num_horizons_, 0.0);
+        z_guess_          = std::vector<double>(num_horizons_, 0.0);
+        r_min_guess_      = std::vector<double>(num_horizons_, 0.0);
+        r_max_guess_      = std::vector<double>(num_horizons_, 0.0);
 
-        x_center_m1_ = std::vector<double>(num_horizons_, 0.0);
-        y_center_m1_ = std::vector<double>(num_horizons_, 0.0);
-        z_center_m1_ = std::vector<double>(num_horizons_, 0.0);
-        x_center_m2_ = std::vector<double>(num_horizons_, 0.0);
-        y_center_m2_ = std::vector<double>(num_horizons_, 0.0);
-        z_center_m2_ = std::vector<double>(num_horizons_, 0.0);
-        x_center_m3_ = std::vector<double>(num_horizons_, 0.0);
-        y_center_m3_ = std::vector<double>(num_horizons_, 0.0);
-        z_center_m3_ = std::vector<double>(num_horizons_, 0.0);
+        x_center_m1_      = std::vector<double>(num_horizons_, 0.0);
+        y_center_m1_      = std::vector<double>(num_horizons_, 0.0);
+        z_center_m1_      = std::vector<double>(num_horizons_, 0.0);
+        x_center_m2_      = std::vector<double>(num_horizons_, 0.0);
+        y_center_m2_      = std::vector<double>(num_horizons_, 0.0);
+        z_center_m2_      = std::vector<double>(num_horizons_, 0.0);
+        x_center_m3_      = std::vector<double>(num_horizons_, 0.0);
+        y_center_m3_      = std::vector<double>(num_horizons_, 0.0);
+        z_center_m3_      = std::vector<double>(num_horizons_, 0.0);
 
-        r_min_m1_    = std::vector<double>(num_horizons_, 0.0);
-        r_min_m2_    = std::vector<double>(num_horizons_, 0.0);
-        r_min_m3_    = std::vector<double>(num_horizons_, 0.0);
-        r_max_m1_    = std::vector<double>(num_horizons_, 0.0);
-        r_max_m2_    = std::vector<double>(num_horizons_, 0.0);
-        r_max_m3_    = std::vector<double>(num_horizons_, 0.0);
-        t_m1_        = std::vector<double>(num_horizons_, 0.0);
-        t_m2_        = std::vector<double>(num_horizons_, 0.0);
-        t_m3_        = std::vector<double>(num_horizons_, 0.0);
+        r_min_m1_         = std::vector<double>(num_horizons_, 0.0);
+        r_min_m2_         = std::vector<double>(num_horizons_, 0.0);
+        r_min_m3_         = std::vector<double>(num_horizons_, 0.0);
+        r_max_m1_         = std::vector<double>(num_horizons_, 0.0);
+        r_max_m2_         = std::vector<double>(num_horizons_, 0.0);
+        r_max_m3_         = std::vector<double>(num_horizons_, 0.0);
+        t_m1_             = std::vector<double>(num_horizons_, 0.0);
+        t_m2_             = std::vector<double>(num_horizons_, 0.0);
+        t_m3_             = std::vector<double>(num_horizons_, 0.0);
+        failed_last_find_ = std::vector<bool>(num_horizons_, false);
 
         prev_horizon_m1_ =
             std::vector<double>(num_horizons_ * max_ntheta_ * max_nphi_);
@@ -531,7 +535,8 @@ class AEH_BHaHAHA {
 
     void find_horizons(const ot::Mesh* mesh, const double** var,
                        const unsigned int current_step,
-                       const double current_time);
+                       const double current_time,
+                       const std::vector<Point> tracked_location_data = {});
 
     void synchronize_to_root(const ot::Mesh* mesh, const int targetProc = 0);
 
