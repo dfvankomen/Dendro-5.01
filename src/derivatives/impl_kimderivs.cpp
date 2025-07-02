@@ -487,7 +487,7 @@ MatrixDiagonalEntries* createBYU_KIM_3_Diagonals() {
 
 		// diagonal elements for Q matrix for 1st derivative
 		std::vector<double> Q1DiagInterior{
-			-a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
+			-a3, -a2, -a1, 0.0, a1, a2, a3
 		};
 
 		// store the entries for matrix creation
@@ -557,7 +557,7 @@ MatrixDiagonalEntries* createBYU_KIM_3_Diagonals() {
 
 		// diagonal elements for Q matrix for 1st derivative
 		std::vector<double> Q1DiagInterior{
-			-a3, -a2, -a1, 0.0, a1/2.0, a2, a3
+			-a3, -a2, -a1, 0.0, a1, a2, a3
 		};
 
 		// store the entries for matrix creation
@@ -628,7 +628,7 @@ MatrixDiagonalEntries* createBYU_KIM_4_Diagonals() {
 
 		// diagonal elements for Q matrix for 1st derivative
 		std::vector<double> Q1DiagInterior{
-			-a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
+			-a3, -a2, -a1, 0.0, a1, a2, a3
 		};
 
 		// store the entries for matrix creation
@@ -699,7 +699,7 @@ MatrixDiagonalEntries* createBYU_KIM_4_Diagonals() {
 
 		// diagonal elements for Q matrix for 1st derivative
 		std::vector<double> Q1DiagInterior{
-			-a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
+			-a3, -a2, -a1, 0.0, a1, a2/4.0, a3
 		};
 
 		// store the entries for matrix creation
