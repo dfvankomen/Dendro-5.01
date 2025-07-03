@@ -2152,7 +2152,7 @@ void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
                     idy_sqrd_by_180;
 
                 // This is a centered sixth order stencil.
-                DyDyu[IDX(i, ib + 3, k)] =
+                DyDyu[IDX(i, jb + 3, k)] =
                     (2.0 * u[IDX(i, jb, k)] - 27.0 * u[IDX(i, jb + 1, k)] +
                      270.0 * u[IDX(i, jb + 2, k)] -
                      490.0 * u[IDX(i, jb + 3, k)] +
@@ -2315,7 +2315,7 @@ void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
                     idz_sqrd_by_180;
 
                 // This is a centered sixth order stencil.
-                DzDzu[IDX(i, i, kb + 3)] =
+                DzDzu[IDX(i, j, kb + 3)] =
                     (2.0 * u[IDX(i, j, kb)] - 27.0 * u[IDX(i, j, kb + 1)] +
                      270.0 * u[IDX(i, j, kb + 2)] -
                      490.0 * u[IDX(i, j, kb + 3)] +
