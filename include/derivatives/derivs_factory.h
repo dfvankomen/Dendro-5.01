@@ -110,7 +110,79 @@ class DerivsFactory {
         } if (name == "KIM416") {
             return std::unique_ptr<Derivs>(new Kim_16_BoundO4_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
-        } else if (name == "JTT4") {
+        }else if (name == "C6_1") {
+            return std::unique_ptr<Derivs>(new C6_1_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_2") {
+            return std::unique_ptr<Derivs>(new C6_2_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_3") {
+            return std::unique_ptr<Derivs>(new C6_3_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_4") {
+            return std::unique_ptr<Derivs>(new C6_4_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_5") {
+            return std::unique_ptr<Derivs>(new C6_5_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_6") {
+            return std::unique_ptr<Derivs>(new C6_6_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_7") {
+            return std::unique_ptr<Derivs>(new C6_7_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_8") {
+            return std::unique_ptr<Derivs>(new C6_8_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_9") {
+            return std::unique_ptr<Derivs>(new C6_9_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_10") {
+            return std::unique_ptr<Derivs>(new C6_10_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_11") {
+            return std::unique_ptr<Derivs>(new C6_11_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_12") {
+            return std::unique_ptr<Derivs>(new C6_12_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_13") {
+            return std::unique_ptr<Derivs>(new C6_13_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_14") {
+            return std::unique_ptr<Derivs>(new C6_14_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_15") {
+            return std::unique_ptr<Derivs>(new C6_15_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_16") {
+            return std::unique_ptr<Derivs>(new C6_16_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "UC6_1") {
+            return std::unique_ptr<Derivs>(new UC6_1_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "UC6_2") {
+            return std::unique_ptr<Derivs>(new UC6_2_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "UC6_3") {
+            return std::unique_ptr<Derivs>(new UC6_3_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "UC6_4") {
+            return std::unique_ptr<Derivs>(new UC6_4_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "UA4_4") {
+            return std::unique_ptr<Derivs>(new UA4_4_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "UA4_5") {
+            return std::unique_ptr<Derivs>(new UA4_5_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "UA4_6") {
+            return std::unique_ptr<Derivs>(new UA4_6_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+
+
+ else if (name == "JTT4") {
             return std::unique_ptr<Derivs>(new JonathanTyler_JTT4_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
         } else if (name == "JTT6") {
