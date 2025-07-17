@@ -27,7 +27,17 @@ inline std::unique_ptr<InMatrixFilter> createInMatrixFilterByType(
         return std::make_unique<BYUT8Filter_InMatrix>(in_matrix_filter_coeffs);
     }else if (in_matrix_filter == "KIM") {
         return std::make_unique<KimFilter_InMatrix>(in_matrix_filter_coeffs);
-    } else {
+    }  else if (in_matrix_filter == "KIM_1_P6") {
+    return std::make_unique<Kim1P6Filter_InMatrix>(in_matrix_filter_coeffs);
+    } else if (in_matrix_filter == "KIM_2_P6") {
+        return std::make_unique<Kim2P6Filter_InMatrix>(in_matrix_filter_coeffs);
+    } else if (in_matrix_filter == "KIM_3_P6") {
+        return std::make_unique<Kim3P6Filter_InMatrix>(in_matrix_filter_coeffs);
+    } else if (in_matrix_filter == "KIM_4_P6") {
+        return std::make_unique<Kim4P6Filter_InMatrix>(in_matrix_filter_coeffs);
+    } else if (in_matrix_filter == "KIM_P6") {
+        return std::make_unique<KimP6Filter_InMatrix>(in_matrix_filter_coeffs);
+    }else {
         throw std::invalid_argument("Unsupported 'In-Matrix' Filter Type!");
     }
 }
