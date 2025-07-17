@@ -110,7 +110,12 @@ enum DerivType {
     D_BYUP6R3,
     D_BYUP6R2,
     D_BYUP8,
-    D_BYUP8B7
+    D_BYUP8B7,
+    // TwoA and TwoUA Second-Order Derivatives
+    D_2A_1,
+    D_2A_2,
+    D_2UA_1,
+    D_2UA_2
 };
 
 enum DerivOrder { D_FIRST_ORDER = 0, D_SECOND_ORDER };

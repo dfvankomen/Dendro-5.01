@@ -337,6 +337,18 @@ class DerivsFactory {
         } else if (name == "JTP6Banded") {
             return std::unique_ptr<Derivs>(
                 new JonathanTyler_JTP6_SecondOrder_Banded(ele_order));
+        }else if (name == "2A_1") {
+            return std::unique_ptr<Derivs>(new TwoADerivs2A_1_SecondOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        } else if (name == "2A_2") {
+            return std::unique_ptr<Derivs>(new TwoADerivs2A_2_SecondOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        } else if (name == "2UA_1") {
+            return std::unique_ptr<Derivs>(new TwoUADerivs2UA_1_SecondOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        } else if (name == "2UA_2") {
+            return std::unique_ptr<Derivs>(new TwoUADerivs2UA_2_SecondOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
         }
 
         return nullptr;
