@@ -208,13 +208,18 @@ createMatrixSystemForSingleSizeInMatrixFilter(
         lapack::square_matrix_multiplication(Rinv.data(), S_temp.data(),
                                              R1_S.data(), n);
 
-        // if this is a kim-type filter, then we need identity to be added to
-        // R1_S
-        if (filt_type == InMatFilterType::IMFT_KIM) {
+            if (filt_type == InMatFilterType::IMFT_KIM ||
+            filt_type == InMatFilterType::IMFT_KIM_1_P6 ||
+            filt_type == InMatFilterType::IMFT_KIM_2_P6 ||
+            filt_type == InMatFilterType::IMFT_KIM_3_P6 ||
+            filt_type == InMatFilterType::IMFT_KIM_4_P6 ||
+            filt_type == InMatFilterType::IMFT_KIM_P6) 
+            {
             for (size_t idx = 0; idx < n; ++idx) {
                 R1_S[n * idx + idx] += 1.0;
             }
-        }
+            }
+
         lapack::square_matrix_multiplication(Q_temp.data(), R1_S.data(),
                                              QRS.data(), n);
         lapack::iterative_inverse(P_temp.data(), Pinv.data(), n);

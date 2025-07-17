@@ -316,7 +316,225 @@ inline MatrixDiagonalEntries* create_Kim_filter_diagonals(
     return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary,
                                      SDiagInterior, SDiagBoundary};
 }
+inline MatrixDiagonalEntries* create_Kim_1_P6_filter_diagonals(
+    const std::vector<double>& F_coeffs) {
+    
+    double alpha = 0.65962395409;
+    double beta = 0.168075209182;
+    double a0    = -0.00528203443216;
+    double a1    = 0.00396152582412;
+    double a2    = -0.00158461032965;
+    double a3    = 0.000264101721608;
+    double gamma01 = 0.353429725931;
+    double gamma02 = 0.227880553472;
+    double gamma10 = 0.740973835194;
+    double gamma12 = 0.680002017967;
+    double gamma13 = 0.193246726905;
+    double gamma20 = 0.171027000915;
+    double gamma21 = 0.644864995425;
+    double gamma23 = 0.644864995425;
+    double gamma24 = 0.171027000915;
+    double a20   = -0.000817562671559;
+    double a21   = 0.0040878133578;
+    double a22   = -0.00817562671559;
+    double a23   = 0.00817562671559;
+    double a24   = -0.0040878133578;
+    double a25   = 0.000817562671559;
+    double a26   = 0.0;
 
+    // diagonal elements for R matrix for 1st derivative
+    std::vector<double> RDiagInterior{beta, alpha, 1.0, alpha, beta};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> RDiagBoundary{
+        {1, gamma01, gamma02, 0.0}, {gamma10, 1, gamma12, gamma13}, {gamma20, gamma21, 1, gamma23, gamma24}};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> SDiagBoundary{
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {a20, a21, a22, a23, a24, a25, a26}};
+
+    // diagonal elements for S matrix for 1st derivative
+    std::vector<double> SDiagInterior{a3 , a2 , a1 , a0,
+                                      a1, a2, a3};
+
+    return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary,
+                                     SDiagInterior, SDiagBoundary};
+}
+inline MatrixDiagonalEntries* create_2_KimP6_filter_diagonals(
+    const std::vector<double>& F_coeffs) {
+    
+    double alpha = 0.663414325008;
+    double beta = 0.167317134998;
+    double a0    = -0.0024392562443;
+    double a1    = 0.00182944218322;
+    double a2    = -0.000731776873289;
+    double a3    = 0.000121962812215;
+    double gamma01 = -0.195200942687;
+    double gamma02 = 0.527677738361;
+    double gamma10 = 0.490734436475;
+    double gamma12 = 0.390611716453;
+    double gamma13 = 0.266181061882;
+    double gamma20 = 0.178455630498;
+    double gamma21 = 0.607721847511;
+    double gamma23 = 0.607721847511;
+    double gamma24 = 0.178455630498;
+    double a20   = -0.00221043071836;
+    double a21   = 0.0110521535918;
+    double a22   = -0.0221043071836;
+    double a23   = 0.0221043071836;
+    double a24   = -0.0110521535918;
+    double a25   = 0.00221043071836;
+    double a26   = 0.0;
+
+    // diagonal elements for R matrix for 1st derivative
+    std::vector<double> RDiagInterior{beta, alpha, 1.0, alpha, beta};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> RDiagBoundary{
+        {1, gamma01, gamma02, 0.0}, {gamma10, 1, gamma12, gamma13}, {gamma20, gamma21, 1, gamma23, gamma24}};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> SDiagBoundary{
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {a20, a21, a22, a23, a24, a25, a26}};
+
+    // diagonal elements for S matrix for 1st derivative
+    std::vector<double> SDiagInterior{a3 , a2 , a1 , a0,
+                                      a1, a2, a3};
+
+    return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary,
+                                     SDiagInterior, SDiagBoundary};
+}
+inline MatrixDiagonalEntries* create_3_KimP6_filter_diagonals(
+    const std::vector<double>& F_coeffs) {
+    
+    double alpha = 0.666399889783;
+    double beta = 0.166720022043;
+    double a0    = -0.000200082662579;
+    double a1    = 0.000150061996934;
+    double a2    = -0.0000600247987736;
+    double a3    = 0.0000100041331289;
+    double gamma01 = 0.236067342065;
+    double gamma02 = 0.297104978225;
+    double gamma10 = 0.710704941823;
+    double gamma12 = 0.646009455605;
+    double gamma13 = 0.201597191107;
+    double gamma20 = 0.168881274414;
+    double gamma21 = 0.655593627928;
+    double gamma23 = 0.655593627928;
+    double gamma24 = 0.168881274414;
+    double a20   = -0.000415238952692;
+    double a21   = 0.00207619476346;
+    double a22   = -0.00415238952692;
+    double a23   = 0.00415238952692;
+    double a24   = -0.00207619476346;
+    double a25   = 0.000415238952692;
+    double a26   = 0.0;
+
+    // diagonal elements for R matrix for 1st derivative
+    std::vector<double> RDiagInterior{beta, alpha, 1.0, alpha, beta};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> RDiagBoundary{
+        {1, gamma01, gamma02, 0.0}, {gamma10, 1, gamma12, gamma13}, {gamma20, gamma21, 1, gamma23, gamma24}};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> SDiagBoundary{
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {a20, a21, a22, a23, a24, a25, a26}};
+
+    // diagonal elements for S matrix for 1st derivative
+    std::vector<double> SDiagInterior{a3 , a2 , a1 , a0,
+                                      a1, a2, a3};
+
+    return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary,
+                                     SDiagInterior, SDiagBoundary};
+}
+inline MatrixDiagonalEntries* create_4_KimP6_filter_diagonals(
+    const std::vector<double>& F_coeffs) {
+    
+    double alpha = 0.666562981824;
+    double beta = 0.166687403635;
+    double a0    = -0.0000777636322293;
+    double a1    = 0.000058322724172;
+    double a2    = -0.0000233290896688;
+    double a3    = 3.88818161147e-6;
+    double gamma01 = 0.0598943352325;
+    double gamma02 = 0.396374973771;
+    double gamma10 = 0.653284293889;
+    double gamma12 = 0.580910965487;
+    double gamma13 = 0.217727684816;
+    double gamma20 = 0.169508337276;
+    double gamma21 = 0.652458313618;
+    double gamma23 = 0.652458313618;
+    double gamma24 = 0.169508337276;
+    double a20   = -0.000532813239342;
+    double a21   = 0.00266406619671;
+    double a22   = -0.00532813239342;
+    double a23   = 0.00532813239342;
+    double a24   = -0.00266406619671;
+    double a25   = 0.000532813239342;
+    double a26   = 0.0;
+    // diagonal elements for R matrix for 1st derivative
+    std::vector<double> RDiagInterior{beta, alpha, 1.0, alpha, beta};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> RDiagBoundary{
+        {1, gamma01, gamma02, 0.0}, {gamma10, 1, gamma12, gamma13}, {gamma20, gamma21, 1, gamma23, gamma24}};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> SDiagBoundary{
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {a20, a21, a22, a23, a24, a25, a26}};
+
+    // diagonal elements for S matrix for 1st derivative
+    std::vector<double> SDiagInterior{a3 , a2 , a1 , a0,
+                                      a1, a2, a3};
+
+    return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary,
+                                     SDiagInterior, SDiagBoundary};
+}
+inline MatrixDiagonalEntries* create_KimP6_filter_diagonals(
+    const std::vector<double>& F_coeffs) {
+    
+    double alpha = 0.666562981824;
+    double beta = 0.166687403635;
+    double a0    = -0.0000777636322293;
+    double a1    = 0.000058322724172;
+    double a2    = -0.0000233290896688;
+    double a3    = 3.88818161147e-6;
+    double gamma01 = -1.35501169469;
+    double gamma02 = 0.325151189414;
+    double gamma10 = 0.158963697311;
+    double gamma12 = -0.0648335733749;
+    double gamma13 = 0.39518799765;
+    double gamma20 = 0.181461515322;
+    double gamma21 = 0.592692423392;
+    double gamma23 = 0.592692423392;
+    double gamma24 = 0.181461515322;
+    double a20   = -0.00277403412279;
+    double a21   = 0.0138701706139;
+    double a22   = -0.0277403412279;
+    double a23   = 0.0277403412279;
+    double a24   = -0.0138701706139;
+    double a25   = 0.00277403412279;
+    double a26   = 0.0;
+
+    // diagonal elements for R matrix for 1st derivative
+    std::vector<double> RDiagInterior{beta, alpha, 1.0, alpha, beta};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> RDiagBoundary{
+        {1, gamma01, gamma02, 0.0}, {gamma10, 1, gamma12, gamma13}, {gamma20, gamma21, 1, gamma23, gamma24}};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> SDiagBoundary{
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {a20, a21, a22, a23, a24, a25, a26}};
+
+    // diagonal elements for S matrix for 1st derivative
+    std::vector<double> SDiagInterior{a3 , a2 , a1 , a0,
+                                      a1, a2, a3};
+
+    return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary,
+                                     SDiagInterior, SDiagBoundary};
+}
 class KimFilter_InMatrix : public InMatrixFilter {
    public:
     KimFilter_InMatrix(const std::vector<double>& input_coeffs)
@@ -330,4 +548,74 @@ class KimFilter_InMatrix : public InMatrixFilter {
         return InMatFilterType::IMFT_KIM;
     }
 };
+class Kim1P6Filter_InMatrix : public InMatrixFilter {
+public:
+    Kim1P6Filter_InMatrix(const std::vector<double>& input_coeffs)
+        : InMatrixFilter(input_coeffs) {
+        diagEntries = create_Kim_1_P6_filter_diagonals(input_coeffs);
+    }
+
+    ~Kim1P6Filter_InMatrix() = default;
+
+    InMatFilterType get_filter_type() const override {
+        return InMatFilterType::IMFT_KIM_1_P6;
+    }
+};
+
+class Kim2P6Filter_InMatrix : public InMatrixFilter {
+public:
+    Kim2P6Filter_InMatrix(const std::vector<double>& input_coeffs)
+        : InMatrixFilter(input_coeffs) {
+        diagEntries = create_2_KimP6_filter_diagonals(input_coeffs);
+    }
+
+    ~Kim2P6Filter_InMatrix() = default;
+
+    InMatFilterType get_filter_type() const override {
+        return InMatFilterType::IMFT_KIM_2_P6;
+    }
+};
+
+class Kim3P6Filter_InMatrix : public InMatrixFilter {
+public:
+    Kim3P6Filter_InMatrix(const std::vector<double>& input_coeffs)
+        : InMatrixFilter(input_coeffs) {
+        diagEntries = create_3_KimP6_filter_diagonals(input_coeffs);
+    }
+
+    ~Kim3P6Filter_InMatrix() = default;
+
+    InMatFilterType get_filter_type() const override {
+        return InMatFilterType::IMFT_KIM_3_P6;
+    }
+};
+
+class Kim4P6Filter_InMatrix : public InMatrixFilter {
+public:
+    Kim4P6Filter_InMatrix(const std::vector<double>& input_coeffs)
+        : InMatrixFilter(input_coeffs) {
+        diagEntries = create_4_KimP6_filter_diagonals(input_coeffs);
+    }
+
+    ~Kim4P6Filter_InMatrix() = default;
+
+    InMatFilterType get_filter_type() const override {
+        return InMatFilterType::IMFT_KIM_4_P6;
+    }
+};
+
+class KimP6Filter_InMatrix : public InMatrixFilter {
+public:
+    KimP6Filter_InMatrix(const std::vector<double>& input_coeffs)
+        : InMatrixFilter(input_coeffs) {
+        diagEntries = create_KimP6_filter_diagonals(input_coeffs);
+    }
+
+    ~KimP6Filter_InMatrix() = default;
+
+    InMatFilterType get_filter_type() const override {
+        return InMatFilterType::IMFT_KIM_P6;
+    }
+};
+
 }  // namespace dendroderivs
