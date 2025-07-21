@@ -112,10 +112,20 @@ enum DerivType {
     D_BYUP8,
     D_BYUP8B7,
     // TwoA and TwoUA Second-Order Derivatives
-    D_2A_1,
-    D_2A_2,
-    D_2UA_1,
-    D_2UA_2
+   D_2A_1,
+   D_2A_2,
+   D_2A_3,
+   D_2A_4,
+   D_2A_5,
+   D_2A_6,
+   D_2A_7,
+   D_2A_8,
+   D_2A_9,
+   D_2A_10,
+   D_2A_11,
+   D_2A_12,
+   D_2UA_1,
+   D_2UA_2
 };
 
 enum DerivOrder { D_FIRST_ORDER = 0, D_SECOND_ORDER };

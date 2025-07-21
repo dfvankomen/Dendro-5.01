@@ -55,6 +55,16 @@ MatrixDiagonalEntries* createUA4_5_Diagonals();
 MatrixDiagonalEntries* createUA4_6_Diagonals();
 MatrixDiagonalEntries* create2A_1_Diagonals();
 MatrixDiagonalEntries* create2A_2_Diagonals();
+MatrixDiagonalEntries* create2A_3_Diagonals();
+MatrixDiagonalEntries* create2A_4_Diagonals();
+MatrixDiagonalEntries* create2A_5_Diagonals();
+MatrixDiagonalEntries* create2A_6_Diagonals();
+MatrixDiagonalEntries* create2A_7_Diagonals();
+MatrixDiagonalEntries* create2A_8_Diagonals();
+MatrixDiagonalEntries* create2A_9_Diagonals();
+MatrixDiagonalEntries* create2A_10_Diagonals();
+MatrixDiagonalEntries* create2A_11_Diagonals();
+MatrixDiagonalEntries* create2A_12_Diagonals();
 MatrixDiagonalEntries* create2UA_1_Diagonals();
 MatrixDiagonalEntries* create2UA_2_Diagonals();
 
@@ -1269,7 +1279,6 @@ class KimBoundO4_SecondOrder : public BandedCompactDerivs {
 
     std::string toString() const override { return "KimBoundO4_FirstOrder"; };
 };
-
 class TwoADerivs2A_1_SecondOrder : public MatrixCompactDerivs<2> {
 public:
     TwoADerivs2A_1_SecondOrder(
@@ -1312,6 +1321,228 @@ public:
     DerivType getDerivType() const override { return DerivType::D_2A_2; }
     DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
     std::string toString() const override { return "TwoADerivs2A_2_SecondOrder"; }
+};
+
+class TwoADerivs2A_3_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_3_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_3_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_3_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_3_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_3; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_3_SecondOrder"; }
+};
+
+class TwoADerivs2A_4_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_4_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_4_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_4_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_4_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_4; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_4_SecondOrder"; }
+};
+
+// Repeat pattern for 5–12
+
+class TwoADerivs2A_5_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_5_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_5_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_5_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_5_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_5; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_5_SecondOrder"; }
+};
+
+class TwoADerivs2A_6_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_6_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_6_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_6_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_6_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_6; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_6_SecondOrder"; }
+};
+
+class TwoADerivs2A_7_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_7_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_7_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_7_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_7_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_7; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_7_SecondOrder"; }
+};
+
+class TwoADerivs2A_8_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_8_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_8_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_8_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_8_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_8; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_8_SecondOrder"; }
+};
+
+class TwoADerivs2A_9_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_9_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_9_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_9_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_9_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_9; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_9_SecondOrder"; }
+};
+
+class TwoADerivs2A_10_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_10_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_10_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_10_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_10_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_10; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_10_SecondOrder"; }
+};
+
+class TwoADerivs2A_11_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_11_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_11_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_11_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_11_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_11; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_11_SecondOrder"; }
+};
+
+class TwoADerivs2A_12_SecondOrder : public MatrixCompactDerivs<2> {
+public:
+    TwoADerivs2A_12_SecondOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(),
+        const std::vector<double>& coeffs_in = std::vector<double>())
+        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = create2A_12_Diagonals();
+        this->init();
+    }
+
+    ~TwoADerivs2A_12_SecondOrder() override = default;
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<TwoADerivs2A_12_SecondOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_2A_12; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
+    std::string toString() const override { return "TwoADerivs2A_12_SecondOrder"; }
 };
 
 class TwoUADerivs2UA_1_SecondOrder : public MatrixCompactDerivs<2> {
