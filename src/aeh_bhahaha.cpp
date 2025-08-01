@@ -446,6 +446,14 @@ void AEH_BHaHAHA::find_horizons(
 
                 // update the guess with the BH data for this horizon
                 failed_last_find_[which_horizon] = true;
+
+                // this signals broken history for extrapolation
+                t_m1_[which_horizon]             = -1.0;
+
+                // and then this ensures the next guess is a full-sphere search
+                // by updating the r_max_guess
+                r_max_guess_[which_horizon] =
+                    bah_max_search_radius_[which_horizon];
             }
         }
 
@@ -499,6 +507,17 @@ void AEH_BHaHAHA::bah_sum_shared_arrays(const ot::Mesh* mesh) {
     combined_double_buffer.insert(combined_double_buffer.end(),
                                   r_min_guess_.begin(), r_min_guess_.end());
 
+    // make sure the prev_horizon arrays are added to the buffer
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  prev_horizon_m1_.begin(),
+                                  prev_horizon_m1_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  prev_horizon_m2_.begin(),
+                                  prev_horizon_m2_.end());
+    combined_double_buffer.insert(combined_double_buffer.end(),
+                                  prev_horizon_m3_.begin(),
+                                  prev_horizon_m3_.end());
+
     MPI_Allreduce(MPI_IN_PLACE, combined_double_buffer.data(),
                   combined_double_buffer.size(), MPI_DOUBLE, MPI_SUM,
                   commActive);
@@ -524,6 +543,13 @@ void AEH_BHaHAHA::bah_sum_shared_arrays(const ot::Mesh* mesh) {
     std::copy(it, it + r_max_guess_.size(), r_max_guess_.begin());
     it += r_max_guess_.size();
     std::copy(it, it + r_min_guess_.size(), r_min_guess_.begin());
+    // and unpack the prev_horizon stuff
+    it += r_min_guess_.size();
+    std::copy(it, it + prev_horizon_m1_.size(), prev_horizon_m1_.begin());
+    it += prev_horizon_m1_.size();
+    std::copy(it, it + prev_horizon_m2_.size(), prev_horizon_m2_.begin());
+    it += prev_horizon_m2_.size();
+    std::copy(it, it + prev_horizon_m3_.size(), prev_horizon_m3_.begin());
 }
 
 void AEH_BHaHAHA::fill_domain_coords(const int which_horizon, const int n_r,
