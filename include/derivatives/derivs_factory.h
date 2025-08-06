@@ -110,6 +110,25 @@ class DerivsFactory {
         } if (name == "KIM416") {
             return std::unique_ptr<Derivs>(new Kim_16_BoundO4_FirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "C4_1") {
+        return std::unique_ptr<Derivs>(new C4_1_DiagonalsFirstOrder(
+            ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } 
+        else if (name == "C4_2") {
+        return std::unique_ptr<Derivs>(new C4_2_DiagonalsFirstOrder(
+            ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } 
+        else if (name == "C4_3") {
+        return std::unique_ptr<Derivs>(new C4_3_DiagonalsFirstOrder(
+            ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } 
+        else if (name == "C4_4") {
+        return std::unique_ptr<Derivs>(new C4_4_DiagonalsFirstOrder(
+            ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } 
+        else if (name == "C4_5") {
+        return std::unique_ptr<Derivs>(new C4_5_DiagonalsFirstOrder(
+            ele_order, inMatrixFilterType, in_mat_coeffs_in));
         }else if (name == "C6_1") {
             return std::unique_ptr<Derivs>(new C6_1_DiagonalsFirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
@@ -379,7 +398,15 @@ class DerivsFactory {
         } else if (name == "2UA_2") {
             return std::unique_ptr<Derivs>(new TwoUADerivs2UA_2_SecondOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        }else if (name == "2B4_1") {
+        return std::unique_ptr<Derivs>(new TwoDerivs2B4_1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
         }
+        else if (name == "2B6_1") {
+        return std::unique_ptr<Derivs>(new TwoDerivs2B6_1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+        }
+
 
         return nullptr;
     }

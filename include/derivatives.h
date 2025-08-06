@@ -64,6 +64,11 @@ enum DerivType {
     D_KIMBYU_17,
     D_KIMBYU_18,
     D_KIMBYU_19,
+    D_C4_1,
+    D_C4_2,
+    D_C4_3,
+    D_C4_4,
+    D_C4_5,
     D_C6_1,
     D_C6_2,
     D_C6_3,
@@ -125,7 +130,12 @@ enum DerivType {
    D_2A_11,
    D_2A_12,
    D_2UA_1,
-   D_2UA_2
+   D_2UA_2,    
+   D_2B4_1,
+   D_2B6_1,
+
+
+
 };
 
 enum DerivOrder { D_FIRST_ORDER = 0, D_SECOND_ORDER };
