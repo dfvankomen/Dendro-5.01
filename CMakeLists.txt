@@ -12,7 +12,7 @@
 # 
 # ##############################################################################
 
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.1...3.20)
 project(Dendro-5.0-Library C CXX Fortran)
 
 option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
