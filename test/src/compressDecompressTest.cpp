@@ -18,6 +18,7 @@
 
 namespace testcomp {
 
+#if 1
 std::string compressor_path_onnx_3d =
     "../testmodels/ENCODER_twodim_equal_in_out_3d.onnx";
 std::string decompressor_path_onnx_3d =
@@ -34,6 +35,25 @@ std::string compressor_path_onnx_0d =
     "../testmodels/ENCODER_twodim_equal_in_out_0d.onnx";
 std::string decompressor_path_onnx_0d =
     "../testmodels/DECODER_twodim_equal_in_out_0d.onnx";
+
+#else
+std::string compressor_path_onnx_3d =
+    "../testmodels/ENCODER_singledim_equal_in_out_3d.onnx";
+std::string decompressor_path_onnx_3d =
+    "../testmodels/DECODER_singledim_equal_in_out_3d.onnx";
+std::string compressor_path_onnx_2d =
+    "../testmodels/ENCODER_singledim_equal_in_out_2d.onnx";
+std::string decompressor_path_onnx_2d =
+    "../testmodels/DECODER_singledim_equal_in_out_2d.onnx";
+std::string compressor_path_onnx_1d =
+    "../testmodels/ENCODER_singledim_equal_in_out_1d.onnx";
+std::string decompressor_path_onnx_1d =
+    "../testmodels/DECODER_singledim_equal_in_out_1d.onnx";
+std::string compressor_path_onnx_0d =
+    "../testmodels/ENCODER_singledim_equal_in_out_0d.onnx";
+std::string decompressor_path_onnx_0d =
+    "../testmodels/DECODER_singledim_equal_in_out_0d.onnx";
+#endif
 
 std::string compressor_path_pt_3d =
     "../testmodels/ENCODER_twodim_equal_in_out_3d.pt";

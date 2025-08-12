@@ -5,6 +5,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
+#include <memory>
+#include <numeric>
 #include <vector>
 
 #include "compression_base.hpp"
@@ -104,6 +107,126 @@ class ONNXCompressor : public Compression<T> {
     Ort::SessionOptions session_options_;
     Ort::MemoryInfo memory_info_;
 
+    bool treat_variables_as_batch_3d_ = false;
+    bool treat_variables_as_batch_2d_ = false;
+    bool treat_variables_as_batch_1d_ = false;
+    bool treat_variables_as_batch_0d_ = false;
+
+    void probe_and_setup_model(
+        Ort::Session &encoder, Ort::Session &decoder,
+        const std::string &model_dim_str, std::vector<int64_t> &input_shape,
+        bool &treat_vars_as_batch, unsigned int &n_outs_encoder,
+        std::string &encoder_input_name, std::string &encoder_output_name,
+        std::string &decoder_input_name, std::string &decoder_output_name,
+        std::vector<int64_t> &decoder_shape) {
+        Ort::AllocatorWithDefaultOptions allocator;
+
+        // Step 1. model's expected input shape from metadata
+        Ort::TypeInfo input_type_info = encoder.GetInputTypeInfo(0);
+        auto tensor_info = input_type_info.GetTensorTypeAndShapeInfo();
+        std::vector<int64_t> model_expected_shape = tensor_info.GetShape();
+
+        // Step 2: make sure the model has the expected number of dimensions
+        size_t expected_dims                      = input_shape.size();
+        if (model_expected_shape.size() != expected_dims) {
+            throw std::runtime_error(
+                "ERROR: Mismatched dimensions encountered when loading "
+                "encoder.");
+        }
+
+        // Step 3: how to handle the "variables" dimension
+        int64_t channel_dim_size = model_expected_shape[1];
+
+        if (channel_dim_size == 1) {
+            // if the channel dimension is 1, then we need to "flatten"
+            treat_vars_as_batch = true;
+        } else if (channel_dim_size == this->num_vars_) {
+            // normal operation, all variables are together
+            treat_vars_as_batch = false;
+        } else if (channel_dim_size < 0) {
+            // this is a handler for ambiguous channel dimension
+            std::cerr << "Warning: " << model_dim_str
+                      << " encoder has a dynamic channel dimension. "
+                      << "Assuming it will handle all " << this->num_vars_
+                      << " variables as channels.\n";
+            treat_vars_as_batch = false;
+        } else {
+            // if it's zero or any other positive integer, throw an error
+            throw std::runtime_error(
+                "ERROR: Unexpected channel dimension size for " +
+                model_dim_str + " encoder. Model expects " +
+                std::to_string(channel_dim_size) +
+                " channels, but code is configured for 1 or " +
+                std::to_string(this->num_vars_) + ".");
+        }
+
+        // Step 4: check the names and get meta data for inputs/outputs
+        auto enc_input_name_ptr  = encoder.GetInputNameAllocated(0, allocator);
+        encoder_input_name       = enc_input_name_ptr.get();
+        auto enc_output_name_ptr = encoder.GetOutputNameAllocated(0, allocator);
+        encoder_output_name      = enc_output_name_ptr.get();
+
+        auto dec_input_name_ptr  = decoder.GetInputNameAllocated(0, allocator);
+        decoder_input_name       = dec_input_name_ptr.get();
+        auto dec_output_name_ptr = decoder.GetOutputNameAllocated(0, allocator);
+        decoder_output_name      = dec_output_name_ptr.get();
+
+        // Step 5: Test the encoder for shape information
+        std::vector<int64_t> test_run_shape = tensor_info.GetShape();
+        // Replace symbolic dimensions with concrete dimensions
+        for (auto &dim : test_run_shape) {
+            if (dim < 0) {
+                dim = 1;
+            }
+        }
+
+        size_t test_tensor_size =
+            std::accumulate(test_run_shape.begin(), test_run_shape.end(), 1LL,
+                            std::multiplies<int64_t>());
+        std::vector<float> test_data(test_tensor_size, 1.0f);
+
+        Ort::Value test_tensor = Ort::Value::CreateTensor<float>(
+            memory_info_, test_data.data(), test_data.size(),
+            test_run_shape.data(), test_run_shape.size());
+
+        const char *input_names[]  = {encoder_input_name.c_str()};
+        const char *output_names[] = {encoder_output_name.c_str()};
+
+        auto output_tensors = encoder.Run(Ort::RunOptions{nullptr}, input_names,
+                                          &test_tensor, 1, output_names, 1);
+
+        // shape info gives information about one item (flattened or one block
+        // of all vars if not)
+        auto output_tensor_info = output_tensors[0].GetTensorTypeAndShapeInfo();
+        n_outs_encoder          = output_tensor_info.GetElementCount();
+
+        // 6. Setup the base shape for the decoder input tensor.
+        decoder_shape           = {1, static_cast<int64_t>(n_outs_encoder)};
+    }
+
+    Ort::Value createOnnxTensorFromDataInternal(
+        const T *original_matrix, size_t total_elements,
+        std::vector<float> &float_buffer, const std::vector<int64_t> &shape) {
+        // NOTE: this is a simplified data, other data conversions will be
+        // required!
+        if constexpr (std::is_same_v<T, double>) {
+            // float converstion
+            std::transform(original_matrix, original_matrix + total_elements,
+                           float_buffer.begin(),
+                           [](double d) { return static_cast<float>(d); });
+
+            // create the tensor
+            return Ort::Value::CreateTensor<float>(
+                memory_info_, float_buffer.data(), total_elements, shape.data(),
+                shape.size());
+        } else if constexpr (std::is_same_v<T, float>) {
+            // nothing to convert if we already have floats
+            return Ort::Value::CreateTensor<float>(
+                memory_info_, const_cast<float *>(original_matrix),
+                total_elements, shape.data(), shape.size());
+        }
+    }
+
     void load_models() {
         // then attempt to load 3D
         encoder_3d_ = std::make_unique<Ort::Session>(
@@ -123,112 +246,35 @@ class ONNXCompressor : public Compression<T> {
         decoder_1d_ = std::make_unique<Ort::Session>(
             env_, decoder_1d_path_.c_str(), session_options_);
 
-        // TODO: 0D, will need checks for it
+        encoder_0d_ = std::make_unique<Ort::Session>(
+            env_, encoder_0d_path_.c_str(), session_options_);
+        decoder_0d_ = std::make_unique<Ort::Session>(
+            env_, decoder_0d_path_.c_str(), session_options_);
 
-        // allocator that helps us get the input and output names
-        Ort::AllocatorWithDefaultOptions allocator;
+        // Probe and setup each dimension's models.
+        probe_and_setup_model(*encoder_3d_, *decoder_3d_, "3D", input_shape_3d_,
+                              treat_variables_as_batch_3d_, n_outs_3d_encoder_,
+                              input_name_3d_, output_name_3d_,
+                              decoder_input_name_3d_, decoder_output_name_3d_,
+                              decoder_shape_3d_);
 
-        // --------
-        // 3d Checks
+        probe_and_setup_model(*encoder_2d_, *decoder_2d_, "2D", input_shape_2d_,
+                              treat_variables_as_batch_2d_, n_outs_2d_encoder_,
+                              input_name_2d_, output_name_2d_,
+                              decoder_input_name_2d_, decoder_output_name_2d_,
+                              decoder_shape_2d_);
 
-        // CALCULATE THE OUTPUT SIZE OF THE ENCODER TO STORE INTERNALLY
-        std::vector<float> test_data(this->total_3d_pts_, 1.0);
+        probe_and_setup_model(*encoder_1d_, *decoder_1d_, "1D", input_shape_1d_,
+                              treat_variables_as_batch_1d_, n_outs_1d_encoder_,
+                              input_name_1d_, output_name_1d_,
+                              decoder_input_name_1d_, decoder_output_name_1d_,
+                              decoder_shape_1d_);
 
-        Ort::Value tensor_data = Ort::Value::CreateTensor<float>(
-            memory_info_, const_cast<float *>(test_data.data()),
-            test_data.size(), input_shape_3d_.data(), input_shape_3d_.size());
-
-        // this returns a smart pointer, which we'll just clear at the end of
-        // the function anyway
-        auto output_name_ptr =
-            encoder_3d_->GetOutputNameAllocated(0, allocator);
-        // fetch the string output
-        output_name_3d_     = output_name_ptr.get();
-
-        auto input_name_ptr = encoder_3d_->GetInputNameAllocated(0, allocator);
-        input_name_3d_      = input_name_ptr.get();
-
-        const char *input_names_3d[]  = {input_name_3d_.c_str()};
-        const char *output_names_3d[] = {output_name_3d_.c_str()};
-        auto output = encoder_3d_->Run(Ort::RunOptions{nullptr}, input_names_3d,
-                                       &tensor_data, 1, output_names_3d, 1);
-
-        n_outs_3d_encoder_ =
-            output[0].GetTensorTypeAndShapeInfo().GetElementCount();
-
-        // decoder names
-        output_name_ptr = decoder_3d_->GetOutputNameAllocated(0, allocator);
-        // fetch the string output
-        decoder_output_name_3d_ = output_name_ptr.get();
-
-        input_name_ptr = decoder_3d_->GetInputNameAllocated(0, allocator);
-        decoder_input_name_3d_ = input_name_ptr.get();
-
-        // now we can do the same for other dimensionalities
-
-        // --------
-        // 2d Checks
-        test_data.resize(this->total_2d_pts_);
-        // override tensor data
-        tensor_data = Ort::Value::CreateTensor<float>(
-            memory_info_, const_cast<float *>(test_data.data()),
-            test_data.size(), input_shape_2d_.data(), input_shape_2d_.size());
-        output_name_ptr = encoder_2d_->GetOutputNameAllocated(0, allocator);
-        // fetch the string output
-        output_name_2d_ = output_name_ptr.get();
-
-        input_name_ptr  = encoder_2d_->GetInputNameAllocated(0, allocator);
-        input_name_2d_  = input_name_ptr.get();
-
-        const char *input_names_2d[]  = {input_name_2d_.c_str()};
-        const char *output_names_2d[] = {output_name_2d_.c_str()};
-        output = encoder_2d_->Run(Ort::RunOptions{nullptr}, input_names_2d,
-                                  &tensor_data, 1, output_names_2d, 1);
-
-        n_outs_2d_encoder_ =
-            output[0].GetTensorTypeAndShapeInfo().GetElementCount();
-
-        // decoder names
-        output_name_ptr = decoder_2d_->GetOutputNameAllocated(0, allocator);
-        // fetch the string output
-        decoder_output_name_2d_ = output_name_ptr.get();
-
-        input_name_ptr = decoder_2d_->GetInputNameAllocated(0, allocator);
-        decoder_input_name_2d_ = input_name_ptr.get();
-
-        // --------
-        // 1d Checks
-        test_data.resize(this->total_1d_pts_);
-        // override tensor data
-        tensor_data = Ort::Value::CreateTensor<float>(
-            memory_info_, const_cast<float *>(test_data.data()),
-            test_data.size(), input_shape_1d_.data(), input_shape_1d_.size());
-        output_name_ptr = encoder_1d_->GetOutputNameAllocated(0, allocator);
-        // fetch the string output
-        output_name_1d_ = output_name_ptr.get();
-
-        input_name_ptr  = encoder_1d_->GetInputNameAllocated(0, allocator);
-        input_name_1d_  = input_name_ptr.get();
-
-        const char *input_names_1d[]  = {input_name_1d_.c_str()};
-        const char *output_names_1d[] = {output_name_1d_.c_str()};
-        output = encoder_1d_->Run(Ort::RunOptions{nullptr}, input_names_1d,
-                                  &tensor_data, 1, output_names_1d, 1);
-
-        n_outs_1d_encoder_ =
-            output[0].GetTensorTypeAndShapeInfo().GetElementCount();
-
-        // decoder names
-        output_name_ptr = decoder_1d_->GetOutputNameAllocated(0, allocator);
-        // fetch the string output
-        decoder_output_name_1d_ = output_name_ptr.get();
-
-        input_name_ptr = decoder_1d_->GetInputNameAllocated(0, allocator);
-        decoder_input_name_1d_ = input_name_ptr.get();
-
-        decoder_shape_3d_      = {1, n_outs_3d_encoder_};
-        decoder_shape_2d_      = {1, n_outs_2d_encoder_};
-        decoder_shape_1d_      = {1, n_outs_1d_encoder_};
+        probe_and_setup_model(*encoder_0d_, *decoder_0d_, "0D", input_shape_0d_,
+                              treat_variables_as_batch_0d_, n_outs_0d_encoder_,
+                              input_name_0d_, output_name_0d_,
+                              decoder_input_name_0d_, decoder_output_name_0d_,
+                              decoder_shape_0d_);
     }
 
    public:
@@ -292,40 +338,43 @@ class ONNXCompressor : public Compression<T> {
                                unsigned int batch_size) override {
         if (!encoder_3d_) {
             throw std::runtime_error(
-                "ERROR: The 3D encoder is not initialized! Make sure "
-                "set_models() "
-                "is called.");
+                "ERROR: The 3D encoder is not initialized!");
         }
 
-        // update batch size
-        input_shape_3d_[0] = batch_size;
+        std::vector<int64_t> current_input_shape = input_shape_3d_;
+        unsigned int effective_batch_size;
 
-        // only resize if we're going to use this buffer
-        if constexpr (std::is_same_v<T, double>) {
-            if (double_to_float_buffer_3d_.size() <
-                this->total_3d_pts_ * batch_size) {
-                double_to_float_buffer_3d_.resize(this->total_3d_pts_ *
-                                                  batch_size);
-            }
+        if (treat_variables_as_batch_3d_) {
+            effective_batch_size   = batch_size * this->num_vars_;
+            current_input_shape[0] = effective_batch_size;
+            current_input_shape[1] = 1;
+        } else {
+            effective_batch_size   = batch_size;
+            current_input_shape[0] = effective_batch_size;
         }
 
-        Ort::Value tensor_data = createOnnxTensorFromData(
-            original_matrix, this->total_3d_pts_, batch_size,
-            double_to_float_buffer_3d_, memory_info_, input_shape_3d_);
+        size_t total_elements = this->total_3d_pts_ * batch_size;
+        if (double_to_float_buffer_3d_.size() < total_elements) {
+            double_to_float_buffer_3d_.resize(total_elements);
+        }
 
-        const float *tensor_values = tensor_data.GetTensorData<float>();
+        Ort::Value tensor_data = createOnnxTensorFromDataInternal(
+            original_matrix, total_elements, double_to_float_buffer_3d_,
+            current_input_shape);
 
         const char *input_names[]  = {input_name_3d_.c_str()};
         const char *output_names[] = {output_name_3d_.c_str()};
 
-        auto output = encoder_3d_->Run(Ort::RunOptions{nullptr}, input_names,
-                                       &tensor_data, 1, output_names, 1);
+        auto output_tensors =
+            encoder_3d_->Run(Ort::RunOptions{nullptr}, input_names,
+                             &tensor_data, 1, output_names, 1);
 
-        const float *output_data = output[0].GetTensorData<float>();
+        const float *output_data = output_tensors[0].GetTensorData<float>();
+        size_t total_output_bytes =
+            n_outs_3d_encoder_ * sizeof(float) * effective_batch_size;
+        std::memcpy(output_array, output_data, total_output_bytes);
 
-        std::memcpy(output_array, output_data,
-                    n_outs_3d_encoder_ * sizeof(float) * batch_size);
-        return batch_size * n_outs_3d_encoder_ * sizeof(float);
+        return total_output_bytes;
     }
 
     std::size_t do_decompress_3d(unsigned char *const compressed_buffer,
@@ -333,120 +382,123 @@ class ONNXCompressor : public Compression<T> {
                                  unsigned int batch_size) override {
         if (!decoder_3d_) {
             throw std::runtime_error(
-                "ERROR: The 3D decoder is not initialized! Make sure "
-                "set_models() "
-                "is called.");
+                "ERROR: The 3D decoder is not initialized!");
         }
 
-        const float *floatInputArray =
+        unsigned int effective_batch_size = treat_variables_as_batch_3d_
+                                                ? (batch_size * this->num_vars_)
+                                                : batch_size;
+        size_t compressed_elements = n_outs_3d_encoder_ * effective_batch_size;
+
+        std::vector<int64_t> current_decoder_input_shape = decoder_shape_3d_;
+        current_decoder_input_shape[0]                   = effective_batch_size;
+
+        std::vector<int64_t> final_output_shape          = input_shape_3d_;
+        if (treat_variables_as_batch_3d_) {
+            final_output_shape[0] = effective_batch_size;
+            final_output_shape[1] = 1;
+        } else {
+            final_output_shape[0] = effective_batch_size;
+        }
+
+        const float *float_input_array =
             reinterpret_cast<const float *>(compressed_buffer);
 
-        decoder_shape_3d_[0] = batch_size;
+        Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+            memory_info_, const_cast<float *>(float_input_array),
+            compressed_elements, current_decoder_input_shape.data(),
+            current_decoder_input_shape.size());
 
-        if (double_to_float_buffer_3d_.size() <
-            this->total_3d_pts_ * batch_size) {
-            double_to_float_buffer_3d_.resize(this->total_3d_pts_ * batch_size);
-        }
+        const char *input_names[]    = {decoder_input_name_3d_.c_str()};
+        const char *output_names[]   = {decoder_output_name_3d_.c_str()};
+        size_t total_output_elements = this->total_3d_pts_ * batch_size;
 
-        Ort::Value tensor_data = Ort::Value::CreateTensor<float>(
-            memory_info_, const_cast<float *>(floatInputArray),
+        Ort::Value tensor_data       = Ort::Value::CreateTensor<float>(
+            memory_info_, const_cast<float *>(float_input_array),
             n_outs_3d_encoder_ * batch_size, decoder_shape_3d_.data(),
             decoder_shape_3d_.size());
         const float *tensor_values = tensor_data.GetTensorData<float>();
 
-        const char *input_names[]  = {decoder_input_name_3d_.c_str()};
-        const char *output_names[] = {decoder_output_name_3d_.c_str()};
-
-#if 1
         if constexpr (std::is_same_v<T, double>) {
             // output to the buffer array so we're not deleting it
-            input_shape_3d_[0]       = batch_size;
+            if (double_to_float_buffer_3d_.size() <
+                this->total_3d_pts_ * batch_size) {
+                double_to_float_buffer_3d_.resize(this->total_3d_pts_ *
+                                                  batch_size);
+            }
 
             Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
                 memory_info_, double_to_float_buffer_3d_.data(),
-                this->total_3d_pts_ * batch_size, input_shape_3d_.data(),
-                input_shape_3d_.size());
+                total_output_elements, final_output_shape.data(),
+                final_output_shape.size());
 
             decoder_3d_->Run(Ort::RunOptions{nullptr}, input_names,
-                             &tensor_data, 1, output_names, &output_tensor, 1);
+                             &input_tensor, 1, output_names, &output_tensor, 1);
 
             // now the data has been written to output tensor so we don't have
             // to worry about *more copies*, we just convert back to doubles
-            std::transform(double_to_float_buffer_3d_.data(),
-                           double_to_float_buffer_3d_.data() +
-                               (this->total_3d_pts_ * batch_size),
-                           output_array,
-                           [](float d) { return static_cast<double>(d); });
+            std::transform(
+                double_to_float_buffer_3d_.begin(),
+                double_to_float_buffer_3d_.begin() + total_output_elements,
+                output_array, [](float f) { return static_cast<T>(f); });
         } else if constexpr (std::is_same_v<T, float>) {
-            input_shape_3d_[0]       = batch_size;
-
             Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
-                memory_info_, output_array, this->total_3d_pts_ * batch_size,
-                input_shape_3d_.data(), input_shape_3d_.size());
+                memory_info_, reinterpret_cast<float *>(output_array),
+                total_output_elements, final_output_shape.data(),
+                final_output_shape.size());
 
             decoder_3d_->Run(Ort::RunOptions{nullptr}, input_names,
-                             &tensor_data, 1, output_names, &output_tensor, 1);
+                             &input_tensor, 1, output_names, &output_tensor, 1);
 
             // here, we have the data just within output_tensor, which mapped
             // directly to our output array, so we are done
         }
 
-#else
-        auto output = decoder_3d_->Run(Ort::RunOptions{nullptr}, input_names,
-                                       &tensor_data, 1, output_names, 1);
-
-        const float *output_data = output[0].GetTensorData<float>();
-
-        if constexpr (std::is_same_v<T, double>) {
-            std::transform(
-                output_data, output_data + (this->total_3d_pts_ * batch_size),
-                output_array, [](float d) { return static_cast<double>(d); });
-        } else if constexpr (std::is_same_v<T, float>) {
-            std::memcpy(output_array, output_data,
-                        this->total_3d_pts_ * sizeof(float) * batch_size);
-        }
-#endif
-        return n_outs_3d_encoder_ * sizeof(float) * batch_size;
+        return compressed_elements * sizeof(float);
     }
 
     std::size_t do_compress_2d(T *const original_matrix,
                                unsigned char *const output_array,
                                unsigned int batch_size) override {
-        static_assert(
-            std::is_same_v<T, float> || std::is_same_v<T, double>,
-            "ONNX Compression only accepts doubles or floats as inputs!");
-
         if (!encoder_2d_) {
             throw std::runtime_error(
-                "ERROR: The 2D encoder is not initialized! Make sure "
-                "set_models() "
-                "is called.");
+                "ERROR: The 2D encoder is not initialized!");
         }
 
-        input_shape_2d_[0] = batch_size;
+        std::vector<int64_t> current_input_shape = input_shape_2d_;
+        unsigned int effective_batch_size;
 
-        if (double_to_float_buffer_2d_.size() <
-            this->total_2d_pts_ * batch_size) {
-            double_to_float_buffer_2d_.resize(this->total_2d_pts_ * batch_size);
+        if (treat_variables_as_batch_2d_) {
+            effective_batch_size   = batch_size * this->num_vars_;
+            current_input_shape[0] = effective_batch_size;
+            current_input_shape[1] = 1;
+        } else {
+            effective_batch_size   = batch_size;
+            current_input_shape[0] = effective_batch_size;
         }
 
-        // tensor data can now come from this function
-        Ort::Value tensor_data = createOnnxTensorFromData(
-            original_matrix, this->total_2d_pts_, batch_size,
-            double_to_float_buffer_2d_, memory_info_, input_shape_2d_);
+        size_t total_elements = this->total_2d_pts_ * batch_size;
+        if (double_to_float_buffer_2d_.size() < total_elements) {
+            double_to_float_buffer_2d_.resize(total_elements);
+        }
 
-        // const float* tensor_values = tensor_data.GetTensorData<float>();
+        Ort::Value tensor_data = createOnnxTensorFromDataInternal(
+            original_matrix, total_elements, double_to_float_buffer_2d_,
+            current_input_shape);
 
         const char *input_names[]  = {input_name_2d_.c_str()};
         const char *output_names[] = {output_name_2d_.c_str()};
 
-        auto output = encoder_2d_->Run(Ort::RunOptions{nullptr}, input_names,
-                                       &tensor_data, 1, output_names, 1);
-        const float *output_data = output[0].GetTensorData<float>();
+        auto output_tensors =
+            encoder_2d_->Run(Ort::RunOptions{nullptr}, input_names,
+                             &tensor_data, 1, output_names, 1);
 
-        std::memcpy(output_array, output_data,
-                    n_outs_2d_encoder_ * sizeof(float) * batch_size);
-        return n_outs_2d_encoder_ * sizeof(float) * batch_size;
+        const float *output_data = output_tensors[0].GetTensorData<float>();
+        size_t total_output_bytes =
+            n_outs_2d_encoder_ * sizeof(float) * effective_batch_size;
+        std::memcpy(output_array, output_data, total_output_bytes);
+
+        return total_output_bytes;
     }
 
     std::size_t do_decompress_2d(unsigned char *const compressed_buffer,
@@ -454,81 +506,79 @@ class ONNXCompressor : public Compression<T> {
                                  unsigned int batch_size) override {
         if (!decoder_2d_) {
             throw std::runtime_error(
-                "ERROR: The 2D decoder is not initialized! Make sure "
-                "set_models() "
-                "is called.");
+                "ERROR: The 2D decoder is not initialized!");
         }
 
-        const float *floatInputArray =
+        unsigned int effective_batch_size = treat_variables_as_batch_2d_
+                                                ? (batch_size * this->num_vars_)
+                                                : batch_size;
+        size_t compressed_elements = n_outs_2d_encoder_ * effective_batch_size;
+
+        std::vector<int64_t> current_decoder_input_shape = decoder_shape_2d_;
+        current_decoder_input_shape[0]                   = effective_batch_size;
+
+        std::vector<int64_t> final_output_shape          = input_shape_2d_;
+        if (treat_variables_as_batch_2d_) {
+            final_output_shape[0] = effective_batch_size;
+            final_output_shape[1] = 1;
+        } else {
+            final_output_shape[0] = effective_batch_size;
+        }
+
+        const float *float_input_array =
             reinterpret_cast<const float *>(compressed_buffer);
 
-        decoder_shape_2d_[0] = batch_size;
+        Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+            memory_info_, const_cast<float *>(float_input_array),
+            compressed_elements, current_decoder_input_shape.data(),
+            current_decoder_input_shape.size());
 
-        if (double_to_float_buffer_2d_.size() <
-            this->total_2d_pts_ * batch_size) {
-            double_to_float_buffer_2d_.resize(this->total_2d_pts_ * batch_size);
-        }
+        const char *input_names[]    = {decoder_input_name_2d_.c_str()};
+        const char *output_names[]   = {decoder_output_name_2d_.c_str()};
+        size_t total_output_elements = this->total_2d_pts_ * batch_size;
 
-        Ort::Value tensor_data = Ort::Value::CreateTensor<float>(
-            memory_info_, const_cast<float *>(floatInputArray),
+        Ort::Value tensor_data       = Ort::Value::CreateTensor<float>(
+            memory_info_, const_cast<float *>(float_input_array),
             n_outs_2d_encoder_ * batch_size, decoder_shape_2d_.data(),
             decoder_shape_2d_.size());
         const float *tensor_values = tensor_data.GetTensorData<float>();
 
-        const char *input_names[]  = {decoder_input_name_2d_.c_str()};
-        const char *output_names[] = {decoder_output_name_2d_.c_str()};
-
-#if 1
         if constexpr (std::is_same_v<T, double>) {
             // output to the buffer array so we're not deleting it
-            input_shape_2d_[0]       = batch_size;
+            if (double_to_float_buffer_2d_.size() <
+                this->total_2d_pts_ * batch_size) {
+                double_to_float_buffer_2d_.resize(this->total_2d_pts_ *
+                                                  batch_size);
+            }
 
             Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
                 memory_info_, double_to_float_buffer_2d_.data(),
-                this->total_2d_pts_ * batch_size, input_shape_2d_.data(),
-                input_shape_2d_.size());
+                total_output_elements, final_output_shape.data(),
+                final_output_shape.size());
 
             decoder_2d_->Run(Ort::RunOptions{nullptr}, input_names,
-                             &tensor_data, 1, output_names, &output_tensor, 1);
+                             &input_tensor, 1, output_names, &output_tensor, 1);
 
             // now the data has been written to output tensor so we don't have
             // to worry about *more copies*, we just convert back to doubles
-            std::transform(double_to_float_buffer_2d_.data(),
-                           double_to_float_buffer_2d_.data() +
-                               (this->total_2d_pts_ * batch_size),
-                           output_array,
-                           [](float d) { return static_cast<double>(d); });
+            std::transform(
+                double_to_float_buffer_2d_.begin(),
+                double_to_float_buffer_2d_.begin() + total_output_elements,
+                output_array, [](float f) { return static_cast<T>(f); });
         } else if constexpr (std::is_same_v<T, float>) {
-            input_shape_2d_[0]       = batch_size;
-
             Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
-                memory_info_, output_array, this->total_2d_pts_ * batch_size,
-                input_shape_2d_.data(), input_shape_2d_.size());
+                memory_info_, reinterpret_cast<float *>(output_array),
+                total_output_elements, final_output_shape.data(),
+                final_output_shape.size());
 
             decoder_2d_->Run(Ort::RunOptions{nullptr}, input_names,
-                             &tensor_data, 1, output_names, &output_tensor, 1);
+                             &input_tensor, 1, output_names, &output_tensor, 1);
 
             // here, we have the data just within output_tensor, which mapped
             // directly to our output array, so we are done
         }
 
-#else
-        auto output = decoder_2d_->Run(Ort::RunOptions{nullptr}, input_names,
-                                       &tensor_data, 1, output_names, 1);
-
-        const float *output_data = output[0].GetTensorData<float>();
-
-        // convert to doubles
-        if constexpr (std::is_same_v<T, double>) {
-            std::transform(
-                output_data, output_data + (this->total_2d_pts_ * batch_size),
-                output_array, [](float d) { return static_cast<double>(d); });
-        } else if constexpr (std::is_same_v<T, float>) {
-            std::memcpy(output_array, output_data,
-                        this->total_2d_pts_ * sizeof(float) * batch_size);
-        }
-#endif
-        return n_outs_2d_encoder_ * sizeof(float) * batch_size;
+        return compressed_elements * sizeof(float);
     }
 
     std::size_t do_compress_1d(T *const original_matrix,
@@ -536,35 +586,43 @@ class ONNXCompressor : public Compression<T> {
                                unsigned int batch_size) override {
         if (!encoder_1d_) {
             throw std::runtime_error(
-                "ERROR: The 1D encoder is not initialized! Make sure "
-                "set_models() "
-                "is called.");
+                "ERROR: The 1D encoder is not initialized!");
         }
 
-        input_shape_1d_[0] = batch_size;
+        std::vector<int64_t> current_input_shape = input_shape_1d_;
+        unsigned int effective_batch_size;
 
-        if (double_to_float_buffer_1d_.size() <
-            this->total_1d_pts_ * batch_size) {
-            double_to_float_buffer_1d_.resize(this->total_1d_pts_ * batch_size);
+        if (treat_variables_as_batch_1d_) {
+            effective_batch_size   = batch_size * this->num_vars_;
+            current_input_shape[0] = effective_batch_size;
+            current_input_shape[1] = 1;
+        } else {
+            effective_batch_size   = batch_size;
+            current_input_shape[0] = effective_batch_size;
         }
 
-        // convert to tensor data
-        Ort::Value tensor_data = createOnnxTensorFromData(
-            original_matrix, this->total_1d_pts_, batch_size,
-            double_to_float_buffer_1d_, memory_info_, input_shape_1d_);
+        size_t total_elements = this->total_1d_pts_ * batch_size;
+        if (double_to_float_buffer_1d_.size() < total_elements) {
+            double_to_float_buffer_1d_.resize(total_elements);
+        }
 
-        // const float* tensor_values = tensor_data.GetTensorData<float>();
+        Ort::Value tensor_data = createOnnxTensorFromDataInternal(
+            original_matrix, total_elements, double_to_float_buffer_1d_,
+            current_input_shape);
 
         const char *input_names[]  = {input_name_1d_.c_str()};
         const char *output_names[] = {output_name_1d_.c_str()};
 
-        auto output = encoder_1d_->Run(Ort::RunOptions{nullptr}, input_names,
-                                       &tensor_data, 1, output_names, 1);
-        const float *output_data = output[0].GetTensorData<float>();
+        auto output_tensors =
+            encoder_1d_->Run(Ort::RunOptions{nullptr}, input_names,
+                             &tensor_data, 1, output_names, 1);
 
-        std::memcpy(output_array, output_data,
-                    n_outs_1d_encoder_ * sizeof(float) * batch_size);
-        return n_outs_1d_encoder_ * sizeof(float) * batch_size;
+        const float *output_data = output_tensors[0].GetTensorData<float>();
+        size_t total_output_bytes =
+            n_outs_1d_encoder_ * sizeof(float) * effective_batch_size;
+        std::memcpy(output_array, output_data, total_output_bytes);
+
+        return total_output_bytes;
     }
 
     std::size_t do_decompress_1d(unsigned char *const compressed_buffer,
@@ -572,81 +630,79 @@ class ONNXCompressor : public Compression<T> {
                                  unsigned int batch_size) override {
         if (!decoder_1d_) {
             throw std::runtime_error(
-                "ERROR: The 1D decoder is not initialized! Make sure "
-                "set_models() "
-                "is called.");
+                "ERROR: The 1D decoder is not initialized!");
         }
 
-        const float *floatInputArray =
+        unsigned int effective_batch_size = treat_variables_as_batch_1d_
+                                                ? (batch_size * this->num_vars_)
+                                                : batch_size;
+        size_t compressed_elements = n_outs_1d_encoder_ * effective_batch_size;
+
+        std::vector<int64_t> current_decoder_input_shape = decoder_shape_1d_;
+        current_decoder_input_shape[0]                   = effective_batch_size;
+
+        std::vector<int64_t> final_output_shape          = input_shape_1d_;
+        if (treat_variables_as_batch_1d_) {
+            final_output_shape[0] = effective_batch_size;
+            final_output_shape[1] = 1;
+        } else {
+            final_output_shape[0] = effective_batch_size;
+        }
+
+        const float *float_input_array =
             reinterpret_cast<const float *>(compressed_buffer);
 
-        decoder_shape_1d_[0] = batch_size;
+        Ort::Value input_tensor = Ort::Value::CreateTensor<float>(
+            memory_info_, const_cast<float *>(float_input_array),
+            compressed_elements, current_decoder_input_shape.data(),
+            current_decoder_input_shape.size());
 
-        if (double_to_float_buffer_1d_.size() <
-            this->total_1d_pts_ * batch_size) {
-            double_to_float_buffer_1d_.resize(this->total_1d_pts_ * batch_size);
-        }
+        const char *input_names[]    = {decoder_input_name_1d_.c_str()};
+        const char *output_names[]   = {decoder_output_name_1d_.c_str()};
+        size_t total_output_elements = this->total_1d_pts_ * batch_size;
 
-        Ort::Value tensor_data = Ort::Value::CreateTensor<float>(
-            memory_info_, const_cast<float *>(floatInputArray),
+        Ort::Value tensor_data       = Ort::Value::CreateTensor<float>(
+            memory_info_, const_cast<float *>(float_input_array),
             n_outs_1d_encoder_ * batch_size, decoder_shape_1d_.data(),
             decoder_shape_1d_.size());
         const float *tensor_values = tensor_data.GetTensorData<float>();
 
-        const char *input_names[]  = {decoder_input_name_1d_.c_str()};
-        const char *output_names[] = {decoder_output_name_1d_.c_str()};
-
-#if 1
         if constexpr (std::is_same_v<T, double>) {
             // output to the buffer array so we're not deleting it
-            input_shape_1d_[0]       = batch_size;
+            if (double_to_float_buffer_1d_.size() <
+                this->total_1d_pts_ * batch_size) {
+                double_to_float_buffer_1d_.resize(this->total_1d_pts_ *
+                                                  batch_size);
+            }
 
             Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
                 memory_info_, double_to_float_buffer_1d_.data(),
-                this->total_1d_pts_ * batch_size, input_shape_1d_.data(),
-                input_shape_1d_.size());
+                total_output_elements, final_output_shape.data(),
+                final_output_shape.size());
 
             decoder_1d_->Run(Ort::RunOptions{nullptr}, input_names,
-                             &tensor_data, 1, output_names, &output_tensor, 1);
+                             &input_tensor, 1, output_names, &output_tensor, 1);
 
             // now the data has been written to output tensor so we don't have
             // to worry about *more copies*, we just convert back to doubles
-            std::transform(double_to_float_buffer_1d_.data(),
-                           double_to_float_buffer_1d_.data() +
-                               (this->total_1d_pts_ * batch_size),
-                           output_array,
-                           [](float d) { return static_cast<double>(d); });
+            std::transform(
+                double_to_float_buffer_1d_.begin(),
+                double_to_float_buffer_1d_.begin() + total_output_elements,
+                output_array, [](float f) { return static_cast<T>(f); });
         } else if constexpr (std::is_same_v<T, float>) {
-            input_shape_1d_[0]       = batch_size;
-
             Ort::Value output_tensor = Ort::Value::CreateTensor<float>(
-                memory_info_, output_array, this->total_1d_pts_ * batch_size,
-                input_shape_1d_.data(), input_shape_1d_.size());
+                memory_info_, reinterpret_cast<float *>(output_array),
+                total_output_elements, final_output_shape.data(),
+                final_output_shape.size());
 
             decoder_1d_->Run(Ort::RunOptions{nullptr}, input_names,
-                             &tensor_data, 1, output_names, &output_tensor, 1);
+                             &input_tensor, 1, output_names, &output_tensor, 1);
 
             // here, we have the data just within output_tensor, which mapped
             // directly to our output array, so we are done
         }
 
-#else
-        auto output = decoder_1d_->Run(Ort::RunOptions{nullptr}, input_names,
-                                       &tensor_data, 1, output_names, 1);
-
-        const float *output_data = output[0].GetTensorData<float>();
-
-        // convert to doubles
-        if constexpr (std::is_same_v<T, double>) {
-            std::transform(
-                output_data, output_data + (this->total_1d_pts_ * batch_size),
-                output_array, [](float d) { return static_cast<double>(d); });
-        } else if constexpr (std::is_same_v<T, float>) {
-            std::memcpy(output_array, output_data,
-                        this->total_1d_pts_ * sizeof(float) * batch_size);
-        }
-#endif
-        return n_outs_1d_encoder_ * sizeof(float) * batch_size;
+        return compressed_elements * sizeof(float);
     }
 
     std::size_t do_compress_0d(T *const original_matrix,
