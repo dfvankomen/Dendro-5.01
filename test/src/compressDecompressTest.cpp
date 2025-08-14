@@ -10,6 +10,7 @@
 #include "compression.h"
 #include "compression/compression_base.hpp"
 #include "compression/compression_factory.hpp"
+#include "compression/compressor_onnx.hpp"
 #include "profiler.h"
 
 #define IDX(i, j, k) ((k) * y * z + (j) * y + (i))  // 3D to 1D indexing
@@ -18,7 +19,7 @@
 
 namespace testcomp {
 
-#if 1
+#if 0
 std::string compressor_path_onnx_3d =
     "../testmodels/ENCODER_twodim_equal_in_out_3d.onnx";
 std::string decompressor_path_onnx_3d =
@@ -35,7 +36,6 @@ std::string compressor_path_onnx_0d =
     "../testmodels/ENCODER_twodim_equal_in_out_0d.onnx";
 std::string decompressor_path_onnx_0d =
     "../testmodels/DECODER_twodim_equal_in_out_0d.onnx";
-
 #else
 std::string compressor_path_onnx_3d =
     "../testmodels/ENCODER_singledim_equal_in_out_3d.onnx";
@@ -210,6 +210,25 @@ void printError(std::vector<T> originalMatrix,
     std::cout << psnr << std::endl;
     // std::cout << prefix << "Peak Signal to Noise Ratio (in dB): " << psnr
     //           << "\n";
+
+    // print first sheet
+    // std::cout << " ORIGINAL MATRIX FIRST SLICE:" << std::endl;
+    // for (unsigned int i = 0; i < 5; i++) {
+    //     std::cout << "   ";
+    //     for (unsigned int j = 0; j < 5; j++) {
+    //         std::cout << originalMatrix[i * 5 + j + 25] << " ";
+    //     }
+    //     std::cout << std::endl;
+    // }
+    //
+    // std::cout << " DECOMPRESSED MATRIX FIRST SLICE:" << std::endl;
+    // for (unsigned int i = 0; i < 5; i++) {
+    //     std::cout << "   ";
+    //     for (unsigned int j = 0; j < 5; j++) {
+    //         std::cout << decompressedMatrix[i * 5 + j + 25] << " ";
+    //     }
+    //     std::cout << std::endl;
+    // }
 }
 
 template <typename T>
@@ -326,9 +345,9 @@ int main() {
 
     unsigned int eleorder      = 6;
     unsigned int n             = eleorder - 1;
-    unsigned int nvar          = 2;
+    unsigned int nvar          = 24;
 
-    unsigned int nbatches      = 10;
+    unsigned int nbatches      = 100;
 
     unsigned int interp_stride = 2;
 
@@ -388,22 +407,18 @@ int main() {
          testcomp::decompressor_path_onnx_3d, testcomp::compressor_path_onnx_2d,
          testcomp::decompressor_path_onnx_2d, testcomp::compressor_path_onnx_1d,
          testcomp::decompressor_path_onnx_1d, testcomp::compressor_path_onnx_0d,
-         testcomp::decompressor_path_onnx_0d},
-        // torchscript model params
-        {eleorder, nvar, testcomp::compressor_path_pt_3d,
-         testcomp::decompressor_path_pt_3d, testcomp::compressor_path_pt_2d,
-         testcomp::decompressor_path_pt_2d, testcomp::compressor_path_pt_1d,
-         testcomp::decompressor_path_pt_1d, testcomp::compressor_path_pt_0d,
-         testcomp::decompressor_path_pt_0d},
+         testcomp::decompressor_path_onnx_0d,
+         dendrocompression::ExecutionProviderType::CUDA},
         // zfp params
         {eleorder, nvar, zfp_mode, zfp_param},
         // interp params
         {eleorder, nvar, interp_stride}};
 
+    // NOTE: the torchscript implementation seems pretty slow
+
     std::vector<dendrocompression::CompressionType> comp_types = {
         dendrocompression::CompressionType::COMP_DUMMY,
         dendrocompression::CompressionType::COMP_ONNX_MODEL,
-        dendrocompression::CompressionType::COMP_TORCH_SCRIPT,
         dendrocompression::CompressionType::COMP_ZFP,
         dendrocompression::CompressionType::COMP_INTERP};
 

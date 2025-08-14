@@ -1155,16 +1155,36 @@ void Mesh::compressSingleProcessAllDOF(AsyncExchangeContex& ctx, T* vec,
         std::size_t originalOffset = 0;
 
         // compress over all of the vars in our dof
-        std::size_t total_bytes_compressed =
-            dendro_compress::blockwise_all_dof_compression(
-                sendB + dof * (nodeSendOffset[proc_id]),
-                compressSendB + compressOffset,
-                this->getSendNodeSMConfigCount()[proc_id], dof,
-                this->getSendNodeSMConfig(),
-                this->getSendNodeSMConfigOffset()[proc_id],
-                this->getSendNodeSMConfigDimCounts()[proc_id],
-                this->getSendNodeSMConfigDimOffset()[proc_id],
-                m_uiElementOrder);
+        std::size_t total_bytes_compressed;
+        if constexpr (std::is_same_v<U, float>) {
+            total_bytes_compressed =
+                dendro_compress::blockwise_all_dof_compression_class<float>(
+                    dendro_compress::compressor_float.get(),
+                    sendB + dof * (nodeSendOffset[proc_id]),
+                    compressSendB + compressOffset,
+                    this->getSendNodeSMConfigCount()[proc_id], dof,
+                    this->getSendNodeSMConfig(),
+                    this->getSendNodeSMConfigOffset()[proc_id],
+                    this->getSendNodeSMConfigDimCounts()[proc_id],
+                    this->getSendNodeSMConfigDimOffset()[proc_id],
+                    m_uiElementOrder);
+        } else if constexpr (std::is_same_v<U, double>) {
+            total_bytes_compressed =
+                dendro_compress::blockwise_all_dof_compression_class<double>(
+                    dendro_compress::compressor_double.get(),
+                    sendB + dof * (nodeSendOffset[proc_id]),
+                    compressSendB + compressOffset,
+                    this->getSendNodeSMConfigCount()[proc_id], dof,
+                    this->getSendNodeSMConfig(),
+                    this->getSendNodeSMConfigOffset()[proc_id],
+                    this->getSendNodeSMConfigDimCounts()[proc_id],
+                    this->getSendNodeSMConfigDimOffset()[proc_id],
+                    m_uiElementOrder);
+        } else {
+            static_assert(
+                std::is_same_v<T, T>,
+                "Compressing all dof compression requires double or float!");
+        }
 
 #ifdef __DENDRO_TEST_COMPRESSION_QUALITY__
 
@@ -1172,46 +1192,99 @@ void Mesh::compressSingleProcessAllDOF(AsyncExchangeContex& ctx, T* vec,
         U* sendBOffset = sendB + dof * (nodeSendOffset[proc_id]);
         std::size_t total_points_check = nodeSendCount[proc_id] * dof;
 
-        U* decompressBuffer =
-            static_cast<U*>(calloc(total_points_check, sizeof(U)));
-        U* absErrorBuffer =
-            static_cast<U*>(calloc(total_points_check, sizeof(U)));
+        std::vector<U> decompressBuffer(total_points_check);
+        std::vector<U> absErrorBuffer(total_points_check);
+
+        U* decompressPtr = decompressBuffer.data();
+        U* absErrorPtr   = absErrorBuffer.data();
 
 // do the decompression right now
 #if 1
-        std::size_t temp = dendro_compress::blockwise_all_dof_decompression(
-            decompressBuffer, compressSendB + compressOffset,
-            this->getSendNodeSMConfigCount()[proc_id], dof,
-            this->getSendNodeSMConfig(),
-            this->getSendNodeSMConfigOffset()[proc_id],
-            this->getSendNodeSMConfigDimCounts()[proc_id],
-            this->getSendNodeSMConfigDimOffset()[proc_id], m_uiElementOrder);
+
+        std::size_t temp;
+        if constexpr (std::is_same_v<U, float>) {
+            temp =
+                dendro_compress::blockwise_all_dof_decompression_class<float>(
+                    dendro_compress::compressor_float.get(), decompressPtr,
+                    compressSendB + compressOffset,
+                    this->getSendNodeSMConfigCount()[proc_id], dof,
+                    this->getSendNodeSMConfig(),
+                    this->getSendNodeSMConfigOffset()[proc_id],
+                    this->getSendNodeSMConfigDimCounts()[proc_id],
+                    this->getSendNodeSMConfigDimOffset()[proc_id],
+                    m_uiElementOrder);
+        } else if constexpr (std::is_same_v<U, double>) {
+            temp =
+                dendro_compress::blockwise_all_dof_decompression_class<double>(
+                    dendro_compress::compressor_double.get(), decompressPtr,
+                    compressSendB + compressOffset,
+                    this->getSendNodeSMConfigCount()[proc_id], dof,
+                    this->getSendNodeSMConfig(),
+                    this->getSendNodeSMConfigOffset()[proc_id],
+                    this->getSendNodeSMConfigDimCounts()[proc_id],
+                    this->getSendNodeSMConfigDimOffset()[proc_id],
+                    m_uiElementOrder);
+        } else {
+            static_assert(
+                std::is_same_v<T, T>,
+                "Decompressing all dof compression requires double or float!");
+        }
+
+        // std::size_t temp = dendro_compress::blockwise_all_dof_decompression(
+        //     decompressPtr, compressSendB + compressOffset,
+        //     this->getSendNodeSMConfigCount()[proc_id], dof,
+        //     this->getSendNodeSMConfig(),
+        //     this->getSendNodeSMConfigOffset()[proc_id],
+        //     this->getSendNodeSMConfigDimCounts()[proc_id],
+        //     this->getSendNodeSMConfigDimOffset()[proc_id], m_uiElementOrder);
 #else
         std::size_t temp = 0;
 #endif
 
         // calculate the errors
         for (size_t i = 0; i < total_points_check; ++i) {
-            absErrorBuffer[i] = std::abs(sendBOffset[i] - decompressBuffer[i]);
+            absErrorPtr[i] = std::abs(sendBOffset[i] - decompressPtr[i]);
         }
 
-        U mse =
-            dendro_compress::calculate_mse(absErrorBuffer, total_points_check);
+        U mse = dendro_compress::calculate_mse(absErrorPtr, total_points_check);
         U rmse = std::sqrt(mse);
-        U mae =
-            dendro_compress::calculate_mae(absErrorBuffer, total_points_check);
-        U max_error = dendro_compress::calculate_max_error(absErrorBuffer,
-                                                           total_points_check);
-        U min_error = dendro_compress::calculate_min_error(absErrorBuffer,
-                                                           total_points_check);
+        U mae = dendro_compress::calculate_mae(absErrorPtr, total_points_check);
+        U max_error          = dendro_compress::calculate_max_error(absErrorPtr,
+                                                                    total_points_check);
+        U min_error          = dendro_compress::calculate_min_error(absErrorPtr,
+                                                                    total_points_check);
 
         // save this information to a file
         std::string filename = DENDRO_compression_file_prefix + "_proc_" +
                                std::to_string(this->getMPIRankGlobal()) +
                                "_compressionErrors.txt";
 
+        // check if the file is new or empty to write the header
+        bool write_header = false;
+        if (std::ifstream(filename).peek() ==
+            std::ifstream::traits_type::eof()) {
+            write_header = true;
+        }
+
         std::ofstream outfile;
         outfile.open(filename, std::ios::app);
+
+        if (write_header) {
+            outfile
+                << "Call_ID,Global_Rank,Target_Rank,DOF,Data_Type,Total_Points,"
+                << "Original_Bytes_T,Original_Bytes_U,Compressed_Bytes,"
+                << "Total_MSE,Total_RMSE,Total_MAE,Total_Max_Error,Total_Min_"
+                   "Error,"
+                << "Dim_3,Points_3,Blocks_3,MSE_3,RMSE_3,MAE_3,Max_Error_3,Min_"
+                   "Error_3,"
+                << "Dim_2,Points_2,Blocks_2,MSE_2,RMSE_2,MAE_2,Max_Error_2,Min_"
+                   "Error_2,"
+                << "Dim_1,Points_1,Blocks_1,MSE_1,RMSE_1,MAE_1,Max_Error_1,Min_"
+                   "Error_1,"
+                << "Dim_0,Points_0,Blocks_0,MSE_0,RMSE_0,MAE_0,Max_Error_0,Min_"
+                   "Error_0"
+                << std::endl;
+        }
 
         int demangledstatus;
         const char* typeName = typeid(U).name();
@@ -1253,7 +1326,7 @@ void Mesh::compressSingleProcessAllDOF(AsyncExchangeContex& ctx, T* vec,
             // rember that the total_points_arr already includes dof
             std::size_t n_points_total = total_points_arr[ndim] * num_blocks;
 
-            U* absErrorBuffer_Offset   = absErrorBuffer + ptOffset;
+            U* absErrorBuffer_Offset   = absErrorPtr + ptOffset;
 
             // now we can do the same thing, and get an offset
             mse_blks[ndim]             = dendro_compress::calculate_mse(
@@ -1283,9 +1356,6 @@ void Mesh::compressSingleProcessAllDOF(AsyncExchangeContex& ctx, T* vec,
 
         // make sure file is closed
         outfile.close();
-
-        free(decompressBuffer);
-        free(absErrorBuffer);
 
 #endif
 
@@ -1474,13 +1544,33 @@ void Mesh::decompressSingleProcessAllDOF(AsyncExchangeContex& ctx,
 
     // now decompress
     dendro::timer::t_compression_decompress.start();
-    std::size_t temp = dendro_compress::blockwise_all_dof_decompression(
-        recvB + dof * (nodeRecvOffset[proc_id]),
-        recvBComp + compressBufferOffset,
-        this->getRecvNodeSMConfigCount()[proc_id], dof,
-        this->getRecvNodeSMConfig(), this->getRecvNodeSMConfigOffset()[proc_id],
-        this->getRecvNodeSMConfigDimCounts()[proc_id],
-        this->getRecvNodeSMConfigDimOffset()[proc_id], m_uiElementOrder);
+
+    std::size_t temp;
+    if constexpr (std::is_same_v<U, float>) {
+        temp = dendro_compress::blockwise_all_dof_decompression_class<float>(
+            dendro_compress::compressor_float.get(),
+            recvB + dof * (nodeRecvOffset[proc_id]),
+            recvBComp + compressBufferOffset,
+            this->getRecvNodeSMConfigCount()[proc_id], dof,
+            this->getRecvNodeSMConfig(),
+            this->getRecvNodeSMConfigOffset()[proc_id],
+            this->getRecvNodeSMConfigDimCounts()[proc_id],
+            this->getRecvNodeSMConfigDimOffset()[proc_id], m_uiElementOrder);
+    } else if constexpr (std::is_same_v<U, double>) {
+        temp = dendro_compress::blockwise_all_dof_decompression_class<double>(
+            dendro_compress::compressor_double.get(),
+            recvB + dof * (nodeRecvOffset[proc_id]),
+            recvBComp + compressBufferOffset,
+            this->getRecvNodeSMConfigCount()[proc_id], dof,
+            this->getRecvNodeSMConfig(),
+            this->getRecvNodeSMConfigOffset()[proc_id],
+            this->getRecvNodeSMConfigDimCounts()[proc_id],
+            this->getRecvNodeSMConfigDimOffset()[proc_id], m_uiElementOrder);
+    } else {
+        static_assert(
+            std::is_same_v<T, T>,
+            "Decompressing all dof compression requires double or float!");
+    }
     compressBufferOffset += temp;
     dendro::timer::t_compression_decompress.stop();
 }

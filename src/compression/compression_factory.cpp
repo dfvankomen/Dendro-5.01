@@ -79,7 +79,7 @@ void register_compressors() {
                 !args[1].has_value() || !args[2].has_value() ||
                 !args[3].has_value()) {
                 throw std::runtime_error(
-                    "Invalid number of inputs for setting up TOrchScript "
+                    "Invalid number of inputs for setting up TorchScript "
                     "Compressor");
             }
             return std::make_unique<TorchScriptCompressor<float>>(
@@ -117,11 +117,11 @@ void register_compressors() {
     floatCompressor.register_compressor(
         dendrocompression::CompressionType::COMP_ONNX_MODEL,
         [](const std::vector<std::any>& args) {
-            if (args.size() != 10 || !args[0].has_value() ||
+            if (args.size() != 11 || !args[0].has_value() ||
                 !args[1].has_value() || !args[2].has_value() ||
                 !args[3].has_value()) {
                 throw std::runtime_error(
-                    "Invalid number of inputs for setting up TOrchScript "
+                    "Invalid number of inputs for setting up onnx "
                     "Compressor");
             }
             return std::make_unique<ONNXCompressor<float>>(
@@ -135,7 +135,9 @@ void register_compressors() {
                 std::any_cast<std::string>(args[6]),
                 std::any_cast<std::string>(args[7]),
                 std::any_cast<std::string>(args[8]),
-                std::any_cast<std::string>(args[9]));
+                std::any_cast<std::string>(args[9]),
+                std::any_cast<dendrocompression::ExecutionProviderType>(
+                    args[10]));
         });
 
     doubleCompressor.register_compressor(
@@ -152,7 +154,9 @@ void register_compressors() {
                 std::any_cast<std::string>(args[6]),
                 std::any_cast<std::string>(args[7]),
                 std::any_cast<std::string>(args[8]),
-                std::any_cast<std::string>(args[9]));
+                std::any_cast<std::string>(args[9]),
+                std::any_cast<dendrocompression::ExecutionProviderType>(
+                    args[10]));
         });
 
     // Interpolation Compressor Registration

@@ -20,6 +20,8 @@
 #include <omp.h>
 
 #include "asyncExchangeContex.h"
+#include "compression/compression_base.hpp"
+#include "compression/compression_factory.hpp"
 #include "lapac.h"
 #include "scattermapConfig.h"
 
@@ -2678,4 +2680,33 @@ std::size_t blockwise_all_dof_decompression(
     const std::array<unsigned int, 4> &blockDimCounts,
     const std::array<unsigned int, 4> &blockDimOffsets, const size_t eleorder,
     const unsigned int batchSize = __DENDRO_DEFAULT_BATCH_SIZE__);
+
+template <typename T>
+std::size_t blockwise_all_dof_compression_class(
+    dendrocompression::Compression<T> *compressor, T *buffer,
+    unsigned char *compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig> &blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4> &blockDimCounts,
+    const std::array<unsigned int, 4> &blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize = __DENDRO_DEFAULT_BATCH_SIZE__);
+
+template <typename T>
+std::size_t blockwise_all_dof_decompression_class(
+    dendrocompression::Compression<T> *compressor, T *buffer,
+    unsigned char *compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig> &blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4> &blockDimCounts,
+    const std::array<unsigned int, 4> &blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize = __DENDRO_DEFAULT_BATCH_SIZE__);
+
+// store the compressor
+extern std::unique_ptr<dendrocompression::Compression<float>> compressor_float;
+extern std::unique_ptr<dendrocompression::Compression<double>>
+    compressor_double;
+
+void setUpCompressor(dendrocompression::CompressionType compressor_type,
+                     std::vector<std::any> compressor_parameters);
+
 }  // namespace dendro_compress

@@ -24,12 +24,15 @@
 #pragma once
 #include <fdCoefficient.h>
 
+#include <any>
 #include <memory>
 #include <vector>
 
 #include "TreeNode.h"
 #include "asyncExchangeContex.h"
 #include "block.h"
+#include "compression/compression_base.hpp"
+#include "compression/compression_factory.hpp"
 #include "dendro.h"
 #include "dendroProfileParams.h"  // only need to profile unzip_asyn for bssn. remove this header file later.
 #include "key.h"

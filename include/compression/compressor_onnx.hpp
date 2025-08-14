@@ -2,6 +2,7 @@
 
 #include <onnxruntime_c_api.h>
 #include <onnxruntime_cxx_api.h>
+#include <onnxruntime_session_options_config_keys.h>
 
 #include <algorithm>
 #include <cassert>
@@ -43,6 +44,8 @@ Ort::Value createOnnxTensorFromData(const T *original_matrix,
         return Ort::Value(nullptr);
     }
 }
+
+enum class ExecutionProviderType { CPU, CUDA, ROCM, OpenVINO, DirectML };
 
 template <typename T>
 class ONNXCompressor : public Compression<T> {
@@ -106,6 +109,10 @@ class ONNXCompressor : public Compression<T> {
     Ort::Env env_;
     Ort::SessionOptions session_options_;
     Ort::MemoryInfo memory_info_;
+
+    // default CPU selection
+    ExecutionProviderType selected_execution_provider_ =
+        ExecutionProviderType::CPU;
 
     bool treat_variables_as_batch_3d_ = false;
     bool treat_variables_as_batch_2d_ = false;
@@ -283,7 +290,8 @@ class ONNXCompressor : public Compression<T> {
         const std::string &encoder_3d_path, const std::string &decoder_3d_path,
         const std::string &encoder_2d_path, const std::string &decoder_2d_path,
         const std::string &encoder_1d_path, const std::string &decoder_1d_path,
-        const std::string &encoder_0d_path, const std::string &decoder_0d_path)
+        const std::string &encoder_0d_path, const std::string &decoder_0d_path,
+        ExecutionProviderType execution_provider = ExecutionProviderType::CPU)
         : Compression<T>(ele_order, num_vars),
           encoder_3d_path_(encoder_3d_path),
           decoder_3d_path_(decoder_3d_path),
@@ -293,11 +301,56 @@ class ONNXCompressor : public Compression<T> {
           decoder_1d_path_(decoder_1d_path),
           encoder_0d_path_(encoder_0d_path),
           decoder_0d_path_(encoder_0d_path),
-          memory_info_(Ort::MemoryInfo::CreateCpu(OrtArenaAllocator,
-                                                  OrtMemTypeDefault)) {
+          memory_info_(
+              Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault)),
+          selected_execution_provider_(execution_provider) {
         session_options_.SetIntraOpNumThreads(1);
         session_options_.SetGraphOptimizationLevel(
             GraphOptimizationLevel::ORT_ENABLE_EXTENDED);
+
+        // set up the execution provider...
+        switch (selected_execution_provider_) {
+            case dendrocompression::ExecutionProviderType::CUDA: {
+                // building the NVIDIA CUDA provider
+                std::cout << "INFO[dendrocompression:ONNX]: Attempting to "
+                             "enable CUDA execution "
+                             "provider (NVIDIA)..."
+                          << std::endl;
+                OrtCUDAProviderOptions cuda_options{};
+                session_options_.AppendExecutionProvider_CUDA(cuda_options);
+                break;
+            }
+            case dendrocompression::ExecutionProviderType::ROCM: {
+                // AMD provider
+                std::cout << "INFO[dendrocompression:ONNX]: Attempting to "
+                             "enable ROCm execution "
+                             "provider (AMD)...."
+                          << std::endl;
+                OrtROCMProviderOptions rocm_options{};
+                session_options_.AppendExecutionProvider_ROCM(rocm_options);
+                break;
+            }
+            case dendrocompression::ExecutionProviderType::OpenVINO: {
+                // openvino, which is an alternative provider specifically for
+                // intel
+                std::cout << "INFO[dendrocompression:ONNX]: Attempting to "
+                             "enable OpenVINO execution "
+                             "provider (Intel)..."
+                          << std::endl;
+                OrtOpenVINOProviderOptions openvino_options{};
+                session_options_.AppendExecutionProvider_OpenVINO(
+                    openvino_options);
+            }
+            // NOTE: we can also technically add DirectML, which would give
+            // support Windows, as it uses DirectX 12. We don't support Windows
+            // currently, but the option does exist for future
+            case dendrocompression::ExecutionProviderType::CPU:
+            default:
+                std::cout << "INFO[dendrocompression:ONNX]: Using CPU "
+                             "execution provider"
+                          << std::endl;
+                break;
+        }
 
         // then set up the sizes and buffers
         input_shape_3d_ = {1, this->num_vars_, this->n_, this->n_, this->n_};
@@ -321,7 +374,7 @@ class ONNXCompressor : public Compression<T> {
             this->decoder_3d_path_, this->encoder_2d_path_,
             this->decoder_2d_path_, this->encoder_1d_path_,
             this->decoder_1d_path_, this->encoder_0d_path_,
-            this->decoder_0d_path_);
+            this->decoder_0d_path_, this->selected_execution_provider_);
 
         // constructor should call load models and do the session initilaization
         return cloned;

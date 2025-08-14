@@ -3278,4 +3278,378 @@ template std::size_t blockwise_all_dof_decompression<float>(
     const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
     const unsigned int batchSize);
 
+template <typename T>
+std::size_t blockwise_all_dof_compression_class(
+    dendrocompression::Compression<T>* compressor, T* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize) {
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    // std::cout << rank << ": INSIDE COMPRESSION - numblocks: " << numBlocks
+    //           << " - counts/offsets: ";
+    // for (auto& iii : blockDimCounts) {
+    //     std::cout << iii << " ";
+    // }
+    // std::cout << " - ";
+    // for (auto& iii : blockDimOffsets) {
+    //     std::cout << iii << " ";
+    // }
+    // std::cout << std::endl;
+
+    // booleans that store whether or not these dimensions are "active"
+    bool xdim, ydim, zdim;
+    uint32_t ndim;
+    size_t total_n_points        = 0;
+    const size_t points_per_dim  = eleorder - 1;
+    const size_t total_points_0d = 1 * dof;
+    const size_t total_points_1d = points_per_dim * dof;
+    const size_t total_points_2d = points_per_dim * points_per_dim * dof;
+    const size_t total_points_3d =
+        points_per_dim * points_per_dim * points_per_dim * dof;
+
+    // TODO: set the compression type elsewhere
+    // ChebyshevAlgorithms::cheby.set_compression_type(eleorder, 2);
+    // ChebyshevAlgorithms::cheby.print();
+
+    std::size_t comp_offset         = 0;
+    std::size_t orig_offset         = 0;
+
+    std::size_t curr_block_no       = 0;
+    std::size_t curr_inner_block_no = 0;
+    for (unsigned int currNdim : {3, 2, 1, 0}) {
+        // see if we can get our batch size with what's left after currBlockNo
+
+        // reset the inner block number
+        curr_inner_block_no = 0;
+
+        while (curr_inner_block_no < blockDimCounts[currNdim]) {
+            unsigned int remaining_blocks =
+                blockDimCounts[currNdim] - curr_inner_block_no;
+
+            unsigned int items_to_process =
+                std::min(remaining_blocks, batchSize);
+
+            if (items_to_process == 0) {
+                // break out of the loop if there are no more items to process!
+                // this could go infinite...
+                break;
+            }
+
+            // std::cout << rank << ": " << currNdim
+            //           << ": ITEMS TO PROCESS: " << items_to_process
+            //           << " CURRENTLY ON: " << curr_block_no << std::endl;
+            assert((debugAssertAllBlocksSameDim(
+                blockConfiguration, blockConfigOffset + curr_block_no,
+                items_to_process, currNdim)));
+
+            // then we process this amount
+
+            // now based on the ndim, we will set up our compression methods
+            switch (currNdim) {
+                case 0:
+                    // no compression on a single point
+                    comp_offset += compressor->do_compress_0d(
+                        &buffer[orig_offset], compressBuffer + comp_offset,
+                        items_to_process);
+                    orig_offset += total_points_0d * items_to_process;
+                    break;
+                case 1:
+                    comp_offset += compressor->do_compress_1d(
+                        &buffer[orig_offset], compressBuffer + comp_offset,
+                        items_to_process);
+                    orig_offset += total_points_1d * items_to_process;
+                    break;
+                case 2:
+                    comp_offset += compressor->do_compress_2d(
+                        &buffer[orig_offset], compressBuffer + comp_offset,
+                        items_to_process);
+                    orig_offset += total_points_2d * items_to_process;
+                    break;
+                case 3:
+                    comp_offset += compressor->do_compress_3d(
+                        &buffer[orig_offset], compressBuffer + comp_offset,
+                        items_to_process);
+                    orig_offset += total_points_3d * items_to_process;
+                    break;
+                default:
+                    std::cerr
+                        << "Invalid number of dimensions found when doing "
+                           "blockwise compression. Exiting!"
+                        << std::endl;
+                    exit(0);
+                    break;
+            }
+
+            curr_block_no += items_to_process;
+            curr_inner_block_no += items_to_process;
+        }
+    }
+
+    // make sure we got through all of them!
+    assert((curr_block_no == numBlocks));
+
+    return comp_offset;
+}
+
+template <typename T>
+std::size_t blockwise_all_dof_decompression_class(
+    dendrocompression::Compression<T>* compressor, T* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize) {
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    // std::cout << rank << ": INSIDE COMPRESSION - numblocks: " << numBlocks
+    //           << " - counts/offsets: ";
+    // for (auto& iii : blockDimCounts) {
+    //     std::cout << iii << " ";
+    // }
+    // std::cout << " - ";
+    // for (auto& iii : blockDimOffsets) {
+    //     std::cout << iii << " ";
+    // }
+    // std::cout << std::endl;
+
+    // booleans that store whether or not these dimensions are "active"
+    bool xdim, ydim, zdim;
+    uint32_t ndim;
+
+    // these values are used to define the output side, since we're
+    // decompressing back to our values. All of the decompression methods should
+    // return how many bytes to advance the compression offset.
+    size_t total_n_points        = 0;
+    const size_t points_per_dim  = eleorder - 1;
+    const size_t total_points_0d = 1 * dof;
+    const size_t total_points_1d = points_per_dim * dof;
+    const size_t total_points_2d = points_per_dim * points_per_dim * dof;
+    const size_t total_points_3d =
+        points_per_dim * points_per_dim * points_per_dim * dof;
+
+    std::size_t comp_offset         = 0;
+    std::size_t orig_offset         = 0;
+
+    std::size_t curr_block_no       = 0;
+    std::size_t curr_inner_block_no = 0;
+    for (unsigned int currNdim : {3, 2, 1, 0}) {
+        // see if we can get our batch size with what's left after currBlockNo
+
+        while (curr_inner_block_no < blockDimCounts[currNdim]) {
+            unsigned int remaining_blocks =
+                blockDimCounts[currNdim] - curr_inner_block_no;
+
+            unsigned int items_to_process =
+                std::min(remaining_blocks, batchSize);
+
+            if (items_to_process == 0) {
+                // break out of the loop if there are no more items to process!
+                // this could go infinite...
+                break;
+            }
+
+            assert((debugAssertAllBlocksSameDim(
+                blockConfiguration, blockConfigOffset + curr_block_no,
+                items_to_process, currNdim)));
+
+            // then we process this amount
+
+            // now based on the ndim, we will set up our compression methods
+            switch (currNdim) {
+                case 0:
+                    // no compression on a single point
+                    comp_offset += compressor->do_decompress_0d(
+                        compressBuffer + comp_offset, &buffer[orig_offset],
+                        items_to_process);
+                    orig_offset += total_points_0d * items_to_process;
+                    break;
+                case 1:
+                    comp_offset += compressor->do_decompress_1d(
+                        compressBuffer + comp_offset, &buffer[orig_offset],
+                        items_to_process);
+                    orig_offset += total_points_1d * items_to_process;
+                    break;
+                case 2:
+                    comp_offset += compressor->do_decompress_2d(
+                        compressBuffer + comp_offset, &buffer[orig_offset],
+                        items_to_process);
+                    orig_offset += total_points_2d * items_to_process;
+                    break;
+                case 3:
+                    comp_offset += compressor->do_decompress_3d(
+                        compressBuffer + comp_offset, &buffer[orig_offset],
+                        items_to_process);
+                    orig_offset += total_points_3d * items_to_process;
+                    break;
+                default:
+                    std::cerr
+                        << "Invalid number of dimensions found when doing "
+                           "blockwise decompression. Exiting!"
+                        << std::endl;
+                    exit(0);
+                    break;
+            }
+
+            curr_block_no += items_to_process;
+            curr_inner_block_no += items_to_process;
+        }
+
+        // reset the inner block number
+        curr_inner_block_no = 0;
+    }
+
+    // make sure we got through all of them!
+    assert((curr_block_no == numBlocks));
+
+    // TODO: copy or modify the compression filtering option
+
+    return comp_offset;
+}
+
+template std::size_t blockwise_all_dof_compression_class<float>(
+    dendrocompression::Compression<float>* compressor, float* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize);
+
+template std::size_t blockwise_all_dof_compression_class<double>(
+    dendrocompression::Compression<double>* compressor, double* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize);
+
+#if 0
+template std::size_t blockwise_all_dof_compression_class<float, float>(
+    dendrocompression::Compression<float>* compressor, float* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize);
+
+template std::size_t blockwise_all_dof_compression_class<double, double>(
+    dendrocompression::Compression<double>* compressor, double* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize);
+
+// template std::size_t blockwise_all_dof_compression_class<double, float>(
+//     dendrocompression::Compression<float>* compressor, double* buffer,
+//     unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+//     const std::vector<sm_config::SMConfig>& blockConfiguration,
+//     const size_t blockConfigOffset,
+//     const std::array<unsigned int, 4>& blockDimCounts,
+//     const std::array<unsigned int, 4>& blockDimOffsets, const size_t
+//     eleorder, const unsigned int batchSize);
+//
+// template std::size_t blockwise_all_dof_compression_class<float, double>(
+//     const dendrocompression::Compression<double>* compressor, float* buffer,
+//     unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+//     const std::vector<sm_config::SMConfig>& blockConfiguration,
+//     const size_t blockConfigOffset,
+//     const std::array<unsigned int, 4>& blockDimCounts,
+//     const std::array<unsigned int, 4>& blockDimOffsets, const size_t
+//     eleorder, const unsigned int batchSize);
+#endif
+
+template std::size_t blockwise_all_dof_decompression_class<float>(
+    dendrocompression::Compression<float>* compressor, float* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize);
+
+template std::size_t blockwise_all_dof_decompression_class<double>(
+    dendrocompression::Compression<double>* compressor, double* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize);
+
+#if 0
+template std::size_t blockwise_all_dof_decompression_class<float, float>(
+    dendrocompression::Compression<float>* compressor, float* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize);
+
+template std::size_t blockwise_all_dof_decompression_class<double, double>(
+    dendrocompression::Compression<double>* compressor, double* buffer,
+    unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+    const std::vector<sm_config::SMConfig>& blockConfiguration,
+    const size_t blockConfigOffset,
+    const std::array<unsigned int, 4>& blockDimCounts,
+    const std::array<unsigned int, 4>& blockDimOffsets, const size_t eleorder,
+    const unsigned int batchSize);
+
+// template std::size_t blockwise_all_dof_decompression_class<double, float>(
+//     dendrocompression::Compression<float>* compressor, double* buffer,
+//     unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+//     const std::vector<sm_config::SMConfig>& blockConfiguration,
+//     const size_t blockConfigOffset,
+//     const std::array<unsigned int, 4>& blockDimCounts,
+//     const std::array<unsigned int, 4>& blockDimOffsets, const size_t
+//     eleorder, const unsigned int batchSize);
+//
+// template std::size_t blockwise_all_dof_decompression_class<float, double>(
+//     const dendrocompression::Compression<double>* compressor, float* buffer,
+//     unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+//     const std::vector<sm_config::SMConfig>& blockConfiguration,
+//     const size_t blockConfigOffset,
+//     const std::array<unsigned int, 4>& blockDimCounts,
+//     const std::array<unsigned int, 4>& blockDimOffsets, const size_t
+//     eleorder, const unsigned int batchSize);
+//
+// template std::size_t blockwise_all_dof_decompression_class<double, float>(
+//     const dendrocompression::Compression<float>* compressor, double* buffer,
+//     unsigned char* compressBuffer, const size_t numBlocks, const size_t dof,
+//     const std::vector<sm_config::SMConfig>& blockConfiguration,
+//     const size_t blockConfigOffset,
+//     const std::array<unsigned int, 4>& blockDimCounts,
+//     const std::array<unsigned int, 4>& blockDimOffsets, const size_t
+//     eleorder, const unsigned int batchSize);
+//
+#endif
+
+std::unique_ptr<dendrocompression::Compression<double>> compressor_double;
+std::unique_ptr<dendrocompression::Compression<float>> compressor_float;
+
+void setUpCompressor(dendrocompression::CompressionType compressor_type,
+                     std::vector<std::any> compressor_parameters) {
+    // simple as just creating the compressor through the factory
+    // TODO: should adjust based on float/double compressor (and other
+    // potential types!)
+    std::cout << "COMPRESSOR TYPE: " << compressor_type << std::endl;
+    compressor_double = dendrocompression::doubleCompressor.create(
+        compressor_type, compressor_parameters);
+
+    std::cout << "Now building float: " << compressor_type << std::endl;
+    // TODO: this can be "smarter" based on the parameter that we want to use
+    // for setup
+    compressor_float = dendrocompression::floatCompressor.create(
+        compressor_type, compressor_parameters);
+}
+
 }  // namespace dendro_compress
