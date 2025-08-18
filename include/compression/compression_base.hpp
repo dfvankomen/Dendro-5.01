@@ -18,6 +18,8 @@ enum CompressionType {
     COMP_INTERP
 };
 
+enum class ExecutionProviderType { CPU, CUDA, ROCM, OpenVINO, DirectML };
+
 template <typename T>
 class Compression {
    protected:

@@ -45,8 +45,6 @@ Ort::Value createOnnxTensorFromData(const T *original_matrix,
     }
 }
 
-enum class ExecutionProviderType { CPU, CUDA, ROCM, OpenVINO, DirectML };
-
 template <typename T>
 class ONNXCompressor : public Compression<T> {
    private:
