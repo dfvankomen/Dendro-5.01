@@ -12,7 +12,7 @@
 #
 # ##############################################################################
 
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.1...3.20)
 project(Dendro-5.0-Library C CXX Fortran)
 
 option(DENDROLIB_ISOLATED_DIR "Only modify this if Dendro is not a library" OFF)
@@ -87,6 +87,7 @@ set(DENDRO_INCLUDE_FILES
     include/launcher.h
     include/device.h
     include/aeh_bhahaha.h
+    include/logger.h
 )
 
 set(DENDRO_SOURCE_FILES
@@ -112,6 +113,7 @@ set(DENDRO_SOURCE_FILES
     src/waveletRefEl.cpp
     test/src/meshTestUtils.cpp
     src/aeh_bhahaha.cpp
+    src/logger.cpp
 )
 
 set(FEM_INC
@@ -194,6 +196,14 @@ if(WITH_CUDA)
                           FEM/examples/src/heatMat.cpp)
 endif()
 
+include(FetchContent)
+FetchContent_Declare(
+        spdlog
+        GIT_REPOSITORY https://github.com/gabime/spdlog.git
+        GIT_TAG        v1.14.1
+    )
+FetchContent_MakeAvailable(spdlog)
+
 # ==========================
 # DENDRO LIBRARY DEFINITION -- Starting with CUDA
 # ==========================
@@ -273,6 +283,7 @@ if(BUILD_WITH_PETSC)
 endif()
 
 target_link_libraries(dendro5 PUBLIC BHaHAHA)
+target_link_libraries(dendro5 PUBLIC spdlog::spdlog)
 
 # =======================
 # =======================
