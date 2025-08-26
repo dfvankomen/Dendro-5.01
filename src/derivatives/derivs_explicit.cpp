@@ -1914,8 +1914,7 @@ template void deriv8666_z<5>(double *const Dzu, const double *const u,
 template <unsigned int P>
 void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
                   const unsigned int *sz, unsigned bflag) {
-    static_assert(P >= 4 && P <= 5, "P must be between 4 and 5 (for now)!");
-    const double idx_sqrd         = 1.0 / (dx * dx);
+  const double idx_sqrd         = 1.0 / (dx * dx);
     const double idx_sqrd_by_12   = idx_sqrd / 12.0;
     const double idx_sqrd_by_180  = idx_sqrd / 180.0;
     const double idx_sqrd_by_5040 = idx_sqrd / 5040.0;
@@ -1923,12 +1922,12 @@ void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
     const int nx                  = sz[0];
     const int ny                  = sz[1];
     const int nz                  = sz[2];
-    static constexpr int ib       = (P == 4) ? 4 : 5;
-    static constexpr int jb       = (P == 4) ? 4 : 5;
-    static constexpr int kb       = (P == 4) ? 4 : 5;
-    const int ie                  = nx - ib;
-    const int je                  = ny - jb;
-    const int ke                  = nz - kb;
+    const int ib                  = 4;
+    const int jb                  = 4;
+    const int kb                  = 4;
+    const int ie                  = sz[0] - 4;
+    const int je                  = sz[1] - 4;
+    const int ke                  = sz[2] - 4;
 
     for (int k = kb; k < ke; k++) {
         for (int j = jb; j < je; j++) {
@@ -1952,51 +1951,31 @@ void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
 
     if (bflag & (1u << OCT_DIR_LEFT)) {
         for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (int j = jb; j < je; j++) {
-                // This is a (totally) shifted sixth order stencil.
-                DxDxu[IDX(ib, j, k)] =
-                    (938.0 * u[IDX(ib, j, k)] - 4014.0 * u[IDX(ib + 1, j, k)] +
-                     7911.0 * u[IDX(ib + 2, j, k)] -
-                     9490.0 * u[IDX(ib + 3, j, k)] +
-                     7380.0 * u[IDX(ib + 4, j, k)] -
-                     3618.0 * u[IDX(ib + 5, j, k)] +
-                     1019.0 * u[IDX(ib + 6, j, k)] -
-                     126.0 * u[IDX(ib + 7, j, k)]) *
-                    idx_sqrd_by_180;
+                // This is a (totally) shifted second order stencil.
+                DxDxu[IDX(4, j, k)] =
+                    (2.0 * u[IDX(4, j, k)] - 5.0 * u[IDX(5, j, k)] +
+                     4.0 * u[IDX(6, j, k)] - u[IDX(7, j, k)]) *
+                    idx_sqrd;
 
-                // This is a (partially) shifted sixth order stencil.
-                DxDxu[IDX(ib + 1, j, k)] =
-                    (126.0 * u[IDX(ib, j, k)] - 70.0 * u[IDX(ib + 1, j, k)] -
-                     486.0 * u[IDX(ib + 2, j, k)] +
-                     855.0 * u[IDX(ib + 3, j, k)] -
-                     670.0 * u[IDX(ib + 4, j, k)] +
-                     324.0 * u[IDX(ib + 5, j, k)] -
-                     90.0 * u[IDX(ib + 6, j, k)] +
-                     11.0 * u[IDX(ib + 7, j, k)]) *
-                    idx_sqrd_by_180;
+                // This is a centered second order stencil.
+                DxDxu[IDX(5, j, k)] = (u[IDX(4, j, k)] - 2.0 * u[IDX(5, j, k)] +
+                                       u[IDX(6, j, k)]) *
+                                      idx_sqrd;
 
-                // This is a shifted sixth order stencil.
-                DxDxu[IDX(ib + 2, j, k)] =
-                    (-11.0 * u[IDX(ib, j, k)] + 214.0 * u[IDX(ib + 1, j, k)] -
-                     378.0 * u[IDX(ib + 2, j, k)] +
-                     130.0 * u[IDX(ib + 3, j, k)] +
-                     85.0 * u[IDX(ib + 4, j, k)] - 54.0 * u[IDX(ib + 5, j, k)] +
-                     16.0 * u[IDX(ib + 6, j, k)] - 2.0 * u[IDX(ib + 7, j, k)]) *
-                    idx_sqrd_by_180;
+                // This is a centered fourth order stencil.
+                DxDxu[IDX(6, j, k)] =
+                    (-u[IDX(4, j, k)] + 16.0 * u[IDX(5, j, k)] -
+                     30.0 * u[IDX(6, j, k)] + 16.0 * u[IDX(7, j, k)] -
+                     u[IDX(8, j, k)]) *
+                    idx_sqrd_by_12;
 
                 // This is a centered sixth order stencil.
-                DxDxu[IDX(ib + 3, j, k)] =
-                    (2.0 * u[IDX(ib, j, k)] - 27.0 * u[IDX(ib + 1, j, k)] +
-                     270.0 * u[IDX(ib + 2, j, k)] -
-                     490.0 * u[IDX(ib + 3, j, k)] +
-                     270.0 * u[IDX(ib + 4, j, k)] -
-                     27.0 * u[IDX(ib + 5, j, k)] + 2.0 * u[IDX(ib + 6, j, k)]) *
+                DxDxu[IDX(7, j, k)] =
+                    (2.0 * u[IDX(4, j, k)] - 27.0 * u[IDX(5, j, k)] +
+                     270.0 * u[IDX(6, j, k)] - 490.0 * u[IDX(7, j, k)] +
+                     270.0 * u[IDX(8, j, k)] - 27.0 * u[IDX(9, j, k)] +
+                     2.0 * u[IDX(10, j, k)]) *
                     idx_sqrd_by_180;
             }
         }
@@ -2020,37 +1999,24 @@ void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
                      27.0 * u[IDX(ie - 2, j, k)] + 2.0 * u[IDX(ie - 1, j, k)]) *
                     idx_sqrd_by_180;
 
-                // This is a shifted sixth order stencil.
+                // This is a centered fourth order stencil.
                 DxDxu[IDX(ie - 3, j, k)] =
-                    (-2.0 * u[IDX(ie - 8, j, k)] + 16.0 * u[IDX(ie - 7, j, k)] -
-                     54.0 * u[IDX(ie - 6, j, k)] + 85.0 * u[IDX(ie - 5, j, k)] +
-                     130.0 * u[IDX(ie - 4, j, k)] -
-                     378.0 * u[IDX(ie - 3, j, k)] +
-                     214.0 * u[IDX(ie - 2, j, k)] -
-                     11.0 * u[IDX(ie - 1, j, k)]) *
-                    idx_sqrd_by_180;
+                    (-u[IDX(ie - 5, j, k)] + 16.0 * u[IDX(ie - 4, j, k)] -
+                     30.0 * u[IDX(ie - 3, j, k)] + 16.0 * u[IDX(ie - 2, j, k)] -
+                     u[IDX(ie - 1, j, k)]) *
+                    idx_sqrd_by_12;
 
-                // This is a (partially) shifted sixth order stencil.
+                // This is a centered second order stencil.
                 DxDxu[IDX(ie - 2, j, k)] =
-                    (11.0 * u[IDX(ie - 8, j, k)] - 90.0 * u[IDX(ie - 7, j, k)] +
-                     324.0 * u[IDX(ie - 6, j, k)] -
-                     670.0 * u[IDX(ie - 5, j, k)] +
-                     855.0 * u[IDX(ie - 4, j, k)] -
-                     486.0 * u[IDX(ie - 3, j, k)] -
-                     70.0 * u[IDX(ie - 2, j, k)] +
-                     126.0 * u[IDX(ie - 1, j, k)]) *
-                    idx_sqrd_by_180;
+                    (u[IDX(ie - 3, j, k)] - 2.0 * u[IDX(ie - 2, j, k)] +
+                     u[IDX(ie - 1, j, k)]) *
+                    idx_sqrd;
 
-                // XThis is a (totally) shifted sixth order stencil.
-                DxDxu[IDX(ie - 1, j, k)] = (-126.0 * u[IDX(ie - 8, j, k)] +
-                                            1019.0 * u[IDX(ie - 7, j, k)] -
-                                            3618.0 * u[IDX(ie - 6, j, k)] +
-                                            7380.0 * u[IDX(ie - 5, j, k)] -
-                                            9490.0 * u[IDX(ie - 4, j, k)] +
-                                            7911.0 * u[IDX(ie - 3, j, k)] -
-                                            4014.0 * u[IDX(ie - 2, j, k)] +
-                                            938.0 * u[IDX(ie - 1, j, k)]) *
-                                           idx_sqrd_by_180;
+                // This is a (totally) shifted second order stencil.
+                DxDxu[IDX(ie - 1, j, k)] =
+                    (-u[IDX(ie - 4, j, k)] + 4.0 * u[IDX(ie - 3, j, k)] -
+                     5.0 * u[IDX(ie - 2, j, k)] + 2.0 * u[IDX(ie - 1, j, k)]) *
+                    idx_sqrd;
             }
         }
     }
@@ -2074,8 +2040,7 @@ void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
 template <unsigned int P>
 void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
                   const unsigned int *sz, unsigned bflag) {
-    static_assert(P >= 4 && P <= 5, "P must be between 4 and 5 (for now)!");
-    const double idy_sqrd         = 1.0 / (dy * dy);
+     const double idy_sqrd         = 1.0 / (dy * dy);
     const double idy_sqrd_by_12   = idy_sqrd / 12.0;
     const double idy_sqrd_by_180  = idy_sqrd / 180.0;
     const double idy_sqrd_by_5040 = idy_sqrd / 5040.0;
@@ -2083,12 +2048,12 @@ void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
     const int nx                  = sz[0];
     const int ny                  = sz[1];
     const int nz                  = sz[2];
-    static constexpr int ib       = (P == 4) ? 4 : 5;
-    static constexpr int jb       = (P == 4) ? 4 : 5;
-    static constexpr int kb       = (P == 4) ? 4 : 5;
-    const int ie                  = nx - ib;
-    const int je                  = ny - jb;
-    const int ke                  = nz - kb;
+    const int ib                  = 4;
+    const int jb                  = 4;
+    const int kb                  = 4;
+    const int ie                  = sz[0] - 4;
+    const int je                  = sz[1] - 4;
+    const int ke                  = sz[2] - 4;
 
     for (int k = kb; k < ke; k++) {
         for (int i = ib; i < ie; i++) {
@@ -2120,44 +2085,30 @@ void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
 #endif
 #endif
             for (int i = ib; i < ie; i++) {
-                // This is a (totally) shifted sixth order stencil.
-                DyDyu[IDX(i, jb, k)] =
-                    (938.0 * u[IDX(i, jb, k)] - 4014.0 * u[IDX(i, jb + 1, k)] +
-                     7911.0 * u[IDX(i, jb + 2, k)] -
-                     9490.0 * u[IDX(i, jb + 3, k)] +
-                     7380.0 * u[IDX(i, jb + 4, k)] -
-                     3618.0 * u[IDX(i, jb + 5, k)] +
-                     1019.0 * u[IDX(i, jb + 6, k)] -
-                     126.0 * u[IDX(i, jb + 7, k)]) *
-                    idy_sqrd_by_180;
+                // This is a (totally) shifted second order stencil.
+                DyDyu[IDX(i, 4, k)] =
+                    (2.0 * u[IDX(i, 4, k)] - 5.0 * u[IDX(i, 5, k)] +
+                     4.0 * u[IDX(i, 6, k)] - u[IDX(i, 7, k)]) *
+                    idy_sqrd;
 
-                // This is a (partially) shifted sixth order stencil.
-                DyDyu[IDX(i, jb + 1, k)] =
-                    (126.0 * u[IDX(i, jb, k)] - 70.0 * u[IDX(i, jb + 1, k)] -
-                     486.0 * u[IDX(i, jb + 2, k)] +
-                     855.0 * u[IDX(i, jb + 3, k)] -
-                     670.0 * u[IDX(i, jb + 4, k)] +
-                     324.0 * u[IDX(i, jb + 5, k)] -
-                     90.0 * u[IDX(i, jb + 6, k)] +
-                     11.0 * u[IDX(i, jb + 7, k)]) *
-                    idy_sqrd_by_180;
+                // This is a centered second order stencil.
+                DyDyu[IDX(i, 5, k)] = (u[IDX(i, 4, k)] - 2.0 * u[IDX(i, 5, k)] +
+                                       u[IDX(i, 6, k)]) *
+                                      idy_sqrd;
 
-                // This is a shifted sixth order stencil.
-                DyDyu[IDX(i, jb + 2, k)] =
-                    (-11.0 * u[IDX(i, jb, k)] + 214.0 * u[IDX(i, jb + 1, k)] -
-                     378.0 * u[IDX(i, jb + 2, k)] +
-                     130.0 * u[IDX(i, jb + 3, k)] +
-                     85.0 * u[IDX(i, jb + 4, k)] - 54.0 * u[IDX(i, jb + 5, k)] +
-                     16.0 * u[IDX(i, jb + 6, k)] - 2.0 * u[IDX(i, jb + 7, k)]) *
-                    idy_sqrd_by_180;
+                // This is a centered fourth order stencil.
+                DyDyu[IDX(i, 6, k)] =
+                    (-u[IDX(i, 4, k)] + 16.0 * u[IDX(i, 5, k)] -
+                     30.0 * u[IDX(i, 6, k)] + 16.0 * u[IDX(i, 7, k)] -
+                     u[IDX(i, 8, k)]) *
+                    idy_sqrd_by_12;
 
                 // This is a centered sixth order stencil.
-                DyDyu[IDX(i, jb + 3, k)] =
-                    (2.0 * u[IDX(i, jb, k)] - 27.0 * u[IDX(i, jb + 1, k)] +
-                     270.0 * u[IDX(i, jb + 2, k)] -
-                     490.0 * u[IDX(i, jb + 3, k)] +
-                     270.0 * u[IDX(i, jb + 4, k)] -
-                     27.0 * u[IDX(i, jb + 5, k)] + 2.0 * u[IDX(i, jb + 6, k)]) *
+                DyDyu[IDX(i, 7, k)] =
+                    (2.0 * u[IDX(i, 4, k)] - 27.0 * u[IDX(i, 5, k)] +
+                     270.0 * u[IDX(i, 6, k)] - 490.0 * u[IDX(i, 7, k)] +
+                     270.0 * u[IDX(i, 8, k)] - 27.0 * u[IDX(i, 9, k)] +
+                     2.0 * u[IDX(i, 10, k)]) *
                     idy_sqrd_by_180;
             }
         }
@@ -2181,37 +2132,24 @@ void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
                      27.0 * u[IDX(i, je - 2, k)] + 2.0 * u[IDX(i, je - 1, k)]) *
                     idy_sqrd_by_180;
 
-                // This is a shifted sixth order stencil.
+                // This is a centered fourth order stencil.
                 DyDyu[IDX(i, je - 3, k)] =
-                    (-2.0 * u[IDX(i, je - 8, k)] + 16.0 * u[IDX(i, je - 7, k)] -
-                     54.0 * u[IDX(i, je - 6, k)] + 85.0 * u[IDX(i, je - 5, k)] +
-                     130.0 * u[IDX(i, je - 4, k)] -
-                     378.0 * u[IDX(i, je - 3, k)] +
-                     214.0 * u[IDX(i, je - 2, k)] -
-                     11.0 * u[IDX(i, je - 1, k)]) *
-                    idy_sqrd_by_180;
+                    (-u[IDX(i, je - 5, k)] + 16.0 * u[IDX(i, je - 4, k)] -
+                     30.0 * u[IDX(i, je - 3, k)] + 16.0 * u[IDX(i, je - 2, k)] -
+                     u[IDX(i, je - 1, k)]) *
+                    idy_sqrd_by_12;
 
-                // This is a (partially) shifted sixth order stencil.
+                // This is a centered second order stencil.
                 DyDyu[IDX(i, je - 2, k)] =
-                    (11.0 * u[IDX(i, je - 8, k)] - 90.0 * u[IDX(i, je - 7, k)] +
-                     324.0 * u[IDX(i, je - 6, k)] -
-                     670.0 * u[IDX(i, je - 5, k)] +
-                     855.0 * u[IDX(i, je - 4, k)] -
-                     486.0 * u[IDX(i, je - 3, k)] -
-                     70.0 * u[IDX(i, je - 2, k)] +
-                     126.0 * u[IDX(i, je - 1, k)]) *
-                    idy_sqrd_by_180;
+                    (u[IDX(i, je - 3, k)] - 2.0 * u[IDX(i, je - 2, k)] +
+                     u[IDX(i, je - 1, k)]) *
+                    idy_sqrd;
 
-                // XThis is a (totally) shifted sixth order stencil.
-                DyDyu[IDX(i, je - 1, k)] = (-126.0 * u[IDX(i, je - 8, k)] +
-                                            1019.0 * u[IDX(i, je - 7, k)] -
-                                            3618.0 * u[IDX(i, je - 6, k)] +
-                                            7380.0 * u[IDX(i, je - 5, k)] -
-                                            9490.0 * u[IDX(i, je - 4, k)] +
-                                            7911.0 * u[IDX(i, je - 3, k)] -
-                                            4014.0 * u[IDX(i, je - 2, k)] +
-                                            938.0 * u[IDX(i, je - 1, k)]) *
-                                           idy_sqrd_by_180;
+                // This is a (totally) shifted second order stencil.
+                DyDyu[IDX(i, je - 1, k)] =
+                    (-u[IDX(i, je - 4, k)] + 4.0 * u[IDX(i, je - 3, k)] -
+                     5.0 * u[IDX(i, je - 2, k)] + 2.0 * u[IDX(i, je - 1, k)]) *
+                    idy_sqrd;
             }
         }
     }
@@ -2235,8 +2173,7 @@ void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
 template <unsigned int P>
 void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
                   const unsigned int *sz, unsigned bflag) {
-    static_assert(P >= 4 && P <= 5, "P must be between 4 and 5 (for now)!");
-    const double idz_sqrd         = 1.0 / (dz * dz);
+   const double idz_sqrd         = 1.0 / (dz * dz);
     const double idz_sqrd_by_12   = idz_sqrd / 12.0;
     const double idz_sqrd_by_180  = idz_sqrd / 180.0;
     const double idz_sqrd_by_5040 = idz_sqrd / 5040.0;
@@ -2244,12 +2181,12 @@ void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
     const int nx                  = sz[0];
     const int ny                  = sz[1];
     const int nz                  = sz[2];
-    static constexpr int ib       = (P == 4) ? 4 : 5;
-    static constexpr int jb       = (P == 4) ? 4 : 5;
-    static constexpr int kb       = (P == 4) ? 4 : 5;
-    const int ie                  = nx - ib;
-    const int je                  = ny - jb;
-    const int ke                  = nz - kb;
+    const int ib                  = 4;
+    const int jb                  = 4;
+    const int kb                  = 4;
+    const int ie                  = sz[0] - 4;
+    const int je                  = sz[1] - 4;
+    const int ke                  = sz[2] - 4;
 
     const int n                   = nx * ny;
 
@@ -2283,44 +2220,30 @@ void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
 #endif
 #endif
             for (int i = ib; i < ie; i++) {
-                // This is a (totally) shifted sixth order stencil.
-                DzDzu[IDX(i, j, kb)] =
-                    (938.0 * u[IDX(i, j, kb)] - 4014.0 * u[IDX(i, j, kb + 1)] +
-                     7911.0 * u[IDX(i, j, kb + 2)] -
-                     9490.0 * u[IDX(i, j, kb + 3)] +
-                     7380.0 * u[IDX(i, j, kb + 4)] -
-                     3618.0 * u[IDX(i, j, kb + 5)] +
-                     1019.0 * u[IDX(i, j, kb + 6)] -
-                     126.0 * u[IDX(i, j, kb + 7)]) *
-                    idz_sqrd_by_180;
+                // This is a (totally) shifted second order stencil.
+                DzDzu[IDX(i, j, 4)] =
+                    (2.0 * u[IDX(i, j, 4)] - 5.0 * u[IDX(i, j, 5)] +
+                     4.0 * u[IDX(i, j, 6)] - u[IDX(i, j, 7)]) *
+                    idz_sqrd;
 
-                // This is a (partially) shifted sixth order stencil.
-                DzDzu[IDX(i, j, kb + 1)] =
-                    (126.0 * u[IDX(i, j, kb)] - 70.0 * u[IDX(i, j, kb + 1)] -
-                     486.0 * u[IDX(i, j, kb + 2)] +
-                     855.0 * u[IDX(i, j, kb + 3)] -
-                     670.0 * u[IDX(i, j, kb + 4)] +
-                     324.0 * u[IDX(i, j, kb + 5)] -
-                     90.0 * u[IDX(i, j, kb + 6)] +
-                     11.0 * u[IDX(i, j, kb + 7)]) *
-                    idz_sqrd_by_180;
+                // This is a centered second order stencil.
+                DzDzu[IDX(i, j, 5)] = (u[IDX(i, j, 4)] - 2.0 * u[IDX(i, j, 5)] +
+                                       u[IDX(i, j, 6)]) *
+                                      idz_sqrd;
 
-                // This is a shifted sixth order stencil.
-                DzDzu[IDX(i, j, kb + 2)] =
-                    (-11.0 * u[IDX(i, j, kb)] + 214.0 * u[IDX(i, j, kb + 1)] -
-                     378.0 * u[IDX(i, j, kb + 2)] +
-                     130.0 * u[IDX(i, j, kb + 3)] +
-                     85.0 * u[IDX(i, j, kb + 4)] - 54.0 * u[IDX(i, j, kb + 5)] +
-                     16.0 * u[IDX(i, j, kb + 6)] - 2.0 * u[IDX(i, j, kb + 7)]) *
-                    idz_sqrd_by_180;
+                // This is a centered fourth order stencil.
+                DzDzu[IDX(i, j, 6)] =
+                    (-u[IDX(i, j, 4)] + 16.0 * u[IDX(i, j, 5)] -
+                     30.0 * u[IDX(i, j, 6)] + 16.0 * u[IDX(i, j, 7)] -
+                     u[IDX(i, j, 8)]) *
+                    idz_sqrd_by_12;
 
                 // This is a centered sixth order stencil.
-                DzDzu[IDX(i, j, kb + 3)] =
-                    (2.0 * u[IDX(i, j, kb)] - 27.0 * u[IDX(i, j, kb + 1)] +
-                     270.0 * u[IDX(i, j, kb + 2)] -
-                     490.0 * u[IDX(i, j, kb + 3)] +
-                     270.0 * u[IDX(i, j, kb + 4)] -
-                     27.0 * u[IDX(i, j, kb + 5)] + 2.0 * u[IDX(i, j, kb + 6)]) *
+                DzDzu[IDX(i, j, 7)] =
+                    (2.0 * u[IDX(i, j, 4)] - 27.0 * u[IDX(i, j, 5)] +
+                     270.0 * u[IDX(i, j, 6)] - 490.0 * u[IDX(i, j, 7)] +
+                     270.0 * u[IDX(i, j, 8)] - 27.0 * u[IDX(i, j, 9)] +
+                     2.0 * u[IDX(i, j, 10)]) *
                     idz_sqrd_by_180;
             }
         }
@@ -2344,37 +2267,24 @@ void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
                      27.0 * u[IDX(i, j, ke - 2)] + 2.0 * u[IDX(i, j, ke - 1)]) *
                     idz_sqrd_by_180;
 
-                // This is a shifted sixth order stencil.
+                // This is a centered fourth order stencil.
                 DzDzu[IDX(i, j, ke - 3)] =
-                    (-2.0 * u[IDX(i, j, ke - 8)] + 16.0 * u[IDX(i, j, ke - 7)] -
-                     54.0 * u[IDX(i, j, ke - 6)] + 85.0 * u[IDX(i, j, ke - 5)] +
-                     130.0 * u[IDX(i, j, ke - 4)] -
-                     378.0 * u[IDX(i, j, ke - 3)] +
-                     214.0 * u[IDX(i, j, ke - 2)] -
-                     11.0 * u[IDX(i, j, ke - 1)]) *
-                    idz_sqrd_by_180;
+                    (-u[IDX(i, j, ke - 5)] + 16.0 * u[IDX(i, j, ke - 4)] -
+                     30.0 * u[IDX(i, j, ke - 3)] + 16.0 * u[IDX(i, j, ke - 2)] -
+                     u[IDX(i, j, ke - 1)]) *
+                    idz_sqrd_by_12;
 
-                // This is a (partially) shifted sixth order stencil.
+                // This is a centered second order stencil.
                 DzDzu[IDX(i, j, ke - 2)] =
-                    (11.0 * u[IDX(i, j, ke - 8)] - 90.0 * u[IDX(i, j, ke - 7)] -
-                     324.0 * u[IDX(i, j, ke - 6)] -
-                     670.0 * u[IDX(i, j, ke - 5)] +
-                     855.0 * u[IDX(i, j, ke - 4)] -
-                     486.0 * u[IDX(i, j, ke - 3)] -
-                     70.0 * u[IDX(i, j, ke - 2)] +
-                     126.0 * u[IDX(i, j, ke - 1)]) *
-                    idz_sqrd_by_180;
+                    (u[IDX(i, j, ke - 3)] - 2.0 * u[IDX(i, j, ke - 2)] +
+                     u[IDX(i, j, ke - 1)]) *
+                    idz_sqrd;
 
-                // XThis is a (totally) shifted sixth order stencil.
-                DzDzu[IDX(i, j, ke - 1)] = (-126.0 * u[IDX(i, j, ke - 8)] +
-                                            1019.0 * u[IDX(i, j, ke - 7)] -
-                                            3618.0 * u[IDX(i, j, ke - 6)] +
-                                            7380.0 * u[IDX(i, j, ke - 5)] -
-                                            9490.0 * u[IDX(i, j, ke - 4)] +
-                                            7911.0 * u[IDX(i, j, ke - 3)] -
-                                            4014.0 * u[IDX(i, j, ke - 2)] +
-                                            938.0 * u[IDX(i, j, ke - 1)]) *
-                                           idz_sqrd_by_180;
+                // This is a (totally) shifted second order stencil.
+                DzDzu[IDX(i, j, ke - 1)] =
+                    (-u[IDX(i, j, ke - 4)] + 4.0 * u[IDX(i, j, ke - 3)] -
+                     5.0 * u[IDX(i, j, ke - 2)] + 2.0 * u[IDX(i, j, ke - 1)]) *
+                    idz_sqrd;
             }
         }
     }
