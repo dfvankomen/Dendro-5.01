@@ -9,7 +9,7 @@
 # The options in there must be included in the root directory of your project
 # that you are using this library with. This will configure everything for building,
 # but the options must be propagated to your own solvers and projects.
-# 
+#
 # ##############################################################################
 
 cmake_minimum_required(VERSION 3.1...3.20)
@@ -82,6 +82,7 @@ set(DENDRO_INCLUDE_FILES
     test/include/testUtils.tcc
     test/include/meshTestUtils.h
     include/launcher.h
+    include/logger.h
     include/device.h)
 
 set(DENDRO_SOURCE_FILES
@@ -105,6 +106,7 @@ set(DENDRO_SOURCE_FILES
     src/sub_oda.cpp
     src/meshUtils.cpp
     src/waveletRefEl.cpp
+    src/logger.cpp
     test/src/meshTestUtils.cpp)
 
 set(FEM_INC
@@ -187,6 +189,14 @@ if(WITH_CUDA)
                           FEM/examples/src/heatMat.cpp)
 endif()
 
+include(FetchContent)
+FetchContent_Declare(
+        spdlog
+        GIT_REPOSITORY https://github.com/gabime/spdlog.git
+        GIT_TAG        v1.14.1
+    )
+FetchContent_MakeAvailable(spdlog)
+
 # ==========================
 # DENDRO LIBRARY DEFINITION -- Starting with CUDA
 # ==========================
@@ -264,6 +274,8 @@ if(BUILD_WITH_PETSC)
   target_include_directories(dendro5 PUBLIC ${PETSC_INCLUDES})
   target_link_libraries(dendro5 PUBLIC ${PETSC_LIBRARIES})
 endif()
+
+target_link_libraries(dendro5 PUBLIC spdlog::spdlog)
 
 # =======================
 # =======================
