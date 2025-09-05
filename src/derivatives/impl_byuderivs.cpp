@@ -1628,6 +1628,1522 @@ MatrixDiagonalEntries* BYUDerivsT6R2DiagonalsSecondOrder(
 	}
 
 //FIRST DERIVATIVES
+
+MatrixDiagonalEntries* createA4_1_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 9.820500840908007;
+		double gamma02 = 10.282867796276006;
+		double gamma10 = 0.08185064221837997;
+		double gamma12 = 1.68906274817202;
+		double gamma13 = 0.496147893139263;
+		double gamma20 = 0.015218619469010378;
+		double gamma21 = 0.313606951149977;
+		double gamma23 = 0.7939030813731411;
+		double gamma24 = 0.14913730019362592;
+		double a00 =  - 3.7344525106358377;
+		double a01 =  - 10.765902293945098;
+		double a02 = 11.158777464424904;
+		double a03 = 3.8932795799678406;
+		double a04 =  - 0.6389839716987255;
+		double a05 = 0.09587727382044378;
+		double a06 =  - 0.008595531659208112;
+		double a10 =  - 0.31850909623408924;
+		double a11 =  - 1.396944235857124;
+		double a12 = 0.536401605870878;
+		double a13 = 1.122316892896269;
+		double a14 = 0.05945060450387947;
+		double a15 =  - 0.0027438380250889333;
+		double a16 = 0.000028066844770735025;
+		double a20 =  - 0.06702204160713257;
+		double a21 =  - 0.6115799835980097;
+		double a22 =  - 0.4353270505424934;
+		double a23 = 0.7147300302515313;
+		double a24 = 0.3855053316097469;
+		double a25 = 0.014273663642987601;
+		double a26 =  - 0.0005799497566284084;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_2_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 9.82050086297005;
+		double gamma02 = 10.282867809058313;
+		double gamma10 = 0.08185064221829087;
+		double gamma12 = 1.6890627481714804;
+		double gamma13 = 0.4961478931388701;
+		double gamma20 = 0.017918887158094664;
+		double gamma21 = 0.33500390219730425;
+		double gamma23 = 0.7548768581531722;
+		double gamma24 = 0.13667343083285768;
+		double a00 =  - 3.73445251380582;
+		double a01 =  - 10.765902315893966;
+		double a02 = 11.158777481815811;
+		double a03 = 3.8932795799881186;
+		double a04 =  - 0.6389839738157034;
+		double a05 = 0.09587727397420936;
+		double a06 =  - 0.008595531676508965;
+		double a10 =  - 0.31850909623427476;
+		double a11 =  - 1.396944235854646;
+		double a12 = 0.5364016058704685;
+		double a13 = 1.1223168928950014;
+		double a14 = 0.059450604503400145;
+		double a15 =  - 0.0027438380250710795;
+		double a16 = 0.00002806684476978311;
+		double a20 =  - 0.07670359108573083;
+		double a21 =  - 0.6273443641711278;
+		double a22 =  - 0.37833992259630045;
+		double a23 = 0.7128462614236629;
+		double a24 = 0.3572245284141374;
+		double a25 = 0.012842138314361781;
+		double a26 =  - 0.0005250502990408262;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_3_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 11.720569036874554;
+		double gamma02 = 15.554462579626016;
+		double gamma10 = 0.1081072833795741;
+		double gamma12 = 0.9879415284429277;
+		double gamma13 =  - 0.019091049862053604;
+		double gamma20 = 0.001594503696184088;
+		double gamma21 = 0.11896661542190605;
+		double gamma23 = 1.4712607824914257;
+		double gamma24 = 0.39065672002582436;
+		double a00 =  - 3.869256849728272;
+		double a01 =  - 15.34137988312291;
+		double a02 = 12.883637155318173;
+		double a03 = 7.717258677339867;
+		double a04 =  - 1.6841269756473085;
+		double a05 = 0.32933821713218175;
+		double a06 =  - 0.035470348869858045;
+		double a10 =  - 0.3964964225533291;
+		double a11 =  - 1.0420535477054953;
+		double a12 = 1.1470798670545719;
+		double a13 = 0.3494082667125378;
+		double a14 =  - 0.06737997031063933;
+		double a15 = 0.010504184266465403;
+		double a16 =  - 0.0010623774453651048;
+		double a20 =  - 0.008283084846223839;
+		double a21 =  - 0.3750015455221021;
+		double a22 =  - 1.2054305952790025;
+		double a23 = 0.6249651589579047;
+		double a24 = 0.9236932467174234;
+		double a25 = 0.04166802585994469;
+		double a26 =  - 0.0016112058874788778;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_4_Diagonals() {
+			double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 9.092199664350433;
+		double gamma02 = 10.362304786419537;
+		double gamma10 = 0.10511747198457709;
+		double gamma12 = 1.3999606300191687;
+		double gamma13 = 0.36626783281004827;
+		double gamma20 = 0.010832502509735786;
+		double gamma21 = 0.23818680686599208;
+		double gamma23 = 1.1282790769923212;
+		double gamma24 = 0.28864969919854105;
+		double a00 =  - 3.583310087673525;
+		double a01 =  - 9.995923639727009;
+		double a02 = 9.549519843633083;
+		double a03 = 4.968473573688743;
+		double a04 =  - 1.17661765410291;
+		double a05 = 0.2747094330971768;
+		double a06 =  - 0.03685144021286404;
+		double a10 =  - 0.380753971849515;
+		double a11 =  - 1.1730254249425538;
+		double a12 = 0.6536944559326225;
+		double a13 = 0.8627866179739128;
+		double a14 = 0.03735935464342531;
+		double a15 = 0.0004486340570757499;
+		double a16 =  - 0.0005096658149371253;
+		double a20 =  - 0.04678686551681484;
+		double a21 =  - 0.5104482821604837;
+		double a22 =  - 0.770033072247565;
+		double a23 = 0.6228933619764672;
+		double a24 = 0.67271251593522;
+		double a25 = 0.033041689527390984;
+		double a26 =  - 0.001379347514430855;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_5_Diagonals() {
+			double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 9.82050086297005;
+		double gamma02 = 10.282867809058313;
+		double gamma10 = 0.08185064221829087;
+		double gamma12 = 1.6890627481714804;
+		double gamma13 = 0.4961478931388701;
+		double gamma20 = 0.010832502509737819;
+		double gamma21 = 0.2381868068661776;
+		double gamma23 = 1.128279076992181;
+		double gamma24 = 0.28864969919845446;
+		double a00 =  - 3.73445251380582;
+		double a01 =  - 10.765902315893966;
+		double a02 = 11.158777481815811;
+		double a03 = 3.8932795799881186;
+		double a04 =  - 0.6389839738157034;
+		double a05 = 0.09587727397420936;
+		double a06 =  - 0.008595531676508965;
+		double a10 =  - 0.31850909623427476;
+		double a11 =  - 1.396944235854646;
+		double a12 = 0.5364016058704685;
+		double a13 = 1.1223168928950014;
+		double a14 = 0.059450604503400145;
+		double a15 =  - 0.0027438380250710795;
+		double a16 = 0.00002806684476978311;
+		double a20 =  - 0.046786865516800155;
+		double a21 =  - 0.5104482821608083;
+		double a22 =  - 0.7700330722473107;
+		double a23 = 0.6228933619765842;
+		double a24 = 0.6727125159356983;
+		double a25 = 0.033041689527405986;
+		double a26 =  - 0.0013793475144312974;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_6_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 9.82050086297005;
+		double gamma02 = 10.282867809058313;
+		double gamma10 = 0.36393960516685847;
+		double gamma12 =  - 6.34581504273248;
+		double gamma13 =  - 5.455121314714797;
+		double gamma20 = 0.010832502509737819;
+		double gamma21 = 0.2381868068661776;
+		double gamma23 = 1.128279076992181;
+		double gamma24 = 0.28864969919845446;
+		double a00 =  - 3.73445251380582;
+		double a01 =  - 10.765902315893966;
+		double a02 = 11.158777481815811;
+		double a03 = 3.8932795799881186;
+		double a04 =  - 0.6389839738157034;
+		double a05 = 0.09587727397420936;
+		double a06 =  - 0.008595531676508965;
+		double a10 =  - 1.1690129655580526;
+		double a11 = 2.5693037088752675;
+		double a12 = 7.670098232641336;
+		double a13 =  - 7.8155049102691265;
+		double a14 =  - 1.3854291627394484;
+		double a15 = 0.1415361269516958;
+		double a16 =  - 0.010991029895683714;
+		double a20 =  - 0.046786865516800155;
+		double a21 =  - 0.5104482821608083;
+		double a22 =  - 0.7700330722473107;
+		double a23 = 0.6228933619765842;
+		double a24 = 0.6727125159356983;
+		double a25 = 0.033041689527405986;
+		double a26 =  - 0.0013793475144312974;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_7_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 11.72056913137962;
+		double gamma02 = 15.554462594162011;
+		double gamma10 = 0.36393960516685847;
+		double gamma12 =  - 6.34581504273248;
+		double gamma13 =  - 5.455121314714797;
+		double gamma20 = 0.010832502509737819;
+		double gamma21 = 0.2381868068661776;
+		double gamma23 = 1.128279076992181;
+		double gamma24 = 0.28864969919845446;
+		double a00 =  - 3.8692568733227635;
+		double a01 =  - 15.341379957576446;
+		double a02 = 12.883637219907088;
+		double a03 = 7.717258726068238;
+		double a04 =  - 1.6841269855708267;
+		double a05 = 0.3293382198137049;
+		double a06 =  - 0.03547034916968481;
+		double a10 =  - 1.1690129655580526;
+		double a11 = 2.5693037088752675;
+		double a12 = 7.670098232641336;
+		double a13 =  - 7.8155049102691265;
+		double a14 =  - 1.3854291627394484;
+		double a15 = 0.1415361269516958;
+		double a16 =  - 0.010991029895683714;
+		double a20 =  - 0.046786865516800155;
+		double a21 =  - 0.5104482821608083;
+		double a22 =  - 0.7700330722473107;
+		double a23 = 0.6228933619765842;
+		double a24 = 0.6727125159356983;
+		double a25 = 0.033041689527405986;
+		double a26 =  - 0.0013793475144312974;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+
+	}
+MatrixDiagonalEntries* createA4_8_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 10.124423686900291;
+		double gamma02 = 13.061603846624669;
+		double gamma10 = 0.36393960516397067;
+		double gamma12 =  - 6.345815043464687;
+		double gamma13 =  - 5.455121315585303;
+		double gamma20 = 0.010832502509735786;
+		double gamma21 = 0.23818680686599208;
+		double gamma23 = 1.1282790769923212;
+		double gamma24 = 0.28864969919854105;
+		double a00 =  - 3.6694533066008543;
+		double a01 =  - 12.369980002354707;
+		double a02 = 10.464970745197672;
+		double a03 = 6.987379266251513;
+		double a04 =  - 1.7858832667253233;
+		double a05 = 0.4303380766868438;
+		double a06 =  - 0.05737147795252053;
+		double a10 =  - 1.1690129655423311;
+		double a11 = 2.569303709628177;
+		double a12 = 7.6700982331484715;
+		double a13 =  - 7.815504911034343;
+		double a14 =  - 1.3854291629690247;
+		double a15 = 0.14153612692248557;
+		double a16 =  - 0.010991029895809476;
+		double a20 =  - 0.04678686551681484;
+		double a21 =  - 0.5104482821604837;
+		double a22 =  - 0.770033072247565;
+		double a23 = 0.6228933619764672;
+		double a24 = 0.67271251593522;
+		double a25 = 0.033041689527390984;
+		double a26 =  - 0.001379347514430855;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3/6.0, -a2/4.0, -a1/2.0, 0.0, a1/2.0, a2/4.0, a3/6.0
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_9_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 9.092199640716895;
+		double gamma02 = 10.362304769374216;
+		double gamma10 = 0.36393960516685847;
+		double gamma12 =  - 6.34581504273248;
+		double gamma13 =  - 5.455121314714797;
+		double gamma20 = 0.010832502509737819;
+		double gamma21 = 0.2381868068661776;
+		double gamma23 = 1.128279076992181;
+		double gamma24 = 0.28864969919845446;
+		double a00 =  - 3.583310083032476;
+		double a01 =  - 9.995923596790389;
+		double a02 = 9.549519902457892;
+		double a03 = 4.968473477723128;
+		double a04 =  - 1.1766177021837405;
+		double a05 = 0.2747094406267014;
+		double a06 =  - 0.03685144035384007;
+		double a10 =  - 1.1690129655580526;
+		double a11 = 2.5693037088752675;
+		double a12 = 7.670098232641336;
+		double a13 =  - 7.8155049102691265;
+		double a14 =  - 1.3854291627394484;
+		double a15 = 0.1415361269516958;
+		double a16 =  - 0.010991029895683714;
+		double a20 =  - 0.046786865516800155;
+		double a21 =  - 0.5104482821608083;
+		double a22 =  - 0.7700330722473107;
+		double a23 = 0.6228933619765842;
+		double a24 = 0.6727125159356983;
+		double a25 = 0.033041689527405986;
+		double a26 =  - 0.0013793475144312974;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_10_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 9.82050086297005;
+		double gamma02 = 10.282867809058313;
+		double gamma10 = 0.06432504195032081;
+		double gamma12 = 2.253048588922067;
+		double gamma13 = 0.8947355749649457;
+		double gamma20 = 0.010832502509737819;
+		double gamma21 = 0.2381868068661776;
+		double gamma23 = 1.128279076992181;
+		double gamma24 = 0.28864969919845446;
+		double a00 =  - 3.73445251380582;
+		double a01 =  - 10.765902315893966;
+		double a02 = 11.158777481815811;
+		double a03 = 3.8932795799881186;
+		double a04 =  - 0.6389839738157034;
+		double a05 = 0.09587727397420936;
+		double a06 =  - 0.008595531676508965;
+		double a10 =  - 0.2633689121814849;
+		double a11 =  - 1.6681586712239223;
+		double a12 = 0.040493403700274426;
+		double a13 = 1.7567567175694963;
+		double a14 = 0.14259309069789727;
+		double a15 =  - 0.008532325517430831;
+		double a16 = 0.00021669695996460306;
+		double a20 =  - 0.046786865516800155;
+		double a21 =  - 0.5104482821608083;
+		double a22 =  - 0.7700330722473107;
+		double a23 = 0.6228933619765842;
+		double a24 = 0.6727125159356983;
+		double a25 = 0.033041689527405986;
+		double a26 =  - 0.0013793475144312974;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_11_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 7.382379779647204;
+		double gamma02 = 6.118391304701528;
+		double gamma10 = 0.10511747198457366;
+		double gamma12 = 1.3999606300191616;
+		double gamma13 = 0.36626783281006475;
+		double gamma20 = 0.014504838045567564;
+		double gamma21 = 0.2617273578999154;
+		double gamma23 = 1.110302482205355;
+		double gamma24 = 0.3070536064807964;
+		double a00 =  - 3.4387560411379563;
+		double a01 =  - 6.120972374567166;
+		double a02 = 7.819283685673539;
+		double a03 = 2.0327058980606223;
+		double a04 =  - 0.3578340204155545;
+		double a05 = 0.07704263923889951;
+		double a06 =  - 0.011469786857726549;
+		double a10 =  - 0.3807539718494947;
+		double a11 =  - 1.1730254249425167;
+		double a12 = 0.6536944559325863;
+		double a13 = 0.8627866179738892;
+		double a14 = 0.03735935464344308;
+		double a15 = 0.0004486340570785038;
+		double a16 =  - 0.0005096658149371573;
+		double a20 =  - 0.058823348930518396;
+		double a21 =  - 0.5249167357886487;
+		double a22 =  - 0.714498395784144;
+		double a23 = 0.5832981939847537;
+		double a24 = 0.6747270495592782;
+		double a25 = 0.0425803899581001;
+		double a26 =  - 0.0023671529988773697;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_12_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 10.124423686900291;
+		double gamma02 = 13.061603846624669;
+		double gamma10 = 0.10511747198457709;
+		double gamma12 = 1.3999606300191687;
+		double gamma13 = 0.36626783281004827;
+		double gamma20 = 0.014504838045567564;
+		double gamma21 = 0.2617273578999557;
+		double gamma23 = 1.1103024822053873;
+		double gamma24 = 0.3070536064807722;
+		double a00 =  - 3.6694533066008543;
+		double a01 =  - 12.369980002354707;
+		double a02 = 10.464970745197672;
+		double a03 = 6.987379266251513;
+		double a04 =  - 1.7858832667253233;
+		double a05 = 0.4303380766868438;
+		double a06 =  - 0.05737147795252053;
+		double a10 =  - 0.380753971849515;
+		double a11 =  - 1.1730254249425538;
+		double a12 = 0.6536944559326225;
+		double a13 = 0.8627866179739128;
+		double a14 = 0.03735935464342531;
+		double a15 = 0.0004486340570757499;
+		double a16 =  - 0.0005096658149371253;
+		double a20 =  - 0.058823348930526466;
+		double a21 =  - 0.5249167357886829;
+		double a22 =  - 0.7144983957840794;
+		double a23 = 0.5832981939848182;
+		double a24 = 0.6747270495592943;
+		double a25 = 0.04258038995809657;
+		double a26 =  - 0.0023671529988773224;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_13_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 7.382379779647204;
+		double gamma02 = 6.118391304701528;
+		double gamma10 = 0.17427954622883998;
+		double gamma12 = 0.16936101668592404;
+		double gamma13 =  - 0.40635680897269083;
+		double gamma20 = 0.014504838045567564;
+		double gamma21 = 0.2617273578999154;
+		double gamma23 = 1.110302482205355;
+		double gamma24 = 0.3070536064807964;
+		double a00 =  - 3.4387560411379563;
+		double a01 =  - 6.120972374567166;
+		double a02 = 7.819283685673539;
+		double a03 = 2.0327058980606223;
+		double a04 =  - 0.3578340204155545;
+		double a05 = 0.07704263923889951;
+		double a06 =  - 0.011469786857726549;
+		double a10 =  - 0.5727257684097207;
+		double a11 =  - 0.4112262980330496;
+		double a12 = 1.4956215666978379;
+		double a13 =  - 0.3873992442738074;
+		double a14 =  - 0.14379120110929572;
+		double a15 = 0.022496214935192167;
+		double a16 =  - 0.002975269806106884;
+		double a20 =  - 0.058823348930518396;
+		double a21 =  - 0.5249167357886487;
+		double a22 =  - 0.714498395784144;
+		double a23 = 0.5832981939847537;
+		double a24 = 0.6747270495592782;
+		double a25 = 0.0425803899581001;
+		double a26 =  - 0.0023671529988773697;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_14_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 11.72056913137962;
+		double gamma02 = 15.554462594162011;
+		double gamma10 = 0.1081072833783197;
+		double gamma12 = 0.9879415284063021;
+		double gamma13 =  - 0.01909104991398132;
+		double gamma20 = 0.014504838045567564;
+		double gamma21 = 0.2617273578999154;
+		double gamma23 = 1.110302482205355;
+		double gamma24 = 0.3070536064807964;
+		double a00 =  - 3.8692568733227635;
+		double a01 =  - 15.341379957576446;
+		double a02 = 12.883637219907088;
+		double a03 = 7.717258726068238;
+		double a04 =  - 1.6841269855708267;
+		double a05 = 0.3293382198137049;
+		double a06 =  - 0.03547034916968481;
+		double a10 =  - 0.3964964225581668;
+		double a11 =  - 1.0420535476865542;
+		double a12 = 1.1470798670311428;
+		double a13 = 0.3494082667185844;
+		double a14 =  - 0.06737997033390317;
+		double a15 = 0.010504184268101917;
+		double a16 =  - 0.0010623774454914835;
+		double a20 =  - 0.058823348930518396;
+		double a21 =  - 0.5249167357886487;
+		double a22 =  - 0.714498395784144;
+		double a23 = 0.5832981939847537;
+		double a24 = 0.6747270495592782;
+		double a25 = 0.0425803899581001;
+		double a26 =  - 0.0023671529988773697;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_15_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 10.124421930341821;
+		double gamma02 = 13.061601592420779;
+		double gamma10 = 0.36393960516685847;
+		double gamma12 =  - 6.34581504273248;
+		double gamma13 =  - 5.455121314714797;
+		double gamma20 = 0.014504838045567564;
+		double gamma21 = 0.2617273578999154;
+		double gamma23 = 1.110302482205355;
+		double gamma24 = 0.3070536064807964;
+		double a00 =  - 3.6694526780300785;
+		double a01 =  - 12.36997789511369;
+		double a02 = 10.464968940637677;
+		double a03 = 6.9873780576381375;
+		double a04 =  - 1.7858829589397163;
+		double a05 = 0.4303380013201043;
+		double a06 =  - 0.05737146796374551;
+		double a10 =  - 1.1690129655580526;
+		double a11 = 2.5693037088752675;
+		double a12 = 7.670098232641336;
+		double a13 =  - 7.8155049102691265;
+		double a14 =  - 1.3854291627394484;
+		double a15 = 0.1415361269516958;
+		double a16 =  - 0.010991029895683714;
+		double a20 =  - 0.058823348930518396;
+		double a21 =  - 0.5249167357886487;
+		double a22 =  - 0.714498395784144;
+		double a23 = 0.5832981939847537;
+		double a24 = 0.6747270495592782;
+		double a25 = 0.0425803899581001;
+		double a26 =  - 0.0023671529988773697;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_16_Diagonals() {
+			double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 9.092199640716895;
+		double gamma02 = 10.362304769374216;
+		double gamma10 = 0.36393960516685847;
+		double gamma12 =  - 6.34581504273248;
+		double gamma13 =  - 5.455121314714797;
+		double gamma20 = 0.014504838045567564;
+		double gamma21 = 0.2617273578999154;
+		double gamma23 = 1.110302482205355;
+		double gamma24 = 0.3070536064807964;
+		double a00 =  - 3.583310083032476;
+		double a01 =  - 9.995923596790389;
+		double a02 = 9.549519902457892;
+		double a03 = 4.968473477723128;
+		double a04 =  - 1.1766177021837405;
+		double a05 = 0.2747094406267014;
+		double a06 =  - 0.03685144035384007;
+		double a10 =  - 1.1690129655580526;
+		double a11 = 2.5693037088752675;
+		double a12 = 7.670098232641336;
+		double a13 =  - 7.8155049102691265;
+		double a14 =  - 1.3854291627394484;
+		double a15 = 0.1415361269516958;
+		double a16 =  - 0.010991029895683714;
+		double a20 =  - 0.058823348930518396;
+		double a21 =  - 0.5249167357886487;
+		double a22 =  - 0.714498395784144;
+		double a23 = 0.5832981939847537;
+		double a24 = 0.6747270495592782;
+		double a25 = 0.0425803899581001;
+		double a26 =  - 0.0023671529988773697;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_17_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 7.382379779615977;
+		double gamma02 = 6.118391304628355;
+		double gamma10 = 0.0643250419496078;
+		double gamma12 = 2.2530485889042495;
+		double gamma13 = 0.8947355749693718;
+		double gamma20 = 0.014504838045567564;
+		double gamma21 = 0.2617273578999557;
+		double gamma23 = 1.1103024822053873;
+		double gamma24 = 0.3070536064807722;
+		double a00 =  - 3.438756041105928;
+		double a01 =  - 6.120972374525143;
+		double a02 = 7.819283685619206;
+		double a03 = 2.0327058980757524;
+		double a04 =  - 0.3578340204185375;
+		double a05 = 0.07704263923912963;
+		double a06 =  - 0.011469786857738811;
+		double a10 =  - 0.26336891217791125;
+		double a11 =  - 1.6681586712175933;
+		double a12 = 0.04049340369078189;
+		double a13 = 1.7567567175439678;
+		double a14 = 0.142593090701886;
+		double a15 =  - 0.00853232551642941;
+		double a16 = 0.0002166969599412292;
+		double a20 =  - 0.058823348930526466;
+		double a21 =  - 0.5249167357886829;
+		double a22 =  - 0.7144983957840794;
+		double a23 = 0.5832981939848182;
+		double a24 = 0.6747270495592943;
+		double a25 = 0.04258038995809657;
+		double a26 =  - 0.0023671529988773224;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_18_Diagonals() {
+	double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 7.382379779647204;
+		double gamma02 = 6.118391304701528;
+		double gamma10 = 0.06106149690079044;
+		double gamma12 = 2.6424801172618326;
+		double gamma13 = 1.3710069602113883;
+		double gamma20 = 0.014504838045567564;
+		double gamma21 = 0.2617273578999154;
+		double gamma23 = 1.110302482205355;
+		double gamma24 = 0.3070536064807964;
+		double a00 =  - 3.4387560411379563;
+		double a01 =  - 6.120972374567166;
+		double a02 = 7.819283685673539;
+		double a03 = 2.0327058980606223;
+		double a04 =  - 0.3578340204155545;
+		double a05 = 0.07704263923889951;
+		double a06 =  - 0.011469786857726549;
+		double a10 =  - 0.25047387349211636;
+		double a11 =  - 1.7715514547125182;
+		double a12 =  - 0.5198462724609013;
+		double a13 = 2.2536920432047496;
+		double a14 = 0.318588110606521;
+		double a15 =  - 0.0328153209921653;
+		double a16 = 0.0024067678049133558;
+		double a20 =  - 0.058823348930518396;
+		double a21 =  - 0.5249167357886487;
+		double a22 =  - 0.714498395784144;
+		double a23 = 0.5832981939847537;
+		double a24 = 0.6747270495592782;
+		double a25 = 0.0425803899581001;
+		double a26 =  - 0.0023671529988773697;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+MatrixDiagonalEntries* createA4_19_Diagonals() {
+		double alpha0 = 0.5770460201292381;
+		double alpha = alpha0 ;
+
+		double beta = 0.08900836845092142;
+		double a1 = 0.6517078440898839;
+		double a2 = 0.24815882627035918;
+		double a3 = 0.006009630649852392;
+		double gamma01 = 7.382379779647204;
+		double gamma02 = 6.118391304701528;
+		double gamma10 = 0.053558769421507044;
+		double gamma12 = 2.843009383880429;
+		double gamma13 = 1.6480384645594641;
+		double gamma20 = 0.014504838045567564;
+		double gamma21 = 0.2617273578999154;
+		double gamma23 = 1.110302482205355;
+		double gamma24 = 0.3070536064807964;
+		double a00 =  - 3.4387560411379563;
+		double a01 =  - 6.120972374567166;
+		double a02 = 7.819283685673539;
+		double a03 = 2.0327058980606223;
+		double a04 =  - 0.3578340204155545;
+		double a05 = 0.07704263923889951;
+		double a06 =  - 0.011469786857726549;
+		double a10 =  - 0.2311615287844447;
+		double a11 =  - 1.8507243442530117;
+		double a12 =  - 0.7937803097614184;
+		double a13 = 2.470592586730826;
+		double a14 = 0.46036823621123646;
+		double a15 =  - 0.061408717577990914;
+		double a16 = 0.006114077338592431;
+		double a20 =  - 0.058823348930518396;
+		double a21 =  - 0.5249167357886487;
+		double a22 =  - 0.714498395784144;
+		double a23 = 0.5832981939847537;
+		double a24 = 0.6747270495592782;
+		double a25 = 0.0425803899581001;
+		double a26 =  - 0.0023671529988773697;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06},
+			{a10, a11, a12, a13, a14, a15, a16},
+			{a20, a21, a22, a23, a24, a25, a26}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a3, -a2, -a1, 0.0, a1, a2, a3
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+	MatrixDiagonalEntries* createB4_1_Diagonals() {
+	double alpha0 = 0.5942348163052151;
+		double alpha = alpha0 ;
+
+		double beta = 0.10275748724572716;
+		double a1 = 0.6340472486307104;
+		double a2 = 0.26726592813302824;
+		double a3 = 0.01004721696654148;
+		double a4 =  - 0.000432113061362272;
+		double gamma01 = 3.258552321591469;
+		double gamma02 = 3.9713593168524697;
+		double gamma10 = 0.06191926485496031;
+		double gamma12 = 2.0240678742461267;
+		double gamma13 = 0.7927070599812164;
+		double gamma20 =  - 0.049675740964988974;
+		double gamma21 = 0.41403683368328115;
+		double gamma23 = 0.557331401383541;
+		double gamma24 = 0.0475762903159798;
+		double gamma31 = 0.06152352492601939;
+		double gamma32 = 0.4513445460734534;
+		double gamma34 = 0.7364421712048806;
+		double gamma35 = 0.14994836521298124;
+		double a00 =  - 1.1516922313137914;
+		double a01 =  - 3.9563373394376447;
+		double a02 = 3.5592032994641367;
+		double a03 = 1.8924696303209219;
+		double a04 =  - 0.4222724838806715;
+		double a05 = 0.08906811076020506;
+		double a06 =  - 0.009529693586625327;
+		double a07 =  - 0.0013840014549392028;
+		double a08 = 0.0004747091933148014;
+		double a10 =  - 0.30084732114693374;
+		double a11 =  - 1.5148170310304807;
+		double a12 = 0.15314297682362069;
+		double a13 = 1.5422949488010151;
+		double a14 = 0.12268287511032198;
+		double a15 = 0.001965655478423474;
+		double a16 =  - 0.006571656384717709;
+		double a17 = 0.0025969778309034844;
+		double a18 =  - 0.0004474254894815129;
+		double a20 =  - 0.1134399758555121;
+		double a21 =  - 0.6853799451553532;
+		double a22 =  - 0.15180049288285746;
+		double a23 = 0.7652655700431873;
+		double a24 = 0.1860662489110366;
+		double a25 =  - 0.00021508262326884955;
+		double a26 =  - 0.0009294994767801919;
+		double a27 = 0.0005386721242711686;
+		double a28 =  - 0.00010549508480059121;
+		double a30 =  - 0.007648819480336699;
+		double a31 =  - 0.16596155150300815;
+		double a32 =  - 0.6126045501032937;
+		double a33 =  - 0.24829934932465766;
+		double a34 = 0.6512334472074195;
+		double a35 = 0.36673578848776456;
+		double a36 = 0.017642516808049794;
+		double a37 =  - 0.0011665688689049812;
+		double a38 = 0.00006908677697936095;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24},
+			{0.0, gamma31, gamma32, 1.0, gamma34, gamma35}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06, a07, a08},
+			{a10, a11, a12, a13, a14, a15, a16, a17, a18},
+			{a20, a21, a22, a23, a24, a25, a26, a27, a28},
+			{a30, a31, a32, a33, a34, a35, a36, a37, a38}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a4, -a3, -a2, -a1, 0.0, a1, a2, a3, a4
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
+	MatrixDiagonalEntries* createB4_2_Diagonals() {
+		double alpha0 = 0.5942348163052151;
+		double alpha = alpha0 ;
+
+		double beta = 0.10275748724572716;
+		double a1 = 0.6340472486307104;
+		double a2 = 0.26726592813302824;
+		double a3 = 0.01004721696654148;
+		double a4 =  - 0.000432113061362272;
+		double gamma01 =  - 3.2302485255282924;
+		double gamma02 =  - 3.8740710583603564;
+		double gamma10 = 0.034553312591525796;
+		double gamma12 = 2.2932350583595316;
+		double gamma13 = 1.0868840184220743;
+		double gamma20 =  - 0.049675740964988974;
+		double gamma21 = 0.41403683368328115;
+		double gamma23 = 0.557331401383541;
+		double gamma24 = 0.0475762903159798;
+		double gamma31 = 0.06817786077706668;
+		double gamma32 = 0.45657677163676796;
+		double gamma34 = 0.7669552204799124;
+		double gamma35 = 0.16738821761628633;
+		double a00 = 1.247434332017422;
+		double a01 = 3.649601749789092;
+		double a02 =  - 3.2437101950576603;
+		double a03 =  - 2.140663098848015;
+		double a04 = 0.6845448723757406;
+		double a05 =  - 0.27827838081944706;
+		double a06 = 0.10851949533457124;
+		double a07 =  - 0.03257912317463041;
+		double a08 = 0.0051303502327167405;
+		double a10 =  - 0.28054224569703096;
+		double a11 =  - 1.6192847312096472;
+		double a12 =  - 0.16916653559434483;
+		double a13 = 1.844706742431158;
+		double a14 = 0.24897027957135032;
+		double a15 =  - 0.025994549064399283;
+		double a16 = 0.00047165522700310254;
+		double a17 = 0.0011017597543377866;
+		double a18 =  - 0.00026237541739589055;
+		double a20 =  - 0.1134399758555121;
+		double a21 =  - 0.6853799451553532;
+		double a22 =  - 0.15180049288285746;
+		double a23 = 0.7652655700431873;
+		double a24 = 0.1860662489110366;
+		double a25 =  - 0.00021508262326884955;
+		double a26 =  - 0.0009294994767801919;
+		double a27 = 0.0005386721242711686;
+		double a28 =  - 0.00010549508480059121;
+		double a30 =  - 0.009799026774407651;
+		double a31 =  - 0.17433707805796222;
+		double a32 =  - 0.5984475804837898;
+		double a33 =  - 0.2671267567857216;
+		double a34 = 0.6333386471959103;
+		double a35 = 0.3964863153342717;
+		double a36 = 0.021300842819348294;
+		double a37 =  - 0.0015087751353093529;
+		double a38 = 0.00009341188766025977;
+
+		// boundary elements for P matrix for 1st derivative
+		std::vector<std::vector<double>> P1DiagBoundary{
+			{1.0, gamma01, gamma02},
+			{gamma10, 1.0, gamma12, gamma13},
+			{gamma20, gamma21, 1.0, gamma23, gamma24},
+			{0.0, gamma31, gamma32, 1.0, gamma34, gamma35}
+		};
+
+		// diagonal elements for P matrix for 1st derivative
+		std::vector<double> P1DiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for Q matrix for 1st derivative
+		std::vector<std::vector<double>> Q1DiagBoundary{
+			{a00, a01, a02, a03, a04, a05, a06, a07, a08},
+			{a10, a11, a12, a13, a14, a15, a16, a17, a18},
+			{a20, a21, a22, a23, a24, a25, a26, a27, a28},
+			{a30, a31, a32, a33, a34, a35, a36, a37, a38}
+		};
+
+		// diagonal elements for Q matrix for 1st derivative
+		std::vector<double> Q1DiagInterior{
+			-a4, -a3, -a2, -a1, 0.0, a1, a2, a3, a4
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
+			};
+		return diagEntries;
+	}
 MatrixDiagonalEntries* createC4_1_Diagonals() {
 		double alpha0 = 0.5362930888943283;
 		double alpha = alpha0;

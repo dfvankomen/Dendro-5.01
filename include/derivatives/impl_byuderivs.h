@@ -95,7 +95,34 @@ MatrixDiagonalEntries* BYUDerivsP8R4DiagonalsSecondOrder(
 
 MatrixDiagonalEntries* BYUDerivsP8R4DiagonalsFirstOrder(
     const std::vector<double>& D_coeffs);
- //First Derivatives   
+ //First Derivatives
+    // (Assumes 'struct MatrixDiagonalEntries;' is visible to this header)
+
+// ---- A4 ----
+MatrixDiagonalEntries* createA4_1_Diagonals();
+MatrixDiagonalEntries* createA4_2_Diagonals();
+MatrixDiagonalEntries* createA4_3_Diagonals();
+MatrixDiagonalEntries* createA4_4_Diagonals();
+MatrixDiagonalEntries* createA4_5_Diagonals();
+MatrixDiagonalEntries* createA4_6_Diagonals();
+MatrixDiagonalEntries* createA4_7_Diagonals();
+MatrixDiagonalEntries* createA4_8_Diagonals();
+MatrixDiagonalEntries* createA4_9_Diagonals();
+MatrixDiagonalEntries* createA4_10_Diagonals();
+MatrixDiagonalEntries* createA4_11_Diagonals();
+MatrixDiagonalEntries* createA4_12_Diagonals();
+MatrixDiagonalEntries* createA4_13_Diagonals();
+MatrixDiagonalEntries* createA4_14_Diagonals();
+MatrixDiagonalEntries* createA4_15_Diagonals();
+MatrixDiagonalEntries* createA4_16_Diagonals();
+MatrixDiagonalEntries* createA4_17_Diagonals();
+MatrixDiagonalEntries* createA4_18_Diagonals();
+MatrixDiagonalEntries* createA4_19_Diagonals();
+
+// ---- B4 ----
+MatrixDiagonalEntries* createB4_1_Diagonals();
+MatrixDiagonalEntries* createB4_2_Diagonals();
+
 MatrixDiagonalEntries* createC4_1_Diagonals();
 MatrixDiagonalEntries* createC4_2_Diagonals();
 MatrixDiagonalEntries* createC4_3_Diagonals();
@@ -1068,6 +1095,469 @@ class BYUDerivsP8_R4_SecondOrder : public MatrixCompactDerivs<2> {
     }
 };
 //First Derivatives:
+// ----------------------------- A4 ---------------------------------
+class A4_1_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_1_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_1_Diagonals();
+        this->init();
+    }
+    ~A4_1_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_1_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_1_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_1; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_1_DiagonalsFirstOrder"; }
+};
+
+class A4_2_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_2_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_2_Diagonals();
+        this->init();
+    }
+    ~A4_2_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_2_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_2_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_2; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_2_DiagonalsFirstOrder"; }
+};
+
+class A4_3_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_3_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_3_Diagonals();
+        this->init();
+    }
+    ~A4_3_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_3_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_3_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_3; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_3_DiagonalsFirstOrder"; }
+};
+
+class A4_4_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_4_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_4_Diagonals();
+        this->init();
+    }
+    ~A4_4_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_4_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_4_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_4; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_4_DiagonalsFirstOrder"; }
+};
+
+class A4_5_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_5_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_5_Diagonals();
+        this->init();
+    }
+    ~A4_5_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_5_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_5_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_5; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_5_DiagonalsFirstOrder"; }
+};
+
+class A4_6_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_6_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_6_Diagonals();
+        this->init();
+    }
+    ~A4_6_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_6_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_6_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_6; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_6_DiagonalsFirstOrder"; }
+};
+
+class A4_7_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_7_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_7_Diagonals();
+        this->init();
+    }
+    ~A4_7_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_7_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_7_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_7; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_7_DiagonalsFirstOrder"; }
+};
+
+class A4_8_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_8_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_8_Diagonals();
+        this->init();
+    }
+    ~A4_8_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_8_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_8_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_8; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_8_DiagonalsFirstOrder"; }
+};
+
+class A4_9_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_9_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_9_Diagonals();
+        this->init();
+    }
+    ~A4_9_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_9_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_9_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_9; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_9_DiagonalsFirstOrder"; }
+};
+
+class A4_10_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_10_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_10_Diagonals();
+        this->init();
+    }
+    ~A4_10_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_10_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_10_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_10; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_10_DiagonalsFirstOrder"; }
+};
+
+class A4_11_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_11_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_11_Diagonals();
+        this->init();
+    }
+    ~A4_11_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_11_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_11_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_11; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_11_DiagonalsFirstOrder"; }
+};
+
+class A4_12_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_12_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_12_Diagonals();
+        this->init();
+    }
+    ~A4_12_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_12_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_12_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_12; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_12_DiagonalsFirstOrder"; }
+};
+
+class A4_13_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_13_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_13_Diagonals();
+        this->init();
+    }
+    ~A4_13_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_13_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_13_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_13; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_13_DiagonalsFirstOrder"; }
+};
+
+class A4_14_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_14_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_14_Diagonals();
+        this->init();
+    }
+    ~A4_14_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_14_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_14_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_14; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_14_DiagonalsFirstOrder"; }
+};
+
+class A4_15_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_15_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_15_Diagonals();
+        this->init();
+    }
+    ~A4_15_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_15_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_15_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_15; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_15_DiagonalsFirstOrder"; }
+};
+
+class A4_16_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_16_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_16_Diagonals();
+        this->init();
+    }
+    ~A4_16_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_16_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_16_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_16; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_16_DiagonalsFirstOrder"; }
+};
+
+class A4_17_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_17_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_17_Diagonals();
+        this->init();
+    }
+    ~A4_17_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_17_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_17_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_17; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_17_DiagonalsFirstOrder"; }
+};
+
+class A4_18_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_18_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_18_Diagonals();
+        this->init();
+    }
+    ~A4_18_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_18_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_18_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_18; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_18_DiagonalsFirstOrder"; }
+};
+
+class A4_19_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A4_19_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA4_19_Diagonals();
+        this->init();
+    }
+    ~A4_19_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in A4_19_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A4_19_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_A4_19; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A4_19_DiagonalsFirstOrder"; }
+};
+
+// ----------------------------- B4 ---------------------------------
+class B4_1_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    B4_1_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createB4_1_Diagonals();
+        this->init();
+    }
+    ~B4_1_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in B4_1_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<B4_1_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_B4_1; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "B4_1_DiagonalsFirstOrder"; }
+};
+
+class B4_2_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    B4_2_DiagonalsFirstOrder(
+        unsigned int ele_order, const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createB4_2_Diagonals();
+        this->init();
+    }
+    ~B4_2_DiagonalsFirstOrder() {
+#ifdef DEBUG
+        std::cout << "in B4_2_DiagonalsFirstOrder destructor" << std::endl;
+#endif
+    }
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<B4_2_DiagonalsFirstOrder>(*this);
+    }
+    DerivType getDerivType() const override { return DerivType::D_B4_2; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "B4_2_DiagonalsFirstOrder"; }
+};
 class C4_1_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
 public:
     C4_1_DiagonalsFirstOrder(

@@ -129,6 +129,89 @@ class DerivsFactory {
         else if (name == "C4_5") {
         return std::unique_ptr<Derivs>(new C4_5_DiagonalsFirstOrder(
             ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "A4_1") {
+    return std::unique_ptr<Derivs>(new A4_1_DiagonalsFirstOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_2") {
+            return std::unique_ptr<Derivs>(new A4_2_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_3") {
+            return std::unique_ptr<Derivs>(new A4_3_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_4") {
+            return std::unique_ptr<Derivs>(new A4_4_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_5") {
+            return std::unique_ptr<Derivs>(new A4_5_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_6") {
+            return std::unique_ptr<Derivs>(new A4_6_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_7") {
+            return std::unique_ptr<Derivs>(new A4_7_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_8") {
+            return std::unique_ptr<Derivs>(new A4_8_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_9") {
+            return std::unique_ptr<Derivs>(new A4_9_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_10") {
+            return std::unique_ptr<Derivs>(new A4_10_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_11") {
+            return std::unique_ptr<Derivs>(new A4_11_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_12") {
+            return std::unique_ptr<Derivs>(new A4_12_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_13") {
+            return std::unique_ptr<Derivs>(new A4_13_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_14") {
+            return std::unique_ptr<Derivs>(new A4_14_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_15") {
+            return std::unique_ptr<Derivs>(new A4_15_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_16") {
+            return std::unique_ptr<Derivs>(new A4_16_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_17") {
+            return std::unique_ptr<Derivs>(new A4_17_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_18") {
+            return std::unique_ptr<Derivs>(new A4_18_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "A4_19") {
+            return std::unique_ptr<Derivs>(new A4_19_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "B4_1") {
+            return std::unique_ptr<Derivs>(new B4_1_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }
+        else if (name == "B4_2") {
+            return std::unique_ptr<Derivs>(new B4_2_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
         }else if (name == "A6_1") {
     return std::unique_ptr<Derivs>(new A6_1_DiagonalsFirstOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in));
