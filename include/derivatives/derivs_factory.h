@@ -493,11 +493,50 @@ class DerivsFactory {
         }else if (name == "2B4_1") {
         return std::unique_ptr<Derivs>(new TwoDerivs2B4_1_SecondOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
-        }
-        else if (name == "2B6_1") {
-        return std::unique_ptr<Derivs>(new TwoDerivs2B6_1_SecondOrder(
+        }else if (name == "2A6_1") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2A6_1_SecondOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
-        }
+}
+else if (name == "2B6_1") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2B6_1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+else if (name == "2B6_2") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2B6_2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+else if (name == "2B6_3") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2B6_3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+else if (name == "2B6_4") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2B6_4_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+else if (name == "2B6_5") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2B6_5_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+else if (name == "2B6_6") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2B6_6_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+else if (name == "2B6_7") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2B6_7_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+else if (name == "2B6_8") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2B6_8_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+else if (name == "2B6_9") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2B6_9_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+else if (name == "2C6_1") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C6_1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
 
 
         return nullptr;
