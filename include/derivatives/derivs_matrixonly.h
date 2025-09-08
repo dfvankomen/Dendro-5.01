@@ -21,6 +21,8 @@ inline std::unique_ptr<InMatrixFilter> createInMatrixFilterByType(
     const std::vector<double> &in_matrix_filter_coeffs) {
     if (in_matrix_filter == "none") {
         return std::make_unique<NoneFilter_InMatrix>(in_matrix_filter_coeffs);
+    } else if (in_matrix_filter == "BYUT4") {
+        return std::make_unique<BYUT4Filter_InMatrix>(in_matrix_filter_coeffs);
     } else if (in_matrix_filter == "BYUT6") {
         return std::make_unique<BYUT6Filter_InMatrix>(in_matrix_filter_coeffs);
     } else if (in_matrix_filter == "BYUT8") {

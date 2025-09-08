@@ -8,6 +8,7 @@ namespace dendroderivs {
 
 enum InMatFilterType {
     IMFT_NONE = 0,
+    IMFT_BYUT4,
     IMFT_BYUT6,
     IMFT_BYUT8,
     IMFT_KIM,
