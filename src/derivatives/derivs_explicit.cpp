@@ -1760,36 +1760,6 @@ void deriv8666_z(double *const Dzu, const double *const u, const double dz,
 #endif
             for (int i = ib; i < ie; i++) {
                 // This is a (totally) shifted sixth order stencil.
-                Dzu[IDX(i, j, 4)] =
-                    (-147.0 * u[IDX(i, j, 4)] + 360.0 * u[IDX(i, j, 5)] -
-                     450.0 * u[IDX(i, j, 6)] + 400.0 * u[IDX(i, j, 7)] -
-                     225.0 * u[IDX(i, j, 8)] + 72.0 * u[IDX(i, j, 9)] -
-                     10.0 * u[IDX(i, j, 10)]) *
-                    idz_by_60;
-
-                // This is a shifted sixth order stencil.
-                Dzu[IDX(i, j, 5)] =
-                    (-10.0 * u[IDX(i, j, 4)] - 77.0 * u[IDX(i, j, 5)] +
-                     150.0 * u[IDX(i, j, 6)] - 100.0 * u[IDX(i, j, 7)] +
-                     50.0 * u[IDX(i, j, 8)] - 15.0 * u[IDX(i, j, 9)] +
-                     2.0 * u[IDX(i, j, 10)]) *
-                    idz_by_60;
-
-                // This is a shifted sixth order stencil.
-                Dzu[IDX(i, j, 6)] =
-                    (2.0 * u[IDX(i, j, 4)] - 24.0 * u[IDX(i, j, 5)] -
-                     35.0 * u[IDX(i, j, 6)] + 80.0 * u[IDX(i, j, 7)] -
-                     30.0 * u[IDX(i, j, 8)] + 8.0 * u[IDX(i, j, 9)] -
-                     u[IDX(i, j, 10)]) *
-                    idz_by_60;
-
-                // This is a centered sixth order stencil.
-                Dzu[IDX(i, j, 7)] =
-                    (-u[IDX(i, j, 4)] + 9.0 * u[IDX(i, j, 5)] -
-                     45.0 * u[IDX(i, j, 6)] + 45.0 * u[IDX(i, j, 8)] -
-                     9.0 * u[IDX(i, j, 9)] + u[IDX(i, j, 10)]) *
-                    idz_by_60;
-
                 Dzu[IDX(i, j, kb)] =
                     (-147.0 * u[IDX(i, j, kb)] + 360.0 * u[IDX(i, j, kb + 1)] -
                      450.0 * u[IDX(i, j, kb + 2)] +
@@ -1914,7 +1884,8 @@ template void deriv8666_z<5>(double *const Dzu, const double *const u,
 template <unsigned int P>
 void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
                   const unsigned int *sz, unsigned bflag) {
-  const double idx_sqrd         = 1.0 / (dx * dx);
+    static_assert(P >= 4 && P <= 5, "P must be either 4 or 5");
+    const double idx_sqrd         = 1.0 / (dx * dx);
     const double idx_sqrd_by_12   = idx_sqrd / 12.0;
     const double idx_sqrd_by_180  = idx_sqrd / 180.0;
     const double idx_sqrd_by_5040 = idx_sqrd / 5040.0;
@@ -1922,21 +1893,17 @@ void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
     const int nx                  = sz[0];
     const int ny                  = sz[1];
     const int nz                  = sz[2];
-    const int ib                  = 4;
-    const int jb                  = 4;
-    const int kb                  = 4;
-    const int ie                  = sz[0] - 4;
-    const int je                  = sz[1] - 4;
-    const int ke                  = sz[2] - 4;
+
+    static constexpr int ib       = (P == 4) ? 4 : 5;
+    static constexpr int jb       = (P == 4) ? 4 : 5;
+    static constexpr int kb       = (P == 4) ? 4 : 5;
+
+    const int ie                  = nx - ib;
+    const int je                  = ny - jb;
+    const int ke                  = nz - kb;
 
     for (int k = kb; k < ke; k++) {
         for (int j = jb; j < je; j++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (int i = ib; i < ie; i++) {
                 const int pp = IDX(i, j, k);
 
@@ -1953,29 +1920,31 @@ void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
         for (int k = kb; k < ke; k++) {
             for (int j = jb; j < je; j++) {
                 // This is a (totally) shifted second order stencil.
-                DxDxu[IDX(4, j, k)] =
-                    (2.0 * u[IDX(4, j, k)] - 5.0 * u[IDX(5, j, k)] +
-                     4.0 * u[IDX(6, j, k)] - u[IDX(7, j, k)]) *
+                DxDxu[IDX(ib + 0, j, k)] =
+                    (2.0 * u[IDX(ib + 0, j, k)] - 5.0 * u[IDX(ib + 1, j, k)] +
+                     4.0 * u[IDX(ib + 2, j, k)] - u[IDX(ib + 3, j, k)]) *
                     idx_sqrd;
 
                 // This is a centered second order stencil.
-                DxDxu[IDX(5, j, k)] = (u[IDX(4, j, k)] - 2.0 * u[IDX(5, j, k)] +
-                                       u[IDX(6, j, k)]) *
-                                      idx_sqrd;
+                DxDxu[IDX(ib + 1, j, k)] =
+                    (u[IDX(ib + 0, j, k)] - 2.0 * u[IDX(ib + 1, j, k)] +
+                     u[IDX(ib + 2, j, k)]) *
+                    idx_sqrd;
 
                 // This is a centered fourth order stencil.
-                DxDxu[IDX(6, j, k)] =
-                    (-u[IDX(4, j, k)] + 16.0 * u[IDX(5, j, k)] -
-                     30.0 * u[IDX(6, j, k)] + 16.0 * u[IDX(7, j, k)] -
-                     u[IDX(8, j, k)]) *
+                DxDxu[IDX(ib + 2, j, k)] =
+                    (-u[IDX(ib + 0, j, k)] + 16.0 * u[IDX(ib + 1, j, k)] -
+                     30.0 * u[IDX(ib + 2, j, k)] + 16.0 * u[IDX(ib + 3, j, k)] -
+                     u[IDX(ib + 4, j, k)]) *
                     idx_sqrd_by_12;
 
                 // This is a centered sixth order stencil.
-                DxDxu[IDX(7, j, k)] =
-                    (2.0 * u[IDX(4, j, k)] - 27.0 * u[IDX(5, j, k)] +
-                     270.0 * u[IDX(6, j, k)] - 490.0 * u[IDX(7, j, k)] +
-                     270.0 * u[IDX(8, j, k)] - 27.0 * u[IDX(9, j, k)] +
-                     2.0 * u[IDX(10, j, k)]) *
+                DxDxu[IDX(ib + 3, j, k)] =
+                    (2.0 * u[IDX(ib + 0, j, k)] - 27.0 * u[IDX(ib + 1, j, k)] +
+                     270.0 * u[IDX(ib + 2, j, k)] -
+                     490.0 * u[IDX(ib + 3, j, k)] +
+                     270.0 * u[IDX(ib + 4, j, k)] -
+                     27.0 * u[IDX(ib + 5, j, k)] + 2.0 * u[IDX(ib + 6, j, k)]) *
                     idx_sqrd_by_180;
             }
         }
@@ -1983,12 +1952,6 @@ void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
 
     if (bflag & (1u << OCT_DIR_RIGHT)) {
         for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (int j = jb; j < je; j++) {
                 // This is a centered sixth order stencil.
                 DxDxu[IDX(ie - 4, j, k)] =
@@ -2020,27 +1983,13 @@ void deriv8666_xx(double *const DxDxu, const double *const u, const double dx,
             }
         }
     }
-
-#ifdef DEBUG_DERIVS_COMP
-#pragma message("DEBUG_DERIVS_COMP: ON")
-    for (int k = kb; k < ke; k++) {
-        for (int j = jb; j < je; j++) {
-            for (int i = ib; i < ie; i++) {
-                const int pp = IDX(i, j, k);
-                if (std::isnan(DxDxu[pp]))
-                    std::cout << "NAN detected function " << __func__
-                              << " file: " << __FILE__ << " line: " << __LINE__
-                              << std::endl;
-            }
-        }
-    }
-#endif
 }
 
 template <unsigned int P>
 void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
                   const unsigned int *sz, unsigned bflag) {
-     const double idy_sqrd         = 1.0 / (dy * dy);
+    static_assert(P >= 4 && P <= 5, "P must be either 4 or 5");
+    const double idy_sqrd         = 1.0 / (dy * dy);
     const double idy_sqrd_by_12   = idy_sqrd / 12.0;
     const double idy_sqrd_by_180  = idy_sqrd / 180.0;
     const double idy_sqrd_by_5040 = idy_sqrd / 5040.0;
@@ -2048,21 +1997,17 @@ void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
     const int nx                  = sz[0];
     const int ny                  = sz[1];
     const int nz                  = sz[2];
-    const int ib                  = 4;
-    const int jb                  = 4;
-    const int kb                  = 4;
-    const int ie                  = sz[0] - 4;
-    const int je                  = sz[1] - 4;
-    const int ke                  = sz[2] - 4;
+
+    static constexpr int ib       = (P == 4) ? 4 : 5;
+    static constexpr int jb       = (P == 4) ? 4 : 5;
+    static constexpr int kb       = (P == 4) ? 4 : 5;
+
+    const int ie                  = nx - ib;
+    const int je                  = ny - jb;
+    const int ke                  = nz - kb;
 
     for (int k = kb; k < ke; k++) {
         for (int i = ib; i < ie; i++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (int j = jb; j < je; j++) {
                 const int pp = IDX(i, j, k);
 
@@ -2078,37 +2023,33 @@ void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
 
     if (bflag & (1u << OCT_DIR_DOWN)) {
         for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (int i = ib; i < ie; i++) {
                 // This is a (totally) shifted second order stencil.
-                DyDyu[IDX(i, 4, k)] =
-                    (2.0 * u[IDX(i, 4, k)] - 5.0 * u[IDX(i, 5, k)] +
-                     4.0 * u[IDX(i, 6, k)] - u[IDX(i, 7, k)]) *
+                DyDyu[IDX(i, jb, k)] =
+                    (2.0 * u[IDX(i, jb, k)] - 5.0 * u[IDX(i, jb + 1, k)] +
+                     4.0 * u[IDX(i, jb + 2, k)] - u[IDX(i, jb + 3, k)]) *
                     idy_sqrd;
 
                 // This is a centered second order stencil.
-                DyDyu[IDX(i, 5, k)] = (u[IDX(i, 4, k)] - 2.0 * u[IDX(i, 5, k)] +
-                                       u[IDX(i, 6, k)]) *
-                                      idy_sqrd;
+                DyDyu[IDX(i, jb + 1, k)] =
+                    (u[IDX(i, jb, k)] - 2.0 * u[IDX(i, jb + 1, k)] +
+                     u[IDX(i, jb + 2, k)]) *
+                    idy_sqrd;
 
                 // This is a centered fourth order stencil.
-                DyDyu[IDX(i, 6, k)] =
-                    (-u[IDX(i, 4, k)] + 16.0 * u[IDX(i, 5, k)] -
-                     30.0 * u[IDX(i, 6, k)] + 16.0 * u[IDX(i, 7, k)] -
-                     u[IDX(i, 8, k)]) *
+                DyDyu[IDX(i, jb + 2, k)] =
+                    (-u[IDX(i, jb + 0, k)] + 16.0 * u[IDX(i, jb + 1, k)] -
+                     30.0 * u[IDX(i, jb + 2, k)] + 16.0 * u[IDX(i, jb + 3, k)] -
+                     u[IDX(i, jb + 4, k)]) *
                     idy_sqrd_by_12;
 
                 // This is a centered sixth order stencil.
-                DyDyu[IDX(i, 7, k)] =
-                    (2.0 * u[IDX(i, 4, k)] - 27.0 * u[IDX(i, 5, k)] +
-                     270.0 * u[IDX(i, 6, k)] - 490.0 * u[IDX(i, 7, k)] +
-                     270.0 * u[IDX(i, 8, k)] - 27.0 * u[IDX(i, 9, k)] +
-                     2.0 * u[IDX(i, 10, k)]) *
+                DyDyu[IDX(i, jb + 3, k)] =
+                    (2.0 * u[IDX(i, jb + 0, k)] - 27.0 * u[IDX(i, jb + 1, k)] +
+                     270.0 * u[IDX(i, jb + 2, k)] -
+                     490.0 * u[IDX(i, jb + 3, k)] +
+                     270.0 * u[IDX(i, jb + 4, k)] -
+                     27.0 * u[IDX(i, jb + 5, k)] + 2.0 * u[IDX(i, jb + 6, k)]) *
                     idy_sqrd_by_180;
             }
         }
@@ -2116,12 +2057,6 @@ void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
 
     if (bflag & (1u << OCT_DIR_UP)) {
         for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (int i = ib; i < ie; i++) {
                 // This is a centered sixth order stencil.
                 DyDyu[IDX(i, je - 4, k)] =
@@ -2153,27 +2088,13 @@ void deriv8666_yy(double *const DyDyu, const double *const u, const double dy,
             }
         }
     }
-
-#ifdef DEBUG_DERIVS_COMP
-#pragma message("DEBUG_DERIVS_COMP: ON")
-    for (int k = kb; k < ke; k++) {
-        for (int j = jb; j < je; j++) {
-            for (int i = ib; i < ie; i++) {
-                const int pp = IDX(i, j, k);
-                if (std::isnan(DyDyu[pp]))
-                    std::cout << "NAN detected function " << __func__
-                              << " file: " << __FILE__ << " line: " << __LINE__
-                              << std::endl;
-            }
-        }
-    }
-#endif
 }
 
 template <unsigned int P>
 void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
                   const unsigned int *sz, unsigned bflag) {
-   const double idz_sqrd         = 1.0 / (dz * dz);
+    static_assert(P >= 4 && P <= 5, "P must be either 4 or 5");
+    const double idz_sqrd         = 1.0 / (dz * dz);
     const double idz_sqrd_by_12   = idz_sqrd / 12.0;
     const double idz_sqrd_by_180  = idz_sqrd / 180.0;
     const double idz_sqrd_by_5040 = idz_sqrd / 5040.0;
@@ -2181,23 +2102,19 @@ void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
     const int nx                  = sz[0];
     const int ny                  = sz[1];
     const int nz                  = sz[2];
-    const int ib                  = 4;
-    const int jb                  = 4;
-    const int kb                  = 4;
-    const int ie                  = sz[0] - 4;
-    const int je                  = sz[1] - 4;
-    const int ke                  = sz[2] - 4;
+
+    static constexpr int ib       = (P == 4) ? 4 : 5;
+    static constexpr int jb       = (P == 4) ? 4 : 5;
+    static constexpr int kb       = (P == 4) ? 4 : 5;
+
+    const int ie                  = nx - ib;
+    const int je                  = ny - jb;
+    const int ke                  = nz - kb;
 
     const int n                   = nx * ny;
 
     for (int j = jb; j < je; j++) {
         for (int i = ib; i < ie; i++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (int k = kb; k < ke; k++) {
                 const int pp = IDX(i, j, k);
 
@@ -2213,37 +2130,33 @@ void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
 
     if (bflag & (1u << OCT_DIR_BACK)) {
         for (int j = jb; j < je; j++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (int i = ib; i < ie; i++) {
                 // This is a (totally) shifted second order stencil.
-                DzDzu[IDX(i, j, 4)] =
-                    (2.0 * u[IDX(i, j, 4)] - 5.0 * u[IDX(i, j, 5)] +
-                     4.0 * u[IDX(i, j, 6)] - u[IDX(i, j, 7)]) *
+                DzDzu[IDX(i, j, kb + 0)] =
+                    (2.0 * u[IDX(i, j, kb + 0)] - 5.0 * u[IDX(i, j, kb + 1)] +
+                     4.0 * u[IDX(i, j, kb + 2)] - u[IDX(i, j, kb + 3)]) *
                     idz_sqrd;
 
                 // This is a centered second order stencil.
-                DzDzu[IDX(i, j, 5)] = (u[IDX(i, j, 4)] - 2.0 * u[IDX(i, j, 5)] +
-                                       u[IDX(i, j, 6)]) *
-                                      idz_sqrd;
+                DzDzu[IDX(i, j, kb + 1)] =
+                    (u[IDX(i, j, kb + 0)] - 2.0 * u[IDX(i, j, kb + 1)] +
+                     u[IDX(i, j, kb + 2)]) *
+                    idz_sqrd;
 
                 // This is a centered fourth order stencil.
-                DzDzu[IDX(i, j, 6)] =
-                    (-u[IDX(i, j, 4)] + 16.0 * u[IDX(i, j, 5)] -
-                     30.0 * u[IDX(i, j, 6)] + 16.0 * u[IDX(i, j, 7)] -
-                     u[IDX(i, j, 8)]) *
+                DzDzu[IDX(i, j, kb + 2)] =
+                    (-u[IDX(i, j, kb + 0)] + 16.0 * u[IDX(i, j, kb + 1)] -
+                     30.0 * u[IDX(i, j, kb + 2)] + 16.0 * u[IDX(i, j, kb + 3)] -
+                     u[IDX(i, j, kb + 4)]) *
                     idz_sqrd_by_12;
 
                 // This is a centered sixth order stencil.
-                DzDzu[IDX(i, j, 7)] =
-                    (2.0 * u[IDX(i, j, 4)] - 27.0 * u[IDX(i, j, 5)] +
-                     270.0 * u[IDX(i, j, 6)] - 490.0 * u[IDX(i, j, 7)] +
-                     270.0 * u[IDX(i, j, 8)] - 27.0 * u[IDX(i, j, 9)] +
-                     2.0 * u[IDX(i, j, 10)]) *
+                DzDzu[IDX(i, j, kb + 3)] =
+                    (2.0 * u[IDX(i, j, kb + 0)] - 27.0 * u[IDX(i, j, kb + 1)] +
+                     270.0 * u[IDX(i, j, kb + 2)] -
+                     490.0 * u[IDX(i, j, kb + 3)] +
+                     270.0 * u[IDX(i, j, kb + 4)] -
+                     27.0 * u[IDX(i, j, kb + 5)] + 2.0 * u[IDX(i, j, kb + 6)]) *
                     idz_sqrd_by_180;
             }
         }
@@ -2251,12 +2164,6 @@ void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
 
     if (bflag & (1u << OCT_DIR_FRONT)) {
         for (int j = jb; j < je; j++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
             for (int i = ib; i < ie; i++) {
                 // This is a centered sixth order stencil.
                 DzDzu[IDX(i, j, ke - 4)] =
@@ -2288,21 +2195,6 @@ void deriv8666_zz(double *const DzDzu, const double *const u, const double dz,
             }
         }
     }
-
-#ifdef DEBUG_DERIVS_COMP
-#pragma message("DEBUG_DERIVS_COMP: ON")
-    for (int k = kb; k < ke; k++) {
-        for (int j = jb; j < je; j++) {
-            for (int i = ib; i < ie; i++) {
-                const int pp = IDX(i, j, k);
-                if (std::isnan(DzDzu[pp]))
-                    std::cout << "NAN detected function " << __func__
-                              << " file: " << __FILE__ << " line: " << __LINE__
-                              << std::endl;
-            }
-        }
-    }
-#endif
 }
 
 // Explicit instiation for P = 4 and 5 for deriv866_[dim]
