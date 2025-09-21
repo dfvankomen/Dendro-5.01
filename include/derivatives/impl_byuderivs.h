@@ -132,7 +132,10 @@ MatrixDiagonalEntries* createC4_5_Diagonals();
 MatrixDiagonalEntries* createA6_1_Diagonals();
 MatrixDiagonalEntries* createA6_2_Diagonals();
 MatrixDiagonalEntries* createA6_3_Diagonals();
-
+MatrixDiagonalEntries* createA6_4_Diagonals();
+MatrixDiagonalEntries* createA6_5_Diagonals();
+MatrixDiagonalEntries* createA6_6_Diagonals();
+MatrixDiagonalEntries* createA6_7_Diagonals();
 //Second Derivatives
 MatrixDiagonalEntries* create2B4_1_Diagonals();
 // ---- 2A6 ----
@@ -1775,6 +1778,110 @@ public:
     DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
     std::string toString() const override { return "A6_3_DiagonalsFirstOrder"; }
 };
+class A6_4_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A6_4_DiagonalsFirstOrder(
+        unsigned int ele_order,
+        const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA6_4_Diagonals();
+        this->init();
+    }
+
+    ~A6_4_DiagonalsFirstOrder() {
+    #ifdef DEBUG
+        std::cout << "in A6_4_DiagonalsFirstOrder destructor" << std::endl;
+    #endif
+    }
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A6_4_DiagonalsFirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_A6_4; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A6_4_DiagonalsFirstOrder"; }
+};
+
+class A6_5_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A6_5_DiagonalsFirstOrder(
+        unsigned int ele_order,
+        const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA6_5_Diagonals();
+        this->init();
+    }
+
+    ~A6_5_DiagonalsFirstOrder() {
+    #ifdef DEBUG
+        std::cout << "in A6_5_DiagonalsFirstOrder destructor" << std::endl;
+    #endif
+    }
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A6_5_DiagonalsFirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_A6_5; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A6_5_DiagonalsFirstOrder"; }
+};
+
+class A6_6_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A6_6_DiagonalsFirstOrder(
+        unsigned int ele_order,
+        const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA6_6_Diagonals();
+        this->init();
+    }
+
+    ~A6_6_DiagonalsFirstOrder() {
+    #ifdef DEBUG
+        std::cout << "in A6_6_DiagonalsFirstOrder destructor" << std::endl;
+    #endif
+    }
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A6_6_DiagonalsFirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_A6_6; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A6_6_DiagonalsFirstOrder"; }
+};
+
+class A6_7_DiagonalsFirstOrder : public MatrixCompactDerivs<1> {
+public:
+    A6_7_DiagonalsFirstOrder(
+        unsigned int ele_order,
+        const std::string& in_matrix_filter = "none",
+        const std::vector<double>& in_filter_coeffs = std::vector<double>())
+        : MatrixCompactDerivs<1>{ele_order, in_matrix_filter, in_filter_coeffs} {
+        diagEntries = createA6_7_Diagonals();
+        this->init();
+    }
+
+    ~A6_7_DiagonalsFirstOrder() {
+    #ifdef DEBUG
+        std::cout << "in A6_7_DiagonalsFirstOrder destructor" << std::endl;
+    #endif
+    }
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<A6_7_DiagonalsFirstOrder>(*this);
+    }
+
+    DerivType getDerivType() const override { return DerivType::D_A6_7; }
+    DerivOrder getDerivOrder() const override { return DerivOrder::D_FIRST_ORDER; }
+    std::string toString() const override { return "A6_7_DiagonalsFirstOrder"; }
+};
+
 //Second Derivatives:
 class TwoDerivs2B4_1_SecondOrder : public MatrixCompactDerivs<2> {
 public:

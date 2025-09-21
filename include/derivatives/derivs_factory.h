@@ -221,7 +221,19 @@ class DerivsFactory {
         }else if (name == "A6_3") {
         return std::unique_ptr<Derivs>(new A6_3_DiagonalsFirstOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in));
-        }  else if (name == "C6_1") {
+        } else if (name == "A6_4") {
+        return std::unique_ptr<Derivs>(new A6_4_DiagonalsFirstOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "A6_5") {
+        return std::unique_ptr<Derivs>(new A6_5_DiagonalsFirstOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "A6_6") {
+        return std::unique_ptr<Derivs>(new A6_6_DiagonalsFirstOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "A6_7") {
+        return std::unique_ptr<Derivs>(new A6_7_DiagonalsFirstOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        } else if (name == "C6_1") {
             return std::unique_ptr<Derivs>(new C6_1_DiagonalsFirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
         } else if (name == "C6_2") {
