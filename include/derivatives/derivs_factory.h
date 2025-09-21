@@ -505,11 +505,7 @@ class DerivsFactory {
         }else if (name == "2B4_1") {
         return std::unique_ptr<Derivs>(new TwoDerivs2B4_1_SecondOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
-        }else if (name == "2A6_1") {
-    return std::unique_ptr<Derivs>(new TwoDerivs2A6_1_SecondOrder(
-        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
-}
-else if (name == "2B6_1") {
+        }else if (name == "2B6_1") {
     return std::unique_ptr<Derivs>(new TwoDerivs2B6_1_SecondOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
 }
@@ -545,10 +541,87 @@ else if (name == "2B6_9") {
     return std::unique_ptr<Derivs>(new TwoDerivs2B6_9_SecondOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
 }
+// ==== C4 family ====
+else if (name == "2C4_1") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C4_2") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C4_3") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C4_4") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_4_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C4_5") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_5_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C4_6") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_6_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C4_7") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_7_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C4_8") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_8_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C4_9") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_9_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C4_10") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C4_10_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+
+// ==== C6 family (1..7) ====
 else if (name == "2C6_1") {
     return std::unique_ptr<Derivs>(new TwoDerivs2C6_1_SecondOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C6_2") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C6_2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C6_3") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C6_3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C6_4") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C6_4_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C6_5") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C6_5_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C6_6") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C6_6_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2C6_7") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2C6_7_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
 }
+
+// ==== A6 family (1..7) ====
+else if (name == "2A6_1") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2A6_1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2A6_2") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2A6_2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2A6_3") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2A6_3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2A6_4") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2A6_4_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2A6_5") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2A6_5_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2A6_6") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2A6_6_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "2A6_7") {
+    return std::unique_ptr<Derivs>(new TwoDerivs2A6_7_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+}
+
 
 
         return nullptr;

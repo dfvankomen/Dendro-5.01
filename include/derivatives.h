@@ -160,7 +160,6 @@ enum DerivType {
    D_2UA_1,
    D_2UA_2,    
    D_2B4_1,
-   D_2A6_1,
    D_2B6_1,
    D_2B6_2,
    D_2B6_3,
@@ -170,7 +169,36 @@ enum DerivType {
    D_2B6_7,
    D_2B6_8,
    D_2B6_9,
-   D_2C6_1,
+      // C4 family (10 total)
+    D_2C4_1,
+    D_2C4_2,
+    D_2C4_3,
+    D_2C4_4,
+    D_2C4_5,
+    D_2C4_6,
+    D_2C4_7,
+    D_2C4_8,
+    D_2C4_9,
+    D_2C4_10,
+
+    // C6 family (1..7, extended from 6)
+    D_2C6_1,
+    D_2C6_2,
+    D_2C6_3,
+    D_2C6_4,
+    D_2C6_5,
+    D_2C6_6,
+    D_2C6_7,
+
+    // A6 family (1..7, extended from 6)
+    D_2A6_1,
+    D_2A6_2,
+    D_2A6_3,
+    D_2A6_4,
+    D_2A6_5,
+    D_2A6_6,
+    D_2A6_7,
+
 
 
 
@@ -188,6 +216,7 @@ enum DerivFamily {
     DF_BL,     // Brady Livescue
     DF_BORIS,  // Boris
     DF_BYUT,   // BYU tridiagonal
+
     DF_BYUP    // BYU Pentadiagonal
 };
 
