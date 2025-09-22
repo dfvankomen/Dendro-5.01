@@ -426,12 +426,12 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
         m_uiAij                           = (DendroScalar*)ETS_U;
 
     } else if (type == ETSType::RK5) {
-        // this is the classic RK5, should be based on Kutta's table(?) unclear
+        // this is the fifth-order method as given by Nystrom, as a correction
+        // to Kutta
         m_uiNumStages                     = 6;
         // this is his "b" vector (weights)
-        static const DendroScalar ETS_C[] = {23.0 / 192.0,  0.0,
-                                             125.0 / 192.0, 0.0,
-                                             -81.0 / 192.0, 125.0 / 192.0};
+        static const DendroScalar ETS_C[] = {
+            23.0 / 192.0, 0.0, 125.0 / 192.0, 0.0, -27.0 / 64.0, 125.0 / 192.0};
         // this is his 'c' vector (time nodes)
         static const DendroScalar ETS_T[] = {0.0, 1.0 / 3.0, 2.0 / 5.0,
                                              1.0, 2.0 / 3.0, 4.0 / 5.0};
@@ -444,12 +444,11 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
             // stage 3
             4.0 / 25.0, 6.0 / 25.0, 0.0, 0.0, 0.0, 0.0,
             // stage 4
-            1.0 / 4.0, -3.0, 12.0 / 5.0, 0.0, 0.0, 0.0,
+            1.0 / 4.0, -3.0, 15.0 / 4.0, 0.0, 0.0, 0.0,
             // stage 5
-            6.0 / 81.0, 90.0 / 81.0, -50.0 / 81.0, 8.0 / 81.0, 0.0, 0.0,
+            2.0 / 27.0, 10.0 / 9.0, -50.0 / 81.0, 8.0 / 81.0, 0.0, 0.0,
             // stage 6
-            -11.0 / 12.0, 5.0 / 2.0, -35.0 / 12.0, -10.0 / 3.0, 61.0 / 60.0,
-            0.0};
+            2.0 / 25.0, 12.0 / 25.0, 2.0 / 15.0, 8.0 / 75.0, 0.0, 0.0};
 
         m_uiCi  = (DendroScalar*)ETS_T;
         m_uiBi  = (DendroScalar*)ETS_C;
