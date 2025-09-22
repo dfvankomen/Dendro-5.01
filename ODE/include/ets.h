@@ -488,7 +488,7 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
         m_uiBi  = (DendroScalar*)ETS_C;
         m_uiAij = (DendroScalar*)ETS_U;
 
-    } else if (type == ETSType::RK45_CASH_KARP) {
+    } else if (type == ETSType::RKF45) {
         // this is the Runge-Kutta-Fehlberg method
         // TODO: this is typically done to see if the step size is large or
         // small enough
