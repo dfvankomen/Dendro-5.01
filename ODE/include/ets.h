@@ -11,6 +11,8 @@
  */
 
 #pragma once
+#include <cmath>
+
 #include "ctx.h"
 #include "dendro.h"
 #include "dvec.h"
@@ -424,6 +426,48 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
         m_uiCi                            = (DendroScalar*)ETS_T;
         m_uiBi                            = (DendroScalar*)ETS_C;
         m_uiAij                           = (DendroScalar*)ETS_U;
+
+    } else if (type == ETSType::RK4_RALSTON) {
+        // this is based on Ralston's fourth-order method, which should have
+        // minimal truncation error compared to the classic fourth order by
+        // Runge-Kutta
+        m_uiNumStages                     = 4;
+
+        static const DendroScalar ETS_C[] = {
+            // (263.0 + 24.0 * sqrt(5.0)) / 1812.0,
+            0.17476028226269036,
+            // (125.0 - 1000.0 * sqrt(5.0)) / 3828.0,
+            −0.551480662878733,
+            // (3426304.0 - 1661952.0 * sqrt(5.0)) / 5924787.0,
+            -0.04893570812617069,
+            // (30.0 - 4.0 * sqrt(5.0)) / 123.0,
+            0.17118478121951902};
+        static const DendroScalar ETS_T[] = {0,  // 2.0 / 5.0,
+                                             0.4,
+                                             // (14.0 - 3.0 * sqrt(5.0)) / 16.0,
+                                             0.4557372542187894, 1.0};
+        static const DendroScalar ETS_U[] = {
+            // stage 1
+            0.0, 0.0, 0.0, 0.0,
+            // stage 2
+            // 2.0 / 5.0,
+            0.4, 0.0, 0.0, 0.0,
+            // stage 3
+            // (-2889.0 + 1428.0 * sqrt(5.0)) / 1024.0,
+            0.2969776092477536,
+            // (3785.0 - 1620.0 * sqrt(5.0)) / 1024.0,
+            0.15875964497103584, 0.0, 0.0,
+            // stage 4
+            // (-3365.0 + 2094.0 * sqrt(5.0)) / 6040.0,
+            0.21810038822592046,
+            // (-975.0 - 3046.0 * sqrt(5.0)) / 2552.0,
+            -3.050965148692931,
+            // (467040.0 + 203968.0 * sqrt(5.0)) / 240845.0,
+            3.8328647604670105, 0.0};
+
+        m_uiCi  = (DendroScalar*)ETS_T;
+        m_uiBi  = (DendroScalar*)ETS_C;
+        m_uiAij = (DendroScalar*)ETS_U;
 
     } else if (type == ETSType::RK5) {
         // this is the fifth-order method as given by Nystrom, as a correction
