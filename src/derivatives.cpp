@@ -55,6 +55,9 @@ DendroDerivatives::DendroDerivatives(
             case 8:
                 filterUse = "KO6";
                 break;
+            case 10:
+                filterUse = "KO8";
+                break;
             default:
                 filterUse = "KO4";
                 break;

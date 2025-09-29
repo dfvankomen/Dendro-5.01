@@ -642,6 +642,9 @@ class FilterFactory {
         } else if (name == "KO6") {
             return std::unique_ptr<Filters>(
                 new ExplicitKODissO6(std::forward<Args>(args)...));
+        }else if (name == "KO8") {
+            return std::unique_ptr<Filters>(
+                new ExplicitKODissO8(std::forward<Args>(args)...));
         }
 
         return nullptr;
