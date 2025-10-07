@@ -204,6 +204,9 @@ class DerivsFactory {
         else if (name == "A4_19") {
             return std::unique_ptr<Derivs>(new A4_19_DiagonalsFirstOrder(
                 ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }  else if (name == "A4_20") {
+            return std::unique_ptr<Derivs>(new A4_20_DiagonalsFirstOrder(
+                ele_order, inMatrixFilterType, in_mat_coeffs_in));
         }
         else if (name == "B4_1") {
             return std::unique_ptr<Derivs>(new B4_1_DiagonalsFirstOrder(
@@ -232,6 +235,9 @@ class DerivsFactory {
         ele_order, inMatrixFilterType, in_mat_coeffs_in));
         } else if (name == "A6_7") {
         return std::unique_ptr<Derivs>(new A6_7_DiagonalsFirstOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in));
+        }else if (name == "A6_8") {
+        return std::unique_ptr<Derivs>(new A6_8_DiagonalsFirstOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in));
         } else if (name == "C6_1") {
             return std::unique_ptr<Derivs>(new C6_1_DiagonalsFirstOrder(
