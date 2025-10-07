@@ -213,6 +213,7 @@ createMatrixSystemForSingleSizeInMatrixFilter(
             filt_type == InMatFilterType::IMFT_KIM_2_P6 ||
             filt_type == InMatFilterType::IMFT_KIM_3_P6 ||
             filt_type == InMatFilterType::IMFT_KIM_4_P6 ||
+            filt_type == InMatFilterType::IMFT_A4 ||
             filt_type == InMatFilterType::IMFT_KIM_P6) 
             {
             for (size_t idx = 0; idx < n; ++idx) {

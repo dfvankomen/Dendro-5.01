@@ -39,7 +39,10 @@ inline std::unique_ptr<InMatrixFilter> createInMatrixFilterByType(
         return std::make_unique<Kim4P6Filter_InMatrix>(in_matrix_filter_coeffs);
     } else if (in_matrix_filter == "KIM_P6") {
         return std::make_unique<KimP6Filter_InMatrix>(in_matrix_filter_coeffs);
-    }else {
+    }else if (in_matrix_filter == "A4") {
+        return std::make_unique<A4_Filter_InMatrix>(in_matrix_filter_coeffs);
+    }
+    else {
         throw std::invalid_argument("Unsupported 'In-Matrix' Filter Type!");
     }
 }

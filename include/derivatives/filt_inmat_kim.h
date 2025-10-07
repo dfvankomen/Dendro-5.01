@@ -360,6 +360,50 @@ inline MatrixDiagonalEntries* create_Kim_1_P6_filter_diagonals(
     return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary,
                                      SDiagInterior, SDiagBoundary};
 }
+inline MatrixDiagonalEntries* create_A4_filter_diagonals(
+    const std::vector<double>& F_coeffs) {
+    
+    double alpha = 0.653235269184;
+    double beta = 0.169352946163;
+    double a0    = -0.0100735481123;
+    double a1    = 0.00755516108426;
+    double a2    = -0.0030220644337;
+    double a3    = 0.000503677405617;
+    double gamma01 = 0.356475439823;
+    double gamma02 = 0.22606192595;
+    double gamma10 = 0.735691167056;
+    double gamma12 = 0.67408404222;
+    double gamma13 = 0.194697181749;
+    double gamma20 = 0.172719977221;
+    double gamma21 = 0.636400113893;
+    double gamma23 = 0.636400113893;
+    double gamma24 = 0.172719977221;
+    double a20   = -0.00113499572901;
+    double a21   = 0.00567497864505;
+    double a22   = -0.0113499572901;
+    double a23   = 0.0113499572901;
+    double a24   = -0.00567497864505;
+    double a25   = 0.00113499572901;
+    double a26   = 0.0;
+
+    // diagonal elements for R matrix for 1st derivative
+    std::vector<double> RDiagInterior{beta, alpha, 1.0, alpha, beta};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> RDiagBoundary{
+        {1, gamma01, gamma02, 0.0}, {gamma10, 1, gamma12, gamma13}, {gamma20, gamma21, 1, gamma23, gamma24}};
+    // boundary elements for S matrix for 1st derivative
+    std::vector<std::vector<double>> SDiagBoundary{
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0},
+        {a20, a21, a22, a23, a24, a25, a26}};
+
+    // diagonal elements for S matrix for 1st derivative
+    std::vector<double> SDiagInterior{a3 , a2 , a1 , a0,
+                                      a1, a2, a3};
+
+    return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary,
+                                     SDiagInterior, SDiagBoundary};
+}
 inline MatrixDiagonalEntries* create_2_KimP6_filter_diagonals(
     const std::vector<double>& F_coeffs) {
     
@@ -617,5 +661,20 @@ public:
         return InMatFilterType::IMFT_KIM_P6;
     }
 };
+
+class A4_Filter_InMatrix : public InMatrixFilter {
+public:
+    A4_Filter_InMatrix(const std::vector<double>& input_coeffs)
+        : InMatrixFilter(input_coeffs) {
+        diagEntries = create_A4_filter_diagonals(input_coeffs);
+    }
+
+    ~A4_Filter_InMatrix() = default;  // <- exact class name here
+
+    InMatFilterType get_filter_type() const override {
+        return InMatFilterType::IMFT_A4;
+    }
+};
+
 
 }  // namespace dendroderivs

@@ -16,6 +16,7 @@ enum InMatFilterType {
     IMFT_KIM_2_P6,
     IMFT_KIM_3_P6,
     IMFT_KIM_4_P6,
+    IMFT_A4,
     IMFT_KIM_P6
 };
 
