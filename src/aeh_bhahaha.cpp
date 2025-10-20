@@ -940,32 +940,35 @@ void AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
         nlohmann::json checkPoint;
 
         // make sure the n_horizons is achieved
-        checkPoint["N_HORIZONS"]      = num_horizons_;
-        checkPoint["IS_BBH"]          = is_bbh_;
+        checkPoint["N_HORIZONS"]       = num_horizons_;
+        checkPoint["IS_BBH"]           = is_bbh_;
 
         // using base91 for good compression and high-accuracy checkpointing
-        checkPoint["X_CENTER_M1"]     = b91_encode(x_center_m1_);
-        checkPoint["Y_CENTER_M1"]     = b91_encode(y_center_m1_);
-        checkPoint["Z_CENTER_M1"]     = b91_encode(z_center_m1_);
-        checkPoint["X_CENTER_M2"]     = b91_encode(x_center_m2_);
-        checkPoint["Y_CENTER_M2"]     = b91_encode(y_center_m2_);
-        checkPoint["Z_CENTER_M2"]     = b91_encode(z_center_m2_);
-        checkPoint["X_CENTER_M3"]     = b91_encode(x_center_m3_);
-        checkPoint["Y_CENTER_M3"]     = b91_encode(y_center_m3_);
-        checkPoint["Z_CENTER_M3"]     = b91_encode(z_center_m3_);
-        checkPoint["T_M1"]            = b91_encode(t_m1_);
-        checkPoint["T_M2"]            = b91_encode(t_m2_);
-        checkPoint["T_M3"]            = b91_encode(t_m3_);
-        checkPoint["R_MIN_M1"]        = b91_encode(r_min_m1_);
-        checkPoint["R_MIN_M2"]        = b91_encode(r_min_m2_);
-        checkPoint["R_MIN_M3"]        = b91_encode(r_min_m3_);
-        checkPoint["R_MAX_M1"]        = b91_encode(r_max_m1_);
-        checkPoint["R_MAX_M2"]        = b91_encode(r_max_m2_);
-        checkPoint["R_MAX_M3"]        = b91_encode(r_max_m3_);
-        checkPoint["PREV_HORIZON_M1"] = b91_encode(prev_horizon_m1_);
-        checkPoint["PREV_HORIZON_M2"] = b91_encode(prev_horizon_m2_);
-        checkPoint["PREV_HORIZON_M3"] = b91_encode(prev_horizon_m3_);
-        checkPoint["HORIZON_ACTIVE"]  = bah_horizon_active_;
+        checkPoint["X_CENTER_M1"]      = b91_encode(x_center_m1_);
+        checkPoint["Y_CENTER_M1"]      = b91_encode(y_center_m1_);
+        checkPoint["Z_CENTER_M1"]      = b91_encode(z_center_m1_);
+        checkPoint["X_CENTER_M2"]      = b91_encode(x_center_m2_);
+        checkPoint["Y_CENTER_M2"]      = b91_encode(y_center_m2_);
+        checkPoint["Z_CENTER_M2"]      = b91_encode(z_center_m2_);
+        checkPoint["X_CENTER_M3"]      = b91_encode(x_center_m3_);
+        checkPoint["Y_CENTER_M3"]      = b91_encode(y_center_m3_);
+        checkPoint["Z_CENTER_M3"]      = b91_encode(z_center_m3_);
+        checkPoint["T_M1"]             = b91_encode(t_m1_);
+        checkPoint["T_M2"]             = b91_encode(t_m2_);
+        checkPoint["T_M3"]             = b91_encode(t_m3_);
+        checkPoint["R_MIN_M1"]         = b91_encode(r_min_m1_);
+        checkPoint["R_MIN_M2"]         = b91_encode(r_min_m2_);
+        checkPoint["R_MIN_M3"]         = b91_encode(r_min_m3_);
+        checkPoint["R_MAX_M1"]         = b91_encode(r_max_m1_);
+        checkPoint["R_MAX_M2"]         = b91_encode(r_max_m2_);
+        checkPoint["R_MAX_M3"]         = b91_encode(r_max_m3_);
+        checkPoint["PREV_HORIZON_M1"]  = b91_encode(prev_horizon_m1_);
+        checkPoint["PREV_HORIZON_M2"]  = b91_encode(prev_horizon_m2_);
+        checkPoint["PREV_HORIZON_M3"]  = b91_encode(prev_horizon_m3_);
+        checkPoint["HORIZON_ACTIVE"]   = bah_horizon_active_;
+        checkPoint["FAILED_LAST_FIND"] = failed_last_find_;
+        checkPoint["USE_FIXED_RADIUS_GUESS"] =
+            bah_use_fixed_radius_guess_on_full_sphere_;
 
         std::ofstream outfile(checkpoint_output);
         if (!outfile) {
@@ -1081,6 +1084,20 @@ void AEH_BHaHAHA::restore_checkpoint(const ot::Mesh* mesh,
     // then the currently active ones
     std::vector<int> temp_active = checkPoint["HORIZON_ACTIVE"];
     restore_vector(bah_horizon_active_, temp_active, num_horizons_);
+
+    // check to make sure FAILED_LAST_FIND and USE_FIXED_RADIUS_GUESS are set
+    // up:
+    if (checkPoint.contains("FAILED_LAST_FIND")) {
+        std::vector<bool> temp_failed = checkPoint["FAILED_LAST_FIND"];
+        restore_vector(failed_last_find_, temp_failed, num_horizons_);
+    }
+
+    if (checkPoint.contains("USE_FIXED_RADIUS_GUESS")) {
+        std::vector<int> temp_fixed_guess =
+            checkPoint["USE_FIXED_RADIUS_GUESS"];
+        restore_vector(bah_use_fixed_radius_guess_on_full_sphere_,
+                       temp_fixed_guess, num_horizons_);
+    }
 
     // unpack back into the bah struct to ensure we're all on the same page
     // here
