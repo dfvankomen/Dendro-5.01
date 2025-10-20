@@ -10,7 +10,7 @@
 # building, but the options must be propagated to your own solvers and projects.
 
 
-cmake_minimum_required(VERSION 3.1)
+cmake_minimum_required(VERSION 3.1...3.20)
 project(Dendro-5.0-Library C CXX Fortran)
 
 if(POLICY CMP0169)
@@ -153,7 +153,8 @@ set(DENDRO_INCLUDE_FILES
     include/derivatives/filt_inmat.h
     include/derivatives/filt_inmat_byufilter.h
     include/derivatives/filt_inmat_kim.h
-)
+    include/logger.h
+    include/device.h)
 
 set(DENDRO_SOURCE_FILES
     src/dendro.cpp
@@ -192,7 +193,8 @@ set(DENDRO_SOURCE_FILES
     src/derivatives/impl_hybrid_approaches.cpp
     src/derivatives/filt_kodiss_explicit.cpp
     src/derivatives/nova_derivs.cpp
-)
+    src/logger.cpp
+    test/src/meshTestUtils.cpp)
 
 set(FEM_INC
     FEM/include/basis.h
@@ -274,6 +276,14 @@ if(WITH_CUDA)
                           FEM/examples/src/heatMat.cpp)
 endif()
 
+include(FetchContent)
+FetchContent_Declare(
+        spdlog
+        GIT_REPOSITORY https://github.com/gabime/spdlog.git
+        GIT_TAG        v1.14.1
+    )
+FetchContent_MakeAvailable(spdlog)
+
 # ==========================
 # DENDRO LIBRARY DEFINITION -- Starting with CUDA
 # ==========================
@@ -354,6 +364,9 @@ endif()
 
 # link libxsmm
 target_link_libraries(dendro5 PUBLIC xsmm)
+
+# link logging library
+target_link_libraries(dendro5 PUBLIC spdlog::spdlog)
 
 # =======================
 # =======================
