@@ -17,7 +17,13 @@ enum InMatFilterType {
     IMFT_KIM_3_P6,
     IMFT_KIM_4_P6,
     IMFT_A4,
-    IMFT_KIM_P6
+    IMFT_KIM_P6,
+    IMFT_Kim_06_P6,
+    IMFT_Kim_075_P6,
+    IMFT_Kim_08_P6,
+    IMFT_Kim_085_P6,
+    IMFT_Kim_09_P6
+
 };
 
 // all we really need to do is "inject" into the matrix this stuff, depending on

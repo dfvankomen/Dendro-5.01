@@ -207,14 +207,18 @@ createMatrixSystemForSingleSizeInMatrixFilter(
         lapack::iterative_inverse(R_temp.data(), Rinv.data(), n);
         lapack::square_matrix_multiplication(Rinv.data(), S_temp.data(),
                                              R1_S.data(), n);
-
-            if (filt_type == InMatFilterType::IMFT_KIM ||
-            filt_type == InMatFilterType::IMFT_KIM_1_P6 ||
-            filt_type == InMatFilterType::IMFT_KIM_2_P6 ||
-            filt_type == InMatFilterType::IMFT_KIM_3_P6 ||
-            filt_type == InMatFilterType::IMFT_KIM_4_P6 ||
-            filt_type == InMatFilterType::IMFT_A4 ||
-            filt_type == InMatFilterType::IMFT_KIM_P6) 
+if (filt_type == InMatFilterType::IMFT_KIM ||
+    filt_type == InMatFilterType::IMFT_KIM_1_P6 ||
+    filt_type == InMatFilterType::IMFT_KIM_2_P6 ||
+    filt_type == InMatFilterType::IMFT_KIM_3_P6 ||
+    filt_type == InMatFilterType::IMFT_KIM_4_P6 ||
+    filt_type == InMatFilterType::IMFT_A4 ||
+    filt_type == InMatFilterType::IMFT_KIM_P6 ||
+    filt_type == InMatFilterType::IMFT_Kim_06_P6 ||
+    filt_type == InMatFilterType::IMFT_Kim_075_P6 ||
+    filt_type == InMatFilterType::IMFT_Kim_08_P6 ||
+    filt_type == InMatFilterType::IMFT_Kim_085_P6 ||
+    filt_type == InMatFilterType::IMFT_Kim_09_P6)
             {
             for (size_t idx = 0; idx < n; ++idx) {
                 R1_S[n * idx + idx] += 1.0;
