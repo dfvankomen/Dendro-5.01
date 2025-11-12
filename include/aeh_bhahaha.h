@@ -319,7 +319,7 @@ class AEH_BHaHAHA {
         t_m2_                 = std::vector<double>(num_horizons_, 0.0);
         t_m3_                 = std::vector<double>(num_horizons_, 0.0);
         failed_last_find_     = std::vector<bool>(num_horizons_, false);
-        failed_last_find_int_ = std::vector<bool>(num_horizons_, 0);
+        failed_last_find_int_ = std::vector<int>(num_horizons_, 0);
 
         prev_horizon_m1_ =
             std::vector<double>(num_horizons_ * max_ntheta_ * max_nphi_);

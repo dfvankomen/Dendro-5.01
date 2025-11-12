@@ -191,7 +191,7 @@ void AEH_BHaHAHA::find_horizons(
                     which_horizon != common_horizon) {
                     if (!tracked_location_data.empty()) {
                         std::cout
-                            << "\tAEH NOTICE rank " << std::setw(4)
+                            << "\tAH NOTICE rank " << std::setw(4)
                             << rankActive << " horizon " << std::setw(4)
                             << (which_horizon + 1)
                             << ": Last find failed, overwriting guess points "
@@ -266,6 +266,12 @@ void AEH_BHaHAHA::find_horizons(
             const bool bh1_found_before      = (time_bh1_last_found >= 0.0);
             const bool bh2_found_before      = (time_bh2_last_found >= 0.0);
 
+            // check last found times
+            if (!globalRank) {
+                std::cout << "[BAH]: last found BH1 time: " << time_bh1_last_found << std::endl;
+                std::cout << "[BAH]: last found BH2 time: " << time_bh2_last_found << std::endl;
+            }
+
             // if they've both been found, then we can check their centers
             if (bh1_found_before && bh2_found_before) {
                 const double dist_between_centers =
@@ -339,6 +345,11 @@ void AEH_BHaHAHA::find_horizons(
                                 << std::endl;
                         }
                     }
+                }
+            } else {
+                // sanity check: make sure horizons found when expected
+                if (rankActive == 0) {
+                    std::cout << "[BAH]: Horizons never found before!" << std::endl;
                 }
             }
         }
@@ -1067,7 +1078,7 @@ void AEH_BHaHAHA::restore_checkpoint(const ot::Mesh* mesh,
     std::ifstream infile(checkpoint_file);
     if (!infile) {
         std::cout << checkpoint_file
-                  << " file open failed! Could not restore AEH solver!"
+                  << " file open failed! Could not restore AH solver!"
                   << std::endl;
         return;
     }
