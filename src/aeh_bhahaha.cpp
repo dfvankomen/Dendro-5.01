@@ -538,16 +538,6 @@ void AEH_BHaHAHA::bah_sum_shared_arrays(const ot::Mesh* mesh) {
     }
 
     // double arrays need to also be synchronized
-
-    // this is really only for the BBH case
-    MPI_Allreduce(MPI_IN_PLACE,
-                  bah_use_fixed_radius_guess_on_full_sphere_.data(),
-                  bah_use_fixed_radius_guess_on_full_sphere_.size(), MPI_INT,
-                  MPI_SUM, commActive);
-
-    MPI_Allreduce(MPI_IN_PLACE, bah_horizon_active_.data(),
-                  bah_horizon_active_.size(), MPI_INT, MPI_SUM, commActive);
-
     std::vector<double> combined_double_buffer;
     combined_double_buffer.insert(combined_double_buffer.end(),
                                   x_center_m1_.begin(), x_center_m1_.end());
