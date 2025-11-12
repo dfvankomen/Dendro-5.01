@@ -190,6 +190,7 @@ class AEH_BHaHAHA {
     bool have_done_initial_test_ = false;
 
     std::vector<bool> failed_last_find_;
+    std::vector<int> failed_last_find_int_;
 
    public:
     // add more input types for data...
@@ -292,32 +293,33 @@ class AEH_BHaHAHA {
     void allocate_data_structures() {
         // initialize all internal structures that will store the persistent
         // data
-        x_guess_          = std::vector<double>(num_horizons_, 0.0);
-        y_guess_          = std::vector<double>(num_horizons_, 0.0);
-        z_guess_          = std::vector<double>(num_horizons_, 0.0);
-        r_min_guess_      = std::vector<double>(num_horizons_, 0.0);
-        r_max_guess_      = std::vector<double>(num_horizons_, 0.0);
+        x_guess_              = std::vector<double>(num_horizons_, 0.0);
+        y_guess_              = std::vector<double>(num_horizons_, 0.0);
+        z_guess_              = std::vector<double>(num_horizons_, 0.0);
+        r_min_guess_          = std::vector<double>(num_horizons_, 0.0);
+        r_max_guess_          = std::vector<double>(num_horizons_, 0.0);
 
-        x_center_m1_      = std::vector<double>(num_horizons_, 0.0);
-        y_center_m1_      = std::vector<double>(num_horizons_, 0.0);
-        z_center_m1_      = std::vector<double>(num_horizons_, 0.0);
-        x_center_m2_      = std::vector<double>(num_horizons_, 0.0);
-        y_center_m2_      = std::vector<double>(num_horizons_, 0.0);
-        z_center_m2_      = std::vector<double>(num_horizons_, 0.0);
-        x_center_m3_      = std::vector<double>(num_horizons_, 0.0);
-        y_center_m3_      = std::vector<double>(num_horizons_, 0.0);
-        z_center_m3_      = std::vector<double>(num_horizons_, 0.0);
+        x_center_m1_          = std::vector<double>(num_horizons_, 0.0);
+        y_center_m1_          = std::vector<double>(num_horizons_, 0.0);
+        z_center_m1_          = std::vector<double>(num_horizons_, 0.0);
+        x_center_m2_          = std::vector<double>(num_horizons_, 0.0);
+        y_center_m2_          = std::vector<double>(num_horizons_, 0.0);
+        z_center_m2_          = std::vector<double>(num_horizons_, 0.0);
+        x_center_m3_          = std::vector<double>(num_horizons_, 0.0);
+        y_center_m3_          = std::vector<double>(num_horizons_, 0.0);
+        z_center_m3_          = std::vector<double>(num_horizons_, 0.0);
 
-        r_min_m1_         = std::vector<double>(num_horizons_, 0.0);
-        r_min_m2_         = std::vector<double>(num_horizons_, 0.0);
-        r_min_m3_         = std::vector<double>(num_horizons_, 0.0);
-        r_max_m1_         = std::vector<double>(num_horizons_, 0.0);
-        r_max_m2_         = std::vector<double>(num_horizons_, 0.0);
-        r_max_m3_         = std::vector<double>(num_horizons_, 0.0);
-        t_m1_             = std::vector<double>(num_horizons_, 0.0);
-        t_m2_             = std::vector<double>(num_horizons_, 0.0);
-        t_m3_             = std::vector<double>(num_horizons_, 0.0);
-        failed_last_find_ = std::vector<bool>(num_horizons_, false);
+        r_min_m1_             = std::vector<double>(num_horizons_, 0.0);
+        r_min_m2_             = std::vector<double>(num_horizons_, 0.0);
+        r_min_m3_             = std::vector<double>(num_horizons_, 0.0);
+        r_max_m1_             = std::vector<double>(num_horizons_, 0.0);
+        r_max_m2_             = std::vector<double>(num_horizons_, 0.0);
+        r_max_m3_             = std::vector<double>(num_horizons_, 0.0);
+        t_m1_                 = std::vector<double>(num_horizons_, 0.0);
+        t_m2_                 = std::vector<double>(num_horizons_, 0.0);
+        t_m3_                 = std::vector<double>(num_horizons_, 0.0);
+        failed_last_find_     = std::vector<bool>(num_horizons_, false);
+        failed_last_find_int_ = std::vector<bool>(num_horizons_, 0);
 
         prev_horizon_m1_ =
             std::vector<double>(num_horizons_ * max_ntheta_ * max_nphi_);

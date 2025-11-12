@@ -145,6 +145,31 @@ void AEH_BHaHAHA::find_horizons(
                 t_m1_[which_horizon]                                      = 0.0;
                 r_max_guess_[which_horizon]                               = 0.0;
                 r_min_guess_[which_horizon]                               = 0.0;
+
+                // also zero out the failed last find here
+                failed_last_find_[which_horizon]     = false;
+                failed_last_find_int_[which_horizon] = 0;
+
+                // also be sure to clear out the prev_horizon buffers if we
+                // don't own it
+                const size_t horizon_data_size =
+                    static_cast<size_t>(max_ntheta_ * max_nphi_);
+                const size_t horizon_offset =
+                    static_cast<size_t>(which_horizon) * horizon_data_size;
+
+                std::fill(prev_horizon_m1_.begin() + horizon_offset,
+                          prev_horizon_m1_.begin() + horizon_offset +
+                              horizon_data_size,
+                          0.0);
+                std::fill(prev_horizon_m2_.begin() + horizon_offset,
+                          prev_horizon_m2_.begin() + horizon_offset +
+                              horizon_data_size,
+                          0.0);
+                std::fill(prev_horizon_m3_.begin() + horizon_offset,
+                          prev_horizon_m3_.begin() + horizon_offset +
+                              horizon_data_size,
+                          0.0);
+
             } else {
 #if 0
                 std::cout
@@ -432,7 +457,8 @@ void AEH_BHaHAHA::find_horizons(
 
                 // next time don't force full guess
                 bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 0;
-                failed_last_find_[which_horizon] = false;
+                failed_last_find_[which_horizon]     = false;
+                failed_last_find_int_[which_horizon] = 0;
             } else {
                 std::cerr << "ERROR[HORIZON]: Failure to find horizon "
                           << which_horizon << " with error code "
@@ -445,10 +471,11 @@ void AEH_BHaHAHA::find_horizons(
                 bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 1;
 
                 // update the guess with the BH data for this horizon
-                failed_last_find_[which_horizon] = true;
+                failed_last_find_[which_horizon]     = true;
+                failed_last_find_int_[which_horizon] = 1;
 
                 // this signals broken history for extrapolation
-                t_m1_[which_horizon]             = -1.0;
+                t_m1_[which_horizon]                 = -1.0;
 
                 // and then this ensures the next guess is a full-sphere search
                 // by updating the r_max_guess
@@ -475,6 +502,42 @@ void AEH_BHaHAHA::bah_sum_shared_arrays(const ot::Mesh* mesh) {
     unsigned int npesActive = mesh->getMPICommSize();
     MPI_Comm commActive     = mesh->getMPICommunicator();
     unsigned int globalRank = mesh->getMPIRankGlobal();
+
+    // integer arrays that need to be synchronized
+    std::vector<int> combined_int_buffer;
+    combined_int_buffer.insert(
+        combined_int_buffer.end(),
+        bah_use_fixed_radius_guess_on_full_sphere_.begin(),
+        bah_use_fixed_radius_guess_on_full_sphere_.end());
+
+    combined_int_buffer.insert(combined_int_buffer.end(),
+                               bah_horizon_active_.begin(),
+                               bah_horizon_active_.end());
+    combined_int_buffer.insert(combined_int_buffer.end(),
+                               failed_last_find_int_.begin(),
+                               failed_last_find_int_.end());
+
+    MPI_Allreduce(MPI_IN_PLACE, combined_int_buffer.data(),
+                  combined_int_buffer.size(), MPI_INT, MPI_SUM, commActive);
+
+    // then unpack the integer arrays
+    auto int_it = combined_int_buffer.begin();
+    std::copy(int_it,
+              int_it + bah_use_fixed_radius_guess_on_full_sphere_.size(),
+              bah_use_fixed_radius_guess_on_full_sphere_.begin());
+    int_it += bah_use_fixed_radius_guess_on_full_sphere_.size();
+    std::copy(int_it, int_it + bah_horizon_active_.size(),
+              bah_horizon_active_.begin());
+    int_it += bah_horizon_active_.size();
+    std::copy(int_it, int_it + failed_last_find_int_.size(),
+              failed_last_find_int_.begin());
+
+    // make sure the failed_last_find is converted back to booleans
+    for (size_t i = 0; i < num_horizons_; ++i) {
+        failed_last_find_[i] = (failed_last_find_int_[i] == 1);
+    }
+
+    // double arrays need to also be synchronized
 
     // this is really only for the BBH case
     MPI_Allreduce(MPI_IN_PLACE,
@@ -768,7 +831,7 @@ void AEH_BHaHAHA::synchronize_to_root(const ot::Mesh* mesh,
     // need to synchronize the x/y/z center arrays, the t arrays, the r
     // min/max arrays, and the prev_horizon arrays (as well as the active
     // arrays), that's 18 arrays
-    constexpr int num_standard = 19;
+    constexpr int num_standard = 20;
 
     const size_t data_to_send_per_horizon =
         1 + num_standard + 3 * max_nphi_ * max_ntheta_;
@@ -798,28 +861,30 @@ void AEH_BHaHAHA::synchronize_to_root(const ot::Mesh* mesh,
         // now we can collect the data into the sendBuffer
         // update the send buffer for how many horizons there are to send
         // and then set which horizon this is!
-        sendBuffer[curr_offset++]       = static_cast<double>(which_horizon);
+        sendBuffer[curr_offset++] = static_cast<double>(which_horizon);
 
         // then fill with the values that need to be synchronized
-        sendBuffer[curr_offset++]       = x_center_m1_[which_horizon];
-        sendBuffer[curr_offset++]       = y_center_m1_[which_horizon];
-        sendBuffer[curr_offset++]       = z_center_m1_[which_horizon];
-        sendBuffer[curr_offset++]       = x_center_m2_[which_horizon];
-        sendBuffer[curr_offset++]       = y_center_m2_[which_horizon];
-        sendBuffer[curr_offset++]       = z_center_m2_[which_horizon];
-        sendBuffer[curr_offset++]       = x_center_m3_[which_horizon];
-        sendBuffer[curr_offset++]       = y_center_m3_[which_horizon];
-        sendBuffer[curr_offset++]       = z_center_m3_[which_horizon];
-        sendBuffer[curr_offset++]       = t_m1_[which_horizon];
-        sendBuffer[curr_offset++]       = t_m2_[which_horizon];
-        sendBuffer[curr_offset++]       = t_m3_[which_horizon];
-        sendBuffer[curr_offset++]       = r_min_m1_[which_horizon];
-        sendBuffer[curr_offset++]       = r_min_m2_[which_horizon];
-        sendBuffer[curr_offset++]       = r_min_m3_[which_horizon];
-        sendBuffer[curr_offset++]       = r_max_m1_[which_horizon];
-        sendBuffer[curr_offset++]       = r_max_m2_[which_horizon];
-        sendBuffer[curr_offset++]       = r_max_m3_[which_horizon];
-        sendBuffer[curr_offset++]       = bah_horizon_active_[which_horizon];
+        sendBuffer[curr_offset++] = x_center_m1_[which_horizon];
+        sendBuffer[curr_offset++] = y_center_m1_[which_horizon];
+        sendBuffer[curr_offset++] = z_center_m1_[which_horizon];
+        sendBuffer[curr_offset++] = x_center_m2_[which_horizon];
+        sendBuffer[curr_offset++] = y_center_m2_[which_horizon];
+        sendBuffer[curr_offset++] = z_center_m2_[which_horizon];
+        sendBuffer[curr_offset++] = x_center_m3_[which_horizon];
+        sendBuffer[curr_offset++] = y_center_m3_[which_horizon];
+        sendBuffer[curr_offset++] = z_center_m3_[which_horizon];
+        sendBuffer[curr_offset++] = t_m1_[which_horizon];
+        sendBuffer[curr_offset++] = t_m2_[which_horizon];
+        sendBuffer[curr_offset++] = t_m3_[which_horizon];
+        sendBuffer[curr_offset++] = r_min_m1_[which_horizon];
+        sendBuffer[curr_offset++] = r_min_m2_[which_horizon];
+        sendBuffer[curr_offset++] = r_min_m3_[which_horizon];
+        sendBuffer[curr_offset++] = r_max_m1_[which_horizon];
+        sendBuffer[curr_offset++] = r_max_m2_[which_horizon];
+        sendBuffer[curr_offset++] = r_max_m3_[which_horizon];
+        sendBuffer[curr_offset++] = bah_horizon_active_[which_horizon];
+        sendBuffer[curr_offset++] =
+            failed_last_find_[which_horizon] ? 1.0 : 0.0;
 
         // make sure curr_offset is updated
         // curr_offset += num_standard;
@@ -889,6 +954,10 @@ void AEH_BHaHAHA::synchronize_to_root(const ot::Mesh* mesh,
             r_max_m2_[which_horizon]           = recv_buffer[read_offset + 16];
             r_max_m3_[which_horizon]           = recv_buffer[read_offset + 17];
             bah_horizon_active_[which_horizon] = recv_buffer[read_offset + 18];
+            failed_last_find_[which_horizon] =
+                (recv_buffer[read_offset + 19] == 1.0);
+            failed_last_find_int_[which_horizon] =
+                failed_last_find_[which_horizon] ? 1 : 0;
 
             // make sure curr_offset is updated
             read_offset += num_standard;
@@ -1090,6 +1159,11 @@ void AEH_BHaHAHA::restore_checkpoint(const ot::Mesh* mesh,
     if (checkPoint.contains("FAILED_LAST_FIND")) {
         std::vector<bool> temp_failed = checkPoint["FAILED_LAST_FIND"];
         restore_vector(failed_last_find_, temp_failed, num_horizons_);
+
+        // and then sync the new integer version
+        for (size_t i = 0; i < num_horizons_; ++i) {
+            failed_last_find_int_[i] = failed_last_find_[i] ? 1 : 0;
+        }
     }
 
     if (checkPoint.contains("USE_FIXED_RADIUS_GUESS")) {
