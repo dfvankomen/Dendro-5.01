@@ -268,6 +268,12 @@ void AEH_BHaHAHA::find_horizons(
 
             // check last found times
             if (!globalRank) {
+                std::cout << "[BAH]: last found BH1 position: (" 
+                  << x_bh1_last << ',' << y_bh1_last << ',' << z_bh1_last 
+                  << ')' << std::endl;
+                std::cout << "[BAH]: last found BH2 position: (" 
+                  << x_bh2_last << ',' << y_bh2_last << ',' << z_bh2_last 
+                  << ')' << std::endl;
                 std::cout << "[BAH]: last found BH1 time: " << time_bh1_last_found << std::endl;
                 std::cout << "[BAH]: last found BH2 time: " << time_bh2_last_found << std::endl;
             }
@@ -486,7 +492,7 @@ void AEH_BHaHAHA::find_horizons(
                 failed_last_find_int_[which_horizon] = 1;
 
                 // this signals broken history for extrapolation
-                t_m1_[which_horizon]                 = -1.0;
+                // t_m1_[which_horizon]                 = -1.0;
 
                 // and then this ensures the next guess is a full-sphere search
                 // by updating the r_max_guess
