@@ -187,6 +187,7 @@ void AEH_BHaHAHA::find_horizons(
                 // if we failed last find, then we can just set the x_guess
                 // directly to our black holes, but don't override for common
                 // horizons
+                /*
                 if (failed_last_find_[which_horizon] &&
                     which_horizon != common_horizon) {
                     if (!tracked_location_data.empty()) {
@@ -206,6 +207,7 @@ void AEH_BHaHAHA::find_horizons(
                             tracked_location_data[which_horizon].z();
                     }
                 }
+                */
             }
         }
 
@@ -463,7 +465,6 @@ void AEH_BHaHAHA::find_horizons(
                     &bha_param_data_[which_horizon]);
 
                 // output horizon diagnostics
-
                 if (current_step % file_output_freq_ == 0) {
                     bah_diagnostics_file_output(
                         &bhahaha_diags, &bha_param_data_[which_horizon],
@@ -484,20 +485,31 @@ void AEH_BHaHAHA::find_horizons(
                                  (bhahaha_error_codes)bah_return_code)
                           << std::endl;
 
-                // make sure we revert to full-sphere guess
-                bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 1;
-
-                // update the guess with the BH data for this horizon
+                // update failure flag(s)
                 failed_last_find_[which_horizon]     = true;
                 failed_last_find_int_[which_horizon] = 1;
 
-                // this signals broken history for extrapolation
-                // t_m1_[which_horizon]                 = -1.0;
+                // revert to full-sphere guess
+                bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 1;
+                r_min_guess_[which_horizon] = 0.0;
+                r_max_guess_[which_horizon] = bah_max_search_radius_[which_horizon];
 
-                // and then this ensures the next guess is a full-sphere search
-                // by updating the r_max_guess
-                r_max_guess_[which_horizon] =
-                    bah_max_search_radius_[which_horizon];
+                // update the guess with the BH data for this horizon
+                // taken from the bh history if possible
+                if (!tracked_location_data.empty() &&
+                    which_horizon != common_horizon) {
+                    std::cout << "\tAH NOTICE rank " << std::setw(4)
+                              << rankActive << " horizon " << std::setw(4)
+                              << (which_horizon + 1)
+                              << ": Last find failed, overwriting guess points "
+                                 "to tracked puncture location: "
+                              << tracked_location_data[which_horizon]
+                              << std::endl;
+                    // update center location
+                    x_guess_[which_horizon] = tracked_location_data[which_horizon].x();
+                    y_guess_[which_horizon] = tracked_location_data[which_horizon].y();
+                    z_guess_[which_horizon] = tracked_location_data[which_horizon].z();
+                }
             }
         }
 
