@@ -170,44 +170,6 @@ void AEH_BHaHAHA::find_horizons(
                               horizon_data_size,
                           0.0);
 
-            } else {
-#if 0
-                std::cout
-                    << "DATA FOR HORIZONS: "
-                    << BAH_USE_FIXED_RADIUS_GUESS_ON_FULL_SPHERE[which_horizon]
-                    << " " << bah_horizon_active[which_horizon] << " | "
-                    << x_center_m1[which_horizon] << " "
-                    << y_center_m1[which_horizon] << " "
-                    << z_center_m1[which_horizon] << " | - guess "
-                    << x_guess[which_horizon] << " " << y_guess[which_horizon]
-                    << " " << z_guess[which_horizon] << " "
-                    << r_max_guess[which_horizon] << std::endl;
-#endif
-
-                // if we failed last find, then we can just set the x_guess
-                // directly to our black holes, but don't override for common
-                // horizons
-                /*
-                if (failed_last_find_[which_horizon] &&
-                    which_horizon != common_horizon) {
-                    if (!tracked_location_data.empty()) {
-                        std::cout
-                            << "\tAH NOTICE rank " << std::setw(4)
-                            << rankActive << " horizon " << std::setw(4)
-                            << (which_horizon + 1)
-                            << ": Last find failed, overwriting guess points "
-                               "to tracked puncture location: "
-                            << tracked_location_data[which_horizon]
-                            << std::endl;
-                        x_guess_[which_horizon] =
-                            tracked_location_data[which_horizon].x();
-                        y_guess_[which_horizon] =
-                            tracked_location_data[which_horizon].y();
-                        z_guess_[which_horizon] =
-                            tracked_location_data[which_horizon].z();
-                    }
-                }
-                */
             }
         }
 
@@ -269,15 +231,17 @@ void AEH_BHaHAHA::find_horizons(
             const bool bh2_found_before      = (time_bh2_last_found >= 0.0);
 
             // check last found times
-            if (!globalRank) {
+            if (!globalRank && bah_verbosity_level_ > 1) {
+                // BH1
+                std::cout << "[BAH]: last found BH1 time: " << time_bh1_last_found << std::endl;
                 std::cout << "[BAH]: last found BH1 position: (" 
                   << x_bh1_last << ',' << y_bh1_last << ',' << z_bh1_last 
                   << ')' << std::endl;
+                // BH2
+                std::cout << "[BAH]: last found BH2 time: " << time_bh2_last_found << std::endl;
                 std::cout << "[BAH]: last found BH2 position: (" 
                   << x_bh2_last << ',' << y_bh2_last << ',' << z_bh2_last 
                   << ')' << std::endl;
-                std::cout << "[BAH]: last found BH1 time: " << time_bh1_last_found << std::endl;
-                std::cout << "[BAH]: last found BH2 time: " << time_bh2_last_found << std::endl;
             }
 
             // if they've both been found, then we can check their centers
@@ -356,8 +320,8 @@ void AEH_BHaHAHA::find_horizons(
                 }
             } else {
                 // sanity check: make sure horizons found when expected
-                if (rankActive == 0) {
-                    std::cout << "[BAH]: Horizons never found before!" << std::endl;
+                if (rankActive == 0 && bah_verbosity_level_ > 1) {
+                    std::cout << "[BAH]: Horizon never found before!" << std::endl;
                 }
             }
         }
@@ -464,7 +428,7 @@ void AEH_BHaHAHA::find_horizons(
                 transfer_to_persistent_from_bhahaha(
                     &bha_param_data_[which_horizon]);
 
-                // output horizon diagnostics
+                // output horizon diagnostics to file
                 if (current_step % file_output_freq_ == 0) {
                     bah_diagnostics_file_output(
                         &bhahaha_diags, &bha_param_data_[which_horizon],
@@ -485,7 +449,7 @@ void AEH_BHaHAHA::find_horizons(
                                  (bhahaha_error_codes)bah_return_code)
                           << std::endl;
 
-                // update failure flag(s)
+                // update failure flags
                 failed_last_find_[which_horizon]     = true;
                 failed_last_find_int_[which_horizon] = 1;
 
@@ -498,13 +462,15 @@ void AEH_BHaHAHA::find_horizons(
                 // taken from the bh history if possible
                 if (!tracked_location_data.empty() &&
                     which_horizon != common_horizon) {
-                    std::cout << "\tAH NOTICE rank " << std::setw(4)
-                              << rankActive << " horizon " << std::setw(4)
-                              << (which_horizon + 1)
-                              << ": Last find failed, overwriting guess points "
-                                 "to tracked puncture location: "
-                              << tracked_location_data[which_horizon]
-                              << std::endl;
+                    if (bah_verbosity_level_ > 0) {
+                        std::cout << "\tAH NOTICE rank " << std::setw(4)
+                                  << rankActive << " horizon " << std::setw(4)
+                                  << (which_horizon + 1)
+                                  << ": Last find failed, overwriting guess points "
+                                     "to tracked puncture location: "
+                                  << tracked_location_data[which_horizon]
+                                  << std::endl;
+                    }
                     // update center location
                     x_guess_[which_horizon] = tracked_location_data[which_horizon].x();
                     y_guess_[which_horizon] = tracked_location_data[which_horizon].y();
