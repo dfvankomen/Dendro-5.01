@@ -673,8 +673,94 @@ inline MatrixDiagonalEntries* create_Kim_09_P6_filter_diagonals(
     return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary, SDiagInterior, SDiagBoundary};
 }
 
+inline MatrixDiagonalEntries* create_Kim_08_P2_filter_diagonals(
+    const std::vector<double>& /*F_coeffs*/) {
 
+		double alpha = 0.65196965;
+		double beta = 0.166666666667;
+		double a0 =  - 0.0110227625;
+		double a1 = 0.00734850833336;
+		double a2 =  - 0.00183712708334;
+		double gamma01 = - 0.441129724243;
+		double gamma02 = 0.220564862121;
+		double gamma10 = 0.65196965;
+		double gamma12 = 0.65196965;
+		double gamma13 = 0;
+		double a10 = 0.00183712708334;
+		double a11 = - 0.00551138125002;
+		double a12 = 0.00551138125002;
+		double a13 = - 0.00183712708334;
 
+		// boundary elements for R matrix for 2nd derivative
+		std::vector<std::vector<double>> RDiagBoundary{
+		{1, gamma01, gamma02, 0.0},
+		{gamma10, 1, gamma12, gamma13}		};
+
+		// diagonal elements for R matrix for 2nd derivative
+		std::vector<double> RDiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for S matrix for 2nd derivative
+		std::vector<std::vector<double>> SDiagBoundary{
+			{0.0, 0.0, 0.0, 0.0},
+			{a10, a11, a12, a13}
+		};
+
+		// diagonal elements for S matrix for 2nd derivative
+		std::vector<double> SDiagInterior{
+			a2, a1, a0, a1, a2
+		};
+
+    return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary, SDiagInterior, SDiagBoundary};
+}
+inline MatrixDiagonalEntries* create_Kim_09_P2_filter_diagonals(
+    const std::vector<double>& /*F_coeffs*/) {
+
+		double alpha = 0.665828142501;
+		double beta = 0.166666666667;
+		double a0 =  - 0.000628893124054;
+		double a1 = 0.000419262082703;
+		double a2 =  - 0.000104815520676;
+		double gamma01 = - 0.44425794936;
+		double gamma02 = 0.22212897468;
+		double gamma10 = 0.665828142501;
+		double gamma12 = 0.665828142501;
+		double gamma13 = 0;
+		double a10 = 0.000104815520676;
+		double a11 = - 0.000314446562027;
+		double a12 = 0.000314446562027;
+		double a13 = - 0.000104815520676;
+
+		// boundary elements for R matrix for 2nd derivative
+		std::vector<std::vector<double>> RDiagBoundary{
+		{1, gamma01, gamma02, 0.0},
+		{gamma10, 1, gamma12, gamma13}		};
+
+		// diagonal elements for R matrix for 2nd derivative
+		std::vector<double> RDiagInterior{
+			beta, alpha, 1.0, alpha, beta
+		};
+
+		// boundary elements for S matrix for 2nd derivative
+		std::vector<std::vector<double>> SDiagBoundary{
+			{0.0, 0.0, 0.0, 0.0},
+			{a10, a11, a12, a13}
+		};
+
+		// diagonal elements for S matrix for 2nd derivative
+		std::vector<double> SDiagInterior{
+			a2, a1, a0, a1, a2
+		};
+
+		// store the entries for matrix creation
+		MatrixDiagonalEntries* diagEntries = new
+			MatrixDiagonalEntries{
+				RDiagInterior, RDiagBoundary, SDiagInterior, SDiagBoundary
+			};
+
+    return new MatrixDiagonalEntries{RDiagInterior, RDiagBoundary, SDiagInterior, SDiagBoundary};
+}
 class KimFilter_InMatrix : public InMatrixFilter {
    public:
     KimFilter_InMatrix(const std::vector<double>& input_coeffs)
@@ -854,6 +940,32 @@ public:
 
     InMatFilterType get_filter_type() const override {
         return InMatFilterType::IMFT_Kim_09_P6;
+    }
+};
+class Kim_09_P2_Filter_InMatrix : public InMatrixFilter {
+public:
+    Kim_09_P2_Filter_InMatrix(const std::vector<double>& input_coeffs)
+        : InMatrixFilter(input_coeffs) {
+        diagEntries = create_Kim_09_P2_filter_diagonals(input_coeffs);
+    }
+
+    ~Kim_09_P2_Filter_InMatrix() = default;
+
+    InMatFilterType get_filter_type() const override {
+        return InMatFilterType::IMFT_Kim_09_P2;
+    }
+};
+class Kim_08_P2_Filter_InMatrix : public InMatrixFilter {
+public:
+    Kim_08_P2_Filter_InMatrix(const std::vector<double>& input_coeffs)
+        : InMatrixFilter(input_coeffs) {
+        diagEntries = create_Kim_08_P2_filter_diagonals(input_coeffs);
+    }
+
+    ~Kim_08_P2_Filter_InMatrix() = default;
+
+    InMatFilterType get_filter_type() const override {
+        return InMatFilterType::IMFT_Kim_08_P2;
     }
 };
 }  // namespace dendroderivs

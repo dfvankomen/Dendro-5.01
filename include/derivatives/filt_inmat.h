@@ -22,7 +22,9 @@ enum InMatFilterType {
     IMFT_Kim_075_P6,
     IMFT_Kim_08_P6,
     IMFT_Kim_085_P6,
-    IMFT_Kim_09_P6
+    IMFT_Kim_09_P6,
+    IMFT_Kim_09_P2,
+    IMFT_Kim_08_P2,
 
 };
 

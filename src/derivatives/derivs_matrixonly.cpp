@@ -218,7 +218,9 @@ if (filt_type == InMatFilterType::IMFT_KIM ||
     filt_type == InMatFilterType::IMFT_Kim_075_P6 ||
     filt_type == InMatFilterType::IMFT_Kim_08_P6 ||
     filt_type == InMatFilterType::IMFT_Kim_085_P6 ||
-    filt_type == InMatFilterType::IMFT_Kim_09_P6)
+    filt_type == InMatFilterType::IMFT_Kim_09_P6||
+    filt_type == InMatFilterType::IMFT_Kim_09_P2||
+filt_type == InMatFilterType::IMFT_Kim_08_P2)
             {
             for (size_t idx = 0; idx < n; ++idx) {
                 R1_S[n * idx + idx] += 1.0;
