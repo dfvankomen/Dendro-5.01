@@ -7,21 +7,6 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 # extensions are required, as that's what the gnu99 line does
 set(CMAKE_C_EXTENSIONS ON)
 
-# base compiler flags
-
-set(COMMON_COMPILE_FLAGS "-Wall -fPIC")
-# NOTE: we originally had -g, which adds debug symbols to release, we'll ignore it
-
-set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMMON_COMPILE_FLAGS}")
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COMMON_COMPILE_FLAGS}")
-
-# check for openmp, like the makefile wants
-find_package(OpenMP)
-if(OpenMP_C_FOUND)
-  set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-  set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_C_FLAGS}")
-endif()
-
 # sources for the BHaHAHAlib, thanks to OBJ_FILES
 set(BHAHAHA_SOURCES
   bah_apply_bcs_inner_only.c
@@ -65,14 +50,18 @@ set(BHAHAHA_SOURCES
   bah_xyz_center_r_minmax.c
 )
 
+
+
 # create the library
 add_library(BHaHAHA STATIC ${BHAHAHA_SOURCES})
 
-# link required library (math)
-target_link_libraries(BHaHAHA PRIVATE m)
+# Enable Position Independent Code (-fPIC)
+set_property(TARGET BHaHAHA PROPERTY POSITION_INDEPENDENT_CODE ON)
 
-# make sure the current directory is set as an include directory!
+target_compile_options(BHaHAHA PRIVATE -Wall)
 target_include_directories(BHaHAHA PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 
-# TODO: installation?
+# we require OpenMP
+find_package(OpenMP REQUIRED)
 
+target_link_libraries(BHaHAHA PUBLIC OpenMP::OpenMP_C m)
