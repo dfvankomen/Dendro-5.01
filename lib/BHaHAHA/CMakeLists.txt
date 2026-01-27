@@ -8,8 +8,12 @@ set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS ON)
 
 # base compiler flags
-set(COMMON_COMPILE_FLAGS "-O2 -march=native -g -Wall -fPIC")
+
+set(COMMON_COMPILE_FLAGS "-Wall -fPIC")
+# NOTE: we originally had -g, which adds debug symbols to release, we'll ignore it
+
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${COMMON_COMPILE_FLAGS}")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${COMMON_COMPILE_FLAGS}")
 
 # check for openmp, like the makefile wants
 find_package(OpenMP)
