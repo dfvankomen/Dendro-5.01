@@ -3254,9 +3254,87 @@ class Mesh {
             eid_vec[ele]         = lid_ele + ele_offsets[rank];
         }
 
-        // read from ghost element vectors
+        // read from ghost element vectors (covers round-1 ghosts only)
         this->readFromGhostBeginElementVec(eid_vec, 1);
         this->readFromGhostEndElementVec(eid_vec, 1);
+
+        // Resolve global IDs for round-2 ghost elements not covered
+        // by the element ghost exchange.  Uses an Allgatherv of local
+        // element coordinates to build a global lookup table.
+        {
+            unsigned int numMissing = 0;
+            for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+                if (eid_vec[ele] == LOOK_UP_TABLE_DEFAULT) numMissing++;
+            }
+
+            if (numMissing > 0) {
+                // gather all local element descriptors globally
+                // each entry: (x, y, z, level, global_id) packed as
+                // 5 unsigned ints
+                const unsigned int PACK_SZ = 5;
+                std::vector<int> allLocalSizes(npes);
+                int myLocalSz = static_cast<int>(localSz);
+                MPI_Allgather(&myLocalSz, 1, MPI_INT, allLocalSizes.data(),
+                              1, MPI_INT, commActive);
+
+                std::vector<int> allLocalDispls(npes, 0);
+                for (int p = 1; p < npes; p++)
+                    allLocalDispls[p] =
+                        allLocalDispls[p - 1] + allLocalSizes[p - 1];
+                int totalGlobal =
+                    allLocalDispls[npes - 1] + allLocalSizes[npes - 1];
+
+                // pack local elements
+                std::vector<unsigned int> myPack(localSz * PACK_SZ);
+                for (unsigned int e = this->getElementLocalBegin();
+                     e < this->getElementLocalEnd(); e++) {
+                    unsigned int li = e - this->getElementLocalBegin();
+                    myPack[li * PACK_SZ + 0] = pNodes[e].getX();
+                    myPack[li * PACK_SZ + 1] = pNodes[e].getY();
+                    myPack[li * PACK_SZ + 2] = pNodes[e].getZ();
+                    myPack[li * PACK_SZ + 3] = pNodes[e].getLevel();
+                    myPack[li * PACK_SZ + 4] = eid_vec[e];
+                }
+
+                // scale counts and displacements for packed data
+                std::vector<int> sendCounts(npes), sendDispls(npes);
+                for (int p = 0; p < npes; p++) {
+                    sendCounts[p] = allLocalSizes[p] * PACK_SZ;
+                    sendDispls[p] = allLocalDispls[p] * PACK_SZ;
+                }
+
+                std::vector<unsigned int> allPack(totalGlobal * PACK_SZ);
+                MPI_Allgatherv(myPack.data(), localSz * PACK_SZ,
+                               MPI_UNSIGNED, allPack.data(),
+                               sendCounts.data(), sendDispls.data(),
+                               MPI_UNSIGNED, commActive);
+
+                // build coordinate lookup: (x,y,z,level) -> global_id
+                std::map<std::tuple<unsigned int, unsigned int,
+                                    unsigned int, unsigned int>,
+                         T>
+                    coordToGlobal;
+                for (int g = 0; g < totalGlobal; g++) {
+                    auto key = std::make_tuple(
+                        allPack[g * PACK_SZ + 0], allPack[g * PACK_SZ + 1],
+                        allPack[g * PACK_SZ + 2], allPack[g * PACK_SZ + 3]);
+                    coordToGlobal[key] = allPack[g * PACK_SZ + 4];
+                }
+
+                // resolve missing ghost element global IDs
+                for (unsigned int ele = 0; ele < m_uiNumTotalElements;
+                     ele++) {
+                    if (eid_vec[ele] != LOOK_UP_TABLE_DEFAULT) continue;
+                    auto key = std::make_tuple(
+                        pNodes[ele].getX(), pNodes[ele].getY(),
+                        pNodes[ele].getZ(), pNodes[ele].getLevel());
+                    auto it = coordToGlobal.find(key);
+                    if (it != coordToGlobal.end()) {
+                        eid_vec[ele] = it->second;
+                    }
+                }
+            }
+        }
 
         oct_connectivity_map.resize(localSz);
 

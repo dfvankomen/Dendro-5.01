@@ -21,8 +21,6 @@
 #include "waveletAMR.h"
 #include "waveletRefEl.h"
 
-#define EXPORT_MESH
-
 namespace temp_data {
 
 std::random_device rd;
@@ -292,111 +290,300 @@ int main(int argc, char** argv) {
 
     /**
      *
-     * INITIAL TESTS
+     * TESTS
      *
      */
-    // if the partitioning option is "NoPartition" or "OriginalPartition"
-    // then every output should be the same!
 
-    // create a few vectors for quick tests
-    std::vector<double> funcVal;
-    std::vector<double> funcValUnZip;
-    std::vector<double> dx_funcVal;
-    std::vector<double> dx_funcVal1;
-
+    // ---- TEST 1: createVector on repartitioned mesh ----
     std::vector<double> funcVal_repartitioned;
-    std::vector<double> funcValUnZip_repartitioned;
-    std::vector<double> dx_funcVal_repartitoined;
-    std::vector<double> dx_funcVal1_repartitioned;
-
-    // mesh->createVector(funcVal, func_alt);
-    // mesh->createUnZippedVector(funcValUnZip);
-    // mesh->performGhostExchange(funcVal);
     mesh_repartitioned->createVector(funcVal_repartitioned, func);
-    // mesh_repartitioned->createUnZippedVector(funcValUnZip_repartitioned);
-
-//  nodal value check!
-#if 0
-    ot::test::isElementalNodalValuesValid(mesh, &(*(funcVal.begin())), func_alt,
-                                          1e-3);
-#endif
-#if 0
-    ot::test::isElementalNodalValuesValid(mesh_repartitioned,
-                                          &(*(funcVal_repartitioned.begin())),
-                                          func_alt, 1e-3);
-#endif
-
-    // go through the blocks in the repartitioned mesh and make sure they're
-    // valid
-
-#if 0
-    for (int turn = 0; turn < npes; turn++) {
-        if (rank == turn) {
-            std::cout << "------- MPI PROC " << rank << " ------" << std::endl;
-            unsigned int ii = 0;
-            for (auto& blk : mesh->getLocalBlockList()) {
-                std::cout << "BLOCK ID: " << ii << " - ";
-                for (auto elemId : blk) {
-                    std::cout << elemId << " ";
-                }
-                std::cout << std::endl;
-                ii++;
+    // Verify LOCAL node values match the analytic function
+    {
+        int localErrors       = 0;
+        const double localTol = 1e-6;
+        const auto* pNodes    = mesh_repartitioned->getAllElements().data();
+        const unsigned int* e2n_cg_v =
+            mesh_repartitioned->getE2NMapping().data();
+        const unsigned int* e2n_dg_v =
+            mesh_repartitioned->getE2NMapping_DG().data();
+        const unsigned int npe_v  = mesh_repartitioned->getNumNodesPerElement();
+        const unsigned int eOrd_v = mesh_repartitioned->getElementOrder();
+        unsigned int nlb_v = mesh_repartitioned->getNodeLocalBegin();
+        unsigned int nle_v = mesh_repartitioned->getNodeLocalEnd();
+        for (unsigned int ele = mesh_repartitioned->getElementLocalBegin();
+             ele < mesh_repartitioned->getElementLocalEnd(); ele++) {
+            for (unsigned int n = 0; n < npe_v; n++) {
+                unsigned int cg = e2n_cg_v[ele * npe_v + n];
+                if (cg < nlb_v || cg >= nle_v) continue;
+                unsigned int dg = e2n_dg_v[ele * npe_v + n];
+                unsigned int oe = dg / npe_v;
+                unsigned int rem = dg % npe_v;
+                unsigned int ok = rem / ((eOrd_v+1)*(eOrd_v+1));
+                unsigned int oj = (rem / (eOrd_v+1)) % (eOrd_v+1);
+                unsigned int oi = rem % (eOrd_v+1);
+                double len = 1u << (m_uiMaxDepth - pNodes[oe].getLevel());
+                double x = pNodes[oe].getX() + oi * (len / eOrd_v);
+                double y = pNodes[oe].getY() + oj * (len / eOrd_v);
+                double z = pNodes[oe].getZ() + ok * (len / eOrd_v);
+                double expected = func(x, y, z);
+                double got      = funcVal_repartitioned[cg];
+                if (std::abs(expected - got) > localTol)
+                    localErrors++;
             }
-            std::cout << "-----------------------------------" << std::endl;
         }
-        MPI_Barrier(comm);
-    }
-
-    for (int turn = 0; turn < npes; turn++) {
-        if (rank == turn) {
-            std::cout << "------- MPI PROC " << rank << " ------" << std::endl;
-            unsigned int ii = 0;
-            for (auto& blk : mesh_repartitioned->getLocalBlockList()) {
-                std::cout << "BLOCK ID: " << ii << " - ";
-                for (auto elemId : blk) {
-                    std::cout << elemId << " ";
-                }
-                std::cout << std::endl;
-                ii++;
-            }
-            std::cout << "-----------------------------------" << std::endl;
-        }
-        MPI_Barrier(comm);
-    }
-#endif
-
-#if 0
-    if (partitionOption == PartitioningOptions::NoPartition ||
-        partitionOption == PartitioningOptions::OriginalPartition) {
-        // this is our identity comparison, we need to make sure that all
-        // important data structures were properly implemented
-
-        // basically we just need to do a bunch of assertions, which we'll
-        // go ahead and call as a "comparison" operator in the Mesh
-
-        int retval = mesh->compareCriticalMeshObjects(mesh_repartitioned);
-
-        // then share the ret value across comms
-        int summedval;
-
-        MPI_Allreduce(&retval, &summedval, 1, MPI_INT, MPI_MIN, comm);
-
+        int totalLocalErrors;
+        MPI_Allreduce(&localErrors, &totalLocalErrors, 1, MPI_INT, MPI_SUM,
+                      comm);
         if (!rank) {
-            if (summedval == 0) {
-                std::cout << GRN
-                          << "SUCCESS! ALL comparision tests across all "
-                             "processors succeeded on "
-                             "NoPartion/OriginalPartition!"
+            if (totalLocalErrors == 0)
+                std::cout << GRN << "TEST 1 PASSED: createVector correct"
+                          << NRM << std::endl;
+            else
+                std::cout << RED << "TEST 1 FAILED: " << totalLocalErrors
+                          << " local node value errors" << NRM << std::endl;
+        }
+    }
+
+    // ---- TEST 2: nodal ghost exchange ----
+    mesh_repartitioned->performGhostExchange(funcVal_repartitioned);
+
+    {
+        int ghostErrors        = 0;
+        int ghostNodesChecked  = 0;
+        const double ghostTol  = 1e-6;
+        const auto* pNodes     = mesh_repartitioned->getAllElements().data();
+        const unsigned int* e2n_cg =
+            mesh_repartitioned->getE2NMapping().data();
+        const unsigned int npe  = mesh_repartitioned->getNumNodesPerElement();
+        const unsigned int eOrd = mesh_repartitioned->getElementOrder();
+        const unsigned int lb   = mesh_repartitioned->getElementLocalBegin();
+        const unsigned int le   = mesh_repartitioned->getElementLocalEnd();
+
+        // collect CG indices covered by the recv scatter map
+        const auto& recvCount  = mesh_repartitioned->getNodalRecvCounts();
+        const auto& recvOffset = mesh_repartitioned->getNodalRecvOffsets();
+        const auto& recvSM     = mesh_repartitioned->getRecvNodeSM();
+        std::set<unsigned int> recvCovered;
+        for (unsigned int p = 0; p < (unsigned int)npes; p++)
+            for (unsigned int n = recvOffset[p];
+                 n < recvOffset[p] + recvCount[p]; n++)
+                recvCovered.insert(recvSM[n]);
+
+        // helper: check one ghost element's nodes using the E2N DG
+        // encoding to find the correct physical coordinates (important
+        // for hanging nodes where the owner element differs from the
+        // ghost element)
+        const unsigned int* e2n_dg_t =
+            mesh_repartitioned->getE2NMapping_DG().data();
+        auto checkGhostEle = [&](unsigned int ele) {
+            for (unsigned int n = 0; n < npe; n++) {
+                unsigned int cgIdx = e2n_cg[ele * npe + n];
+                if (cgIdx >= mesh_repartitioned->getNodeLocalBegin() &&
+                    cgIdx < mesh_repartitioned->getNodeLocalEnd())
+                    continue;
+                if (recvCovered.find(cgIdx) == recvCovered.end())
+                    continue;
+                ghostNodesChecked++;
+                // use the DG encoding to find the owner element
+                // and sub-coordinates for the correct physical position
+                unsigned int dgIdx = e2n_dg_t[ele * npe + n];
+                unsigned int oe    = dgIdx / npe;
+                unsigned int rem   = dgIdx % npe;
+                unsigned int ok = rem / ((eOrd + 1) * (eOrd + 1));
+                unsigned int oj = (rem / (eOrd + 1)) % (eOrd + 1);
+                unsigned int oi = rem % (eOrd + 1);
+                double len =
+                    1u << (m_uiMaxDepth - pNodes[oe].getLevel());
+                double x = pNodes[oe].getX() + oi * (len / eOrd);
+                double y = pNodes[oe].getY() + oj * (len / eOrd);
+                double z = pNodes[oe].getZ() + ok * (len / eOrd);
+                double expected = func(x, y, z);
+                double got      = funcVal_repartitioned[cgIdx];
+                if (std::abs(expected - got) > ghostTol) {
+                    ghostErrors++;
+                }
+            }
+        };
+
+        // check pre-ghost and post-ghost (level-1 only)
+        for (unsigned int ele = mesh_repartitioned->getElementPreGhostBegin();
+             ele < mesh_repartitioned->getElementPreGhostEnd(); ele++)
+            checkGhostEle(ele);
+        for (unsigned int ele = mesh_repartitioned->getElementPostGhostBegin();
+             ele < mesh_repartitioned->getElementPostGhostEnd(); ele++)
+            checkGhostEle(ele);
+
+        int totalErrors, totalChecked;
+        MPI_Allreduce(&ghostErrors, &totalErrors, 1, MPI_INT, MPI_SUM, comm);
+        MPI_Allreduce(&ghostNodesChecked, &totalChecked, 1, MPI_INT, MPI_SUM,
+                      comm);
+        if (!rank) {
+            if (totalErrors == 0) {
+                std::cout << GRN << "TEST 2 PASSED: ghost exchange correct ("
+                          << totalChecked << " nodes checked)" << NRM
+                          << std::endl;
+            } else {
+                std::cout << RED << "TEST 2 FAILED: ghost exchange had "
+                          << totalErrors << " / " << totalChecked
+                          << " errors" << NRM << std::endl;
+            }
+        }
+    }
+
+    // ---- TEST 3: scatter map send/recv symmetry ----
+    {
+        const auto& sendCount = mesh_repartitioned->getNodalSendCounts();
+        const auto& recvCount = mesh_repartitioned->getNodalRecvCounts();
+        unsigned int totalSend = 0, totalRecv = 0;
+        for (unsigned int p = 0; p < (unsigned int)npes; p++) {
+            totalSend += sendCount[p];
+            totalRecv += recvCount[p];
+        }
+        unsigned int globalSend, globalRecv;
+        MPI_Allreduce(&totalSend, &globalSend, 1, MPI_UNSIGNED, MPI_SUM,
+                      comm);
+        MPI_Allreduce(&totalRecv, &globalRecv, 1, MPI_UNSIGNED, MPI_SUM,
+                      comm);
+        if (!rank) {
+            if (globalSend == globalRecv) {
+                std::cout << GRN << "TEST 3 PASSED: scatter map symmetric "
+                             "(total send = recv = "
+                          << globalSend << ")" << NRM << std::endl;
+            } else {
+                std::cout << RED << "TEST 3 FAILED: send=" << globalSend
+                          << " recv=" << globalRecv << NRM << std::endl;
+            }
+        }
+    }
+
+    // ---- TEST 4: block decomposition ----
+    {
+        const auto& blkList = mesh_repartitioned->getLocalBlockList();
+        std::set<unsigned int> elementsInBlocks;
+        for (const auto& blk : blkList) {
+            for (auto elemId : blk) {
+                elementsInBlocks.insert(elemId);
+            }
+        }
+
+        int blkErrors = 0;
+        for (unsigned int e = mesh_repartitioned->getElementLocalBegin();
+             e < mesh_repartitioned->getElementLocalEnd(); e++) {
+            if (elementsInBlocks.find(e) == elementsInBlocks.end())
+                blkErrors++;
+        }
+
+        int totalBlkErrors;
+        MPI_Allreduce(&blkErrors, &totalBlkErrors, 1, MPI_INT, MPI_SUM,
+                      comm);
+        if (!rank) {
+            if (totalBlkErrors == 0) {
+                std::cout << GRN << "TEST 4 PASSED: all local elements in "
+                             "blocks (" << blkList.size() << " blocks)"
                           << NRM << std::endl;
             } else {
-                std::cout << RED
-                          << "FAILURE! Not all comparison tests suceeded! "
-                             "Check the logs!"
+                std::cout << RED << "TEST 4 FAILED: " << totalBlkErrors
+                          << " local elements missing from blocks" << NRM
+                          << std::endl;
+            }
+        }
+    }
+
+    // ---- TEST 5: element ghost exchange ----
+    {
+        unsigned int* eleVec =
+            mesh_repartitioned->createElementVector<unsigned int>(
+                LOOK_UP_TABLE_DEFAULT, 1);
+
+        // fill local elements with a known value (global element index)
+        for (unsigned int e = mesh_repartitioned->getElementLocalBegin();
+             e < mesh_repartitioned->getElementLocalEnd(); e++) {
+            eleVec[e] = e;  // local index as marker
+        }
+
+        mesh_repartitioned->readFromGhostBeginElementVec(eleVec, 1);
+        mesh_repartitioned->readFromGhostEndElementVec(eleVec, 1);
+
+        // verify: every ghost element in the Round1 index should now
+        // have a value != LOOK_UP_TABLE_DEFAULT
+        const auto& ghostR1Idx =
+            mesh_repartitioned->getLevel1GhostElementIndices();
+        int eleGhostErrors = 0;
+        for (unsigned int k = 0; k < ghostR1Idx.size(); k++) {
+            if (eleVec[ghostR1Idx[k]] == LOOK_UP_TABLE_DEFAULT) {
+                eleGhostErrors++;
+            }
+        }
+
+        int totalEleGhostErrors;
+        MPI_Allreduce(&eleGhostErrors, &totalEleGhostErrors, 1, MPI_INT,
+                      MPI_SUM, comm);
+        if (!rank) {
+            if (totalEleGhostErrors == 0) {
+                std::cout << GRN << "TEST 5 PASSED: element ghost exchange ("
+                          << ghostR1Idx.size() << " round-1 ghosts)" << NRM
+                          << std::endl;
+            } else {
+                std::cout << RED << "TEST 5 FAILED: " << totalEleGhostErrors
+                          << " ghost elements not received" << NRM
+                          << std::endl;
+            }
+        }
+        delete[] eleVec;
+    }
+
+    // ---- TEST 6: setMeshRefinementFlags + ReMesh ----
+    {
+        std::vector<unsigned int> refine_flags;
+        if (mesh_repartitioned->isActive()) {
+            refine_flags.resize(
+                mesh_repartitioned->getNumLocalMeshElements(), OCT_NO_CHANGE);
+        }
+
+        bool isOctChange =
+            mesh_repartitioned->setMeshRefinementFlags(refine_flags);
+        bool isOctChange_g;
+        MPI_Allreduce(&isOctChange, &isOctChange_g, 1, MPI_CXX_BOOL, MPI_LOR,
+                      comm);
+
+        if (!rank) {
+            std::cout << (isOctChange_g ? YLW : GRN)
+                      << "TEST 6a: setMeshRefinementFlags "
+                      << (isOctChange_g ? "(mesh changed - unexpected for "
+                                          "no-change flags)"
+                                        : "PASSED (no change)")
+                      << NRM << std::endl;
+        }
+
+        // now try actual remesh (even with no-change, this exercises
+        // the full remesh path)
+        ot::Mesh* remeshed = mesh_repartitioned->ReMesh(
+            DENDRO_GRAIN_SZ, LOAD_IMB_TOL, SPLIT_FIX);
+
+        if (remeshed != nullptr) {
+            // verify the remeshed mesh has elements
+            unsigned int remeshLocalCount =
+                remeshed->getNumLocalMeshElements();
+            unsigned int totalRemeshEle;
+            MPI_Allreduce(&remeshLocalCount, &totalRemeshEle, 1, MPI_UNSIGNED,
+                          MPI_SUM, comm);
+
+            if (!rank) {
+                std::cout << GRN << "TEST 6b PASSED: ReMesh succeeded ("
+                          << totalRemeshEle << " total elements)" << NRM
+                          << std::endl;
+            }
+
+            delete remeshed;
+        } else {
+            if (!rank) {
+                std::cout << YLW
+                          << "TEST 6b: ReMesh returned nullptr (mesh "
+                             "unchanged, this is OK for no-change)"
                           << NRM << std::endl;
             }
         }
     }
-#endif
 
     // END CLEANUP
     delete mesh;

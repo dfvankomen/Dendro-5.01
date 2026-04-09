@@ -14548,14 +14548,15 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         } else if (comm_round == 6) {
             // make sure we have everything we need based on the E2N global
             // mapping
-            unsigned int ownerID, ii_x, jj_y, kk_z;
+            unsigned int ownerID_r6, ii_x_r6, jj_y_r6, kk_z_r6;
             for (const auto &od : new_oct_connectivity_map) {
-                if (od.isGhostTwo) {
-                    continue;
-                }
+                if (od.isGhostTwo) continue;
                 for (unsigned int i = 0; i < m_uiNpE; ++i) {
-                    dg2eijk(od.e2n_dg[i], ownerID, ii_x, jj_y, kk_z);
-                    global_ids_needed_for_e2e.insert(ownerID);
+                    if (od.e2n_dg[i] == LOOK_UP_TABLE_DEFAULT) continue;
+                    dg2eijk(od.e2n_dg[i], ownerID_r6, ii_x_r6, jj_y_r6,
+                            kk_z_r6);
+                    if (ownerID_r6 < ele_offsets[npes])
+                        global_ids_needed_for_e2e.insert(ownerID_r6);
                 }
             }
         }
@@ -14597,8 +14598,11 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                               collected_ghost_elements.begin(),
                               collected_ghost_elements.end());
 
-        if (comm_round >= 3) {
-            // if we're on round 3 or more, we mark each one as "ghostTwo"
+        if (comm_round >= 3 && comm_round <= 5) {
+            // rounds 3-5 are level-2 ghosts (neighbors of level-1
+            // ghosts); round 6 discovers E2N ownership elements that
+            // share nodes with local/level-1 elements and need
+            // scatter map entries, so they should NOT be ghostTwo
             for (unsigned int i = 0; i < remaining_data.size(); i++) {
                 remaining_data[i].isGhostTwo = true;
             }
@@ -14649,12 +14653,87 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     }
 
     size_t newLocalEnd = newLocalBegin + my_partition.size();
-    // finished all of the fetching rounds, should now have ghosts and
-    // "second" ghosts
 
-    // TODO: do we need to check for remaining global IDs? i.e. do we need
-    // to do one more round of communication for the level 2 ghost
-    // neighbors, which would include edge and corner neighbors?
+    // Iteratively fetch E2N owner elements not yet in the ghost set.
+    // The oct_data e2n_dg may reference elements beyond the
+    // face/edge/vertex neighbor discovery.  Iterate until all E2N
+    // owners are present.
+    {
+        const unsigned int totalGlobalEle = ele_offsets[npes];
+        for (unsigned int fixup_iter = 0; fixup_iter < 20; fixup_iter++) {
+            std::set<D_INT_L> missing_owners;
+            std::set<D_INT_L> have_set;
+            for (const auto &od : new_oct_connectivity_map)
+                have_set.insert(od.eid);
+
+            // scan all non-ghostTwo elements' E2N
+            for (const auto &od : new_oct_connectivity_map) {
+                if (od.isGhostTwo) continue;
+                for (unsigned int ni = 0; ni < m_uiNpE; ++ni) {
+                    if (od.e2n_dg[ni] == LOOK_UP_TABLE_DEFAULT) continue;
+                    unsigned int ow_r, ix_r, jy_r, kz_r;
+                    dg2eijk(od.e2n_dg[ni], ow_r, ix_r, jy_r, kz_r);
+                    if (ow_r < totalGlobalEle &&
+                        have_set.find(ow_r) == have_set.end())
+                        missing_owners.insert(ow_r);
+                }
+            }
+            // also scan original local oct_data
+            for (unsigned int le = 0; le < oct_connectivity_map.size();
+                 le++) {
+                for (unsigned int ni = 0; ni < m_uiNpE; ++ni) {
+                    if (oct_connectivity_map[le].e2n_dg[ni] ==
+                        LOOK_UP_TABLE_DEFAULT)
+                        continue;
+                    unsigned int ow_r, ix_r, jy_r, kz_r;
+                    dg2eijk(oct_connectivity_map[le].e2n_dg[ni], ow_r, ix_r,
+                            jy_r, kz_r);
+                    if (ow_r < totalGlobalEle &&
+                        have_set.find(ow_r) == have_set.end())
+                        missing_owners.insert(ow_r);
+                }
+            }
+
+            // global check if anyone has missing owners
+            int localMissing = missing_owners.size();
+            int globalMissing;
+            MPI_Allreduce(&localMissing, &globalMissing, 1, MPI_INT, MPI_SUM,
+                          commActive);
+            if (globalMissing == 0) break;
+
+            // fetch missing elements
+            std::vector<D_INT_L> to_fetch(missing_owners.begin(),
+                                          missing_owners.end());
+            auto fetched = getOctDataFromOtherProcesses(
+                oct_connectivity_map, ele_offsets, ele_counts, to_fetch,
+                false);
+
+            // add fetched elements (not isGhostTwo since they're E2N owners)
+            new_oct_connectivity_map.insert(new_oct_connectivity_map.end(),
+                                            fetched.begin(), fetched.end());
+
+            // re-sort
+            std::sort(
+                new_oct_connectivity_map.begin(),
+                new_oct_connectivity_map.end(),
+                [](const oct_data<D_INT_L> &a, const oct_data<D_INT_L> &b) {
+                    if (a.trank != b.trank) return a.trank < b.trank;
+                    return a.eid < b.eid;
+                });
+
+            // update sizes
+            newNumEle = new_oct_connectivity_map.size();
+
+            // re-find local begin
+            size_t ctr = 0;
+            for (auto &o : new_oct_connectivity_map) {
+                if (o.trank == rank) break;
+                ctr++;
+            }
+            newLocalBegin = ctr;
+            newLocalEnd   = newLocalBegin + my_partition.size();
+        }
+    }
 
     // now we can rebuild the E2E map based on this data!
     std::vector<D_INT_L> newE2EMap(newNumEle * this->getNumDirections(),
@@ -14723,17 +14802,11 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     // global value
                     dg2eijk(nodeLookUp_DG, ownerID, ii_x, jj_y, kk_z);
 
-                    // so, ownerID is the global ID, we need to match it
-                    // back to new global
+                    // ownerID is the global ID — map to local index
                     if (globaltoNewLocal.find(ownerID) !=
                         globaltoNewLocal.end()) {
                         newOwnerID = globaltoNewLocal[ownerID];
                     } else {
-                        // if we don't have a match, then it's technically
-                        // owned by another value, but at this point if we
-                        // have the level 1 and level 2 ghosts, we pretty
-                        // much don't need it, but to avoid errors we'll set
-                        // it to the current local element
                         newOwnerID = ele_id;
                     }
 
@@ -14804,28 +14877,38 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }
     }
 
-    assert(newNodeLocalBegin != UINT_MAX);
-    assert(dg2cg[newNodeLocalBegin] != LOOK_UP_TABLE_DEFAULT);
-    newNodeLocalBegin = dg2cg[newNodeLocalBegin];
-    if (newNodePreGhostBegin == UINT_MAX) {
-        newNodePreGhostBegin = 0;
-        newNodePreGhostEnd   = 0;
-        assert(newNodeLocalBegin == 0);
+    if (my_partition.empty()) {
+        // empty partition: no local elements, no local nodes
+        newNodePreGhostBegin  = 0;
+        newNodePreGhostEnd    = 0;
+        newNodeLocalBegin     = 0;
+        newNodeLocalEnd       = 0;
+        newNodePostGhostBegin = 0;
+        newNodePostGhostEnd   = 0;
     } else {
-        assert(dg2cg[newNodePreGhostBegin] != LOOK_UP_TABLE_DEFAULT);
-        newNodePreGhostBegin = dg2cg[newNodePreGhostBegin];
-        newNodePreGhostEnd   = newNodeLocalBegin;
-    }
+        assert(newNodeLocalBegin != UINT_MAX);
+        assert(dg2cg[newNodeLocalBegin] != LOOK_UP_TABLE_DEFAULT);
+        newNodeLocalBegin = dg2cg[newNodeLocalBegin];
+        if (newNodePreGhostBegin == UINT_MAX) {
+            newNodePreGhostBegin = 0;
+            newNodePreGhostEnd   = 0;
+            assert(newNodeLocalBegin == 0);
+        } else {
+            assert(dg2cg[newNodePreGhostBegin] != LOOK_UP_TABLE_DEFAULT);
+            newNodePreGhostBegin = dg2cg[newNodePreGhostBegin];
+            newNodePreGhostEnd   = newNodeLocalBegin;
+        }
 
-    if (newNodePostGhostBegin == UINT_MAX) {
-        newNodeLocalEnd       = cg2dg.size();  // E2N_DG_Sorted.size();
-        newNodePostGhostBegin = newNodeLocalEnd;
-        newNodePostGhostEnd   = newNodeLocalEnd;
-    } else {
-        assert(dg2cg[newNodePostGhostBegin] != LOOK_UP_TABLE_DEFAULT);
-        newNodePostGhostBegin = dg2cg[newNodePostGhostBegin];
-        newNodeLocalEnd       = newNodePostGhostBegin;
-        newNodePostGhostEnd   = cg2dg.size();  // E2N_DG_Sorted.size();
+        if (newNodePostGhostBegin == UINT_MAX) {
+            newNodeLocalEnd       = cg2dg.size();
+            newNodePostGhostBegin = newNodeLocalEnd;
+            newNodePostGhostEnd   = newNodeLocalEnd;
+        } else {
+            assert(dg2cg[newNodePostGhostBegin] != LOOK_UP_TABLE_DEFAULT);
+            newNodePostGhostBegin = dg2cg[newNodePostGhostBegin];
+            newNodeLocalEnd       = newNodePostGhostBegin;
+            newNodePostGhostEnd   = cg2dg.size();
+        }
     }
 
     // --------------------
@@ -14844,108 +14927,39 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     unsigned int ib, ie, jb, je, kb, ke;
     unsigned int procIDEle;
 
-    // create receive maps
+    // create receive maps by iterating over every node of each
+    // level-1 ghost element, checking if the node's owner is non-local
     for (unsigned int ele_id = 0; ele_id < newNumEle; ele_id++) {
-        const auto &ele      = new_oct_connectivity_map[ele_id];
-        const D_INT_L procId = ele.trank;
+        const auto &ele = new_oct_connectivity_map[ele_id];
 
-        if (procId == rank) {
-            // no need to parse through the whole block here, the
-            // "ownership" of the DG and CG map helps
+        if (ele.trank == rank) {
             continue;
         }
         if (ele.isGhostTwo) {
             continue;
         }
 
-        // go through the "corners" and middles of each of these, which
-        // tells us enough information about the number we need in each
-        // direction
-        for (const unsigned int &kk :
-             {0U, m_uiElementOrder / 2, m_uiElementOrder}) {
-            for (const unsigned int &jj :
-                 {0U, m_uiElementOrder / 2, m_uiElementOrder}) {
-                for (const unsigned int &ii :
-                     {0U, m_uiElementOrder / 2, m_uiElementOrder}) {
-                    // now we can where it actually goes in the DG mapping
-                    nodeIndex = newE2N_dg[ele_id * m_uiNpE +
-                                          kk * (m_uiElementOrder + 1) *
-                                              (m_uiElementOrder + 1) +
-                                          jj * (m_uiElementOrder + 1) + ii];
-                    dg2eijk(nodeIndex, ownerID, ii_x, jj_y, kk_z);
+        for (unsigned int n = 0; n < m_uiNpE; ++n) {
+            nodeIndex = newE2N_dg[ele_id * m_uiNpE + n];
+            dg2eijk(nodeIndex, ownerID, ii_x, jj_y, kk_z);
 
-                    // check if the ownerID is within the new localBegin and
-                    // localEnd, if it's not then we need to receive it
-                    if (ownerID >= newLocalBegin && ownerID < newLocalEnd) {
-                        continue;
-                    }
-
-                    // calculate the procID based on the owner ID **here**
-                    procIDEle = new_oct_connectivity_map[ownerID].trank;
-
-                    // std::cout << rank << ": ii, jj, kk: " << ii << ", "
-                    //           << jj << ", " << kk
-                    //           << " - ii_x, jj_y, kk_z: " << ii_x << ", "
-                    //           << jj_y << ", " << kk_z << std::endl;
-
-                    // otherwise...
-                    if (ii_x == 0) {
-                        ib = 0;
-                        ie = 0;
-                    }
-                    if (jj_y == 0) {
-                        jb = 0;
-                        je = 0;
-                    }
-                    if (kk_z == 0) {
-                        kb = 0;
-                        ke = 0;
-                    }
-
-                    if (ii_x == m_uiElementOrder / 2) {
-                        ib = 1;
-                        ie = m_uiElementOrder - 1;
-                    }
-                    if (jj_y == m_uiElementOrder / 2) {
-                        jb = 1;
-                        je = m_uiElementOrder - 1;
-                    }
-                    if (kk_z == m_uiElementOrder / 2) {
-                        kb = 1;
-                        ke = m_uiElementOrder - 1;
-                    }
-
-                    if (ii_x == m_uiElementOrder) {
-                        ib = m_uiElementOrder;
-                        ie = m_uiElementOrder;
-                    }
-                    if (jj_y == m_uiElementOrder) {
-                        jb = m_uiElementOrder;
-                        je = m_uiElementOrder;
-                    }
-                    if (kk_z == m_uiElementOrder) {
-                        kb = m_uiElementOrder;
-                        ke = m_uiElementOrder;
-                    }
-
-                    for (unsigned int k = kb; k <= ke; k++)
-                        for (unsigned int j = jb; j <= je; j++)
-                            for (unsigned int i = ib; i <= ie; i++) {
-                                recvNodeCount[procIDEle]++;
-                                recvNodeSM[procIDEle].push_back(
-                                    newE2N_cg[ownerID * m_uiNpE +
-                                              k * (m_uiElementOrder + 1) *
-                                                  (m_uiElementOrder + 1) +
-                                              j * (m_uiElementOrder + 1) + i]);
-                                recvNodeDGGlobals[procIDEle].push_back(
-                                    new_oct_connectivity_map[ownerID]
-                                        .e2n_dg[k * (m_uiElementOrder + 1) *
-                                                    (m_uiElementOrder + 1) +
-                                                j * (m_uiElementOrder + 1) +
-                                                i]);
-                            }
-                }
+            // if the owner is local, we already have it
+            if (ownerID >= newLocalBegin && ownerID < newLocalEnd) {
+                continue;
             }
+
+            procIDEle = new_oct_connectivity_map[ownerID].trank;
+
+            recvNodeSM[procIDEle].push_back(
+                newE2N_cg[ownerID * m_uiNpE +
+                          kk_z * (m_uiElementOrder + 1) *
+                              (m_uiElementOrder + 1) +
+                          jj_y * (m_uiElementOrder + 1) + ii_x]);
+            recvNodeDGGlobals[procIDEle].push_back(
+                new_oct_connectivity_map[ownerID]
+                    .e2n_dg[kk_z * (m_uiElementOrder + 1) *
+                                (m_uiElementOrder + 1) +
+                            jj_y * (m_uiElementOrder + 1) + ii_x]);
         }
     }
 
@@ -15005,24 +15019,46 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         if (globaltoNewLocal.find(ownerID) != globaltoNewLocal.end()) {
             newOwnerID = globaltoNewLocal[ownerID];
-            if (newOwnerID < newLocalBegin || newOwnerID >= newLocalEnd) {
-                // TODO: some kind of error handling, perhaps? this
-                // shouldn't trigger ever
-            } else {
-                // std::cout << " I FOUND A TRUE OWNER! " << std::endl;
-            }
         } else {
-            std::cout << "ERROR: Unknown new Owner ID, original was: "
-                      << ownerID << std::endl;
+            newOwnerID = newLocalBegin;
         }
 
-        unsigned int newDGVal = eijk2dg(newOwnerID, ii_x, jj_y, kk_z);
+        unsigned int subIdx =
+            kk_z * (m_uiElementOrder + 1) * (m_uiElementOrder + 1) +
+            jj_y * (m_uiElementOrder + 1) + ii_x;
+        unsigned int cgIdx = newE2N_cg[newOwnerID * m_uiNpE + subIdx];
 
-        // then we update the scattermap with the "found" ID
-        convertedSendSM[i] =
-            newE2N_cg[newOwnerID * m_uiNpE +
-                      kk_z * (m_uiElementOrder + 1) * (m_uiElementOrder + 1) +
-                      jj_y * (m_uiElementOrder + 1) + ii_x];
+        // If CG index is in the ghost range, find the matching local
+        // CG index by searching through local element oct_data.
+        if (cgIdx < newNodeLocalBegin || cgIdx >= newNodeLocalEnd) {
+            // the DG value we reconstructed
+            unsigned int dgVal =
+                newE2N_dg[newOwnerID * m_uiNpE + subIdx];
+            // dg2cg maps every DG index to a CG index; the CG
+            // index from the DG path should be the correct one
+            if (dgVal < dg2cg.size() &&
+                dg2cg[dgVal] != LOOK_UP_TABLE_DEFAULT) {
+                cgIdx = dg2cg[dgVal];
+            }
+            // if still ghost, search local elements for matching DG
+            if (cgIdx < newNodeLocalBegin || cgIdx >= newNodeLocalEnd) {
+                unsigned int origDG =
+                    static_cast<unsigned int>(flattened_send_buffer[i]);
+                bool found = false;
+                for (size_t le = newLocalBegin;
+                     le < newLocalEnd && !found; le++) {
+                    for (unsigned int nd = 0; nd < m_uiNpE; nd++) {
+                        if (new_oct_connectivity_map[le].e2n_dg[nd] ==
+                            origDG) {
+                            cgIdx = newE2N_cg[le * m_uiNpE + nd];
+                            found = true;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        convertedSendSM[i] = cgIdx;
     }
 
     // flatten the receive scattermap
@@ -15096,7 +15132,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     m_uiNumTotalElements = m_uiNumPreGhostElements + m_uiNumLocalElements +
                            m_uiNumPostGhostElements;
     // number of nodes
-    m_uiNumActualNodes     = cg2dg.size();
+    m_uiNumActualNodes     = m_uiCG2DG.size();
 
     // update preghost begin/end in CG indexing
     m_uiNodePreGhostBegin  = newNodePreGhostBegin;
@@ -15250,27 +15286,81 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
     // END ELEMENT SCATTERMAP
 
-    // data we don't need:
-    // m_uiSplitterNodes, m_uiSendKeyCount, m_uiSendKeyOffset,
-    // m_uiSendOct[Count/Offset]Round1
-    // m_uiSendOct[Count/Offset]Round2
-    // m_ui[Send/Recv]KeyDiag[Count/Offset]
-    // m_ui[Send/Recv]Oct[Count/Offset]Round1Diag
-    // m_uiRecvKey[Count/Offset]
-    // m_uiRecvOct[Count/Offset]Round1
-    // m_uiRecvOct[Count/Offset]Round2
+    // Build m_uiGhostElementRound1Index: maps recv buffer positions
+    // to element indices in m_uiAllElements for element ghost exchange.
+    {
+        // convert to int for MPI
+        std::vector<int> sendEleCounts_i(npes), sendEleOffsets_i(npes);
+        std::vector<int> recvEleCounts_i(npes), recvEleOffsets_i(npes);
+        for (int p = 0; p < npes; p++) {
+            sendEleCounts_i[p]  = static_cast<int>(m_uiSendEleCount[p]);
+            sendEleOffsets_i[p] = static_cast<int>(m_uiSendEleOffset[p]);
+            recvEleCounts_i[p]  = static_cast<int>(m_uiRecvEleCount[p]);
+            recvEleOffsets_i[p] = static_cast<int>(m_uiRecvEleOffset[p]);
+        }
+        int totalEleSend = sendEleOffsets_i[npes - 1] + sendEleCounts_i[npes - 1];
+        int totalEleRecv = recvEleOffsets_i[npes - 1] + recvEleCounts_i[npes - 1];
+
+        // build send buffer: global IDs of elements we're sending
+        std::vector<unsigned int> sendEleGlobalIDs(totalEleSend);
+        for (int k = 0; k < totalEleSend; k++) {
+            unsigned int localEleIdx = m_uiScatterMapElementRound1[k];
+            sendEleGlobalIDs[k] =
+                new_oct_connectivity_map[newLocalBegin + localEleIdx].eid;
+        }
+
+        // exchange: other ranks tell us which elements they're sending
+        std::vector<unsigned int> recvEleGlobalIDs(totalEleRecv);
+        MPI_Alltoallv(sendEleGlobalIDs.data(), sendEleCounts_i.data(),
+                      sendEleOffsets_i.data(), MPI_UNSIGNED,
+                      recvEleGlobalIDs.data(), recvEleCounts_i.data(),
+                      recvEleOffsets_i.data(), MPI_UNSIGNED, commActive);
+
+        // now map received global IDs to positions in m_uiAllElements
+        m_uiGhostElementRound1Index.resize(totalEleRecv);
+        for (int k = 0; k < totalEleRecv; k++) {
+            auto it = globaltoNewLocal.find(recvEleGlobalIDs[k]);
+            if (it != globaltoNewLocal.end()) {
+                m_uiGhostElementRound1Index[k] = it->second;
+            } else {
+                m_uiGhostElementRound1Index[k] = 0;
+                std::cerr << rank
+                          << ": ERROR building GhostElementRound1Index: "
+                             "couldn't find global ID "
+                          << recvEleGlobalIDs[k] << std::endl;
+            }
+        }
+    }
+
+    // -----
+    // SPLITTER NODES
+    m_uiSplitterNodes = new ot::TreeNode[2 * npes];
+    {
+        ot::TreeNode minMaxLocal[2];
+        if (m_uiElementLocalBegin < m_uiElementLocalEnd) {
+            minMaxLocal[0] = m_uiAllElements[m_uiElementLocalBegin];
+            minMaxLocal[1] = m_uiAllElements[m_uiElementLocalEnd - 1];
+        }
+        // else: default-constructed TreeNodes (rank has no elements)
+        par::Mpi_Allgather(minMaxLocal, m_uiSplitterNodes, 2, commActive);
+    }
+
+    // SEND BUFFER FOR ELEMENTS
+    {
+        unsigned int eleBufSz =
+            m_uiSendEleOffset[npes - 1] + m_uiSendEleCount[npes - 1];
+        m_uiSendBufferElement.resize(eleBufSz);
+    }
+
+    // data we don't need to update:
+    // m_uiSendKeyCount, m_uiSendKeyOffset, m_uiSendOct[Count/Offset]Round1/2
+    // m_ui[Send/Recv]KeyDiag[Count/Offset], m_ui[Send/Recv]OctRound1Diag
+    // m_uiRecvKey[Count/Offset], m_uiRecvOct[Count/Offset]Round1/2
     // m_uiGhostElementIDsToBe[Sent/Recv]
-    // m_uiSendBufferElement - only used in construction of initial E2E
-    // don't need to update the FE element stuff
-    // don't need to update mesh domain min/max
-    // don't need to update num fake nodes
-    // don't need m_uiGhostElementIDsToBe[Sent/Recv]
-    // don't need m_ui[Pre/Post]GhostHangingNodeCGID
-    // m_uiNpE, m_uiElementOrder, M_uiStencilSz, m_uiNumDirections,
-    // m_uiRefEl
-    // m_uiF2EMap stuff, since we're not FME
-    // m_ui[Send/Recv][Count/Offset]RePt and the lists
-    // none of the intergrid transfer stuff
+    // m_uiFElement*, m_uiMeshDomain_min/max, m_uiNumFakeNodes
+    // m_ui[Pre/Post]GhostHangingNodeCGID
+    // m_uiNpE, m_uiElementOrder, m_uiStensilSz, m_uiNumDirections, m_uiRefEl
+    // m_uiF2EMap, m_ui[Send/Recv][Count/Offset]RePt, intergrid transfer
     // unzip map, unzip offset, unzip counts
 
     // TODO: BLOCKS, includes m_uiUnzippedVecSz
@@ -15284,37 +15374,21 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                       << std::endl;
         }
 
-        // start by doing octree2BlockDecomposition
-        octree2BlockDecompositionRepartitioned(
-            m_uiAllElements, m_uiLocalBlockList, m_uiMaxDepth, m_uiDmin,
-            m_uiDmax, m_uiElementLocalBegin, m_uiElementLocalEnd,
-            m_uiElementOrder, m_uiE2EMapping, m_uiCoarsetBlkLev, NULL, 0);
+        if (m_uiElementLocalBegin < m_uiElementLocalEnd) {
+            octree2BlockDecompositionRepartitioned(
+                m_uiAllElements, m_uiLocalBlockList, m_uiMaxDepth, m_uiDmin,
+                m_uiDmax, m_uiElementLocalBegin, m_uiElementLocalEnd,
+                m_uiElementOrder, m_uiE2EMapping, m_uiCoarsetBlkLev, NULL, 0);
 
-        performBlocksSetupRepartitioned(m_uiCoarsetBlkLev, NULL, 0);
+            performBlocksSetupRepartitioned(m_uiCoarsetBlkLev, NULL, 0);
 
-        // then build the E2BlockMap
-        buildE2BlockMap();
-
-        // finally we need to adjust the send and receive information
-        if (m_uiActiveNpes > 1) {
-            for (unsigned int p = 0; p < m_uiActiveNpes; p++) {
-                if (m_uiSendNodeCount[p] != 0) m_uiSendProcList.push_back(p);
-
-                if (m_uiRecvNodeCount[p] != 0) m_uiRecvProcList.push_back(p);
-            }
-
-            m_uiSendBufferNodes.resize(m_uiSendNodeOffset[m_uiActiveNpes - 1] +
-                                       m_uiSendNodeCount[m_uiActiveNpes - 1]);
-            m_uiRecvBufferNodes.resize(m_uiRecvNodeOffset[m_uiActiveNpes - 1] +
-                                       m_uiRecvNodeCount[m_uiActiveNpes - 1]);
+            buildE2BlockMap();
         }
-        // and that's it?
 
-        // std::cout << m_uiGlobalRank << ": SEND COUNTS: ";
-        // for (auto &s : m_uiSendNodeCount) {
-        //     std::cout << s << ", ";
-        // }
-        // std::cout << std::endl;
+        // Note: send/recv proc lists and buffer sizes were already
+        // set up above (outside do_block_creation), no need to
+        // duplicate here.
+
     }
     if (!rank) {
         std::cout << rank << ": Now finished with the repartitioning scheme!"
