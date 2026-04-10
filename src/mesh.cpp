@@ -14678,22 +14678,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                         missing_owners.insert(ow_r);
                 }
             }
-            // also scan original local oct_data
-            for (unsigned int le = 0; le < oct_connectivity_map.size();
-                 le++) {
-                for (unsigned int ni = 0; ni < m_uiNpE; ++ni) {
-                    if (oct_connectivity_map[le].e2n_dg[ni] ==
-                        LOOK_UP_TABLE_DEFAULT)
-                        continue;
-                    unsigned int ow_r, ix_r, jy_r, kz_r;
-                    dg2eijk(oct_connectivity_map[le].e2n_dg[ni], ow_r, ix_r,
-                            jy_r, kz_r);
-                    if (ow_r < totalGlobalEle &&
-                        have_set.find(ow_r) == have_set.end())
-                        missing_owners.insert(ow_r);
-                }
-            }
-
             // global check if anyone has missing owners
             int localMissing = missing_owners.size();
             int globalMissing;
@@ -14701,12 +14685,13 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                           commActive);
             if (globalMissing == 0) break;
 
-            // fetch missing elements
+            // fetch missing elements, mark as ghostTwo
             std::vector<D_INT_L> to_fetch(missing_owners.begin(),
                                           missing_owners.end());
             auto fetched = getOctDataFromOtherProcesses(
                 oct_connectivity_map, ele_offsets, ele_counts, to_fetch,
                 false);
+            for (auto &f : fetched) f.isGhostTwo = true;
 
             // add fetched elements (not isGhostTwo since they're E2N owners)
             new_oct_connectivity_map.insert(new_oct_connectivity_map.end(),
