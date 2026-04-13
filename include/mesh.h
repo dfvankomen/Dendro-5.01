@@ -518,6 +518,11 @@ class Mesh {
 
     /** stores all the pre + local + post ELEMENTS. */
     std::vector<ot::TreeNode> m_uiAllElements;
+    /** Global element IDs for tie-breaking in E2N construction.
+     *  Empty for SFC-ordered meshes (local index IS the tie-break).
+     *  Populated after repartitioning to ensure globally consistent
+     *  CG ownership across ranks. */
+    std::vector<unsigned int> m_uiElementGlobalIDs;
     /** stores the local nodes */
     std::vector<ot::TreeNode> m_uiAllLocalNode;
 
@@ -923,6 +928,13 @@ class Mesh {
      * */
 
     void buildE2NMap();
+
+    /**
+     * @brief: Expands the order-2 E2N to the specified element order,
+     * rebuilds CG/DG mappings, node ranges, and scatter maps.
+     * @param eleOrder: the target element order
+     */
+    void buildE2NWithSMRepartitioned(unsigned int eleOrder);
 
     /**
      * @brief: Builds the Element to nodal mapping for DG computations.
