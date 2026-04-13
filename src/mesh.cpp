@@ -14783,9 +14783,18 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     std::vector<D_INT_L> newE2EMap(newNumEle * this->getNumDirections(),
                                    LOOK_UP_TABLE_DEFAULT);
 
-    // quickly create a global to local map
+    // Create global-to-local map. Prefer LOCAL element indices over
+    // ghost indices so that scatter map lookups find CG values in the
+    // local range (populated by createVector).
     std::map<D_INT_L, D_INT_L> globaltoNewLocal;
+    // First pass: all elements
     for (size_t eid_local = 0; eid_local < newNumEle; eid_local++) {
+        globaltoNewLocal[new_oct_connectivity_map[eid_local].eid] = eid_local;
+    }
+    // Second pass: overwrite with LOCAL elements (guaranteed to have
+    // CG values in the local range after createVector)
+    for (size_t eid_local = newLocalBegin; eid_local < newLocalEnd;
+         eid_local++) {
         globaltoNewLocal[new_oct_connectivity_map[eid_local].eid] = eid_local;
     }
 
@@ -14908,7 +14917,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 unsigned int cgIdx = m_uiE2NMapping_CG[ele_id * m_uiNpE + n];
 
                 recvNodeSM_r[procID].push_back(cgIdx);
-                // Encode using oct_data's global DG encoding
                 recvNodeDGG[procID].push_back(
                     new_oct_connectivity_map[owEle]
                         .e2n_dg[dgIdx % m_uiNpE]);
@@ -14953,7 +14961,10 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                       MPI_UNSIGNED_LONG, sendBuf.data(), sendCount.data(),
                       sendOff.data(), MPI_UNSIGNED_LONG, commActive);
 
-        // Build send scatter map from received DG globals
+        // Build send scatter map from received DG globals.
+        // If the CG index from the direct lookup is in the ghost
+        // range (not populated by createVector), search local
+        // elements for the matching oct_data DG global.
         std::vector<unsigned int> sendSM(totalSend);
         for (int i = 0; i < totalSend; i++) {
             unsigned int ow, ix, jy, kz;
@@ -14961,10 +14972,79 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             unsigned int localOw = globaltoNewLocal.count(ow)
                                        ? globaltoNewLocal[ow]
                                        : m_uiElementLocalBegin;
-            sendSM[i] = m_uiE2NMapping_CG[localOw * m_uiNpE +
-                                           kz * (m_uiElementOrder + 1) *
-                                               (m_uiElementOrder + 1) +
-                                           jy * (m_uiElementOrder + 1) + ix];
+            unsigned int sub =
+                kz * (m_uiElementOrder + 1) * (m_uiElementOrder + 1) +
+                jy * (m_uiElementOrder + 1) + ix;
+            unsigned int cgIdx =
+                m_uiE2NMapping_CG[localOw * m_uiNpE + sub];
+
+            // If the CG index is in the ghost range, the value
+            // wasn't set by createVector.  Compute the physical
+            // position from the DG global and find the matching
+            // local CG index by coordinate.
+            if (cgIdx < m_uiNodeLocalBegin || cgIdx >= m_uiNodeLocalEnd) {
+                // Physical position of the requested node
+                double len = 1u << (m_uiMaxDepth -
+                                    m_uiAllElements[localOw].getLevel());
+                double px = m_uiAllElements[localOw].getX() +
+                            ix * (len / m_uiElementOrder);
+                double py = m_uiAllElements[localOw].getY() +
+                            jy * (len / m_uiElementOrder);
+                double pz = m_uiAllElements[localOw].getZ() +
+                            kz * (len / m_uiElementOrder);
+
+                // Search local elements for a node at this position
+                bool found = false;
+                for (unsigned int le = m_uiElementLocalBegin;
+                     le < m_uiElementLocalEnd && !found; le++) {
+                    double len2 = 1u << (m_uiMaxDepth -
+                                         m_uiAllElements[le].getLevel());
+                    double hh = len2 / m_uiElementOrder;
+                    double ex = m_uiAllElements[le].getX();
+                    double ey = m_uiAllElements[le].getY();
+                    double ez = m_uiAllElements[le].getZ();
+                    // Check if point is within this element's bounds
+                    if (px < ex - 0.5 * hh || px > ex + len2 + 0.5 * hh)
+                        continue;
+                    if (py < ey - 0.5 * hh || py > ey + len2 + 0.5 * hh)
+                        continue;
+                    if (pz < ez - 0.5 * hh || pz > ez + len2 + 0.5 * hh)
+                        continue;
+
+                    for (unsigned int nd = 0; nd < m_uiNpE && !found; nd++) {
+                        unsigned int dgn =
+                            m_uiE2NMapping_DG[le * m_uiNpE + nd];
+                        unsigned int oe = dgn / m_uiNpE;
+                        unsigned int osub = dgn % m_uiNpE;
+                        unsigned int oi = osub % (m_uiElementOrder + 1);
+                        unsigned int oj = (osub / (m_uiElementOrder + 1)) %
+                                          (m_uiElementOrder + 1);
+                        unsigned int ok =
+                            osub / ((m_uiElementOrder + 1) *
+                                    (m_uiElementOrder + 1));
+                        double len3 = 1u << (m_uiMaxDepth -
+                                             m_uiAllElements[oe].getLevel());
+                        double nx = m_uiAllElements[oe].getX() +
+                                    oi * (len3 / m_uiElementOrder);
+                        double ny = m_uiAllElements[oe].getY() +
+                                    oj * (len3 / m_uiElementOrder);
+                        double nz = m_uiAllElements[oe].getZ() +
+                                    ok * (len3 / m_uiElementOrder);
+                        if (std::abs(px - nx) < 0.1 &&
+                            std::abs(py - ny) < 0.1 &&
+                            std::abs(pz - nz) < 0.1) {
+                            unsigned int cg2 =
+                                m_uiE2NMapping_CG[le * m_uiNpE + nd];
+                            if (cg2 >= m_uiNodeLocalBegin &&
+                                cg2 < m_uiNodeLocalEnd) {
+                                cgIdx = cg2;
+                                found = true;
+                            }
+                        }
+                    }
+                }
+            }
+            sendSM[i] = cgIdx;
         }
 
         // Flatten recv scatter map
