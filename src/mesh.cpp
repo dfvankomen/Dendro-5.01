@@ -14912,20 +14912,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     owEle < m_uiElementLocalEnd)
                     continue;
 
-                // Route to the ORIGINAL owner rank via ele_offsets.
-                // This works because the sender decodes the oct_data
-                // DG global (which was built on the original rank)
-                // and that rank's buildE2NMap has the element as local.
-                unsigned int owGid =
-                    new_oct_connectivity_map[owEle].eid;
-                unsigned int procID = 0;
-                for (unsigned int p = 0; p < npes; p++) {
-                    if (owGid >= ele_offsets[p] &&
-                        owGid < ele_offsets[p + 1]) {
-                        procID = p;
-                        break;
-                    }
-                }
+                unsigned int procID =
+                    new_oct_connectivity_map[owEle].trank;
                 unsigned int cgIdx = m_uiE2NMapping_CG[ele_id * m_uiNpE + n];
 
                 recvNodeSM_r[procID].push_back(cgIdx);
