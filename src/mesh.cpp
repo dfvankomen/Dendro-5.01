@@ -11007,6 +11007,54 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
     return pMesh;
 }
 
+ot::Mesh *Mesh::ReMeshRepartitioned(unsigned int grainSz, double ld_tol,
+                                    unsigned int sfK) {
+    std::vector<ot::TreeNode> balOct;
+
+    if (m_uiIsActive) {
+        // 1. Build unbalanced octree from refinement flags (local, no comm)
+        std::vector<ot::TreeNode> unBalanced;
+        for (unsigned int ele = m_uiElementLocalBegin;
+             ele < m_uiElementLocalEnd; ele++) {
+            unsigned int remeshFlag =
+                (m_uiAllElements[ele].getFlag() >> NUM_LEVEL_BITS);
+            assert(m_uiAllElements[ele].getLevel() != 0);
+
+            if (remeshFlag == OCT_SPLIT) {
+                m_uiAllElements[ele].addChildren(unBalanced);
+            } else if (remeshFlag == OCT_COARSE) {
+                assert(m_uiAllElements[ele].getParent() ==
+                       m_uiAllElements[ele + NUM_CHILDREN - 1].getParent());
+                unBalanced.push_back(m_uiAllElements[ele].getParent());
+                ele = ele + NUM_CHILDREN - 1;
+            } else {
+                assert(remeshFlag == OCT_NO_CHANGE);
+                unBalanced.push_back(m_uiAllElements[ele]);
+            }
+        }
+
+        // 2. Global SFC sort + 2:1 balance
+        ot::TreeNode rootNode(m_uiDim, m_uiMaxDepth);
+        SFC::parSort::SFC_treeSort(unBalanced, balOct, balOct, balOct, ld_tol,
+                                   m_uiMaxDepth, rootNode, ROOT_ROTATION, 1,
+                                   TS_BALANCE_OCTREE, sfK, m_uiCommActive);
+        unBalanced.clear();
+    }
+
+    // 3. Build a full SFC mesh from the balanced octants
+    ot::Mesh *sfcMesh =
+        new ot::Mesh(balOct, 1, m_uiElementOrder, m_uiCommGlobal,
+                     m_uiIsBlockSetup, m_uiScatterMapType, grainSz,
+                     ld_tol, sfK);
+    sfcMesh->setDomainBounds(m_uiDMinPt, m_uiDMaxPt);
+
+    // 4. Apply graph partitioning
+    sfcMesh->setPartitioningMethod(m_partitionOption);
+    sfcMesh->repartitionMeshGlobal();
+
+    return sfcMesh;
+}
+
 void ot::Mesh::getElementalFaceNeighbors(const unsigned int eID,
                                          const unsigned int dir,
                                          unsigned int *lookup) const {
@@ -14660,13 +14708,13 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // owners are present.
     {
         const unsigned int totalGlobalEle = ele_offsets[npes];
-        for (unsigned int fixup_iter = 0; fixup_iter < 20; fixup_iter++) {
+        for (unsigned int fixup_iter = 0; fixup_iter < 10; fixup_iter++) {
             std::set<D_INT_L> missing_owners;
             std::set<D_INT_L> have_set;
             for (const auto &od : new_oct_connectivity_map)
                 have_set.insert(od.eid);
 
-            // scan all non-ghostTwo elements' E2N
+            // Scan non-ghostTwo elements' E2N for missing owners
             for (const auto &od : new_oct_connectivity_map) {
                 if (od.isGhostTwo) continue;
                 for (unsigned int ni = 0; ni < m_uiNpE; ++ni) {
@@ -14788,8 +14836,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     dg2eijk(nodeLookUp_DG, ownerID, ii_x, jj_y, kk_z);
 
                     // ownerID is the global ID — map to local index
-                    if (globaltoNewLocal.find(ownerID) !=
-                        globaltoNewLocal.end()) {
+                    if (nodeLookUp_DG != LOOK_UP_TABLE_DEFAULT &&
+                        globaltoNewLocal.find(ownerID) !=
+                            globaltoNewLocal.end()) {
                         newOwnerID = globaltoNewLocal[ownerID];
                     } else {
                         newOwnerID = ele_id;
@@ -15116,6 +15165,19 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         m_uiElementPostGhostEnd - m_uiElementPostGhostBegin;
     m_uiNumTotalElements = m_uiNumPreGhostElements + m_uiNumLocalElements +
                            m_uiNumPostGhostElements;
+
+    // Rebuild nodal map validity.  In the original mesh, round-2
+    // ghost elements are marked invalid because they don't participate
+    // in the nodal scatter map.  For the repartitioned mesh, mark
+    // all non-ghostTwo elements as valid and ghostTwo elements as
+    // invalid (they only provide E2N ownership, not scatter map data).
+    m_uiIsNodalMapValid.clear();
+    m_uiIsNodalMapValid.resize(m_uiNumTotalElements, true);
+    for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+        if (new_oct_connectivity_map[e].isGhostTwo)
+            m_uiIsNodalMapValid[e] = false;
+    }
+
     // number of nodes
     m_uiNumActualNodes     = m_uiCG2DG.size();
 

@@ -2747,6 +2747,18 @@ class Mesh {
                      unsigned int blk_tag_sz                         = 0);
 
     /**
+     * @brief: Remeshes and repartitions using the current partitioning
+     * method.  For graph-partitioned meshes, this builds a temporary
+     * SFC mesh via ReMesh, then calls repartitionMeshGlobal to apply
+     * the graph partition.  Returns the new mesh (caller owns it).
+     * @param grainSz, ld_tol, sfK: passed to ReMesh
+     */
+    ot::Mesh *ReMeshRepartitioned(
+        unsigned int grainSz = DENDRO_DEFAULT_GRAIN_SZ,
+        double ld_tol        = DENDRO_DEFAULT_LB_TOL,
+        unsigned int sfK     = DENDRO_DEFAULT_SF_K);
+
+    /**
      * @brief: Computes the all to all v communication parameters interms of
      * element counts. Let M1 be the current mesh, M2 be the new mesh (pMesh),
      * then we compute M2' auxiliary mesh, where, M2' is partitioned w.r.t

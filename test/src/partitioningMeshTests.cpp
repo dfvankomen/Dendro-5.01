@@ -276,17 +276,92 @@ int main(int argc, char** argv) {
                       nullptr, nullptr);
 #endif
 
-    mesh_repartitioned->setPartitioningMethod(partitionOption);
+    // Capture SFC partition metrics before repartitioning
+    unsigned int sfcSendTotal = 0, sfcRecvTotal = 0;
+    unsigned int sfcNumProcs  = 0;
+    if (mesh_repartitioned->isActive()) {
+        const auto& sc = mesh_repartitioned->getNodalSendCounts();
+        const auto& rc = mesh_repartitioned->getNodalRecvCounts();
+        for (unsigned int p = 0; p < (unsigned int)npes; p++) {
+            sfcSendTotal += sc[p];
+            sfcRecvTotal += rc[p];
+            if (sc[p] > 0 || rc[p] > 0) sfcNumProcs++;
+        }
+    }
 
-    // now we can do some partitioning checks
+    mesh_repartitioned->setPartitioningMethod(partitionOption);
     mesh_repartitioned->repartitionMeshGlobal();
 
-#ifdef EXPORT_MESH
-    std::string save_prefix_2 =
-        "test_mesh_repartitioned_npes" + std::to_string(npes);
-    io::vtk::mesh2vtu(mesh_repartitioned, save_prefix_2.c_str(), 0, nullptr,
-                      nullptr, 0, nullptr, nullptr);
-#endif
+    // Compare SFC vs graph partition scatter maps
+    {
+        unsigned int gphSendTotal = 0, gphRecvTotal = 0;
+        unsigned int gphNumProcs  = 0;
+        if (mesh_repartitioned->isActive()) {
+            const auto& sc = mesh_repartitioned->getNodalSendCounts();
+            const auto& rc = mesh_repartitioned->getNodalRecvCounts();
+            for (unsigned int p = 0; p < (unsigned int)npes; p++) {
+                gphSendTotal += sc[p];
+                gphRecvTotal += rc[p];
+                if (sc[p] > 0 || rc[p] > 0) gphNumProcs++;
+            }
+        }
+
+        // Gather global totals
+        unsigned int sfcSendGlobal, gphSendGlobal;
+        unsigned int sfcProcsGlobal, gphProcsGlobal;
+        MPI_Allreduce(&sfcSendTotal, &sfcSendGlobal, 1, MPI_UNSIGNED,
+                      MPI_SUM, comm);
+        MPI_Allreduce(&gphSendTotal, &gphSendGlobal, 1, MPI_UNSIGNED,
+                      MPI_SUM, comm);
+        MPI_Allreduce(&sfcNumProcs, &sfcProcsGlobal, 1, MPI_UNSIGNED,
+                      MPI_SUM, comm);
+        MPI_Allreduce(&gphNumProcs, &gphProcsGlobal, 1, MPI_UNSIGNED,
+                      MPI_SUM, comm);
+
+        unsigned int sfcLocalEle =
+            mesh->getNumLocalMeshElements();
+        unsigned int gphLocalEle =
+            mesh_repartitioned->getNumLocalMeshElements();
+        unsigned int sfcEleMax, sfcEleMin, gphEleMax, gphEleMin;
+        MPI_Allreduce(&sfcLocalEle, &sfcEleMax, 1, MPI_UNSIGNED, MPI_MAX,
+                      comm);
+        MPI_Allreduce(&sfcLocalEle, &sfcEleMin, 1, MPI_UNSIGNED, MPI_MIN,
+                      comm);
+        MPI_Allreduce(&gphLocalEle, &gphEleMax, 1, MPI_UNSIGNED, MPI_MAX,
+                      comm);
+        MPI_Allreduce(&gphLocalEle, &gphEleMin, 1, MPI_UNSIGNED, MPI_MIN,
+                      comm);
+
+        if (!rank) {
+            std::cout << "\n--- PARTITION METRICS ---\n";
+            std::cout << "Element balance (min/max):\n";
+            std::cout << "  SFC:   " << sfcEleMin << " / " << sfcEleMax
+                      << "  (imbalance "
+                      << (sfcEleMax > 0
+                              ? 100.0 * (sfcEleMax - sfcEleMin) / sfcEleMax
+                              : 0)
+                      << "%)\n";
+            std::cout << "  Graph: " << gphEleMin << " / " << gphEleMax
+                      << "  (imbalance "
+                      << (gphEleMax > 0
+                              ? 100.0 * (gphEleMax - gphEleMin) / gphEleMax
+                              : 0)
+                      << "%)\n";
+            std::cout << "Ghost exchange volume (total nodes sent):\n";
+            std::cout << "  SFC:   " << sfcSendGlobal << "\n";
+            std::cout << "  Graph: " << gphSendGlobal;
+            if (sfcSendGlobal > 0) {
+                double pct = 100.0 * ((double)gphSendGlobal - (double)sfcSendGlobal) /
+                             (double)sfcSendGlobal;
+                std::cout << "  (" << (pct >= 0 ? "+" : "") << pct << "%)";
+            }
+            std::cout << "\n";
+            std::cout << "Communication neighbors (total rank pairs):\n";
+            std::cout << "  SFC:   " << sfcProcsGlobal << "\n";
+            std::cout << "  Graph: " << gphProcsGlobal << "\n";
+            std::cout << "---\n\n";
+        }
+    }
 
     /**
      *
@@ -532,12 +607,120 @@ int main(int argc, char** argv) {
         delete[] eleVec;
     }
 
+    // ---- SCATTER MAP EFFICIENCY ANALYSIS ----
+    // Compare: (a) total nodes in recv scatter map vs
+    //          (b) nodes that are actually on ghost element boundaries
+    //              (the minimal set needed for block padding)
+    {
+        const unsigned int* e2e =
+            mesh_repartitioned->getE2EMapping().data();
+        const unsigned int* e2n_cg_a =
+            mesh_repartitioned->getE2NMapping().data();
+        const unsigned int npe_a =
+            mesh_repartitioned->getNumNodesPerElement();
+        const unsigned int eOrd_a =
+            mesh_repartitioned->getElementOrder();
+        const unsigned int ndir =
+            mesh_repartitioned->getNumDirections();
+        const unsigned int lb_a =
+            mesh_repartitioned->getElementLocalBegin();
+        const unsigned int le_a =
+            mesh_repartitioned->getElementLocalEnd();
+        const unsigned int nlb_a =
+            mesh_repartitioned->getNodeLocalBegin();
+        const unsigned int nle_a =
+            mesh_repartitioned->getNodeLocalEnd();
+
+        // Count unique ghost CG nodes ACTUALLY needed for unzip:
+        // use blkUnzipElementIDs to get the exact ghost element set
+        // that each block reads from, then collect their CG nodes.
+        std::set<unsigned int> unzipGhostNodes;
+        std::set<unsigned int> unzipGhostElements;
+        {
+            std::vector<unsigned int> blkEleIDs;
+            const auto& blkList = mesh_repartitioned->getLocalBlockList();
+            for (unsigned int b = 0; b < blkList.size(); b++) {
+                mesh_repartitioned->blkUnzipElementIDs(b, blkEleIDs);
+                for (unsigned int eid : blkEleIDs) {
+                    if (eid >= lb_a && eid < le_a) continue;
+                    unzipGhostElements.insert(eid);
+                    for (unsigned int n = 0; n < npe_a; n++) {
+                        unsigned int cg = e2n_cg_a[eid * npe_a + n];
+                        if (cg >= nlb_a && cg < nle_a) continue;
+                        unzipGhostNodes.insert(cg);
+                    }
+                }
+            }
+        }
+
+        // Also count all nodes in the recv scatter map
+        const auto& recvSM_a = mesh_repartitioned->getRecvNodeSM();
+        std::set<unsigned int> scatterMapNodes(recvSM_a.begin(),
+                                               recvSM_a.end());
+
+        // Compare with the SFC mesh
+        std::set<unsigned int> sfcScatterNodes;
+        {
+            const auto& sfcRecvSM = mesh->getRecvNodeSM();
+            sfcScatterNodes.insert(sfcRecvSM.begin(), sfcRecvSM.end());
+        }
+
+        unsigned int unzipNodes = unzipGhostNodes.size();
+        unsigned int unzipEles = unzipGhostElements.size();
+        unsigned int smNodes   = scatterMapNodes.size();
+        unsigned int sfcNodes  = sfcScatterNodes.size();
+        unsigned int gUnzipNodes, gUnzipEles, gSmNodes, gSfcNodes;
+        MPI_Allreduce(&unzipNodes, &gUnzipNodes, 1, MPI_UNSIGNED, MPI_SUM,
+                      comm);
+        MPI_Allreduce(&unzipEles, &gUnzipEles, 1, MPI_UNSIGNED, MPI_SUM,
+                      comm);
+        MPI_Allreduce(&smNodes, &gSmNodes, 1, MPI_UNSIGNED, MPI_SUM, comm);
+        MPI_Allreduce(&sfcNodes, &gSfcNodes, 1, MPI_UNSIGNED, MPI_SUM, comm);
+
+        if (!rank) {
+            std::cout << "\n--- SCATTER MAP EFFICIENCY ---\n";
+            std::cout << "Ghost elements needed by unzip:  " << gUnzipEles
+                      << "\n";
+            std::cout << "Ghost CG nodes needed by unzip:  " << gUnzipNodes
+                      << "\n";
+            std::cout << "SFC scatter map sends:           " << gSfcNodes
+                      << "\n";
+            std::cout << "Graph scatter map sends:         " << gSmNodes;
+            if (gUnzipNodes > 0) {
+                double pct =
+                    100.0 * ((double)gSmNodes - (double)gUnzipNodes) /
+                    (double)gUnzipNodes;
+                std::cout << "  (+" << pct << "% vs unzip need)";
+            }
+            std::cout << "\n";
+            if (gSfcNodes > 0) {
+                double sfcPct =
+                    100.0 * ((double)gSfcNodes - (double)gUnzipNodes) /
+                    (double)gUnzipNodes;
+                std::cout << "SFC overhead vs unzip need:      +" << sfcPct
+                          << "%\n";
+            }
+            std::cout << "---\n\n";
+        }
+    }
+
     // ---- TEST 6: setMeshRefinementFlags + ReMesh ----
+    ot::Mesh* remeshed = nullptr;
     {
         std::vector<unsigned int> refine_flags;
         if (mesh_repartitioned->isActive()) {
-            refine_flags.resize(
-                mesh_repartitioned->getNumLocalMeshElements(), OCT_NO_CHANGE);
+            const unsigned int numLocal =
+                mesh_repartitioned->getNumLocalMeshElements();
+            refine_flags.resize(numLocal, OCT_NO_CHANGE);
+
+            // Refine the first few local elements to force actual remeshing
+            const ot::TreeNode* pNodesR =
+                mesh_repartitioned->getAllElements().data();
+            unsigned int lbR = mesh_repartitioned->getElementLocalBegin();
+            for (unsigned int e = 0; e < numLocal && e < 4; e++) {
+                if (pNodesR[lbR + e].getLevel() < m_uiMaxDepth)
+                    refine_flags[e] = OCT_SPLIT;
+            }
         }
 
         bool isOctChange =
@@ -555,13 +738,18 @@ int main(int argc, char** argv) {
                       << NRM << std::endl;
         }
 
-        // now try actual remesh (even with no-change, this exercises
-        // the full remesh path)
-        ot::Mesh* remeshed = mesh_repartitioned->ReMesh(
-            DENDRO_GRAIN_SZ, LOAD_IMB_TOL, SPLIT_FIX);
+        // Remesh: use ReMeshRepartitioned for graph-partitioned meshes,
+        // standard ReMesh for SFC-partitioned (OriginalPartition).
+        if (partitionOption == PartitioningOptions::OriginalPartition ||
+            partitionOption == PartitioningOptions::NoPartition) {
+            remeshed = mesh_repartitioned->ReMesh(
+                DENDRO_GRAIN_SZ, LOAD_IMB_TOL, SPLIT_FIX);
+        } else {
+            remeshed = mesh_repartitioned->ReMeshRepartitioned(
+                DENDRO_GRAIN_SZ, LOAD_IMB_TOL, SPLIT_FIX);
+        }
 
         if (remeshed != nullptr) {
-            // verify the remeshed mesh has elements
             unsigned int remeshLocalCount =
                 remeshed->getNumLocalMeshElements();
             unsigned int totalRemeshEle;
@@ -573,8 +761,6 @@ int main(int argc, char** argv) {
                           << totalRemeshEle << " total elements)" << NRM
                           << std::endl;
             }
-
-            delete remeshed;
         } else {
             if (!rank) {
                 std::cout << YLW
@@ -583,6 +769,131 @@ int main(int argc, char** argv) {
                           << NRM << std::endl;
             }
         }
+    }
+
+    // ---- TEST 7: unzip correctness on repartitioned mesh ----
+    // ---- TEST 8: unzip correctness on remeshed mesh ----
+    // Verify that unzip produces correct values in the ghost padding
+    // region by comparing against the analytic function at each
+    // point's physical coordinates.
+    auto testUnzip = [&](ot::Mesh* testMesh, const char* label) {
+        if (!testMesh || !testMesh->isActive()) return;
+
+        const unsigned int eOrd_u = testMesh->getElementOrder();
+        const unsigned int npe_u  = testMesh->getNumNodesPerElement();
+
+        // Create vector, ghost exchange, unzip
+        std::vector<double> zVec;
+        testMesh->createVector(zVec, func);
+        testMesh->performGhostExchange(zVec);
+
+        double* uzVec = testMesh->createUnZippedVector<double>(0.0);
+        testMesh->unzip(zVec.data(), uzVec);
+
+        const auto& blkList = testMesh->getLocalBlockList();
+        const auto* pNodes  = testMesh->getAllElements().data();
+
+        int totalErrors = 0, totalChecked = 0;
+        int largeErrors = 0;
+        double maxErr = 0;
+        const double uzTol = 1e-3;
+
+        for (unsigned int b = 0; b < blkList.size(); b++) {
+            const ot::Block& blk   = blkList[b];
+            const unsigned int pw   = blk.get1DPadWidth();
+            const unsigned int lx   = blk.getAllocationSzX();
+            const unsigned int ly   = blk.getAllocationSzY();
+            const unsigned int lz   = blk.getAllocationSzZ();
+            const DendroIntL offset = blk.getOffset();
+
+            const ot::TreeNode bn = blk.getBlockNode();
+
+            // Physical spacing at the block's regular grid level
+            const double hx =
+                (1u << (m_uiMaxDepth - blk.getRegularGridLev())) /
+                (double)eOrd_u;
+            const double xmin = bn.getX() - pw * hx;
+            const double ymin = bn.getY() - pw * hx;
+            const double zmin = bn.getZ() - pw * hx;
+
+            // Check every point in the unzipped block
+            for (unsigned int k = 0; k < lz; k++) {
+                for (unsigned int j = 0; j < ly; j++) {
+                    for (unsigned int i = 0; i < lx; i++) {
+                        double x = xmin + i * hx;
+                        double y = ymin + j * hx;
+                        double z = zmin + k * hx;
+
+                        // Skip points outside the domain
+                        if (x < 0 || y < 0 || z < 0) continue;
+                        unsigned int domMax = 1u << m_uiMaxDepth;
+                        if (x > domMax || y > domMax || z > domMax) continue;
+
+                        double expected = func(x, y, z);
+                        double got = uzVec[offset + k * lx * ly + j * lx + i];
+
+                        double err = std::abs(expected - got);
+                        if (err > uzTol) {
+                            totalErrors++;
+                            if (err > 0.5) {
+                                largeErrors++;
+                                if (largeErrors <= 3) {
+                                    // check if point is in padding region
+                                    unsigned int numEle1D = blk.getElemSz1D();
+                                    unsigned int inner = pw * eOrd_u;
+                                    unsigned int outer = inner + numEle1D * eOrd_u;
+                                    bool inPad = (i < inner || i >= outer ||
+                                                  j < inner || j >= outer ||
+                                                  k < inner || k >= outer);
+                                    std::cout << rank << ": UNZIP ERR blk=" << b
+                                              << " (i,j,k)=(" << i << "," << j
+                                              << "," << k << ")"
+                                              << " expected=" << expected
+                                              << " got=" << got
+                                              << (inPad ? " PADDING" : " INTERIOR")
+                                              << " got==0?" << (got == 0.0)
+                                              << std::endl;
+                                }
+                            }
+                            if (err > maxErr) maxErr = err;
+                        }
+                        totalChecked++;
+                    }
+                }
+            }
+        }
+
+        int globalErrors, globalChecked;
+        MPI_Allreduce(&totalErrors, &globalErrors, 1, MPI_INT, MPI_SUM, comm);
+        MPI_Allreduce(&totalChecked, &globalChecked, 1, MPI_INT, MPI_SUM,
+                      comm);
+        int globalLargeErrors;
+        double globalMaxErr;
+        MPI_Allreduce(&largeErrors, &globalLargeErrors, 1, MPI_INT, MPI_SUM,
+                      comm);
+        MPI_Allreduce(&maxErr, &globalMaxErr, 1, MPI_DOUBLE, MPI_MAX, comm);
+        if (!rank) {
+            if (globalErrors == 0) {
+                std::cout << GRN << label << " PASSED: unzip correct ("
+                          << globalChecked << " points)" << NRM << std::endl;
+            } else {
+                std::cout << (globalLargeErrors > 0 ? RED : YLW)
+                          << label << ": " << globalErrors << " / "
+                          << globalChecked << " errors (tol=" << uzTol
+                          << "), " << globalLargeErrors
+                          << " large (>0.5), maxErr=" << globalMaxErr
+                          << NRM << std::endl;
+            }
+        }
+
+        delete[] uzVec;
+    };
+
+    testUnzip(mesh, "TEST 7a (SFC baseline)");
+    testUnzip(mesh_repartitioned, "TEST 7b (repartitioned)");
+    if (remeshed) {
+        testUnzip(remeshed, "TEST 8  (after remesh)");
+        delete remeshed;
     }
 
     // END CLEANUP
