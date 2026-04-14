@@ -384,6 +384,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testDerivOnGrid test/src/derivativeConvergence.cpp test/src/derivativeCtx.cpp)
   dendro_add_deriv_test(buildGlobalMat test/src/globalMatrixBuilding.cpp test/src/derivativeCtx.cpp)
   dendro_add_deriv_test(testLibXSMMvBLAS test/src/testLibXSMMvBLAS.cpp)
+  dendro_add_deriv_test(testAllDerivs test/src/testAllDerivs.cpp)
 
   if(WITH_CUDA)
     # cuda GPU tests
