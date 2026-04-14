@@ -12,7 +12,7 @@
 #include "derivatives/filt_inmat_byufilter.h"
 #include "derivatives/filt_inmat_kim.h"
 
-#define DDERIVS_MAX_BLOCKS_INIT 4
+#define DDERIVS_MAX_BLOCKS_INIT 8
 
 namespace dendroderivs {
 
@@ -120,6 +120,14 @@ class MatrixCompactDerivs : public CompactDerivs {
     void set_maximum_block_size(size_t block_size) {
         workspace_tot_ = block_size * 2;
         workspace_.resize(workspace_tot_);
+    }
+
+    /**
+     * Pre-create derivative matrices for a specific grid dimension size.
+     * Call at mesh setup to avoid lazy creation during timestepping.
+     */
+    void pre_create_for_size(unsigned int n) {
+        get_storage_for_size(n);
     }
 
     /**

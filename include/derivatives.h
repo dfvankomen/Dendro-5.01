@@ -253,13 +253,12 @@ class Derivs {
     }
 
     /**
-     * @brief Copy constructor.
-     * @param obj The Derivs object to copy from.
-     *
-     * TODO: Implement full deep copy method for the derivatives, as
-     * shallow copies would not be appropriate.
+     * @brief Copy constructor. Copies base-class members (ele_order, n, pw).
+     * Derived classes must handle their own deep copy via clone() or their
+     * own copy constructors.
      */
-    Derivs(const Derivs &obj) {};
+    Derivs(const Derivs &obj)
+        : p_ele_order(obj.p_ele_order), p_n(obj.p_n), p_pw(obj.p_pw) {};
 
    public:
     /**
@@ -312,6 +311,10 @@ class Derivs {
     virtual std::string toString() const                   = 0;
 
     virtual void set_maximum_block_size(size_t block_size) = 0;
+
+    /// Pre-create matrices for a specific grid dimension. Override in
+    /// matrix-based classes; default is a no-op for stencil types.
+    virtual void pre_create_for_size(unsigned int) {};
 
     // raw function pointer type for bypassing virtual dispatch on stencils.
     // explicit stencil classes override these to expose their cached function
@@ -520,6 +523,13 @@ class DendroDerivatives {
     void set_maximum_block_size(size_t block_size) {
         _first_deriv->set_maximum_block_size(block_size);
         _second_deriv->set_maximum_block_size(block_size);
+    }
+
+    /// Pre-create derivative matrices for a specific grid dimension size.
+    /// Call at mesh setup to ensure no lazy allocation during timestepping.
+    void pre_create_for_size(unsigned int n) {
+        _first_deriv->pre_create_for_size(n);
+        _second_deriv->pre_create_for_size(n);
     }
 
     std::string toString() {
