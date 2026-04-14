@@ -219,22 +219,22 @@ get_first_order_registry() {
         {"BorisO6", make_with_coeffs_and_id<Boris_BorisO6_FirstOrder>},
         {"BorisO6Eta", make_with_coeffs_and_id<Boris_BorisO6Eta_FirstOrder>},
 
-        // BYU tridiagonal (uses coeffs)
-        {"BYUT4", make_with_coeffs<BYUDerivsT4_R3_FirstOrder>},
-        {"BYUT4R1", make_with_coeffs<BYUDerivsT4_R1_FirstOrder>},
-        {"BYUT4R2", make_with_coeffs<BYUDerivsT4_R2_FirstOrder>},
-        {"BYUT4R4", make_with_coeffs<BYUDerivsT4_R42_FirstOrder>},
-        {"BYUT6", make_with_coeffs<BYUDerivsT6_R4_FirstOrder>},
-        {"BYUT62", make_with_coeffs<BYUDerivsT6_R42_FirstOrder>},
-        {"BYUT64R3", make_with_coeffs<BYUDerivsT64_R3_FirstOrder>},
-        {"BYUT6R2", make_with_coeffs<BYUDerivsT6_R2_FirstOrder>},
-        {"BYUT6R3", make_with_coeffs<BYUDerivsT6_R3_FirstOrder>},
+        // BYU tridiagonal (uses coeffs via GenericMatrixDerivsWithCoeffs)
+        {"BYUT4", make_generic_coeffs<1, BYUDerivsT4R3DiagonalsFirstOrder, DerivType::D_BYUT4, 4>},
+        {"BYUT4R1", make_generic_coeffs<1, BYUDerivsT4R1DiagonalsFirstOrder, DerivType::D_BYUT4R1, 2>},
+        {"BYUT4R2", make_generic_coeffs<1, BYUDerivsT4R2DiagonalsFirstOrder, DerivType::D_BYUT4R2, 3>},
+        {"BYUT4R4", make_generic_coeffs<1, BYUDerivsT4R42DiagonalsFirstOrder, DerivType::D_BYUT4R4, 5>},
+        {"BYUT6", make_generic_coeffs<1, BYUDerivsT6R4DiagonalsFirstOrder, DerivType::D_BYUT6, 5>},
+        {"BYUT62", make_generic_coeffs<1, BYUDerivsT6R42DiagonalsFirstOrder, DerivType::D_BYUT6R4, 5>},
+        {"BYUT64R3", make_generic_coeffs<1, BYUDerivsT64R3DiagonalsFirstOrder, DerivType::D_BYUT64R3, 4>},
+        {"BYUT6R2", make_generic_coeffs<1, BYUDerivsT6R2DiagonalsFirstOrder, DerivType::D_BYUT6R2, 3>},
+        {"BYUT6R3", make_generic_coeffs<1, BYUDerivsT6R3DiagonalsFirstOrder, DerivType::D_BYUT6R3, 4>},
 
         // BYU pentadiagonal (uses coeffs)
-        {"BYUP6", make_with_coeffs<BYUDerivsP6_R3_FirstOrder>},
-        {"BYUP6R2", make_with_coeffs<BYUDerivsP6_R2_FirstOrder>},
-        {"BYUP6R3", make_with_coeffs<BYUDerivsP6_R3_FirstOrder>},
-        {"BYUP8", make_with_coeffs<BYUDerivsP8_R4_FirstOrder>},
+        {"BYUP6", make_generic_coeffs<1, BYUDerivsP6R3DiagonalsFirstOrder, DerivType::D_BYUP6, 7>},
+        {"BYUP6R2", make_generic_coeffs<1, BYUDerivsP6R2DiagonalsFirstOrder, DerivType::D_BYUP6R2, 3>},
+        {"BYUP6R3", make_generic_coeffs<1, BYUDerivsP6R32DiagonalsFirstOrder, DerivType::D_BYUP6R3, 4>},
+        {"BYUP8", make_generic_coeffs<1, BYUDerivsP8R4DiagonalsFirstOrder, DerivType::D_BYUP8, 9>},
     };
     return reg;
 }
@@ -263,17 +263,16 @@ get_second_order_registry() {
         {"JTT6Banded", make_explicit<JonathanTyler_JTT6_SecondOrder_Banded>},
         {"JTP6Banded", make_explicit<JonathanTyler_JTP6_SecondOrder_Banded>},
 
-        // BYU tridiagonal
-        {"BYUT4", make_with_coeffs<BYUDerivsT4_R3_SecondOrder>},
-        {"BYUT6R3", make_with_coeffs<BYUDerivsT6_R3_SecondOrder>},
-        {"BYUT6", make_with_coeffs<BYUDerivsT6_R4_SecondOrder>},
-        {"BYUT6R2", make_with_coeffs<BYUDerivsT6_R2_SecondOrder>},
-        // note: no BYUT8 second-order class exists currently
+        // BYU tridiagonal 2nd order
+        {"BYUT4", make_generic_coeffs<2, BYUDerivsT4R3DiagonalsSecondOrder, DerivType::D_BYUT4, 4>},
+        {"BYUT6R3", make_generic_coeffs<2, BYUDerivsT6R3DiagonalsSecondOrder, DerivType::D_BYUT6R3, 4>},
+        {"BYUT6", make_generic_coeffs<2, BYUDerivsT6R4DiagonalsSecondOrder, DerivType::D_BYUT6, 5>},
+        {"BYUT6R2", make_generic_coeffs<2, BYUDerivsT6R2DiagonalsSecondOrder, DerivType::D_BYUT6R2, 3>},
 
-        // BYU pentadiagonal
-        {"BYUP6", make_with_coeffs<BYUDerivsP6_R3_SecondOrder>},
-        {"BYUP6R2", make_with_coeffs<BYUDerivsP6_R2_SecondOrder>},
-        {"BYUP8", make_with_coeffs<BYUDerivsP8_R4_SecondOrder>},
+        // BYU pentadiagonal 2nd order
+        {"BYUP6", make_generic_coeffs<2, BYUDerivsP6R3DiagonalsSecondOrder, DerivType::D_BYUP6, 7>},
+        {"BYUP6R2", make_generic_coeffs<2, BYUDerivsP6R2DiagonalsSecondOrder, DerivType::D_BYUP6R2, 3>},
+        {"BYUP8", make_generic_coeffs<2, BYUDerivsP8R4DiagonalsSecondOrder, DerivType::D_BYUP8, 9>},
 
         // 2A family (no user coefficients despite old class using make_with_coeffs)
         {"2A_1", make_generic<2, create2A_1_Diagonals, DerivType::D_2A_1>},
@@ -294,48 +293,48 @@ get_second_order_registry() {
         {"2UA_2", make_generic<2, create2UA_2_Diagonals, DerivType::D_2UA_2>},
 
         // 2B4 family
-        {"2B4_1", make_with_coeffs<TwoDerivs2B4_1_SecondOrder>},
+        {"2B4_1", make_generic<2, create2B4_1_Diagonals, DerivType::D_2B4_1>},
 
         // 2B6 family
-        {"2B6_1", make_with_coeffs<TwoDerivs2B6_1_SecondOrder>},
-        {"2B6_2", make_with_coeffs<TwoDerivs2B6_2_SecondOrder>},
-        {"2B6_3", make_with_coeffs<TwoDerivs2B6_3_SecondOrder>},
-        {"2B6_4", make_with_coeffs<TwoDerivs2B6_4_SecondOrder>},
-        {"2B6_5", make_with_coeffs<TwoDerivs2B6_5_SecondOrder>},
-        {"2B6_6", make_with_coeffs<TwoDerivs2B6_6_SecondOrder>},
-        {"2B6_7", make_with_coeffs<TwoDerivs2B6_7_SecondOrder>},
-        {"2B6_8", make_with_coeffs<TwoDerivs2B6_8_SecondOrder>},
-        {"2B6_9", make_with_coeffs<TwoDerivs2B6_9_SecondOrder>},
+        {"2B6_1", make_generic<2, create2B6_1_Diagonals, DerivType::D_2B6_1>},
+        {"2B6_2", make_generic<2, create2B6_2_Diagonals, DerivType::D_2B6_2>},
+        {"2B6_3", make_generic<2, create2B6_3_Diagonals, DerivType::D_2B6_3>},
+        {"2B6_4", make_generic<2, create2B6_4_Diagonals, DerivType::D_2B6_4>},
+        {"2B6_5", make_generic<2, create2B6_5_Diagonals, DerivType::D_2B6_5>},
+        {"2B6_6", make_generic<2, create2B6_6_Diagonals, DerivType::D_2B6_6>},
+        {"2B6_7", make_generic<2, create2B6_7_Diagonals, DerivType::D_2B6_7>},
+        {"2B6_8", make_generic<2, create2B6_8_Diagonals, DerivType::D_2B6_8>},
+        {"2B6_9", make_generic<2, create2B6_9_Diagonals, DerivType::D_2B6_9>},
 
         // 2C4 family
-        {"2C4_1", make_with_coeffs<TwoDerivs2C4_1_SecondOrder>},
-        {"2C4_2", make_with_coeffs<TwoDerivs2C4_2_SecondOrder>},
-        {"2C4_3", make_with_coeffs<TwoDerivs2C4_3_SecondOrder>},
-        {"2C4_4", make_with_coeffs<TwoDerivs2C4_4_SecondOrder>},
-        {"2C4_5", make_with_coeffs<TwoDerivs2C4_5_SecondOrder>},
-        {"2C4_6", make_with_coeffs<TwoDerivs2C4_6_SecondOrder>},
-        {"2C4_7", make_with_coeffs<TwoDerivs2C4_7_SecondOrder>},
-        {"2C4_8", make_with_coeffs<TwoDerivs2C4_8_SecondOrder>},
-        {"2C4_9", make_with_coeffs<TwoDerivs2C4_9_SecondOrder>},
-        {"2C4_10", make_with_coeffs<TwoDerivs2C4_10_SecondOrder>},
+        {"2C4_1", make_generic<2, create2C4_1_Diagonals, DerivType::D_2C4_1>},
+        {"2C4_2", make_generic<2, create2C4_2_Diagonals, DerivType::D_2C4_2>},
+        {"2C4_3", make_generic<2, create2C4_3_Diagonals, DerivType::D_2C4_3>},
+        {"2C4_4", make_generic<2, create2C4_4_Diagonals, DerivType::D_2C4_4>},
+        {"2C4_5", make_generic<2, create2C4_5_Diagonals, DerivType::D_2C4_5>},
+        {"2C4_6", make_generic<2, create2C4_6_Diagonals, DerivType::D_2C4_6>},
+        {"2C4_7", make_generic<2, create2C4_7_Diagonals, DerivType::D_2C4_7>},
+        {"2C4_8", make_generic<2, create2C4_8_Diagonals, DerivType::D_2C4_8>},
+        {"2C4_9", make_generic<2, create2C4_9_Diagonals, DerivType::D_2C4_9>},
+        {"2C4_10", make_generic<2, create2C4_10_Diagonals, DerivType::D_2C4_10>},
 
         // 2C6 family
-        {"2C6_1", make_with_coeffs<TwoDerivs2C6_1_SecondOrder>},
-        {"2C6_2", make_with_coeffs<TwoDerivs2C6_2_SecondOrder>},
-        {"2C6_3", make_with_coeffs<TwoDerivs2C6_3_SecondOrder>},
-        {"2C6_4", make_with_coeffs<TwoDerivs2C6_4_SecondOrder>},
-        {"2C6_5", make_with_coeffs<TwoDerivs2C6_5_SecondOrder>},
-        {"2C6_6", make_with_coeffs<TwoDerivs2C6_6_SecondOrder>},
-        {"2C6_7", make_with_coeffs<TwoDerivs2C6_7_SecondOrder>},
+        {"2C6_1", make_generic<2, create2C6_1_Diagonals, DerivType::D_2C6_1>},
+        {"2C6_2", make_generic<2, create2C6_2_Diagonals, DerivType::D_2C6_2>},
+        {"2C6_3", make_generic<2, create2C6_3_Diagonals, DerivType::D_2C6_3>},
+        {"2C6_4", make_generic<2, create2C6_4_Diagonals, DerivType::D_2C6_4>},
+        {"2C6_5", make_generic<2, create2C6_5_Diagonals, DerivType::D_2C6_5>},
+        {"2C6_6", make_generic<2, create2C6_6_Diagonals, DerivType::D_2C6_6>},
+        {"2C6_7", make_generic<2, create2C6_7_Diagonals, DerivType::D_2C6_7>},
 
         // 2A6 family
-        {"2A6_1", make_with_coeffs<TwoDerivs2A6_1_SecondOrder>},
-        {"2A6_2", make_with_coeffs<TwoDerivs2A6_2_SecondOrder>},
-        {"2A6_3", make_with_coeffs<TwoDerivs2A6_3_SecondOrder>},
-        {"2A6_4", make_with_coeffs<TwoDerivs2A6_4_SecondOrder>},
-        {"2A6_5", make_with_coeffs<TwoDerivs2A6_5_SecondOrder>},
-        {"2A6_6", make_with_coeffs<TwoDerivs2A6_6_SecondOrder>},
-        {"2A6_7", make_with_coeffs<TwoDerivs2A6_7_SecondOrder>},
+        {"2A6_1", make_generic<2, create2A6_1_Diagonals, DerivType::D_2A6_1>},
+        {"2A6_2", make_generic<2, create2A6_2_Diagonals, DerivType::D_2A6_2>},
+        {"2A6_3", make_generic<2, create2A6_3_Diagonals, DerivType::D_2A6_3>},
+        {"2A6_4", make_generic<2, create2A6_4_Diagonals, DerivType::D_2A6_4>},
+        {"2A6_5", make_generic<2, create2A6_5_Diagonals, DerivType::D_2A6_5>},
+        {"2A6_6", make_generic<2, create2A6_6_Diagonals, DerivType::D_2A6_6>},
+        {"2A6_7", make_generic<2, create2A6_7_Diagonals, DerivType::D_2A6_7>},
     };
     return reg;
 }
