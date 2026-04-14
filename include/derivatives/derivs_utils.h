@@ -12,6 +12,13 @@
 #include "libxsmm_typedefs.h"
 #include "refel.h"
 
+// when enabled, the matmul functions use raw libxsmm JIT function pointers
+// instead of the C++ wrapper, reducing per-call dispatch overhead. disable
+// this if you suspect the tighter dispatch is causing issues.
+#ifndef DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
+#define DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH 1
+#endif
+
 // NOTE: lapac.h stores all BLAS/LAPACK routine references and generic versions
 // and wrappers
 
@@ -439,6 +446,72 @@ inline KernelType get_or_create_kernel_yz(int M, int N, int K) {
         return KernelType();
     }
     kernel_cache_yz[dims] = new_kernel;
+    return new_kernel;
+}
+
+// y-dim direct-output kernel: computes C(nx,ny) = U(nx,ny) * D^T(ny,ny)
+// this writes directly to the output buffer, eliminating the transpose step
+extern std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
+    kernel_cache_y_direct;
+
+inline KernelType get_or_create_kernel_y_direct(int nx, int ny) {
+    KernelDimensions dims{nx, ny, ny};
+    auto it = kernel_cache_y_direct.find(dims);
+    if (it != kernel_cache_y_direct.end()) {
+        return it->second;
+    }
+
+    // C(nx,ny) = A(nx,ny) * B^T(ny,ny), LDA=nx, LDB=ny, LDC=nx
+    KernelType new_kernel(LIBXSMM_GEMM_FLAG_TRANS_B, nx, ny, ny, nx, ny, nx,
+                          1.0, 0.0);
+    if (!new_kernel) {
+        std::cout << "FAILED TO BUILD A KERNEL in Y_DIRECT!" << std::endl;
+        kernel_cache_y_direct[dims] = KernelType();
+        return KernelType();
+    }
+    kernel_cache_y_direct[dims] = new_kernel;
+    return new_kernel;
+}
+
+// z-dim direct kernel: reads/writes with stride nx*ny so we can skip the
+// gather/scatter transposes entirely. computes C(nx,nz) = U(nx,nz) * D^T(nz,nz)
+// with LDA=LDC=nx*ny (the z-stride in the 3D array)
+struct ZDirectKernelKey {
+    int nx, ny, nz;
+    bool operator==(const ZDirectKernelKey &o) const {
+        return nx == o.nx && ny == o.ny && nz == o.nz;
+    }
+};
+
+struct ZDirectKernelKeyHash {
+    size_t operator()(const ZDirectKernelKey &k) const {
+        size_t h = std::hash<int>{}(k.nx);
+        h ^= std::hash<int>{}(k.ny) << 1;
+        h ^= std::hash<int>{}(k.nz) << 2;
+        return h;
+    }
+};
+
+extern std::unordered_map<ZDirectKernelKey, KernelType, ZDirectKernelKeyHash>
+    kernel_cache_z_direct;
+
+inline KernelType get_or_create_kernel_z_direct(int nx, int ny, int nz) {
+    ZDirectKernelKey key{nx, ny, nz};
+    auto it = kernel_cache_z_direct.find(key);
+    if (it != kernel_cache_z_direct.end()) {
+        return it->second;
+    }
+
+    // C(nx,nz) = A(nx,nz) * B^T(nz,nz), LDA=nx*ny, LDB=nz, LDC=nx*ny
+    // the large LDA/LDC lets BLAS read/write at z-stride in the 3D array
+    int ld_3d = nx * ny;
+    KernelType new_kernel(LIBXSMM_GEMM_FLAG_TRANS_B, nx, nz, nz, ld_3d, nz,
+                          ld_3d, 1.0, 0.0);
+    if (!new_kernel) {
+        kernel_cache_z_direct[key] = KernelType();
+        return KernelType();
+    }
+    kernel_cache_z_direct[key] = new_kernel;
     return new_kernel;
 }
 

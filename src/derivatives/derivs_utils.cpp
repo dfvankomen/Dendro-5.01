@@ -17,6 +17,10 @@ std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
     kernel_cache_x;
 std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
     kernel_cache_yz;
+std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
+    kernel_cache_y_direct;
+std::unordered_map<ZDirectKernelKey, KernelType, ZDirectKernelKeyHash>
+    kernel_cache_z_direct;
 
 void mulMM(double *C, double *A, double *B, int na, int nb) {
     /*  M = number of rows of A and C
@@ -706,53 +710,41 @@ void matmul_z_dim_old(const double *const R, double *const Dzu,
 void matmul_x_dim(const double *const R, double *const Dxu,
                   const double *const u, const double alpha,
                   const unsigned int *sz, const unsigned int bflag) {
-    // this one generates a kernel as it needs it
-    const unsigned int nx    = sz[0];
-    const unsigned int ny    = sz[1];
-    const unsigned int nz    = sz[2];
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
 
-    static const char TRANSA = 'N';
-    static const char TRANSB = 'N';
-
-    const int M              = nx;
-    const int N              = ny;
-    const int K              = nx;
-    // NOTE: LDA = M, LDB = K, and LDC = M
-
-    static const double beta = 0.0;
-
-    // build kernel
-    auto kernel              = get_or_create_kernel_x(M, N, K);
-
-    if (!kernel) {
-        std::cout << "FALLING BACK TO MATMUL X DIM" << std::endl;
-        return matmul_x_dim_old(R, Dxu, u, alpha, sz, bflag);
-    }
-
-    // calculate z start and end based on bflag, saves a good amount of time if
-    // we're at a Z boundary
+    // skip ghost zones in z if at a boundary
     const int z_start =
         (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
     const int z_end = (bflag & (1u << OCT_DIR_FRONT))
                           ? nz - dendroderivs::DENDRO_DERIVS_PW
                           : nz;
 
-    const unsigned int slice_size = nx * ny;
+    const unsigned int n_active_cols = ny * (z_end - z_start);
 
-    for (unsigned int k = z_start; k < z_end; k++) {
-        // avoid pointer arithmitic, use direct pointer location for compiler
-        // optimization
-        const double *u_slice = u + k * slice_size;
-        double *du_slice      = Dxu + k * slice_size;
-
-        kernel(R, u_slice, du_slice);
-
-        // NOTE: libxsmm only allows kernels with alpha=1.0, so we scale
-        // immediately after the GEMM while data is still in L1/L2 cache
-        for (uint32_t ii = 0; ii < slice_size; ii++) {
-            du_slice[ii] *= alpha;
-        }
+    // pre-scale D by alpha so the GEMM writes the final answer directly
+    double R_scaled[nx * nx];
+    for (unsigned int ii = 0; ii < nx * nx; ii++) {
+        R_scaled[ii] = R[ii] * alpha;
     }
+
+    // batch all active z-slices into one big GEMM:
+    // the 3D array is contiguous in memory, so treating the valid z-range
+    // as a 2D matrix (nx, ny*nz_active) lets us do one kernel call
+    // instead of nz separate ones
+    auto kernel = get_or_create_kernel_x(nx, n_active_cols, nx);
+
+    if (!kernel) {
+        std::cout << "FALLING BACK TO MATMUL X DIM" << std::endl;
+        return matmul_x_dim_old(R, Dxu, u, alpha, sz, bflag);
+    }
+
+    const double *u_start = u + z_start * nx * ny;
+    double *du_start      = Dxu + z_start * nx * ny;
+
+    // one GEMM with pre-scaled D: no post-scaling needed
+    kernel(R_scaled, u_start, du_start);
 }
 
 void matmul_y_dim(const double *const R, double *const Dyu,
@@ -784,65 +776,50 @@ void matmul_y_dim(const double *const R, double *const Dyu,
 
     const unsigned int slice_size = nx * ny;
 
-    // calculate z start and end based on bflag, saves a good amount of time if
-    // we're at a Z boundary
+    // skip ghost zones in z if we're at a z boundary
     const int z_start =
         (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const int z_end             = (bflag & (1u << OCT_DIR_FRONT))
-                                      ? nz - dendroderivs::DENDRO_DERIVS_PW
-                                      : nz;
+    const int z_end = (bflag & (1u << OCT_DIR_FRONT))
+                          ? nz - dendroderivs::DENDRO_DERIVS_PW
+                          : nz;
 
-    const double *workspace_out = workspace + nx * ny * nz;
-
-    double alpha_replace        = 1.0;
-
-    // start by doing all of the calculations right away, but by putting the
-    // data in the correct spot on the workspace
-    for (unsigned int k = z_start; k < z_end; k++) {
-        // avoid pointer arithmitic, use direct pointer location for compiler
-        // optimization
-        const double *u_slice   = u + k * slice_size;
-        double *du_slice        = Dyu + k * slice_size;
-        double *workspace_slice = workspace + k * slice_size;
-
-        kernel(R, u_slice, workspace_slice);
-
-#ifdef __INTEL_MKL__
-        // copy back out from workspace using domatcopy if using intel mkl
-        mkl_domatcopy('C', 'T', ny, nx, alpha_domatcopy, workspace, ny,
-                      du_slice, nx);
-#else
-        // #pragma omp simd collapse(2)
-        //         for (unsigned int i = 0; i < nx; i++) {
-        //             for (unsigned int j = 0; j < ny; j++) {
-        //                 du_slice[INDEX_N2D(i, j, nx)] =
-        //                     workspace_slice[j + i * ny] * alpha;
-        //             }
-        //         }
-#endif
-        // TODO: see if there's a faster way to copy (i.e. SSE?)
-        // the data is transposed so it's much harder to just copy all at
-        // once
+    // pre-scale the derivative matrix by alpha so the GEMM writes the
+    // final result directly. R is ny*ny which is small (e.g. 81 doubles),
+    // so the copy+scale cost is negligible vs scaling nx*ny per z-slice
+    double R_scaled[ny * ny];
+    for (unsigned int ii = 0; ii < ny * ny; ii++) {
+        R_scaled[ii] = R[ii] * alpha;
     }
 
-    // then transpose the data back in
-    for (unsigned int k = z_start; k < z_end; k++) {
-        double *du_slice              = Dyu + k * slice_size;
-        const double *workspace_slice = workspace + k * slice_size;
-#pragma omp simd collapse(2)
-        for (unsigned int i = 0; i < nx; i++) {
-            for (unsigned int j = 0; j < ny; j++) {
-                du_slice[INDEX_N2D(i, j, nx)] =
-                    workspace_slice[j + i * ny] * alpha;
+    auto kernel_direct = get_or_create_kernel_y_direct(nx, ny);
+
+    if (kernel_direct) {
+#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
+        // use the raw JIT function pointer for tighter per-call dispatch
+        libxsmm_gemmfunction raw_fn = kernel_direct.kernel();
+
+        if (raw_fn) {
+            libxsmm_gemm_param args;
+            args.b.primary = (void *)R_scaled;
+
+            for (unsigned int k = z_start; k < z_end; k++) {
+                args.a.primary = (void *)(u + k * slice_size);
+                args.c.primary = (void *)(Dyu + k * slice_size);
+                raw_fn(&args);
             }
+            return;
         }
+#endif
+        // standard C++ wrapper dispatch
+        for (unsigned int k = z_start; k < z_end; k++) {
+            kernel_direct(u + k * slice_size, R_scaled, Dyu + k * slice_size);
+        }
+        return;
     }
 
-    // NOTE: it is currently faster for these derivatives if we calculate
-    // them
-    // for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
-    //     Dyu[ii] *= alpha;
-    // }
+    // fallback
+    std::cout << "FALLING BACK TO MATMUL Y DIM (old)" << std::endl;
+    return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag);
 }
 
 void matmul_z_dim(const double *const R, double *const Dzu,
@@ -866,10 +843,6 @@ void matmul_z_dim(const double *const R, double *const Dzu,
         return matmul_z_dim_old(R, Dzu, u, alpha, sz, workspace, bflag);
     }
 
-    const double *workspace_out   = workspace + nx * ny * nz;
-
-    double alpha_replace          = 1.0;
-
     // NOTE: due to how derivatives are called, and thanks to the padding width,
     // we can actually skip both padding regions of j, they'll never be needed
     // on the z derivative, because z is always called last on 2nd order mixed
@@ -880,41 +853,60 @@ void matmul_z_dim(const double *const R, double *const Dzu,
 
     const unsigned int slice_size = nx * nz;
 
-    // start by transposing out everything *first*, noting that workspace is
-    // guaranteed to be double the size!
-    for (unsigned int j = y_start; j < y_end; j++) {
-        for (unsigned int k = 0; k < nz; k++) {
-            for (unsigned int i = 0; i < nx; i++) {
-                // double *u_slice     = workspace + j * slice_size;
-                // u_slice[k * nx + i] = u[INDEX_3D(i, j, k)];
-                workspace[j * slice_size + k * nx + i] = u[INDEX_3D(i, j, k)];
-            }
-        }
+    // pre-scale D by alpha
+    double R_scaled[nz * nz];
+    for (int ii = 0; ii < nz * nz; ii++) {
+        R_scaled[ii] = R[ii] * alpha;
     }
 
+    // zero-copy approach: strided LDA/LDC = nx*ny so the GEMM reads/writes
+    // directly from/to the 3D array with no gather/scatter
+    auto kernel_direct = get_or_create_kernel_z_direct(nx, ny, nz);
+
+    if (kernel_direct) {
+#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
+        libxsmm_gemmfunction raw_fn = kernel_direct.kernel();
+
+        if (raw_fn) {
+            libxsmm_gemm_param args;
+            args.b.primary = (void *)R_scaled;
+
+            for (unsigned int j = y_start; j < y_end; j++) {
+                args.a.primary = (void *)(u + j * nx);
+                args.c.primary = (void *)(Dzu + j * nx);
+                raw_fn(&args);
+            }
+            return;
+        }
+#endif
+        // standard C++ wrapper dispatch
+        for (unsigned int j = y_start; j < y_end; j++) {
+            kernel_direct(u + j * nx, R_scaled, Dzu + j * nx);
+        }
+        return;
+    }
+
+    // fallback: gather/scatter approach if kernel creation fails
+    const double *workspace_out = workspace + nx * ny * nz;
+
     for (unsigned int j = y_start; j < y_end; j++) {
-        const double *u_slice = workspace + j * slice_size;
-        double *du_slice      = (double *)workspace_out + j * slice_size;
+        double *u_slice  = workspace;
+        double *du_slice = (double *)workspace_out;
+
+        for (unsigned int k = 0; k < nz; k++) {
+            for (unsigned int i = 0; i < nx; i++) {
+                u_slice[k * nx + i] = u[INDEX_3D(i, j, k)];
+            }
+        }
 
         kernel(R, u_slice, du_slice);
-    }
 
-    // transpose everything back out
-    for (unsigned int j = y_start; j < y_end; j++) {
         for (unsigned int k = 0; k < nz; k++) {
             for (unsigned int i = 0; i < nx; i++) {
-                // const double *du_slice = workspace_out + j * slice_size;
-                // Dzu[INDEX_3D(i, j, k)] = du_slice[k + i * nz] * alpha;
-                Dzu[INDEX_3D(i, j, k)] =
-                    workspace_out[j * slice_size + k + i * nz] * alpha;
+                Dzu[INDEX_3D(i, j, k)] = du_slice[k + i * nz] * alpha;
             }
         }
     }
-    // NOTE: it is currently faster for these derivatives if we calculate
-    // them
-    // for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
-    //     Dzu[ii] *= alpha;
-    // }
 }
 
 }  // namespace dendroderivs
