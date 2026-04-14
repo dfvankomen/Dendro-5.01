@@ -351,18 +351,18 @@ inline void dgemm_cpp_safe(const char *TRANSA, const char *TRANSB, const int *m,
 //                const_cast<int *>(ldb));
 // }
 
-void matmul_x_dim(const double *const R, double *const Dxu,
-                  const double *const u, const double alpha,
+void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
+                  const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, const unsigned int bflag);
 
-void matmul_y_dim(const double *const R, double *const Dyu,
-                  const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace,
+void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
+                  const double *__restrict__ u, const double alpha,
+                  const unsigned int *sz, double *__restrict__ workspace,
                   const unsigned int bflag);
 
-void matmul_z_dim(const double *const R, double *const Dzu,
-                  const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace,
+void matmul_z_dim(const double *__restrict__ R, double *__restrict__ Dzu,
+                  const double *__restrict__ u, const double alpha,
+                  const unsigned int *sz, double *__restrict__ workspace,
                   const unsigned int bflag);
 
 void matmul_x_dim_old(const double *const R, double *const Dxu,

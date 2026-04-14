@@ -261,5 +261,120 @@ int main() {
     std::cout << "Coeff test: " << coeff_pass << " pass, " << coeff_fail
               << " fail" << std::endl;
 
-    return (fail > 0 || coeff_fail > 0) ? 1 : 0;
+    // ---- batch API test ----
+    // verify that grad_x_batch gives the same results as calling grad_x
+    // individually for each variable. tests both explicit and compact paths.
+    std::cout << "\n===== Batch API test =====" << std::endl;
+
+    int batch_pass = 0, batch_fail = 0;
+
+    std::vector<std::string> batch_test_types = {"E6", "JTT6"};
+
+    for (auto &dtype : batch_test_types) {
+        DendroDerivatives deriv_obj(dtype, dtype, eleorder);
+        deriv_obj.set_maximum_block_size(total);
+
+        const unsigned int n_test_vars = 4;
+
+        // build distinct inputs (different phase shifts)
+        std::vector<std::vector<double>> inputs(n_test_vars, std::vector<double>(total));
+        std::vector<std::vector<double>> du_single(n_test_vars, std::vector<double>(total, 0.0));
+        std::vector<std::vector<double>> du_batch(n_test_vars, std::vector<double>(total, 0.0));
+
+        for (unsigned int v = 0; v < n_test_vars; v++) {
+            double phase = 0.3 * v;
+            for (unsigned int k = 0; k < sz[2]; k++)
+                for (unsigned int j = 0; j < sz[1]; j++)
+                    for (unsigned int i = 0; i < sz[0]; i++) {
+                        unsigned int idx = i + j * sz[0] + k * sz[0] * sz[1];
+                        double x = (i - (double)pw) * dx;
+                        double y = (j - (double)pw) * dy;
+                        double z = (k - (double)pw) * dz;
+                        inputs[v][idx] = sin(2.0 * M_PI * (x + phase)) *
+                                         sin(2.0 * M_PI * y) *
+                                         sin(2.0 * M_PI * z);
+                    }
+        }
+
+        // individual calls
+        for (unsigned int v = 0; v < n_test_vars; v++)
+            deriv_obj.grad_x(du_single[v].data(), inputs[v].data(), dx, sz, 0);
+
+        // batch call
+        std::vector<double *> du_ptrs(n_test_vars);
+        std::vector<const double *> u_ptrs(n_test_vars);
+        for (unsigned int v = 0; v < n_test_vars; v++) {
+            du_ptrs[v] = du_batch[v].data();
+            u_ptrs[v]  = inputs[v].data();
+        }
+        deriv_obj.grad_x_batch(du_ptrs.data(), u_ptrs.data(), n_test_vars, dx, sz, 0);
+
+        // compare
+        bool all_match = true;
+        for (unsigned int v = 0; v < n_test_vars; v++) {
+            double max_diff = 0.0;
+            for (unsigned int i = 0; i < total; i++) {
+                double diff = std::abs(du_single[v][i] - du_batch[v][i]);
+                max_diff = std::max(max_diff, diff);
+            }
+            if (max_diff > 1e-14) {
+                std::cout << dtype << " var " << v << ": max_diff=" << max_diff
+                          << " FAIL" << std::endl;
+                all_match = false;
+            }
+        }
+
+        if (all_match) {
+            std::cout << dtype << " grad_x_batch: " << n_test_vars
+                      << " vars match individual calls - OK" << std::endl;
+            batch_pass++;
+        } else {
+            batch_fail++;
+        }
+
+        // also test y and z batch
+        for (unsigned int v = 0; v < n_test_vars; v++) {
+            std::fill(du_single[v].begin(), du_single[v].end(), 0.0);
+            std::fill(du_batch[v].begin(), du_batch[v].end(), 0.0);
+        }
+        for (unsigned int v = 0; v < n_test_vars; v++)
+            deriv_obj.grad_y(du_single[v].data(), inputs[v].data(), dy, sz, 0);
+        deriv_obj.grad_y_batch(du_ptrs.data(), u_ptrs.data(), n_test_vars, dy, sz, 0);
+
+        all_match = true;
+        for (unsigned int v = 0; v < n_test_vars; v++) {
+            for (unsigned int i = 0; i < total; i++) {
+                double diff = std::abs(du_single[v][i] - du_batch[v][i]);
+                if (diff > 1e-14) { all_match = false; break; }
+            }
+        }
+        std::cout << dtype << " grad_y_batch: "
+                  << (all_match ? "OK" : "FAIL") << std::endl;
+        if (all_match) batch_pass++; else batch_fail++;
+
+        for (unsigned int v = 0; v < n_test_vars; v++) {
+            std::fill(du_single[v].begin(), du_single[v].end(), 0.0);
+            std::fill(du_batch[v].begin(), du_batch[v].end(), 0.0);
+        }
+        for (unsigned int v = 0; v < n_test_vars; v++)
+            deriv_obj.grad_z(du_single[v].data(), inputs[v].data(), dz, sz, 0);
+        deriv_obj.grad_z_batch(du_ptrs.data(), u_ptrs.data(), n_test_vars, dz, sz, 0);
+
+        all_match = true;
+        for (unsigned int v = 0; v < n_test_vars; v++) {
+            for (unsigned int i = 0; i < total; i++) {
+                double diff = std::abs(du_single[v][i] - du_batch[v][i]);
+                if (diff > 1e-14) { all_match = false; break; }
+            }
+        }
+        std::cout << dtype << " grad_z_batch: "
+                  << (all_match ? "OK" : "FAIL") << std::endl;
+        if (all_match) batch_pass++; else batch_fail++;
+    }
+
+    std::cout << std::string(60, '-') << std::endl;
+    std::cout << "Batch test: " << batch_pass << " pass, " << batch_fail
+              << " fail" << std::endl;
+
+    return (fail > 0 || coeff_fail > 0 || batch_fail > 0) ? 1 : 0;
 }

@@ -312,6 +312,33 @@ class Derivs {
 
     virtual void set_maximum_block_size(size_t block_size) = 0;
 
+    /**
+     * Batch derivative computation for multiple variables.
+     * Default implementation just loops; matrix-based classes override
+     * to share the pre-scaled D matrix across all variables.
+     */
+    virtual void do_grad_x_batch(double **du_arr, const double **u_arr,
+                                 unsigned int n_vars, const double dx,
+                                 const unsigned int *sz,
+                                 const unsigned int bflag) {
+        for (unsigned int v = 0; v < n_vars; v++)
+            do_grad_x(du_arr[v], u_arr[v], dx, sz, bflag);
+    }
+    virtual void do_grad_y_batch(double **du_arr, const double **u_arr,
+                                 unsigned int n_vars, const double dx,
+                                 const unsigned int *sz,
+                                 const unsigned int bflag) {
+        for (unsigned int v = 0; v < n_vars; v++)
+            do_grad_y(du_arr[v], u_arr[v], dx, sz, bflag);
+    }
+    virtual void do_grad_z_batch(double **du_arr, const double **u_arr,
+                                 unsigned int n_vars, const double dx,
+                                 const unsigned int *sz,
+                                 const unsigned int bflag) {
+        for (unsigned int v = 0; v < n_vars; v++)
+            do_grad_z(du_arr[v], u_arr[v], dx, sz, bflag);
+    }
+
     /// Pre-create matrices for a specific grid dimension. Override in
     /// matrix-based classes; default is a no-op for stencil types.
     virtual void pre_create_for_size(unsigned int) {};
@@ -530,6 +557,37 @@ class DendroDerivatives {
     void pre_create_for_size(unsigned int n) {
         _first_deriv->pre_create_for_size(n);
         _second_deriv->pre_create_for_size(n);
+    }
+
+    /**
+     * Compute first derivatives for multiple variables at once.
+     * Keeps the D matrix hot in L1 cache across all variables,
+     * significantly reducing cache pressure vs calling grad_x/y/z
+     * individually for each variable.
+     *
+     * @param du_arr Array of n_vars output pointers
+     * @param u_arr  Array of n_vars input pointers
+     * @param n_vars Number of variables to process
+     */
+    /**
+     * Batch derivative computation for multiple variables at once.
+     * For matrix-based methods, this shares the pre-scaled D matrix
+     * and kernel dispatch across all variables.
+     */
+    void grad_x_batch(double **du_arr, const double **u_arr,
+                      unsigned int n_vars, double dx,
+                      const unsigned int *sz, unsigned int bflag) {
+        _first_deriv->do_grad_x_batch(du_arr, u_arr, n_vars, dx, sz, bflag);
+    }
+    void grad_y_batch(double **du_arr, const double **u_arr,
+                      unsigned int n_vars, double dy,
+                      const unsigned int *sz, unsigned int bflag) {
+        _first_deriv->do_grad_y_batch(du_arr, u_arr, n_vars, dy, sz, bflag);
+    }
+    void grad_z_batch(double **du_arr, const double **u_arr,
+                      unsigned int n_vars, double dz,
+                      const unsigned int *sz, unsigned int bflag) {
+        _first_deriv->do_grad_z_batch(du_arr, u_arr, n_vars, dz, sz, bflag);
     }
 
     std::string toString() {

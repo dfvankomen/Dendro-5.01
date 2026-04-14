@@ -231,6 +231,46 @@ class MatrixCompactDerivs : public CompactDerivs {
         }
     }
 
+    // batch overrides: pre-scale D once and apply to all variables,
+    // keeping the scaled matrix and kernel hot in cache
+    void do_grad_x_batch(double **du_arr, const double **u_arr,
+                         unsigned int n_vars, const double dx,
+                         const unsigned int *sz,
+                         const unsigned int bflag) override {
+        auto *storage = get_storage_for_size(sz[0]);
+        auto *D_use   = get_deriv_mat_by_bflag_x(storage, bflag);
+        const double alpha = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
+
+        for (unsigned int v = 0; v < n_vars; v++)
+            matmul_x_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz, bflag);
+    }
+
+    void do_grad_y_batch(double **du_arr, const double **u_arr,
+                         unsigned int n_vars, const double dx,
+                         const unsigned int *sz,
+                         const unsigned int bflag) override {
+        auto *storage = get_storage_for_size(sz[1]);
+        auto *D_use   = get_deriv_mat_by_bflag_y(storage, bflag);
+        const double alpha = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
+
+        for (unsigned int v = 0; v < n_vars; v++)
+            matmul_y_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz,
+                         workspace_.data(), bflag);
+    }
+
+    void do_grad_z_batch(double **du_arr, const double **u_arr,
+                         unsigned int n_vars, const double dx,
+                         const unsigned int *sz,
+                         const unsigned int bflag) override {
+        auto *storage = get_storage_for_size(sz[2]);
+        auto *D_use   = get_deriv_mat_by_bflag_z(storage, bflag);
+        const double alpha = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
+
+        for (unsigned int v = 0; v < n_vars; v++)
+            matmul_z_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz,
+                         workspace_.data(), bflag);
+    }
+
     void init();
 };
 

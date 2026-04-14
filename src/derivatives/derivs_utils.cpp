@@ -707,8 +707,8 @@ void matmul_z_dim_old(const double *const R, double *const Dzu,
 #endif
 }
 
-void matmul_x_dim(const double *const R, double *const Dxu,
-                  const double *const u, const double alpha,
+void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
+                  const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, const unsigned int bflag) {
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
@@ -747,9 +747,9 @@ void matmul_x_dim(const double *const R, double *const Dxu,
     kernel(R_scaled, u_start, du_start);
 }
 
-void matmul_y_dim(const double *const R, double *const Dyu,
-                  const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace,
+void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
+                  const double *__restrict__ u, const double alpha,
+                  const unsigned int *sz, double *__restrict__ workspace,
                   const unsigned int bflag) {
     const unsigned int nx               = sz[0];
     const unsigned int ny               = sz[1];
@@ -822,9 +822,9 @@ void matmul_y_dim(const double *const R, double *const Dyu,
     return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag);
 }
 
-void matmul_z_dim(const double *const R, double *const Dzu,
-                  const double *const u, const double alpha,
-                  const unsigned int *sz, double *const workspace,
+void matmul_z_dim(const double *__restrict__ R, double *__restrict__ Dzu,
+                  const double *__restrict__ u, const double alpha,
+                  const unsigned int *sz, double *__restrict__ workspace,
                   const unsigned int bflag) {
     const int nx             = sz[0];
     const int ny             = sz[1];
