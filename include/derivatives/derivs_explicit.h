@@ -6,6 +6,11 @@
 
 namespace dendroderivs {
 
+// raw function pointer type for stencil functions — avoids std::function
+// type-erasure overhead in the hot path
+using StencilFn = void (*)(double *const, const double *const, const double,
+                           const unsigned int *, const unsigned int);
+
 template <unsigned int P>
 void deriv42_x(double *const Dxu, const double *const u, const double dx,
                const unsigned int *sz, unsigned bflag);
@@ -80,15 +85,9 @@ void deriv8666_zz(double *const Dzu, const double *const u, const double dz,
 
 class ExplicitDerivsO4_DX : public Derivs {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradx_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        grady_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradz_func;
+    StencilFn gradx_func;
+    StencilFn grady_func;
+    StencilFn gradz_func;
 
    public:
     ExplicitDerivsO4_DX(unsigned int ele_order) : Derivs(ele_order) {
@@ -146,15 +145,9 @@ class ExplicitDerivsO4_DX : public Derivs {
 
 class ExplicitDerivsO4_DXX : public Derivs {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradx_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        grady_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradz_func;
+    StencilFn gradx_func;
+    StencilFn grady_func;
+    StencilFn gradz_func;
 
    public:
     ExplicitDerivsO4_DXX(unsigned int ele_order) : Derivs(ele_order) {
@@ -211,15 +204,9 @@ class ExplicitDerivsO4_DXX : public Derivs {
 
 class ExplicitDerivsO6_DX : public Derivs {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradx_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        grady_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradz_func;
+    StencilFn gradx_func;
+    StencilFn grady_func;
+    StencilFn gradz_func;
 
    public:
     ExplicitDerivsO6_DX(unsigned int ele_order) : Derivs(ele_order) {
@@ -272,15 +259,9 @@ class ExplicitDerivsO6_DX : public Derivs {
 
 class ExplicitDerivsO6_DXX : public Derivs {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradx_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        grady_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradz_func;
+    StencilFn gradx_func;
+    StencilFn grady_func;
+    StencilFn gradz_func;
 
    public:
     ExplicitDerivsO6_DXX(unsigned int ele_order) : Derivs(ele_order) {
@@ -333,15 +314,9 @@ class ExplicitDerivsO6_DXX : public Derivs {
 
 class ExplicitDerivsO8_DX : public Derivs {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradx_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        grady_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradz_func;
+    StencilFn gradx_func;
+    StencilFn grady_func;
+    StencilFn gradz_func;
 
    public:
     ExplicitDerivsO8_DX(unsigned int ele_order) : Derivs(ele_order) {
@@ -390,15 +365,9 @@ class ExplicitDerivsO8_DX : public Derivs {
 
 class ExplicitDerivsO8_DXX : public Derivs {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradx_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        grady_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        gradz_func;
+    StencilFn gradx_func;
+    StencilFn grady_func;
+    StencilFn gradz_func;
 
    public:
     ExplicitDerivsO8_DXX(unsigned int ele_order) : Derivs(ele_order) {

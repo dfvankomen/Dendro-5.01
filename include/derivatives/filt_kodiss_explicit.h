@@ -5,6 +5,10 @@
 
 namespace dendroderivs {
 
+// raw function pointer type for filter stencil functions
+using KOStencilFn = void (*)(double *const, const double *const, const double,
+                             const unsigned int *, const unsigned int);
+
 template <unsigned int P>
 void ko_deriv21_x(double *const Dxu, const double *const u, const double dx,
                   const unsigned int *sz, unsigned bflag);
@@ -78,15 +82,9 @@ void inline do_ko_single(const double *const calc_dx,
 
 class ExplicitKODissO2 : public Filters {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        kox_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koy_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koz_func;
+    KOStencilFn kox_func;
+    KOStencilFn koy_func;
+    KOStencilFn koz_func;
 
    public:
     template <typename... Args>
@@ -150,15 +148,9 @@ class ExplicitKODissO2 : public Filters {
 
 class ExplicitKODissO4 : public Filters {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        kox_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koy_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koz_func;
+    KOStencilFn kox_func;
+    KOStencilFn koy_func;
+    KOStencilFn koz_func;
 
    public:
     template <typename... Args>
@@ -217,15 +209,9 @@ class ExplicitKODissO4 : public Filters {
 
 class ExplicitKODissO6 : public Filters {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        kox_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koy_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koz_func;
+    KOStencilFn kox_func;
+    KOStencilFn koy_func;
+    KOStencilFn koz_func;
 
    public:
     template <typename... Args>
@@ -280,15 +266,9 @@ class ExplicitKODissO6 : public Filters {
 };
 class ExplicitKODissO8 : public Filters {
   private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        kox_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koy_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koz_func;
+    KOStencilFn kox_func;
+    KOStencilFn koy_func;
+    KOStencilFn koz_func;
 
   public:
     template <typename... Args>
@@ -343,15 +323,9 @@ class ExplicitKODissO8 : public Filters {
 #if 0
 class ExplicitKODissO8 : public Filters {
    private:
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        kox_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koy_func;
-    std::function<void(double *const, const double *, const double,
-                       const unsigned int *, const unsigned int)>
-        koz_func;
+    KOStencilFn kox_func;
+    KOStencilFn koy_func;
+    KOStencilFn koz_func;
 
    public:
     template <typename... Args>
