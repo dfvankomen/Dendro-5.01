@@ -226,4 +226,85 @@ class MatrixCompactDerivs : public CompactDerivs {
     void init();
 };
 
+// ============================================================
+// generic wrappers that eliminate per-scheme class boilerplate.
+// instead of defining a class for each scheme, the factory can
+// construct these directly with a diagonal-creation function.
+// ============================================================
+
+// for schemes without user coefficients (most kim, A4, C6, etc.)
+using DiagCreatorFn = MatrixDiagonalEntries* (*)();
+
+template <unsigned int DerivOrder>
+class GenericMatrixDerivs : public MatrixCompactDerivs<DerivOrder> {
+    DiagCreatorFn diag_fn_;
+    DerivType dtype_;
+    std::string name_;
+
+   public:
+    GenericMatrixDerivs(DiagCreatorFn fn, DerivType dt, std::string name,
+                        unsigned int ele_order,
+                        const std::string& filter = "none",
+                        const std::vector<double>& fcoeffs = {})
+        : MatrixCompactDerivs<DerivOrder>{ele_order, filter, fcoeffs},
+          diag_fn_(fn), dtype_(dt), name_(std::move(name)) {
+        this->diagEntries = diag_fn_();
+        this->init();
+    }
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<GenericMatrixDerivs>(*this);
+    }
+    DerivType getDerivType() const override { return dtype_; }
+    enum DerivOrder getDerivOrder() const override {
+        return (DerivOrder == 1) ? D_FIRST_ORDER : D_SECOND_ORDER;
+    }
+    std::string toString() const override { return name_; }
+    void set_maximum_block_size(size_t block_size) override {
+        MatrixCompactDerivs<DerivOrder>::set_maximum_block_size(block_size);
+    }
+};
+
+// for schemes that accept user coefficients (BYU families)
+using DiagCreatorWithCoeffsFn = MatrixDiagonalEntries* (*)(const std::vector<double>&);
+
+template <unsigned int DerivOrder>
+class GenericMatrixDerivsWithCoeffs : public MatrixCompactDerivs<DerivOrder> {
+    DiagCreatorWithCoeffsFn diag_fn_;
+    DerivType dtype_;
+    std::string name_;
+    std::vector<double> coeffs_;
+    unsigned int n_coeffs_;
+
+   public:
+    GenericMatrixDerivsWithCoeffs(DiagCreatorWithCoeffsFn fn, DerivType dt,
+                                  std::string name, unsigned int n_coeffs,
+                                  unsigned int ele_order,
+                                  const std::string& filter = "none",
+                                  const std::vector<double>& fcoeffs = {},
+                                  const std::vector<double>& coeffs_in = {})
+        : MatrixCompactDerivs<DerivOrder>{ele_order, filter, fcoeffs},
+          diag_fn_(fn), dtype_(dt), name_(std::move(name)),
+          n_coeffs_(n_coeffs) {
+        // pad/truncate coefficients to expected count
+        coeffs_.resize(n_coeffs_, 0.0);
+        for (unsigned int i = 0; i < n_coeffs_ && i < coeffs_in.size(); i++)
+            coeffs_[i] = coeffs_in[i];
+        this->diagEntries = diag_fn_(coeffs_);
+        this->init();
+    }
+
+    std::unique_ptr<Derivs> clone() const override {
+        return std::make_unique<GenericMatrixDerivsWithCoeffs>(*this);
+    }
+    DerivType getDerivType() const override { return dtype_; }
+    enum DerivOrder getDerivOrder() const override {
+        return (DerivOrder == 1) ? D_FIRST_ORDER : D_SECOND_ORDER;
+    }
+    std::string toString() const override { return name_; }
+    void set_maximum_block_size(size_t block_size) override {
+        MatrixCompactDerivs<DerivOrder>::set_maximum_block_size(block_size);
+    }
+};
+
 }  // namespace dendroderivs

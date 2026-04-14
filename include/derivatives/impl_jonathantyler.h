@@ -16,36 +16,6 @@ MatrixDiagonalEntries* createJTP6DiagonalsSecondOrder();
 /**
  *  Tridiagonal, 4th-order compact derivative from the thesis of Jonathan Tyler.
  */
-class JonathanTyler_JTT4_FirstOrder : public MatrixCompactDerivs<1> {
-   public:
-    JonathanTyler_JTT4_FirstOrder(
-        unsigned int ele_order, const std::string& in_matrix_filter = "none",
-        const std::vector<double>& in_filter_coeffs = std::vector<double>())
-        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
-        diagEntries = createJTT4DiagonalsFirstOrder();
-
-        this->init();
-    }
-
-    ~JonathanTyler_JTT4_FirstOrder() {}
-
-    std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTT4_FirstOrder>(*this);
-    }
-
-    DerivType getDerivType() const override { return DerivType::D_JTT4; }
-    DerivOrder getDerivOrder() const override {
-        return DerivOrder::D_FIRST_ORDER;
-    }
-
-    std::string toString() const override {
-        return "JonathanTyler_JTT4_FirstOrder";
-    }
-};
-
-/**
- *  Tridiagonal, 4th-order compact derivative from the thesis of Jonathan Tyler.
- */
 class JonathanTyler_JTT4_FirstOrder_Banded : public BandedCompactDerivs {
    public:
     template <typename... Args>
@@ -87,36 +57,6 @@ class JonathanTyler_JTT4_FirstOrder_Banded : public BandedCompactDerivs {
 
     std::string toString() const override {
         return "JonathanTyler_JTT4_FirstOrder_Banded";
-    }
-};
-
-/**
- *  Tridiagonal, 4th-order compact derivative from the thesis of Jonathan Tyler.
- */
-class JonathanTyler_JTT4_SecondOrder : public MatrixCompactDerivs<2> {
-   public:
-    JonathanTyler_JTT4_SecondOrder(
-        unsigned int ele_order, const std::string& in_matrix_filter = "none",
-        const std::vector<double>& in_filter_coeffs = std::vector<double>())
-        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
-        diagEntries = createJTT4DiagonalsSecondOrder();
-
-        this->init();
-    }
-
-    ~JonathanTyler_JTT4_SecondOrder() {}
-
-    std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTT4_SecondOrder>(*this);
-    }
-
-    DerivType getDerivType() const override { return DerivType::D_JTT4; }
-    DerivOrder getDerivOrder() const override {
-        return DerivOrder::D_SECOND_ORDER;
-    }
-
-    std::string toString() const override {
-        return "JonathanTyler_JTT4_SecondOrder";
     }
 };
 
@@ -169,36 +109,6 @@ class JonathanTyler_JTT4_SecondOrder_Banded : public BandedCompactDerivs {
 };
 
 /**
- *  Tridiagonal, 6th-order compact derivative from the thesis of Jonathan Tyler.
- */
-class JonathanTyler_JTT6_FirstOrder : public MatrixCompactDerivs<1> {
-   public:
-    JonathanTyler_JTT6_FirstOrder(
-        unsigned int ele_order, const std::string& in_matrix_filter = "none",
-        const std::vector<double>& in_filter_coeffs = std::vector<double>())
-        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
-        diagEntries = createJTT6DiagonalsFirstOrder();
-
-        this->init();
-    }
-
-    ~JonathanTyler_JTT6_FirstOrder() {}
-
-    std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTT6_FirstOrder>(*this);
-    }
-
-    DerivType getDerivType() const override { return DerivType::D_JTT6; }
-    DerivOrder getDerivOrder() const override {
-        return DerivOrder::D_FIRST_ORDER;
-    }
-
-    std::string toString() const override {
-        return "JonathanTyler_JTT6_FirstOrder";
-    }
-};
-
-/**
  *  Tridiagonal, 4th-order compact derivative from the thesis of Jonathan Tyler.
  */
 class JonathanTyler_JTT6_FirstOrder_Banded : public BandedCompactDerivs {
@@ -243,35 +153,6 @@ class JonathanTyler_JTT6_FirstOrder_Banded : public BandedCompactDerivs {
 
     std::string toString() const override {
         return "JonathanTyler_JTT6_FirstOrder_Banded";
-    }
-};
-
-/**
- *  Tridiagonal, 6th-order compact derivative from the thesis of Jonathan Tyler.
- */
-class JonathanTyler_JTT6_SecondOrder : public MatrixCompactDerivs<2> {
-   public:
-    JonathanTyler_JTT6_SecondOrder(
-        unsigned int ele_order, const std::string& in_matrix_filter = "none",
-        const std::vector<double>& in_filter_coeffs = std::vector<double>())
-        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
-        diagEntries = createJTT6DiagonalsSecondOrder();
-
-        this->init();
-    }
-    ~JonathanTyler_JTT6_SecondOrder() {}
-
-    std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTT6_SecondOrder>(*this);
-    }
-
-    DerivType getDerivType() const override { return DerivType::D_JTT6; }
-    DerivOrder getDerivOrder() const override {
-        return DerivOrder::D_SECOND_ORDER;
-    }
-
-    std::string toString() const override {
-        return "JonathanTyler_JTT5_SecondOrder";
     }
 };
 
@@ -323,37 +204,6 @@ class JonathanTyler_JTT6_SecondOrder_Banded : public BandedCompactDerivs {
     }
 };
 
-/**
- *  Tridiagonal, 6th-order compact derivative from the thesis of Jonathan Tyler,
- * penta 6
- */
-class JonathanTyler_JTP6_FirstOrder : public MatrixCompactDerivs<1> {
-   public:
-    JonathanTyler_JTP6_FirstOrder(
-        unsigned int ele_order, const std::string& in_matrix_filter = "none",
-        const std::vector<double>& in_filter_coeffs = std::vector<double>())
-        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
-        diagEntries = createJTP6DiagonalsFirstOrder();
-
-        this->init();
-    }
-
-    ~JonathanTyler_JTP6_FirstOrder() {}
-
-    std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTP6_FirstOrder>(*this);
-    }
-
-    DerivType getDerivType() const override { return DerivType::D_JTP6; }
-    DerivOrder getDerivOrder() const override {
-        return DerivOrder::D_FIRST_ORDER;
-    }
-
-    std::string toString() const override {
-        return "JonathanTyler_JTP6_FirstOrder";
-    }
-};
-
 class JonathanTyler_JTP6_FirstOrder_Banded : public BandedCompactDerivs {
    public:
     template <typename... Args>
@@ -384,35 +234,6 @@ class JonathanTyler_JTP6_FirstOrder_Banded : public BandedCompactDerivs {
 
     std::string toString() const override {
         return "JonathanTyler_JTP6_FirstOrder_Banded";
-    }
-};
-
-/**
- *  Tridiagonal, 6th-order compact derivative from the thesis of Jonathan Tyler.
- */
-class JonathanTyler_JTP6_SecondOrder : public MatrixCompactDerivs<2> {
-   public:
-    JonathanTyler_JTP6_SecondOrder(
-        unsigned int ele_order, const std::string& in_matrix_filter = "none",
-        const std::vector<double>& in_filter_coeffs = std::vector<double>())
-        : MatrixCompactDerivs{ele_order, in_matrix_filter, in_filter_coeffs} {
-        diagEntries = createJTP6DiagonalsSecondOrder();
-
-        this->init();
-    }
-    ~JonathanTyler_JTP6_SecondOrder() {}
-
-    std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTP6_SecondOrder>(*this);
-    }
-
-    DerivType getDerivType() const override { return DerivType::D_JTP6; }
-    DerivOrder getDerivOrder() const override {
-        return DerivOrder::D_SECOND_ORDER;
-    }
-
-    std::string toString() const override {
-        return "JonathanTyler_JTP6_SecondOrder";
     }
 };
 
