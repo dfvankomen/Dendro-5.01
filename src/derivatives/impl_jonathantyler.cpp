@@ -98,32 +98,37 @@ MatrixDiagonalEntries* createJTP6DiagonalsFirstOrder() {
 }
 
 MatrixDiagonalEntries* createJTP6DiagonalsSecondOrder() {
-    // D_x coeffs
-    // row 1
+    // pentadiagonal 6th-order compact second derivative
+    // interior: alpha=12/97, beta=-1/194, a=120/97
+    // these satisfy the 6th-order taylor expansion constraints for P f'' = Q f / h^2
     const double alpha = 12.0 / 97.0;
     const double beta  = -1.0 / 194.0;
     const double a     = 120.0 / 97.0;
 
-    // Q boundary terms, slot 1
-    const double a1    = 177.0 / 16.0;
-    const double b1    = -507.0 / 8.0;
-    const double c1    = 783.0 / 8.0;
-    const double d1    = -201.0 / 4.0;
-    const double e1    = 81.0 / 16.0;
-    const double f1    = -3.0 / 8.0;
+    // boundary closures: row 0 from thesis Table 26 (P6 at node 1),
+    // row 1 uses interior pentadiagonal P values for smooth transition
+    std::vector<std::vector<double>> P2DiagBoundary{
+        {1.0, 11.0 / 2.0, -131.0 / 4.0},
+        {alpha, 1.0, alpha, beta}};
 
-    // boundary elements for P matrix for 1st derivative
-    std::vector<std::vector<double>> P1DiagBoundary{{11.0 / 2.0, -131.0 / 4.0},
-                                                    {alpha, 1.0, alpha, beta}};
-    // diagonal elements for P matrix for 1st derivative
-    std::vector<double> P1DiagInterior{beta, alpha, 1.0, alpha, beta};
-    // boundary elements for Q matrix for 1st derivative
-    std::vector<std::vector<double>> Q1DiagBoundary{{a1, b1, c1, d1, e1, f1}};
-    // diagonal elements for Q matrix for 1st derivative
-    std::vector<double> Q1DiagInterior{a / 2.0, 0.0, a / 2.0};
+    std::vector<double> P2DiagInterior{beta, alpha, 1.0, alpha, beta};
+
+    // Q boundary: row 0 from thesis Table 26 (P6 at node 1),
+    // row 1 derived via Taylor matching (thesis has no P6 entry for node 2,
+    // see scripts/derive_jtp6_2nd_boundary.py). uses interior P values
+    // for a smooth transition, giving 6th-order accuracy at node 2.
+    std::vector<std::vector<double>> Q2DiagBoundary{
+        {177.0 / 16.0, -507.0 / 8.0, 783.0 / 8.0, -201.0 / 4.0,
+         81.0 / 16.0, -3.0 / 8.0},
+        {5719.0 / 4365.0, -32729.0 / 11640.0, 1109.0 / 582.0,
+         -2545.0 / 3492.0, 134.0 / 291.0, -1849.0 / 11640.0,
+         203.0 / 8730.0}};
+
+    // Q interior: standard second-derivative stencil {a, -2a, a}
+    std::vector<double> Q2DiagInterior{a, -2.0 * a, a};
 
     MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
-        P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary};
+        P2DiagInterior, P2DiagBoundary, Q2DiagInterior, Q2DiagBoundary};
 
     return diagEntries;
 }
