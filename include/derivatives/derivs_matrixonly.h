@@ -86,6 +86,11 @@ class MatrixCompactDerivs : public CompactDerivs {
     std::unordered_map<unsigned int, std::unique_ptr<DerivMatrixStorage>>
         D_storage_map_;
 
+    // memoize the last-used storage pointer — avoids hash lookup when
+    // block size doesn't change between calls (the common case)
+    mutable unsigned int _cached_sz = 0;
+    mutable DerivMatrixStorage *_cached_storage = nullptr;
+
     // interior and bounded entries for each P and Q matrix
     MatrixDiagonalEntries *diagEntries = nullptr;
 
@@ -151,42 +156,34 @@ class MatrixCompactDerivs : public CompactDerivs {
         // delete diagEntries;
     }
 
-    /**
-     * @brief Pure virtual function to calculate the derivative.
-     * @param du Pointer to where calculated derivative will be stored.
-     * @param u Pointer to the input array.
-     * @param dx The step size or grid spacing.
-     * @param sz The number of points expected to be calculated in each dim
-     * @param bflag The boundary flag
-     */
-    void do_grad_x(double *const du, const double *const u, const double dx,
-                   const unsigned int *sz, const unsigned int bflag) {
-        // get a pointer to the vector we're using
-        std::vector<double> *D_use;
-
-        // check to make sure that the data is available
-        if (D_storage_map_.find(sz[0]) != D_storage_map_.end()) {
-            // size exists
-            D_use =
-                get_deriv_mat_by_bflag_x(D_storage_map_[sz[0]].get(), bflag);
-        } else {
-#ifdef DEBUG_MODE
-            std::cout << "[matonly:grad_x]: Matrix Size for " << sz[0]
-                      << " DOES NOT EXIST for deriv " << this->toString()
-                      << ", creating..." << std::endl;
-#endif
-            // if it isn't, then we just have to create a new one for this size
-            D_storage_map_.emplace(sz[0],
-                                   createMatrixSystemForSingleSize<DerivOrder>(
-                                       p_pw, sz[0], diagEntries, false));
-
-            // then get it
-            D_use =
-                get_deriv_mat_by_bflag_x(D_storage_map_[sz[0]].get(), bflag);
+    // fast-path storage lookup: integer compare for the common case,
+    // falls back to hash map + lazy creation if the size changed
+    DerivMatrixStorage *get_storage_for_size(unsigned int n) {
+        if (n == _cached_sz && _cached_storage) {
+            return _cached_storage;
         }
 
-        // NOTE: it is now required that the workspace size be set **properly**
-        // by the user by setting derivs' max_block_size
+        auto it = D_storage_map_.find(n);
+        if (it != D_storage_map_.end()) {
+            _cached_sz      = n;
+            _cached_storage = it->second.get();
+            return _cached_storage;
+        }
+
+        // first time seeing this size — create matrices
+        D_storage_map_.emplace(
+            n, createMatrixSystemForSingleSize<DerivOrder>(
+                   p_pw, n, diagEntries, false));
+
+        _cached_sz      = n;
+        _cached_storage = D_storage_map_[n].get();
+        return _cached_storage;
+    }
+
+    void do_grad_x(double *const du, const double *const u, const double dx,
+                   const unsigned int *sz, const unsigned int bflag) {
+        auto *storage = get_storage_for_size(sz[0]);
+        auto *D_use   = get_deriv_mat_by_bflag_x(storage, bflag);
 
         if constexpr (DerivOrder == 1) {
             matmul_x_dim(D_use->data(), du, u, 1.0 / dx, sz, bflag);
@@ -197,29 +194,8 @@ class MatrixCompactDerivs : public CompactDerivs {
 
     void do_grad_y(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) {
-        // get a pointer to the vector we're using
-        std::vector<double> *D_use;
-
-        // check to make sure that the data is available
-        if (D_storage_map_.find(sz[1]) != D_storage_map_.end()) {
-            // size exists
-            D_use =
-                get_deriv_mat_by_bflag_y(D_storage_map_[sz[1]].get(), bflag);
-        } else {
-#ifdef DEBUG_MODE
-            std::cout << "[matonly:grad_y]: Matrix Size for " << sz[1]
-                      << " DOES NOT EXIST for deriv " << this->toString()
-                      << ", creating..." << std::endl;
-#endif
-            // if it isn't, then we just have to create a new one for this size
-            D_storage_map_.emplace(sz[1],
-                                   createMatrixSystemForSingleSize<DerivOrder>(
-                                       p_pw, sz[1], diagEntries, false));
-
-            // then get it
-            D_use =
-                get_deriv_mat_by_bflag_y(D_storage_map_[sz[1]].get(), bflag);
-        }
+        auto *storage = get_storage_for_size(sz[1]);
+        auto *D_use   = get_deriv_mat_by_bflag_y(storage, bflag);
 
         // NOTE: it is now required that the workspace size be set **properly**
         // by the user by setting derivs' max_block_size
@@ -235,38 +211,8 @@ class MatrixCompactDerivs : public CompactDerivs {
 
     void do_grad_z(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) {
-        // get a pointer to the vector we're using
-        std::vector<double> *D_use;
-
-        // check to make sure that the data is available
-        if (D_storage_map_.find(sz[2]) != D_storage_map_.end()) {
-            // size exists
-            D_use =
-                get_deriv_mat_by_bflag_z(D_storage_map_[sz[2]].get(), bflag);
-        } else {
-#ifdef DEBUG_MODE
-            std::cout << "[matonly:grad_z]: Matrix Size for " << sz[2]
-                      << " DOES NOT EXIST for deriv " << this->toString()
-                      << ", creating..." << std::endl;
-#endif
-            // if it isn't, then we just have to create a new one for this size
-            D_storage_map_.emplace(sz[2],
-                                   createMatrixSystemForSingleSize<DerivOrder>(
-                                       p_pw, sz[2], diagEntries, false));
-
-            // then get it
-            D_use =
-                get_deriv_mat_by_bflag_z(D_storage_map_[sz[2]].get(), bflag);
-        }
-
-        // NOTE: it is now required that the workspace size be set **properly**
-        // by the user by setting derivs' max_block_size
-
-        // std::cout << "workspace_tot is: " << workspace_tot_ << std::endl;
-        // std::cout << "sz is: " << sz[0] << ", " << sz[1] << ", " << sz[2]
-        //           << std::endl;
-        // std::cout << "worksapce_ size is: " << workspace_.size() <<
-        // std::endl;
+        auto *storage = get_storage_for_size(sz[2]);
+        auto *D_use   = get_deriv_mat_by_bflag_z(storage, bflag);
 
         if constexpr (DerivOrder == 1) {
             matmul_z_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data(),

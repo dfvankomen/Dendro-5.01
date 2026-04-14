@@ -312,6 +312,17 @@ class Derivs {
     virtual std::string toString() const                   = 0;
 
     virtual void set_maximum_block_size(size_t block_size) = 0;
+
+    // raw function pointer type for bypassing virtual dispatch on stencils.
+    // explicit stencil classes override these to expose their cached function
+    // pointers, letting DendroDerivatives call them directly.
+    using RawStencilFn = void (*)(double *const, const double *const,
+                                  const double, const unsigned int *,
+                                  const unsigned int);
+
+    virtual RawStencilFn get_raw_grad_x() const { return nullptr; }
+    virtual RawStencilFn get_raw_grad_y() const { return nullptr; }
+    virtual RawStencilFn get_raw_grad_z() const { return nullptr; }
 };
 
 class DendroDerivatives {
@@ -327,6 +338,31 @@ class DendroDerivatives {
 
     unsigned int _n_points_deriv_space;
     unsigned int _n_vars_deriv_space;
+
+    // cached raw function pointers for bypassing virtual dispatch.
+    // extracted from the Derivs objects at construction time — nullptr
+    // means the implementation doesn't expose raw stencils (e.g. matrix
+    // methods) and we fall back to virtual dispatch.
+    Derivs::RawStencilFn _raw_1st_grad_x = nullptr;
+    Derivs::RawStencilFn _raw_1st_grad_y = nullptr;
+    Derivs::RawStencilFn _raw_1st_grad_z = nullptr;
+    Derivs::RawStencilFn _raw_2nd_grad_x = nullptr;
+    Derivs::RawStencilFn _raw_2nd_grad_y = nullptr;
+    Derivs::RawStencilFn _raw_2nd_grad_z = nullptr;
+
+    // pull raw pointers from a Derivs object into the cache slots
+    void _cache_raw_stencils() {
+        if (_first_deriv) {
+            _raw_1st_grad_x = _first_deriv->get_raw_grad_x();
+            _raw_1st_grad_y = _first_deriv->get_raw_grad_y();
+            _raw_1st_grad_z = _first_deriv->get_raw_grad_z();
+        }
+        if (_second_deriv) {
+            _raw_2nd_grad_x = _second_deriv->get_raw_grad_x();
+            _raw_2nd_grad_y = _second_deriv->get_raw_grad_y();
+            _raw_2nd_grad_z = _second_deriv->get_raw_grad_z();
+        }
+    }
 
    public:
     DendroDerivatives(
@@ -364,6 +400,8 @@ class DendroDerivatives {
                           _n_points_deriv_space * _n_vars_deriv_space,
                       _derivative_space.get());
         }
+
+        _cache_raw_stencils();
     }
 
     // Copy assignment operator
@@ -390,6 +428,7 @@ class DendroDerivatives {
                 _derivative_space.reset();
             }
         }
+        _cache_raw_stencils();
         return *this;
     }
 
@@ -412,53 +451,59 @@ class DendroDerivatives {
 
     void grad_x(double *du, const double *u, double dx, const unsigned int *sz,
                 unsigned int bflag) {
-        _first_deriv->do_grad_x(du, u, dx, sz, bflag);
+        if (_raw_1st_grad_x) _raw_1st_grad_x(du, u, dx, sz, bflag);
+        else _first_deriv->do_grad_x(du, u, dx, sz, bflag);
     }
     void grad_y(double *du, const double *u, double dx, const unsigned int *sz,
                 unsigned int bflag) {
-        _first_deriv->do_grad_y(du, u, dx, sz, bflag);
+        if (_raw_1st_grad_y) _raw_1st_grad_y(du, u, dx, sz, bflag);
+        else _first_deriv->do_grad_y(du, u, dx, sz, bflag);
     }
     void grad_z(double *du, const double *u, double dx, const unsigned int *sz,
                 unsigned int bflag) {
-        _first_deriv->do_grad_z(du, u, dx, sz, bflag);
+        if (_raw_1st_grad_z) _raw_1st_grad_z(du, u, dx, sz, bflag);
+        else _first_deriv->do_grad_z(du, u, dx, sz, bflag);
     }
     void grad_xx(double *du, const double *u, double dx, const unsigned int *sz,
                  unsigned int bflag) {
-        _second_deriv->do_grad_x(du, u, dx, sz, bflag);
+        if (_raw_2nd_grad_x) _raw_2nd_grad_x(du, u, dx, sz, bflag);
+        else _second_deriv->do_grad_x(du, u, dx, sz, bflag);
     }
     void grad_yy(double *du, const double *u, double dx, const unsigned int *sz,
                  unsigned int bflag) {
-        _second_deriv->do_grad_y(du, u, dx, sz, bflag);
+        if (_raw_2nd_grad_y) _raw_2nd_grad_y(du, u, dx, sz, bflag);
+        else _second_deriv->do_grad_y(du, u, dx, sz, bflag);
     }
     void grad_zz(double *du, const double *u, double dx, const unsigned int *sz,
                  unsigned int bflag) {
-        _second_deriv->do_grad_z(du, u, dx, sz, bflag);
+        if (_raw_2nd_grad_z) _raw_2nd_grad_z(du, u, dx, sz, bflag);
+        else _second_deriv->do_grad_z(du, u, dx, sz, bflag);
     }
 
     // deriv renaming of grad naming
     void deriv_x(double *du, const double *u, double dx, const unsigned int *sz,
                  unsigned int bflag) {
-        _first_deriv->do_grad_x(du, u, dx, sz, bflag);
+        grad_x(du, u, dx, sz, bflag);
     }
     void deriv_y(double *du, const double *u, double dx, const unsigned int *sz,
                  unsigned int bflag) {
-        _first_deriv->do_grad_y(du, u, dx, sz, bflag);
+        grad_y(du, u, dx, sz, bflag);
     }
     void deriv_z(double *du, const double *u, double dx, const unsigned int *sz,
                  unsigned int bflag) {
-        _first_deriv->do_grad_z(du, u, dx, sz, bflag);
+        grad_z(du, u, dx, sz, bflag);
     }
     void deriv_xx(double *du, const double *u, double dx,
                   const unsigned int *sz, unsigned int bflag) {
-        _second_deriv->do_grad_x(du, u, dx, sz, bflag);
+        grad_xx(du, u, dx, sz, bflag);
     }
     void deriv_yy(double *du, const double *u, double dx,
                   const unsigned int *sz, unsigned int bflag) {
-        _second_deriv->do_grad_y(du, u, dx, sz, bflag);
+        grad_yy(du, u, dx, sz, bflag);
     }
     void deriv_zz(double *du, const double *u, double dx,
                   const unsigned int *sz, unsigned int bflag) {
-        _second_deriv->do_grad_z(du, u, dx, sz, bflag);
+        grad_zz(du, u, dx, sz, bflag);
     }
 
     void filter(const double *const input, double *const output,

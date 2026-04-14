@@ -95,14 +95,6 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdlog)
 
-# toml11 for test configuration files
-FetchContent_Declare(
-    toml11
-    GIT_REPOSITORY https://github.com/ToruNiina/toml11.git
-    GIT_TAG        v4.4.0
-)
-FetchContent_MakeAvailable(toml11)
-
 # libxsmm for optimized small matrix multiplications
 option(USE_LOCAL_XSMM "Use a local copy of libxsmm's source instead of fetching at build" OFF)
 
@@ -369,6 +361,15 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(sfcLaplaceEq FEM/examples/src/sfcLaplace.cpp)
 
   # --- Derivative tests (require toml11 for config) ---
+  # fetch toml11 if the parent project hasn't already provided it
+  if(NOT TARGET toml11::toml11)
+    FetchContent_Declare(
+        toml11
+        GIT_REPOSITORY https://github.com/ToruNiina/toml11.git
+        GIT_TAG        v4.4.0
+    )
+    FetchContent_MakeAvailable(toml11)
+  endif()
   function(dendro_add_deriv_test TARGET_NAME)
     add_executable(${TARGET_NAME} ${ARGN})
     target_link_libraries(${TARGET_NAME} PRIVATE dendro5 MPI::MPI_CXX toml11::toml11 m)

@@ -141,6 +141,10 @@ class ExplicitDerivsO4_DX : public Derivs {
     };
 
     void set_maximum_block_size(size_t block_size) override {};
+
+    RawStencilFn get_raw_grad_x() const override { return gradx_func; }
+    RawStencilFn get_raw_grad_y() const override { return grady_func; }
+    RawStencilFn get_raw_grad_z() const override { return gradz_func; }
 };
 
 class ExplicitDerivsO4_DXX : public Derivs {
@@ -200,6 +204,10 @@ class ExplicitDerivsO4_DXX : public Derivs {
     };
 
     void set_maximum_block_size(size_t block_size) override {};
+
+    RawStencilFn get_raw_grad_x() const override { return gradx_func; }
+    RawStencilFn get_raw_grad_y() const override { return grady_func; }
+    RawStencilFn get_raw_grad_z() const override { return gradz_func; }
 };
 
 class ExplicitDerivsO6_DX : public Derivs {
@@ -255,6 +263,10 @@ class ExplicitDerivsO6_DX : public Derivs {
     };
 
     void set_maximum_block_size(size_t block_size) override {};
+
+    RawStencilFn get_raw_grad_x() const override { return gradx_func; }
+    RawStencilFn get_raw_grad_y() const override { return grady_func; }
+    RawStencilFn get_raw_grad_z() const override { return gradz_func; }
 };
 
 class ExplicitDerivsO6_DXX : public Derivs {
@@ -310,6 +322,10 @@ class ExplicitDerivsO6_DXX : public Derivs {
     };
 
     void set_maximum_block_size(size_t block_size) override {};
+
+    RawStencilFn get_raw_grad_x() const override { return gradx_func; }
+    RawStencilFn get_raw_grad_y() const override { return grady_func; }
+    RawStencilFn get_raw_grad_z() const override { return gradz_func; }
 };
 
 class ExplicitDerivsO8_DX : public Derivs {
@@ -361,6 +377,10 @@ class ExplicitDerivsO8_DX : public Derivs {
     };
 
     void set_maximum_block_size(size_t block_size) override {};
+
+    RawStencilFn get_raw_grad_x() const override { return gradx_func; }
+    RawStencilFn get_raw_grad_y() const override { return grady_func; }
+    RawStencilFn get_raw_grad_z() const override { return gradz_func; }
 };
 
 class ExplicitDerivsO8_DXX : public Derivs {
@@ -412,6 +432,10 @@ class ExplicitDerivsO8_DXX : public Derivs {
     };
 
     void set_maximum_block_size(size_t block_size) override {};
+
+    RawStencilFn get_raw_grad_x() const override { return gradx_func; }
+    RawStencilFn get_raw_grad_y() const override { return grady_func; }
+    RawStencilFn get_raw_grad_z() const override { return gradz_func; }
 };
 
 }  // namespace dendroderivs

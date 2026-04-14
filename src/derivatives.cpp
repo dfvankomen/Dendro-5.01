@@ -83,6 +83,9 @@ DendroDerivatives::DendroDerivatives(
         // otherwise, we can just set it, because it's probably just 0
         DENDRO_DERIVS_PW = pw;
     }
+
+    // cache raw stencil function pointers for fast dispatch
+    _cache_raw_stencils();
 }
 
 }  // namespace dendroderivs
