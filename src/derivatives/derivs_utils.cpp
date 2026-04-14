@@ -737,22 +737,21 @@ void matmul_x_dim(const double *const R, double *const Dxu,
                           ? nz - dendroderivs::DENDRO_DERIVS_PW
                           : nz;
 
+    const unsigned int slice_size = nx * ny;
+
     for (unsigned int k = z_start; k < z_end; k++) {
         // avoid pointer arithmitic, use direct pointer location for compiler
         // optimization
-        const double *u_slice = u + k * nx * ny;
-        double *du_slice      = Dxu + k * nx * ny;
+        const double *u_slice = u + k * slice_size;
+        double *du_slice      = Dxu + k * slice_size;
 
         kernel(R, u_slice, du_slice);
-    }
 
-    // NOTE: libxsmm only allows kernels to have an alpha of 1.0, since that
-    // allows generated kernels to be possible
-
-    // additionally, seems that omp simd makes it slower (on my machine)
-    // #pragma omp simd
-    for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
-        Dxu[ii] *= alpha;
+        // NOTE: libxsmm only allows kernels with alpha=1.0, so we scale
+        // immediately after the GEMM while data is still in L1/L2 cache
+        for (uint32_t ii = 0; ii < slice_size; ii++) {
+            du_slice[ii] *= alpha;
+        }
     }
 }
 

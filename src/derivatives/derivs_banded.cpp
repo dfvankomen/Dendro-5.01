@@ -226,7 +226,7 @@ void BandedCompactDerivs::do_grad_x(double *const du, const double *const u,
                                     const unsigned int bflag) {
     // First compute matrix product of Q1b_ and u and
     //  store in grad_xVars->B using banded matrix vector multiply
-    static double alpha   = 1 / dx;
+    const double alpha    = 1.0 / dx;
 
     // we need to iterate over all z slices
 
@@ -264,7 +264,7 @@ void BandedCompactDerivs::do_grad_x(double *const du, const double *const u,
 void BandedCompactDerivs::do_grad_y(double *const du, const double *const u,
                                     const double dx, const unsigned int *sz,
                                     const unsigned int bflag) {
-    static double alpha          = 1 / dx;
+    const double alpha           = 1.0 / dx;
 
     // we need to iterate over all z slices
 
@@ -325,7 +325,7 @@ void BandedCompactDerivs::do_grad_z(double *const du, const double *const u,
                                     const unsigned int bflag) {
     // First compute matrix product of Q1b_ and u and
     //  store in grad_xVars->B using banded matrix vector multiply
-    static double alpha      = 1 / dx;
+    const double alpha       = 1.0 / dx;
 
     // we need to iterate over all z slices
 
