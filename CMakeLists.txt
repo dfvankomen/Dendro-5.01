@@ -67,6 +67,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdlog)
 
+# toml11 for test configuration files
+FetchContent_Declare(
+    toml11
+    GIT_REPOSITORY https://github.com/ToruNiina/toml11.git
+    GIT_TAG        v4.4.0
+)
+FetchContent_MakeAvailable(toml11)
+
 # libxsmm for optimized small matrix multiplications
 option(USE_LOCAL_XSMM "Use a local copy of libxsmm's source instead of fetching at build" OFF)
 
@@ -142,9 +150,9 @@ set(DENDRO_SRC
     src/derivatives/nova_derivs.cpp
 )
 
-# pick up generated derivative scheme files
-file(GLOB DERIVS_GENERATED_SRC CONFIGURE_DEPENDS src/derivatives/generated/*.cpp)
-list(APPEND DENDRO_SRC ${DERIVS_GENERATED_SRC})
+# NOTE: generated derivative scheme files (src/derivatives/generated/*.cpp) are
+# NOT standalone compilation units -- they're #include'd into impl_*.cpp files.
+# Do NOT glob them as source files.
 
 set(FEM_SRC
     FEM/examples/src/laplace.cpp FEM/src/basis.cpp FEM/src/refel.cpp
@@ -331,6 +339,22 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(heatEq FEM/examples/src/heatMat.cpp FEM/examples/src/heatVec.cpp FEM/examples/src/heatEq.cpp)
   dendro_add_example(subDAExample FEM/examples/src/subdaExample.cpp)
   dendro_add_example(sfcLaplaceEq FEM/examples/src/sfcLaplace.cpp)
+
+  # --- Derivative tests (require toml11 for config) ---
+  function(dendro_add_deriv_test TARGET_NAME)
+    add_executable(${TARGET_NAME} ${ARGN})
+    target_link_libraries(${TARGET_NAME} PRIVATE dendro5 MPI::MPI_CXX toml11::toml11 m)
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/derivatives)
+  endfunction()
+
+  dendro_add_deriv_test(testCompactDerivs test/src/testCompactDerivs.cpp)
+  dendro_add_deriv_test(testMatrixMul test/src/testMatMul.cpp)
+  dendro_add_deriv_test(testNOVA test/src/testNova.cpp)
+  dendro_add_deriv_test(testKODiss test/src/testKODiss.cpp)
+  dendro_add_deriv_test(testDerivOnGrid test/src/derivativeConvergence.cpp test/src/derivativeCtx.cpp)
+  dendro_add_deriv_test(buildGlobalMat test/src/globalMatrixBuilding.cpp test/src/derivativeCtx.cpp)
+  dendro_add_deriv_test(testLibXSMMvBLAS test/src/testLibXSMMvBLAS.cpp)
 
   if(WITH_CUDA)
     # cuda GPU tests
