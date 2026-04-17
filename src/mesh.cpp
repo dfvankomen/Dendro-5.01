@@ -14951,11 +14951,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             if (new_oct_connectivity_map[ele_id].trank == rank) continue;
             if (new_oct_connectivity_map[ele_id].isGhostTwo) continue;
 
-            unsigned int eleGid =
-                new_oct_connectivity_map[ele_id].eid;
-            unsigned int eleTrank =
-                new_oct_connectivity_map[ele_id].trank;
-
             for (unsigned int n = 0; n < m_uiNpE; ++n) {
                 unsigned int cgIdx = m_uiE2NMapping_CG[ele_id * m_uiNpE + n];
 
@@ -14963,9 +14958,27 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     cgIdx < m_uiNodeLocalEnd)
                     continue;
 
-                recvNodeSM_r[eleTrank].push_back(cgIdx);
-                recvNodeDGG[eleTrank].push_back(
-                    eleGid * m_uiNpE + n);
+                // Decode the TRUE owner element from E2N_DG. For
+                // parent-child hanging nodes, the owner is the coarser
+                // parent, which may live on a different rank than the
+                // ghost element ele_id.
+                unsigned int ownerDG =
+                    m_uiE2NMapping_DG[ele_id * m_uiNpE + n];
+                unsigned int ownerLocal = ownerDG / m_uiNpE;
+                unsigned int sub        = ownerDG % m_uiNpE;
+
+                unsigned int ownerGid =
+                    new_oct_connectivity_map[ownerLocal].eid;
+                unsigned int ownerTrank =
+                    new_oct_connectivity_map[ownerLocal].trank;
+
+                // Owner is local on this rank: cgIdx would be local,
+                // but safety guard in case of any mismatch.
+                if (ownerTrank == rank) continue;
+
+                recvNodeSM_r[ownerTrank].push_back(cgIdx);
+                recvNodeDGG[ownerTrank].push_back(
+                    ownerGid * m_uiNpE + sub);
             }
         }
 
