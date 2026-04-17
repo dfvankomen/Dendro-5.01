@@ -3593,8 +3593,15 @@ void Mesh::buildE2NMap() {
             lev2 = m_uiAllElements[lookUp].getLevel();
             if (lev1 == lev2) {
                 parentChildLevEqual = true;
-                lev1                = e;
-                lev2                = lookUp;
+                if (!m_uiElementGlobalIDs.empty()) {
+                    bool eL = (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd);
+                    bool lL = (lookUp >= m_uiElementLocalBegin && lookUp < m_uiElementLocalEnd);
+                    if (eL && !lL) { lev1 = 0; lev2 = 1; }
+                    else if (!eL && lL) { lev1 = 1; lev2 = 0; }
+                    else { lev1 = e; lev2 = lookUp; }
+                } else {
+                    lev1 = e; lev2 = lookUp;
+                }
                 assert(e != lookUp);
             }
 
@@ -3628,8 +3635,15 @@ void Mesh::buildE2NMap() {
             lev1 = m_uiAllElements[e].getLevel();
             lev2 = m_uiAllElements[lookUp].getLevel();
             if (lev1 == lev2) {
-                lev1                = e;
-                lev2                = lookUp;
+                if (!m_uiElementGlobalIDs.empty()) {
+                    bool eL = (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd);
+                    bool lL = (lookUp >= m_uiElementLocalBegin && lookUp < m_uiElementLocalEnd);
+                    if (eL && !lL) { lev1 = 0; lev2 = 1; }
+                    else if (!eL && lL) { lev1 = 1; lev2 = 0; }
+                    else { lev1 = e; lev2 = lookUp; }
+                } else {
+                    lev1 = e; lev2 = lookUp;
+                }
                 parentChildLevEqual = true;
                 assert(e != lookUp);
             }
@@ -3663,8 +3677,15 @@ void Mesh::buildE2NMap() {
             lev1 = m_uiAllElements[e].getLevel();
             lev2 = m_uiAllElements[lookUp].getLevel();
             if (lev1 == lev2) {
-                lev1                = e;
-                lev2                = lookUp;
+                if (!m_uiElementGlobalIDs.empty()) {
+                    bool eL = (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd);
+                    bool lL = (lookUp >= m_uiElementLocalBegin && lookUp < m_uiElementLocalEnd);
+                    if (eL && !lL) { lev1 = 0; lev2 = 1; }
+                    else if (!eL && lL) { lev1 = 1; lev2 = 0; }
+                    else { lev1 = e; lev2 = lookUp; }
+                } else {
+                    lev1 = e; lev2 = lookUp;
+                }
                 parentChildLevEqual = true;
                 assert(e != lookUp);
             }
@@ -3698,8 +3719,15 @@ void Mesh::buildE2NMap() {
             lev1 = m_uiAllElements[e].getLevel();
             lev2 = m_uiAllElements[lookUp].getLevel();
             if (lev1 == lev2) {
-                lev1                = e;
-                lev2                = lookUp;
+                if (!m_uiElementGlobalIDs.empty()) {
+                    bool eL = (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd);
+                    bool lL = (lookUp >= m_uiElementLocalBegin && lookUp < m_uiElementLocalEnd);
+                    if (eL && !lL) { lev1 = 0; lev2 = 1; }
+                    else if (!eL && lL) { lev1 = 1; lev2 = 0; }
+                    else { lev1 = e; lev2 = lookUp; }
+                } else {
+                    lev1 = e; lev2 = lookUp;
+                }
                 parentChildLevEqual = true;
                 assert(e != lookUp);
             }
@@ -3733,8 +3761,15 @@ void Mesh::buildE2NMap() {
             lev1 = m_uiAllElements[e].getLevel();
             lev2 = m_uiAllElements[lookUp].getLevel();
             if (lev1 == lev2) {
-                lev1                = e;
-                lev2                = lookUp;
+                if (!m_uiElementGlobalIDs.empty()) {
+                    bool eL = (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd);
+                    bool lL = (lookUp >= m_uiElementLocalBegin && lookUp < m_uiElementLocalEnd);
+                    if (eL && !lL) { lev1 = 0; lev2 = 1; }
+                    else if (!eL && lL) { lev1 = 1; lev2 = 0; }
+                    else { lev1 = e; lev2 = lookUp; }
+                } else {
+                    lev1 = e; lev2 = lookUp;
+                }
                 parentChildLevEqual = true;
                 assert(e != lookUp);
             }
@@ -3768,8 +3803,15 @@ void Mesh::buildE2NMap() {
             lev1 = m_uiAllElements[e].getLevel();
             lev2 = m_uiAllElements[lookUp].getLevel();
             if (lev1 == lev2) {
-                lev1                = e;
-                lev2                = lookUp;
+                if (!m_uiElementGlobalIDs.empty()) {
+                    bool eL = (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd);
+                    bool lL = (lookUp >= m_uiElementLocalBegin && lookUp < m_uiElementLocalEnd);
+                    if (eL && !lL) { lev1 = 0; lev2 = 1; }
+                    else if (!eL && lL) { lev1 = 1; lev2 = 0; }
+                    else { lev1 = e; lev2 = lookUp; }
+                } else {
+                    lev1 = e; lev2 = lookUp;
+                }
                 parentChildLevEqual = true;
                 assert(e != lookUp);
             }
@@ -14827,6 +14869,11 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // buildE2NMap operates on member variables, so we must first swap
     // in the new E2E and AllElements.
 
+    // Populate global element IDs for conditional tie-breaking
+    m_uiElementGlobalIDs.resize(newNumEle);
+    for (unsigned int e = 0; e < newNumEle; e++)
+        m_uiElementGlobalIDs[e] = new_oct_connectivity_map[e].eid;
+
     std::swap(m_uiE2EMapping, newE2EMap);
 
     // Reconstruct m_uiAllElements from oct_data coordinates
@@ -14904,22 +14951,21 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             if (new_oct_connectivity_map[ele_id].trank == rank) continue;
             if (new_oct_connectivity_map[ele_id].isGhostTwo) continue;
 
+            unsigned int eleGid =
+                new_oct_connectivity_map[ele_id].eid;
+            unsigned int eleTrank =
+                new_oct_connectivity_map[ele_id].trank;
+
             for (unsigned int n = 0; n < m_uiNpE; ++n) {
-                unsigned int dgIdx = m_uiE2NMapping_DG[ele_id * m_uiNpE + n];
-                unsigned int owEle = dgIdx / m_uiNpE;
-
-                if (owEle >= m_uiElementLocalBegin &&
-                    owEle < m_uiElementLocalEnd)
-                    continue;
-
-                unsigned int procID =
-                    new_oct_connectivity_map[owEle].trank;
                 unsigned int cgIdx = m_uiE2NMapping_CG[ele_id * m_uiNpE + n];
 
-                recvNodeSM_r[procID].push_back(cgIdx);
-                recvNodeDGG[procID].push_back(
-                    new_oct_connectivity_map[owEle]
-                        .e2n_dg[dgIdx % m_uiNpE]);
+                if (cgIdx >= m_uiNodeLocalBegin &&
+                    cgIdx < m_uiNodeLocalEnd)
+                    continue;
+
+                recvNodeSM_r[eleTrank].push_back(cgIdx);
+                recvNodeDGG[eleTrank].push_back(
+                    eleGid * m_uiNpE + n);
             }
         }
 
@@ -14961,90 +15007,17 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                       MPI_UNSIGNED_LONG, sendBuf.data(), sendCount.data(),
                       sendOff.data(), MPI_UNSIGNED_LONG, commActive);
 
-        // Build send scatter map from received DG globals.
-        // If the CG index from the direct lookup is in the ghost
-        // range (not populated by createVector), search local
-        // elements for the matching oct_data DG global.
+        // Build send scatter map: decode (element_gid, node_index)
         std::vector<unsigned int> sendSM(totalSend);
         for (int i = 0; i < totalSend; i++) {
-            unsigned int ow, ix, jy, kz;
-            dg2eijk(sendBuf[i], ow, ix, jy, kz);
-            unsigned int localOw = globaltoNewLocal.count(ow)
-                                       ? globaltoNewLocal[ow]
-                                       : m_uiElementLocalBegin;
-            unsigned int sub =
-                kz * (m_uiElementOrder + 1) * (m_uiElementOrder + 1) +
-                jy * (m_uiElementOrder + 1) + ix;
-            unsigned int cgIdx =
-                m_uiE2NMapping_CG[localOw * m_uiNpE + sub];
-
-            // If the CG index is in the ghost range, the value
-            // wasn't set by createVector.  Compute the physical
-            // position from the DG global and find the matching
-            // local CG index by coordinate.
-            if (cgIdx < m_uiNodeLocalBegin || cgIdx >= m_uiNodeLocalEnd) {
-                // Physical position of the requested node
-                double len = 1u << (m_uiMaxDepth -
-                                    m_uiAllElements[localOw].getLevel());
-                double px = m_uiAllElements[localOw].getX() +
-                            ix * (len / m_uiElementOrder);
-                double py = m_uiAllElements[localOw].getY() +
-                            jy * (len / m_uiElementOrder);
-                double pz = m_uiAllElements[localOw].getZ() +
-                            kz * (len / m_uiElementOrder);
-
-                // Search local elements for a node at this position
-                bool found = false;
-                for (unsigned int le = m_uiElementLocalBegin;
-                     le < m_uiElementLocalEnd && !found; le++) {
-                    double len2 = 1u << (m_uiMaxDepth -
-                                         m_uiAllElements[le].getLevel());
-                    double hh = len2 / m_uiElementOrder;
-                    double ex = m_uiAllElements[le].getX();
-                    double ey = m_uiAllElements[le].getY();
-                    double ez = m_uiAllElements[le].getZ();
-                    // Check if point is within this element's bounds
-                    if (px < ex - 0.5 * hh || px > ex + len2 + 0.5 * hh)
-                        continue;
-                    if (py < ey - 0.5 * hh || py > ey + len2 + 0.5 * hh)
-                        continue;
-                    if (pz < ez - 0.5 * hh || pz > ez + len2 + 0.5 * hh)
-                        continue;
-
-                    for (unsigned int nd = 0; nd < m_uiNpE && !found; nd++) {
-                        unsigned int dgn =
-                            m_uiE2NMapping_DG[le * m_uiNpE + nd];
-                        unsigned int oe = dgn / m_uiNpE;
-                        unsigned int osub = dgn % m_uiNpE;
-                        unsigned int oi = osub % (m_uiElementOrder + 1);
-                        unsigned int oj = (osub / (m_uiElementOrder + 1)) %
-                                          (m_uiElementOrder + 1);
-                        unsigned int ok =
-                            osub / ((m_uiElementOrder + 1) *
-                                    (m_uiElementOrder + 1));
-                        double len3 = 1u << (m_uiMaxDepth -
-                                             m_uiAllElements[oe].getLevel());
-                        double nx = m_uiAllElements[oe].getX() +
-                                    oi * (len3 / m_uiElementOrder);
-                        double ny = m_uiAllElements[oe].getY() +
-                                    oj * (len3 / m_uiElementOrder);
-                        double nz = m_uiAllElements[oe].getZ() +
-                                    ok * (len3 / m_uiElementOrder);
-                        if (std::abs(px - nx) < 0.1 &&
-                            std::abs(py - ny) < 0.1 &&
-                            std::abs(pz - nz) < 0.1) {
-                            unsigned int cg2 =
-                                m_uiE2NMapping_CG[le * m_uiNpE + nd];
-                            if (cg2 >= m_uiNodeLocalBegin &&
-                                cg2 < m_uiNodeLocalEnd) {
-                                cgIdx = cg2;
-                                found = true;
-                            }
-                        }
-                    }
-                }
-            }
-            sendSM[i] = cgIdx;
+            unsigned int gid =
+                static_cast<unsigned int>(sendBuf[i] / m_uiNpE);
+            unsigned int nid =
+                static_cast<unsigned int>(sendBuf[i] % m_uiNpE);
+            unsigned int localEle = globaltoNewLocal.count(gid)
+                                        ? globaltoNewLocal[gid]
+                                        : m_uiElementLocalBegin;
+            sendSM[i] = m_uiE2NMapping_CG[localEle * m_uiNpE + nid];
         }
 
         // Flatten recv scatter map
