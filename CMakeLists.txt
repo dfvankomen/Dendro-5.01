@@ -141,6 +141,11 @@ if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib/BHaHAHA")
 endif()
 
 
+# GR utilities (BH struct, TwoPunctures, etc.)
+if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/GR")
+  add_subdirectory(GR)
+endif()
+
 # ==========================
 # SOURCE FILES
 # ==========================
