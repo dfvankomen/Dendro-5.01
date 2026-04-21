@@ -130,16 +130,12 @@ class CompactDerivs : public Derivs {
     CompactDerivs(unsigned int ele_order) : Derivs{ele_order} {}
 
     /**
-     * we implement a copy constructor just to print when it's called;
-     * we would like to avoid accidental shallow copies
+     * @brief Copy constructor. Only copies base-class members (ele_order,
+     * n, pw) — derived classes (e.g. MatrixCompactDerivs) handle their own
+     * deep copy. Keep this defaulted rather than deleted so `clone()` chains
+     * work through the hierarchy.
      */
-    CompactDerivs(const CompactDerivs &obj) : Derivs(obj) {
-#ifdef DEBUG
-        std::cout << "[copy constructor for CompactDerivs was called!\n"
-                  << "this is a mistake as there is no implementation]"
-                  << std::endl;
-#endif
-    };
+    CompactDerivs(const CompactDerivs &obj) : Derivs(obj) {};
 
     // if you want to access this outside of class implementations, consider
     // moving to util.h/util.cpp

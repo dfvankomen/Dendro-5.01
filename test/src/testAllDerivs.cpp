@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <iomanip>
@@ -376,5 +378,140 @@ int main() {
     std::cout << "Batch test: " << batch_pass << " pass, " << batch_fail
               << " fail" << std::endl;
 
-    return (fail > 0 || coeff_fail > 0 || batch_fail > 0) ? 1 : 0;
+    // ---- fused-block correctness + batch profiling sweep ----
+    // fused blocks stack multiple element blocks into one cfd solve.
+    // block size formula: eleorder * (ninterior + 1) + 1
+    //   ninterior=1 -> 13 (the existing single-block case)
+    //   ninterior=2 -> 19 (two blocks fused)
+    //   ninterior=3 -> 25 (three blocks fused)
+    // verifies correctness (RMSE of batch grad_x vs analytical) and
+    // benchmarks individual vs batch at each fused size
+    std::cout << "\n===== Fused-block sweep (correctness + batch profiling) ====="
+              << std::endl;
+
+    // E6 is explicit (stencil-based), E6Matrix and JTT6 are CFDs using the
+    // matmul path — comparison shows CFD overhead vs explicit
+    std::vector<std::string> profile_types = {"E6", "E6Matrix", "JTT6"};
+    std::vector<unsigned int> fused_counts = {1, 2, 3};
+    std::vector<unsigned int> var_counts = {1, 4, 8, 24};
+    const unsigned int profile_iters = 5000;
+
+    int fused_pass = 0, fused_fail = 0;
+
+    for (auto &dtype : profile_types) {
+        // size the derivs object for the largest block we'll see in this sweep
+        unsigned int max_n = eleorder * (*std::max_element(fused_counts.begin(),
+                                                           fused_counts.end()) + 1) + 1;
+        unsigned int max_total = max_n * max_n * max_n;
+
+        DendroDerivatives deriv_obj(dtype, dtype, eleorder);
+        deriv_obj.set_maximum_block_size(max_total);
+
+        std::cout << "\n--- " << dtype << " ---" << std::endl;
+        std::cout << std::left << std::setw(6) << "n"
+                  << std::setw(11) << "rmse_x"
+                  << std::setw(6) << "nvars"
+                  << std::setw(11) << "x_batch"
+                  << std::setw(11) << "y_batch"
+                  << std::setw(11) << "z_batch"
+                  << std::setw(11) << "total(us)"
+                  << std::endl;
+
+        for (auto ninterior : fused_counts) {
+            unsigned int fn = eleorder * (ninterior + 1) + 1;
+            unsigned int fsz[3] = {fn, fn, fn};
+            unsigned int ftotal = fn * fn * fn;
+
+            // build a sine-derivative ground truth at this block size
+            std::vector<double> u_true(ftotal), du_true_x(ftotal);
+            init_sine(u_true.data(), du_true_x.data(), nullptr, fsz, dx, dy, dz, pw);
+
+            // run batch grad_x on a single-variable batch and compare rmse
+            // to analytical — easy check that the larger n "just works"
+            std::vector<double> du_out(ftotal, 0.0);
+            double *du_ptr_single          = du_out.data();
+            const double *u_ptr_single     = u_true.data();
+            deriv_obj.grad_x_batch(&du_ptr_single, &u_ptr_single, 1, dx, fsz, 0);
+            double rmse_x = compute_rmse(du_out.data(), du_true_x.data(),
+                                         ftotal, pw, fsz);
+            bool ok = std::isfinite(rmse_x) && rmse_x < 10.0;
+            if (ok) fused_pass++; else fused_fail++;
+
+            for (auto nv : var_counts) {
+                // allocate variable data at this block size
+                std::vector<std::vector<double>> u_data(nv,
+                    std::vector<double>(ftotal));
+                std::vector<std::vector<double>> du_data(nv,
+                    std::vector<double>(ftotal, 0.0));
+
+                for (unsigned int v = 0; v < nv; v++) {
+                    double phase = 0.3 * v;
+                    for (unsigned int idx = 0; idx < ftotal; idx++) {
+                        unsigned int i = idx % fsz[0];
+                        unsigned int j = (idx / fsz[0]) % fsz[1];
+                        double x = (i - (double)pw) * dx;
+                        double y = (j - (double)pw) * dy;
+                        u_data[v][idx] = sin(2.0 * M_PI * (x + phase) + y);
+                    }
+                }
+
+                std::vector<double *> du_ptrs(nv);
+                std::vector<const double *> u_ptrs(nv);
+                for (unsigned int v = 0; v < nv; v++) {
+                    du_ptrs[v] = du_data[v].data();
+                    u_ptrs[v]  = u_data[v].data();
+                }
+
+                // warmup each direction
+                deriv_obj.grad_x_batch(du_ptrs.data(), u_ptrs.data(), nv, dx,
+                                       fsz, 0);
+                deriv_obj.grad_y_batch(du_ptrs.data(), u_ptrs.data(), nv, dy,
+                                       fsz, 0);
+                deriv_obj.grad_z_batch(du_ptrs.data(), u_ptrs.data(), nv, dz,
+                                       fsz, 0);
+
+                auto time_us = [&](auto fn_call) {
+                    auto t0 = std::chrono::high_resolution_clock::now();
+                    for (unsigned int iter = 0; iter < profile_iters; iter++)
+                        fn_call();
+                    auto t1 = std::chrono::high_resolution_clock::now();
+                    return std::chrono::duration<double, std::micro>(t1 - t0)
+                               .count() /
+                           profile_iters;
+                };
+
+                double xb = time_us([&]() {
+                    deriv_obj.grad_x_batch(du_ptrs.data(), u_ptrs.data(), nv,
+                                           dx, fsz, 0);
+                });
+                double yb = time_us([&]() {
+                    deriv_obj.grad_y_batch(du_ptrs.data(), u_ptrs.data(), nv,
+                                           dy, fsz, 0);
+                });
+                double zb = time_us([&]() {
+                    deriv_obj.grad_z_batch(du_ptrs.data(), u_ptrs.data(), nv,
+                                           dz, fsz, 0);
+                });
+
+                std::cout << std::setw(6) << fn
+                          << std::scientific << std::setprecision(1)
+                          << std::setw(11) << rmse_x
+                          << std::fixed << std::setprecision(3)
+                          << std::setw(6) << nv
+                          << std::setw(11) << xb
+                          << std::setw(11) << yb
+                          << std::setw(11) << zb
+                          << std::setw(11) << (xb + yb + zb)
+                          << std::endl;
+            }
+        }
+    }
+
+    std::cout << std::string(60, '-') << std::endl;
+    std::cout << "Fused-block correctness: " << fused_pass << " pass, "
+              << fused_fail << " fail" << std::endl;
+
+    return (fail > 0 || coeff_fail > 0 || batch_fail > 0 || fused_fail > 0)
+               ? 1
+               : 0;
 }

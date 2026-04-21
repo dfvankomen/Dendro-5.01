@@ -187,26 +187,21 @@ void bandedMatrixSolve(BandedMatrixSolveVars *vars) {
             vars->LDX, vars->RCOND, vars->FERR, vars->BERR, vars->WORK,
             vars->IWORK, vars->INFO);
 
-    // if not successful
+    // if not successful, throw so the caller can decide what to do. a
+    // library should not terminate the user's program
     int info = *(vars->INFO);
     if (info != 0) {
-        std::cerr << "BandedMatrixSolve solve failed. info = " << info
-                  << std::endl;
+        std::string detail;
         if (info < 0) {
-            std::cerr << "Illegal value in element " << std::abs(info)
-                      << std::endl;
+            detail = "illegal value in element " + std::to_string(std::abs(info));
         } else if (info > 0 && info <= *(vars->N)) {
-            std::cerr << "U(i,i) is exactly zero for i = " << info << std::endl;
+            detail = "U(i,i) is exactly zero for i = " + std::to_string(info);
         } else {
-            std::cerr << "U(i,i) is nonsingular, but rcond is less than "
-                         "machine zero."
-                      << std::endl;
+            detail =
+                "U(i,i) is nonsingular, but rcond is less than machine zero";
         }
-
-        // TODO: probably better to throw errors and propagate it up all the way
-        // with try catch, fortunately upon full exit the OS will actually clean
-        // everything up
-        exit(info);
+        throw std::runtime_error("bandedMatrixSolve failed (info=" +
+                                 std::to_string(info) + "): " + detail);
     }
 }
 
@@ -226,395 +221,99 @@ void print_delta_coeffs(std::string prefix1, std::vector<double> &delta1,
 // Routines that actually compute the derivatives given the right matrices, not
 // "dependent" on particular values
 
+// fallback path: used only when libxsmm JIT fails (rare). kept as a pure
+// BLAS implementation so the library degrades gracefully rather than crashing
 void matmul_x_dim_old(const double *const R, double *const Dxu,
                       const double *const u, const double alpha,
-                      const unsigned int *sz, const unsigned int bflag) {
-    const unsigned int nx = sz[0];
-    const unsigned int ny = sz[1];
-    const unsigned int nz = sz[2];
+                      const unsigned int *sz, const unsigned int bflag,
+                      const unsigned int pw) {
+    const unsigned int nx    = sz[0];
+    const unsigned int ny    = sz[1];
+    const unsigned int nz    = sz[2];
 
-#ifdef DEBUG_COMPACT_DERIVS
-    const unsigned int xstart =
-        (bflag & (1u << OCT_DIR_LEFT)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const unsigned int ystart =
-        (bflag & (1u << OCT_DIR_DOWN)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const unsigned int zstart =
-        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const unsigned int xend =
-        nx -
-        ((bflag & (1u << OCT_DIR_RIGHT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
-    const unsigned int yend =
-        ny -
-        ((bflag & (1u << OCT_DIR_UP)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
-    const unsigned int zend =
-        nz -
-        ((bflag & (1u << OCT_DIR_FRONT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
-
-    // check for nans
-    for (int k = zstart; k < zend; k++) {
-        for (int j = ystart; j < yend; j++) {
-            for (int i = xstart; i < xend; i++) {
-                const int pp = INDEX_3D(i, j, k);
-                if (std::isnan(u[pp])) {
-                    std::cout << "NAN detected IN INPUT - function " << __func__
-                              << " file: " << __FILE__ << " line: " << __LINE__
-                              << " (i, j, k): (" << i << ", " << j << ", " << k
-                              << ") bflag: " << std::bitset<8>(bflag)
-                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
-                              << nz << ")" << std::endl;
-                    MPI_Abort(MPI_COMM_WORLD, 1);
-                }
-            }
-        }
-    }
-#endif
-
-    static const char TRANSA = 'N';
-    static const char TRANSB = 'N';
-
+    const char TRANSA        = 'N';
+    const char TRANSB        = 'N';
     const int M              = nx;
     const int N              = ny;
     const int K              = nx;
-    // NOTE: LDA = M, LDB = K, and LDC = M
+    const double beta        = 0.0;
 
-    static const double beta = 0.0;
-
-#ifdef USE_XSMM_MAT_MUL
-#ifdef SOLVER_ENABLE_MERGED_BLOCKS
-    kernel_type *kernel = m_kernel_storage[simple_hash(M, N)];
-#endif
-#endif
-
-    // calculate z start and end based on bflag, saves a good amount of time if
-    // we're at a Z boundary
-    const int z_start =
-        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const int z_end = (bflag & (1u << OCT_DIR_FRONT))
-                          ? nz - dendroderivs::DENDRO_DERIVS_PW
-                          : nz;
+    // skip ghost zones in z at a boundary
+    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
+    const int z_end =
+        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
 
     for (unsigned int k = z_start; k < z_end; k++) {
-        // avoid pointer arithmitic, use direct pointer location for compiler
-        // optimization
         const double *u_slice  = u + k * nx * ny;
         const double *du_slice = Dxu + k * nx * ny;
-
-#ifdef USE_XSMM_MAT_MUL
-        // N = ny;
-        // thanks to memory layout, we can just... use this as a matrix
-        // so we can just grab the "matrix" of ny x nx for this one
-
-        // performs C_mn = alpha * A_mk * B_kn + beta * C_mn
-
-        // for the x_der case, m = k = nx
-#ifdef SOLVER_ENABLE_MERGED_BLOCKS
-        (*kernel)(R, u_curr_chunk, du_curr_chunk);
-#else
-        (*m_kernel_x)(R, u_curr_chunk, du_curr_chunk);
-#endif
-
-#else
-        // this allows us to use const in the functionality
         lapack::dgemm_cpp_safe(&TRANSA, &TRANSB, &M, &N, &K, &alpha, R, &M,
                                u_slice, &K, &beta, du_slice, &M);
-#endif
     }
-
-    // TODO: investigate why the kernel won't take an alpha
-#ifdef USE_XSMM_MAT_MUL
-#pragma omp simd
-    for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
-        Dxu[ii] *= alpha;
-    }
-#endif
-
-#ifdef DEBUG_COMPACT_DERIVS
-    // check for nans
-    for (int k = zstart; k < zend; k++) {
-        for (int j = ystart; j < yend; j++) {
-            for (int i = xstart; i < xend; i++) {
-                const int pp = INDEX_3D(i, j, k);
-                if (std::isnan(Dxu[pp])) {
-                    std::cout << "NAN detected IN DERIVATIVE OUTPUT - function "
-                              << __func__ << " file: " << __FILE__
-                              << " line: " << __LINE__ << " (i, j, k): (" << i
-                              << ", " << j << ", " << k
-                              << ") bflag: " << std::bitset<8>(bflag)
-                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
-                              << nz << ")" << std::endl;
-
-                    // then dump the original input matrix!
-                    double *u_curr_chunk = (double *)u;
-
-                    std::cout << "U Matrix: ====" << std::endl;
-                    for (unsigned int k = 0; k < nz; k++) {
-                        std::cout << "k = " << k << std::endl;
-
-                        printArray_2D(u_curr_chunk, ny, nx);
-
-                        u_curr_chunk += nx * ny;
-                    }
-
-                    // then dump the output matrices!
-                    double *du_curr_chunk = (double *)Dxu;
-
-                    std::cout << "Derivative Matrix: ====" << std::endl;
-                    for (unsigned int k = 0; k < nz; k++) {
-                        std::cout << "k = " << k << std::endl;
-
-                        printArray_2D(du_curr_chunk, ny, nx);
-
-                        du_curr_chunk += nx * ny;
-                    }
-
-                    // and then the R matrix
-                    std::cout << "R Matrix: ===" << std::endl;
-                    printArray_2D_transpose(R, nx, nx);
-
-                    MPI_Abort(MPI_COMM_WORLD, 1);
-                }
-            }
-        }
-    }
-#endif
 }
 
+// fallback path: used only when libxsmm JIT fails (rare). does the GEMM
+// into workspace then transposes back to the output array
 void matmul_y_dim_old(const double *const R, double *const Dyu,
                       const double *const u, const double alpha,
                       const unsigned int *sz, double *const workspace,
-                      const unsigned int bflag) {
-    const unsigned int nx = sz[0];
-    const unsigned int ny = sz[1];
-    const unsigned int nz = sz[2];
+                      const unsigned int bflag, const unsigned int pw) {
+    const unsigned int nx         = sz[0];
+    const unsigned int ny         = sz[1];
+    const unsigned int nz         = sz[2];
 
-#ifdef DEBUG_COMPACT_DERIVS
-    const unsigned int xstart =
-        (bflag & (1u << OCT_DIR_LEFT)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const unsigned int ystart =
-        (bflag & (1u << OCT_DIR_DOWN)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const unsigned int zstart =
-        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const unsigned int xend =
-        nx -
-        ((bflag & (1u << OCT_DIR_RIGHT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
-    const unsigned int yend =
-        ny -
-        ((bflag & (1u << OCT_DIR_UP)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
-    const unsigned int zend =
-        nz -
-        ((bflag & (1u << OCT_DIR_FRONT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
-
-    // check for nans
-    for (int k = zstart; k < zend; k++) {
-        for (int j = ystart; j < yend; j++) {
-            for (int i = xstart; i < xend; i++) {
-                const int pp = INDEX_3D(i, j, k);
-                if (std::isnan(u[pp])) {
-                    std::cout << "NAN detected IN INPUT - function " << __func__
-                              << " file: " << __FILE__ << " line: " << __LINE__
-                              << " (i, j, k): (" << i << ", " << j << ", " << k
-                              << ") bflag: " << std::bitset<8>(bflag)
-                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
-                              << nz << ")" << std::endl;
-                    MPI_Abort(MPI_COMM_WORLD, 1);
-                }
-            }
-        }
-    }
-#endif
-
-    static const char TRANSA            = 'N';
-    static const char TRANSB            = 'T';
-    const int M                         = ny;
-    const int N                         = nx;
-    const int K                         = ny;
-    // NOTE: LDA = M, LDB = N, and LDC = M
-    // LDB is N because in memory, Y is transposed!
-
-    static const double beta            = 0.0;
-
-    static const double alpha_domatcopy = 1.0;
-
-#ifdef USE_XSMM_MAT_MUL
-#ifdef SOLVER_ENABLE_MERGED_BLOCKS
-    kernel_type *kernel = m_kernel_transpose_storage[simple_hash(M, N)];
-#endif
-#endif
+    const char TRANSA             = 'N';
+    const char TRANSB             = 'T';
+    const int M                   = ny;
+    const int N                   = nx;
+    const int K                   = ny;
+    const double beta             = 0.0;
 
     const unsigned int slice_size = nx * ny;
 
-    // calculate z start and end based on bflag, saves a good amount of time if
-    // we're at a Z boundary
-    const int z_start =
-        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const int z_end = (bflag & (1u << OCT_DIR_FRONT))
-                          ? nz - dendroderivs::DENDRO_DERIVS_PW
-                          : nz;
+    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
+    const int z_end =
+        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
 
     for (unsigned int k = z_start; k < z_end; k++) {
-        // avoid pointer arithmitic, use direct pointer location for compiler
-        // optimization
         const double *u_slice = u + k * slice_size;
         double *du_slice      = Dyu + k * slice_size;
 
-#ifdef USE_XSMM_MAT_MUL
-        // thanks to memory layout, we can just... use this as a matrix
-        // so we can just grab the "matrix" of ny x nx for this one
-
-#ifdef SOLVER_ENABLE_MERGED_BLOCKS
-        (*kernel)(R, u_slice, workspace);
-#else
-        (*m_kernel_y)(R, u_slice, workspace);
-#endif
-
-#else
-
         lapack::dgemm_cpp_safe(&TRANSA, &TRANSB, &M, &N, &K, &alpha, R, &M,
                                u_slice, &N, &beta, workspace, &M);
-#endif
 
-#ifdef __INTEL_MKL__
-        // copy back out from workspace using domatcopy if using intel mkl
-        mkl_domatcopy('C', 'T', ny, nx, alpha_domatcopy, workspace, ny,
-                      du_slice, nx);
-#else
-        // TODO: see if there's a faster way to copy (i.e. SSE?)
-        // the data is transposed so it's much harder to just copy all at
-        // once
-
+        // transpose workspace back to the output layout
 #pragma omp simd collapse(2)
         for (unsigned int i = 0; i < nx; i++) {
             for (unsigned int j = 0; j < ny; j++) {
                 du_slice[INDEX_N2D(i, j, nx)] = workspace[j + i * ny];
             }
         }
-#endif
     }
-
-    // NOTE: it is currently faster for these derivatives if we calculate
-    // them
-#ifdef USE_XSMM_MAT_MUL
-    for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
-        Dyu[ii] *= alpha;
-    }
-#endif
-
-#ifdef DEBUG_COMPACT_DERIVS
-    // check for nans
-    for (int k = zstart; k < zend; k++) {
-        for (int j = ystart; j < yend; j++) {
-            for (int i = xstart; i < xend; i++) {
-                const int pp = INDEX_3D(i, j, k);
-                if (std::isnan(Dyu[pp])) {
-                    std::cout << "NAN detected IN DERIVATIVE OUTPUT - function "
-                              << __func__ << " file: " << __FILE__
-                              << " line: " << __LINE__ << " (i, j, k): (" << i
-                              << ", " << j << ", " << k
-                              << ") bflag: " << std::bitset<8>(bflag)
-                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
-                              << nz << ")" << std::endl;
-
-                    // then dump the original input matrix!
-                    double *u_curr_chunk = (double *)u;
-
-                    std::cout << "U Matrix: ====" << std::endl;
-                    for (unsigned int k = 0; k < nz; k++) {
-                        std::cout << "k = " << k << std::endl;
-
-                        printArray_2D(u_curr_chunk, ny, nx);
-
-                        u_curr_chunk += nx * ny;
-                    }
-
-                    // then dump the output matrices!
-                    double *du_curr_chunk = (double *)Dyu;
-
-                    std::cout << "Derivative Matrix: ====" << std::endl;
-                    for (unsigned int k = 0; k < nz; k++) {
-                        std::cout << "k = " << k << std::endl;
-
-                        printArray_2D(du_curr_chunk, ny, nx);
-
-                        du_curr_chunk += nx * ny;
-                    }
-
-                    // and then the R matrix
-                    std::cout << "R Matrix: ===" << std::endl;
-                    printArray_2D_transpose(R, ny, ny);
-
-                    MPI_Abort(MPI_COMM_WORLD, 1);
-                }
-            }
-        }
-    }
-#endif
 }
 
+// fallback path: used only when libxsmm JIT fails (rare). gathers each
+// y-slice into contiguous workspace, runs the GEMM, scatters back out
 void matmul_z_dim_old(const double *const R, double *const Dzu,
                       const double *const u, const double alpha,
                       const unsigned int *sz, double *const workspace,
-                      const unsigned int bflag) {
+                      const unsigned int bflag, const unsigned int pw) {
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
     const unsigned int nz = sz[2];
 
-#ifdef DEBUG_COMPACT_DERIVS
-    const unsigned int xstart =
-        (bflag & (1u << OCT_DIR_LEFT)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const unsigned int ystart =
-        (bflag & (1u << OCT_DIR_DOWN)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const unsigned int zstart =
-        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const unsigned int xend =
-        nx -
-        ((bflag & (1u << OCT_DIR_RIGHT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
-    const unsigned int yend =
-        ny -
-        ((bflag & (1u << OCT_DIR_UP)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
-    const unsigned int zend =
-        nz -
-        ((bflag & (1u << OCT_DIR_FRONT)) ? dendroderivs::DENDRO_DERIVS_PW : 0);
-
-    // check for nans
-    for (int k = zstart; k < zend; k++) {
-        for (int j = ystart; j < yend; j++) {
-            for (int i = xstart; i < xend; i++) {
-                const int pp = INDEX_3D(i, j, k);
-                if (std::isnan(u[pp])) {
-                    std::cout << "NAN detected IN INPUT - function " << __func__
-                              << " file: " << __FILE__ << " line: " << __LINE__
-                              << " (i, j, k): (" << i << ", " << j << ", " << k
-                              << ") bflag: " << std::bitset<8>(bflag)
-                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
-                              << nz << ")" << std::endl;
-                    MPI_Abort(MPI_COMM_WORLD, 1);
-                }
-            }
-        }
-    }
-#endif
-    static const char TRANSA = 'N';
-    static const char TRANSB = 'T';
-    const int M              = nz;
-    const int N              = nx;
-    const int K              = nz;
-    static const double beta = 0.0;
-
-#ifdef USE_XSMM_MAT_MUL
-#ifdef SOLVER_ENABLE_MERGED_BLOCKS
-    kernel_type *kernel = m_kernel_transpose_storage[simple_hash(M, N)];
-#endif
-#endif
+    const char TRANSA     = 'N';
+    const char TRANSB     = 'T';
+    const int M           = nz;
+    const int N           = nx;
+    const int K           = nz;
+    const double beta     = 0.0;
 
     double const *workspace_offset = workspace + nx * nz;
 
-    // NOTE: due to how derivatives are called, and thanks to the padding width,
-    // we can actually skip both padding regions of j, they'll never be needed
-    // on the z derivative, because z is always called last on 2nd order mixed
-    // derivatives
-
-    const unsigned int y_start     = dendroderivs::DENDRO_DERIVS_PW;
-    const unsigned int y_end       = ny - dendroderivs::DENDRO_DERIVS_PW;
+    // z is always called last on 2nd-order mixed derivatives, so the y
+    // padding regions are never needed here — skip them
+    const unsigned int y_start = pw;
+    const unsigned int y_end   = ny - pw;
 
     for (unsigned int j = y_start; j < y_end; j++) {
 #pragma omp simd collapse(2)
@@ -624,21 +323,8 @@ void matmul_z_dim_old(const double *const R, double *const Dzu,
             }
         }
 
-#ifdef USE_XSMM_MAT_MUL
-#ifdef SOLVER_ENABLE_MERGED_BLOCKS
-        (*kernel)(R, workspace, workspace_offset);
-#else
-        // now do the faster math multiplcation
-        (*m_kernel_z)(R, workspace, workspace_offset);
-#endif
-
-#else
-
-        // now we have a transposed matrix to send into dgemm_
         lapack::dgemm_cpp_safe(&TRANSA, &TRANSB, &M, &N, &K, &alpha, R, &M,
                                workspace, &N, &beta, workspace_offset, &M);
-
-#endif
 
 #pragma omp simd collapse(2)
         for (unsigned int i = 0; i < nx; i++) {
@@ -647,79 +333,20 @@ void matmul_z_dim_old(const double *const R, double *const Dzu,
             }
         }
     }
-
-    // NOTE: it is currently faster for these derivatives if we calculate
-    // them
-#ifdef USE_XSMM_MAT_MUL
-    for (uint32_t ii = 0; ii < nx * ny * nz; ii++) {
-        Dzu[ii] *= alpha;
-    }
-#endif
-
-#ifdef DEBUG_COMPACT_DERIVS
-    // check for nans
-    for (int k = zstart; k < zend; k++) {
-        for (int j = ystart; j < yend; j++) {
-            for (int i = xstart; i < xend; i++) {
-                const int pp = INDEX_3D(i, j, k);
-                if (std::isnan(Dzu[pp])) {
-                    std::cout << "NAN detected IN DERIVATIVE OUTPUT - function "
-                              << __func__ << " file: " << __FILE__
-                              << " line: " << __LINE__ << " (i, j, k): (" << i
-                              << ", " << j << ", " << k
-                              << ") bflag: " << std::bitset<8>(bflag)
-                              << " (nx, ny, nz): (" << nx << ", " << ny << ", "
-                              << nz << ")" << std::endl;
-
-                    // then dump the original input matrix!
-                    double *u_curr_chunk = (double *)u;
-
-                    std::cout << "U Matrix: ====" << std::endl;
-                    for (unsigned int k = 0; k < nz; k++) {
-                        std::cout << "k = " << k << std::endl;
-
-                        printArray_2D(u_curr_chunk, ny, nx);
-
-                        u_curr_chunk += nx * ny;
-                    }
-
-                    // then dump the output matrices!
-                    double *du_curr_chunk = (double *)Dzu;
-
-                    std::cout << "Derivative Matrix: ====" << std::endl;
-                    for (unsigned int k = 0; k < nz; k++) {
-                        std::cout << "k = " << k << std::endl;
-
-                        printArray_2D(du_curr_chunk, ny, nx);
-
-                        du_curr_chunk += nx * ny;
-                    }
-
-                    // and then the R matrix
-                    std::cout << "R Matrix: ===" << std::endl;
-                    printArray_2D_transpose(R, nz, nz);
-
-                    MPI_Abort(MPI_COMM_WORLD, 1);
-                }
-            }
-        }
-    }
-#endif
 }
 
 void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
                   const double *__restrict__ u, const double alpha,
-                  const unsigned int *sz, const unsigned int bflag) {
+                  const unsigned int *sz, const unsigned int bflag,
+                  const unsigned int pw) {
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
     const unsigned int nz = sz[2];
 
     // skip ghost zones in z if at a boundary
-    const int z_start =
-        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const int z_end = (bflag & (1u << OCT_DIR_FRONT))
-                          ? nz - dendroderivs::DENDRO_DERIVS_PW
-                          : nz;
+    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
+    const int z_end =
+        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
 
     const unsigned int n_active_cols = ny * (z_end - z_start);
 
@@ -737,7 +364,7 @@ void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
 
     if (!kernel) {
         std::cout << "FALLING BACK TO MATMUL X DIM" << std::endl;
-        return matmul_x_dim_old(R, Dxu, u, alpha, sz, bflag);
+        return matmul_x_dim_old(R, Dxu, u, alpha, sz, bflag, pw);
     }
 
     const double *u_start = u + z_start * nx * ny;
@@ -750,7 +377,7 @@ void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
 void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
                   const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, double *__restrict__ workspace,
-                  const unsigned int bflag) {
+                  const unsigned int bflag, const unsigned int pw) {
     const unsigned int nx               = sz[0];
     const unsigned int ny               = sz[1];
     const unsigned int nz               = sz[2];
@@ -771,17 +398,15 @@ void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
 
     if (!kernel) {
         std::cout << "FALLING BACK TO MATMUL Y DIM" << std::endl;
-        return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag);
+        return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag, pw);
     }
 
     const unsigned int slice_size = nx * ny;
 
     // skip ghost zones in z if we're at a z boundary
-    const int z_start =
-        (bflag & (1u << OCT_DIR_BACK)) ? dendroderivs::DENDRO_DERIVS_PW : 0;
-    const int z_end = (bflag & (1u << OCT_DIR_FRONT))
-                          ? nz - dendroderivs::DENDRO_DERIVS_PW
-                          : nz;
+    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
+    const int z_end =
+        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
 
     // pre-scale the derivative matrix by alpha so the GEMM writes the
     // final result directly. R is ny*ny which is small (e.g. 81 doubles),
@@ -819,13 +444,13 @@ void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
 
     // fallback
     std::cout << "FALLING BACK TO MATMUL Y DIM (old)" << std::endl;
-    return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag);
+    return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag, pw);
 }
 
 void matmul_z_dim(const double *__restrict__ R, double *__restrict__ Dzu,
                   const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, double *__restrict__ workspace,
-                  const unsigned int bflag) {
+                  const unsigned int bflag, const unsigned int pw) {
     const int nx             = sz[0];
     const int ny             = sz[1];
     const int nz             = sz[2];
@@ -840,7 +465,7 @@ void matmul_z_dim(const double *__restrict__ R, double *__restrict__ Dzu,
     auto kernel              = get_or_create_kernel_yz(M, N, K);
 
     if (!kernel) {
-        return matmul_z_dim_old(R, Dzu, u, alpha, sz, workspace, bflag);
+        return matmul_z_dim_old(R, Dzu, u, alpha, sz, workspace, bflag, pw);
     }
 
     // NOTE: due to how derivatives are called, and thanks to the padding width,
@@ -848,8 +473,8 @@ void matmul_z_dim(const double *__restrict__ R, double *__restrict__ Dzu,
     // on the z derivative, because z is always called last on 2nd order mixed
     // derivatives
 
-    const unsigned int y_start    = dendroderivs::DENDRO_DERIVS_PW;
-    const unsigned int y_end      = ny - dendroderivs::DENDRO_DERIVS_PW;
+    const unsigned int y_start    = pw;
+    const unsigned int y_end      = ny - pw;
 
     const unsigned int slice_size = nx * nz;
 

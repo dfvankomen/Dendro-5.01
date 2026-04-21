@@ -6,8 +6,6 @@
 
 namespace dendroderivs {
 
-unsigned int DENDRO_DERIVS_PW = 0;
-
 DendroDerivatives::DendroDerivatives(
     const std::string derivType_1, const std::string derivType_2,
     const unsigned int ele_order, const std::vector<double> &coeffs_in_1,
@@ -69,20 +67,8 @@ DendroDerivatives::DendroDerivatives(
                                  filterUse);
     }
 
-    const unsigned int pw = ele_order / 2;
-
-    // the value starts at 0, so it should be set. if we're not zero and it's
-    // different, print a warning
-    if (DENDRO_DERIVS_PW != 0 && DENDRO_DERIVS_PW != pw) {
-        std::cout << "WARNING: Overwiting internal saved Padding Width from "
-                  << DENDRO_DERIVS_PW << " to " << pw
-                  << "! This could cause issues if there are multiple "
-                     "DendroDerivative objects!";
-        DENDRO_DERIVS_PW = pw;
-    } else {
-        // otherwise, we can just set it, because it's probably just 0
-        DENDRO_DERIVS_PW = pw;
-    }
+    // each Derivs instance carries its own pw (p_pw member); no global
+    // shared state between DendroDerivatives objects anymore
 
     // cache raw stencil function pointers for fast dispatch
     _cache_raw_stencils();

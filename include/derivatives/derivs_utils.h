@@ -351,33 +351,39 @@ inline void dgemm_cpp_safe(const char *TRANSA, const char *TRANSB, const int *m,
 //                const_cast<int *>(ldb));
 // }
 
+// NOTE: pw is the ghost-zone padding width (derived from ele_order/2 by the
+// caller). it used to live in a mutable global DENDRO_DERIVS_PW; passing it
+// explicitly lets two derivs instances at different ele_orders coexist
+// safely in the same process
 void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
                   const double *__restrict__ u, const double alpha,
-                  const unsigned int *sz, const unsigned int bflag);
+                  const unsigned int *sz, const unsigned int bflag,
+                  const unsigned int pw);
 
 void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
                   const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, double *__restrict__ workspace,
-                  const unsigned int bflag);
+                  const unsigned int bflag, const unsigned int pw);
 
 void matmul_z_dim(const double *__restrict__ R, double *__restrict__ Dzu,
                   const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, double *__restrict__ workspace,
-                  const unsigned int bflag);
+                  const unsigned int bflag, const unsigned int pw);
 
 void matmul_x_dim_old(const double *const R, double *const Dxu,
                       const double *const u, const double alpha,
-                      const unsigned int *sz, const unsigned int bflag);
+                      const unsigned int *sz, const unsigned int bflag,
+                      const unsigned int pw);
 
 void matmul_y_dim_old(const double *const R, double *const Dyu,
                       const double *const u, const double alpha,
                       const unsigned int *sz, double *const workspace,
-                      const unsigned int bflag);
+                      const unsigned int bflag, const unsigned int pw);
 
 void matmul_z_dim_old(const double *const R, double *const Dzu,
                       const double *const u, const double alpha,
                       const unsigned int *sz, double *const workspace,
-                      const unsigned int bflag);
+                      const unsigned int bflag, const unsigned int pw);
 
 std::vector<std::vector<double>> inline generate_identity_bdys(size_t nbdry) {
     std::vector<std::vector<double>> bdry_coeffs;

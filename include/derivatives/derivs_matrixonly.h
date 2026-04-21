@@ -131,15 +131,12 @@ class MatrixCompactDerivs : public CompactDerivs {
     }
 
     /**
-     * Based on the crazy things that are being stored across all of these
-     * MatrixCompactDerivs, things need to be properly copied if it's moved!
+     * @brief Deep-copy constructor. Needed so `clone()` can duplicate the
+     * instance, since MatrixCompactDerivs owns the MatrixDiagonalEntries
+     * (raw pointer), a workspace vector, and the per-size D storage map.
+     * Prefer `clone()` over direct copy; this is the mechanism that backs it.
      */
     MatrixCompactDerivs(const MatrixCompactDerivs &obj) : CompactDerivs(obj) {
-#ifdef DEBUG
-        std::cout << "[copy constructor for MatrixCompactDerivs was called!\n"
-                  << "this is a mistake as there is no implementation]"
-                  << std::endl;
-#endif
         if (obj.diagEntries) {
             diagEntries = new MatrixDiagonalEntries{
                 obj.diagEntries->PDiagInterior, obj.diagEntries->PDiagBoundary,
@@ -148,20 +145,13 @@ class MatrixCompactDerivs : public CompactDerivs {
             diagEntries = nullptr;
         }
 
-        // make sure to copy over workspace
         workspace_ = obj.workspace_;
 
-        // and then make sure to copy over D_storage_map
         for (const auto &pair : obj.D_storage_map_) {
             D_storage_map_[pair.first] =
                 pair.second ? std::make_unique<DerivMatrixStorage>(*pair.second)
                             : nullptr;
         }
-#ifdef DEBUG
-        std::cout << "in MatrixCompactDerivs deconstructor" << std::endl;
-#endif
-        // if (D_ != nullptr) delete[] D_;
-        // delete diagEntries;
     }
 
     // fast-path storage lookup: integer compare for the common case,
@@ -194,9 +184,10 @@ class MatrixCompactDerivs : public CompactDerivs {
         auto *D_use   = get_deriv_mat_by_bflag_x(storage, bflag);
 
         if constexpr (DerivOrder == 1) {
-            matmul_x_dim(D_use->data(), du, u, 1.0 / dx, sz, bflag);
+            matmul_x_dim(D_use->data(), du, u, 1.0 / dx, sz, bflag, p_pw);
         } else {
-            matmul_x_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz, bflag);
+            matmul_x_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz, bflag,
+                         p_pw);
         }
     }
 
@@ -210,10 +201,10 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         if constexpr (DerivOrder == 1) {
             matmul_y_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data(),
-                         bflag);
+                         bflag, p_pw);
         } else {
             matmul_y_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz,
-                         workspace_.data(), bflag);
+                         workspace_.data(), bflag, p_pw);
         }
     }
 
@@ -224,10 +215,10 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         if constexpr (DerivOrder == 1) {
             matmul_z_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data(),
-                         bflag);
+                         bflag, p_pw);
         } else {
             matmul_z_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz,
-                         workspace_.data(), bflag);
+                         workspace_.data(), bflag, p_pw);
         }
     }
 
@@ -242,7 +233,8 @@ class MatrixCompactDerivs : public CompactDerivs {
         const double alpha = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
 
         for (unsigned int v = 0; v < n_vars; v++)
-            matmul_x_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz, bflag);
+            matmul_x_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz, bflag,
+                         p_pw);
     }
 
     void do_grad_y_batch(double **du_arr, const double **u_arr,
@@ -255,7 +247,7 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         for (unsigned int v = 0; v < n_vars; v++)
             matmul_y_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz,
-                         workspace_.data(), bflag);
+                         workspace_.data(), bflag, p_pw);
     }
 
     void do_grad_z_batch(double **du_arr, const double **u_arr,
@@ -268,7 +260,7 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         for (unsigned int v = 0; v < n_vars; v++)
             matmul_z_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz,
-                         workspace_.data(), bflag);
+                         workspace_.data(), bflag, p_pw);
     }
 
     void init();
