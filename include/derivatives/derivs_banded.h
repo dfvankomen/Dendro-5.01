@@ -19,6 +19,11 @@ class BandedCompactDerivs : public CompactDerivs {
     BandedMatrixSolveVars *grad_xVars = nullptr;
 
    protected:
+    // dense P and Q matrices — only the banded path materializes these.
+    // built via buildMatrix() then converted into the banded Pb_/Qb_ below
+    std::vector<double> P_;
+    std::vector<double> Q_;
+
     // all KL and KU values for each P and Q matrix
     BandedMatrixDiagonalWidths *kVals = nullptr;
 
@@ -38,17 +43,17 @@ class BandedCompactDerivs : public CompactDerivs {
     // when you create your own BandedCompactDerivs derived
     //  class implementation, you MUST call the method init()!!!!
     BandedCompactDerivs(unsigned int ele_order) : CompactDerivs{ele_order} {};
+
     /**
-     * we implement a copy constructor just to print when it's called;
-     * we would like to avoid accidental shallow copies
+     * @brief Copy constructor. Shallow by default — derived classes should
+     * override if they need to duplicate the banded solver state (kVals,
+     * Pb_, Qb_, workspace). Prefer `clone()`.
      */
-    BandedCompactDerivs(const BandedCompactDerivs &obj) : CompactDerivs(obj) {
-#ifdef DEBUG
-        std::cout << "[copy constructor for BandedCompactDerivs was called!\n"
-                  << "this is a mistake as there is no implementation]"
-                  << std::endl;
-#endif
-    };
+    BandedCompactDerivs(const BandedCompactDerivs &obj) : CompactDerivs(obj) {};
+
+    // accessors for the dense forms — used rarely, but kept for inspection
+    inline const double *getP() const { return P_.data(); }
+    inline const double *getQ() const { return Q_.data(); }
 
     // reminder, this will always be called as a child is destructing
     virtual ~BandedCompactDerivs();

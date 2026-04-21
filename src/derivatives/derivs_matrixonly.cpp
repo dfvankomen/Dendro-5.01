@@ -60,7 +60,7 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
             boundary_bottom = pw;
         }
 
-        // build up P_ and Q_
+        // build the local P and Q matrices from diagonals
         std::vector<double> P_temp = create_P_from_diagonals(
             *diagEntries, n, 1.0, boundary_top, boundary_bottom);
         std::vector<double> Q_temp = create_Q_from_diagonals(
@@ -105,13 +105,6 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
                                    D_ptr->data(), n, info);
             // this should directly solve for the matrix inverse
         }
-
-        // std::cout << "P is: " << std::endl;
-        // printArray_2D_transpose(P_temp.data(), n, n);
-        // std::cout << "Q is: " << std::endl;
-        // printArray_2D_transpose(Q_temp.data(), n, n);
-        // std::cout << "D is: " << std::endl;
-        // printArray_2D_transpose(D_ptr->data(), n, n);
     }
 
     return derivMatrixPtr;
@@ -162,7 +155,7 @@ createMatrixSystemForSingleSizeInMatrixFilter(
             boundary_bottom = pw;
         }
 
-        // build up P_ and Q_
+        // build the local P and Q matrices from diagonals
         std::vector<double> P_temp = create_P_from_diagonals(
             *diagEntries, n, 1.0, boundary_top, boundary_bottom);
         std::vector<double> Q_temp = create_Q_from_diagonals(
@@ -171,29 +164,6 @@ createMatrixSystemForSingleSizeInMatrixFilter(
             *filterEntries, n, 1.0, boundary_top, boundary_bottom);
         std::vector<double> S_temp = create_Q_from_diagonals(
             *filterEntries, n, 1.0, boundary_top, boundary_bottom);
-
-        // Making the filter matrices
-#if 0
-        if (n == pw * 6 + 1) {
-            std::cout << "R MATRIX for n=" << n << std::endl;
-            printArray_2D_transpose(R_temp.data(), n, n);
-
-            std::cout << "S MATRIX for n=" << n << std::endl;
-            printArray_2D_transpose(S_temp.data(), n, n);
-            std::cout << std::endl;
-        }
-#endif
-
-#if 0
-        if (n == pw * 6 + 1) {
-            std::cout << "P MATRIX for n=" << n << std::endl;
-            printArray_2D_transpose(P_temp.data(), n, n);
-
-            std::cout << "Q MATRIX for n=" << n << std::endl;
-            printArray_2D_transpose(Q_temp.data(), n, n);
-            std::cout << std::endl;
-        }
-#endif
 
         std::vector<double>* const D_ptr =
             get_deriv_mat_by_boundary(derivMatrixPtr.get(), b);
@@ -233,60 +203,6 @@ filt_type == InMatFilterType::IMFT_Kim_08_P2)
 
         lapack::square_matrix_multiplication(Pinv.data(), QRS.data(),
                                              D_ptr->data(), n);
-
-#if 0
-
-        // then we solve it
-        if constexpr (_DENDRODERIV_USE_INV_METHOD) {
-            // ORIGINAL solution
-            // we want to solve:
-            // P f' = Q f
-            // this means that we need to do:
-            // P-1 P f' = P-1 Q f
-            // which gives us: f' = D f, so D = P-1 Q
-
-            // start by copying P to Pinv
-            std::vector<double> Pinv = P_temp;
-
-            // compute the inverse
-            lapack::iterative_inverse(P_temp.data(), Pinv.data(), n);
-
-            // perform the norm? could be useful for if we want to make sure
-            // we're within -1 and 1 for stability? for (size_t i = 0; i < p_n *
-            // p_n; i++) {
-            //     Pinv[i] *= norm;
-            // }
-
-            // then do matrix multiplication to get D_
-            lapack::square_matrix_multiplication(Pinv.data(), Q_temp.data(),
-                                                 D_ptr->data(), n);
-
-        } else {
-            // ALTERNATE SOLUTION
-            // use the "solution" routine of BLAS to solve for D, when we
-            // consider that PD = Q Pf' = Qf => D = P-1 Q and P P-1 Q = Q, so ,
-            // P (P-1 Q) = Q, so we can solve P D = Q
-
-            int info = 0;
-            lapack::lapack_DGESV_T(n, n, P_temp.data(), n, Q_temp.data(),
-                                   D_ptr->data(), n, info);
-            // this should directly solve for the matrix inverse
-        }
-#endif
-#if 0
-        if (n == pw * 4 + 1) {
-            std::cout << "D MATRIX for n=" << n << std::endl;
-            printArray_2D_transpose(D_ptr->data(), n, n);
-            std::cout << std::endl << std::endl << std::endl;
-        }
-#endif
-
-        // std::cout << "P is: " << std::endl;
-        // printArray_2D_transpose(P_temp.data(), n, n);
-        // std::cout << "Q is: " << std::endl;
-        // printArray_2D_transpose(Q_temp.data(), n, n);
-        // std::cout << "D is: " << std::endl;
-        // printArray_2D_transpose(D_ptr->data(), n, n);
     }
     return derivMatrixPtr;
 }
@@ -350,22 +266,11 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
             tempDiagEntries = diagEntries;
         }
 
-        // build up P_ and Q_
+        // build the local P and Q matrices from diagonals
         std::vector<double> P_temp = create_P_from_diagonals(
             *tempDiagEntries, n, 1.0, boundary_top, boundary_bottom);
         std::vector<double> Q_temp = create_Q_from_diagonals(
             *tempDiagEntries, n, Q_parity, boundary_top, boundary_bottom);
-
-#if 0
-        if (n == pw * 4 + 1) {
-            std::cout << "P MATRIX for n=" << n << std::endl;
-            printArray_2D_transpose(P_temp.data(), n, n);
-
-            std::cout << "Q MATRIX for n=" << n << std::endl;
-            printArray_2D_transpose(Q_temp.data(), n, n);
-            std::cout << std::endl;
-        }
-#endif
 
         std::vector<double>* const D_ptr =
             get_deriv_mat_by_boundary(derivMatrixPtr.get(), b);
@@ -406,22 +311,6 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
                                    D_ptr->data(), n, info);
             // this should directly solve for the matrix inverse
         }
-
-#if 0
-        if (n == pw * 6 + 1) {
-            std::cout << "D MATRIX for n=" << n << " boundary type: " << b
-                      << std::endl;
-            printArray_2D_transpose(D_ptr->data(), n, n);
-            std::cout << std::endl << std::endl << std::endl;
-        }
-#endif
-
-        // std::cout << "P is: " << std::endl;
-        // printArray_2D_transpose(P_temp.data(), n, n);
-        // std::cout << "Q is: " << std::endl;
-        // printArray_2D_transpose(Q_temp.data(), n, n);
-        // std::cout << "D is: " << std::endl;
-        // printArray_2D_transpose(D_ptr->data(), n, n);
     }
 
     return derivMatrixPtr;

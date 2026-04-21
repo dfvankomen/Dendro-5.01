@@ -23,87 +23,40 @@ namespace dendroderivs {
 void CompactDerivs::buildMatrix(double *M, std::vector<double> &diag,
                                 std::vector<std::vector<double>> &bound,
                                 double parity, unsigned int n) {
-#ifdef DEBUG
-    std::cout << "entering buildMatrix method" << std::endl;
-#endif
     // build rows corresponding to left side boundary
     for (unsigned int i = 0; i < bound.size(); i++) {
         for (unsigned int j = 0; j < bound[i].size(); j++) {
             M[IDXN(i, j, n)] = bound[i][j];
         }
     }
-#ifdef DEBUG
-    std::cout << "just built left side boundary in buildMatrix" << std::endl;
-#endif
 
-    // build rows corresponding to interior
-    unsigned int ku = (((unsigned int)diag.size()) - 1u) /
-                      2u;  // number of diagonals below main
+    // build rows corresponding to interior. ku = number of diagonals below
+    // the main diagonal, derived from the interior stencil width
+    unsigned int ku = (((unsigned int)diag.size()) - 1u) / 2u;
     for (unsigned int i = ((unsigned int)bound.size());
          i < n - ((unsigned int)bound.size()); i++) {
-        // #ifdef DEBUG
-        //         std::cout << "i: " << i << std::endl;
-        // #endif
         for (unsigned int j = 0u; j < ((unsigned int)diag.size()); j++) {
-            // #ifdef DEBUG
-            //             std::cout << "ku: " << ku << " i: " << i << " j: " <<
-            //             j << " diag.size() " << diag.size() << " bound.size()
-            //             " << bound.size() << " n: " << n << " n^2: " << n*n
-            //             << std::endl; std::cout << "IDXN(i, i - ku + j, n) "
-            //             << IDXN(i, i - ku + j, n) << std::endl; std::cout <<
-            //             "M[IDXN(i, i - ku + j, n)] " << M[IDXN(i, i - ku + j,
-            //             n)] << std::endl; std::cout << "about to set M at
-            //             this index" << std::endl; M[IDXN(i, i - ku + j, n)] =
-            //             -1.0; std::cout << "I just set M at that index" <<
-            //             std::endl; std::cout << "diag[j] " << diag[j] <<
-            //             std::endl;
-            //             // std::cout << "about to set diag at this index" <<
-            //             std::endl;
-            //             // diag[j] = -1.0;
-            //             // std::cout << "I just set diag at that index" <<
-            //             std::endl;
-            // #endif
             M[IDXN(i, i - ku + j, n)] = diag[j];
-            // #ifdef DEBUG
-            //         std::cout << "go next iteration in j loop" << std::endl;
-            // #endif
         }
-        // #ifdef DEBUG
-        //     std::cout << "go next iteration in i loop" << std::endl;
-        // #endif
     }
-#ifdef DEBUG
-    std::cout << "just built interior in buildMatrix" << std::endl;
-#endif
-    // build rows corresponding to right side boundary
-    // iterate rows in to out
+
+    // build rows corresponding to right side boundary (mirrored, iterate
+    // inner-to-outer for correctness with parity flip)
     for (unsigned int boundRow = bound.size() - 1;
          boundRow != ((unsigned int)0) - 1; boundRow--) {
         unsigned int i            = n - 1 - boundRow;
         unsigned int numBoundCols = bound[boundRow].size();
-        // iterate columns in to out
         for (unsigned int boundCol = numBoundCols - 1;
              boundCol != ((unsigned int)0) - 1; boundCol--) {
             unsigned int j   = n - 1 - boundCol;
             M[IDXN(i, j, n)] = parity * bound[boundRow][boundCol];
         }
     }
-#ifdef DEBUG
-    std::cout << "just built right boundary in buildMatrix" << std::endl;
-#endif
-
-#ifdef DEBUG
-    std::cout << "exiting buildMatrix method" << std::endl;
-#endif
 }
 
-// have to define this here so GCC creates the vtable.....
-// see this answer https://stackoverflow.com/a/57504289
-CompactDerivs::~CompactDerivs() {
-#ifdef DEBUG
-    std::cout << "in CompactDerivs deconstructor" << std::endl;
-#endif
-};
+// defined out-of-class so GCC emits the vtable in this TU
+// (see https://stackoverflow.com/a/57504289)
+CompactDerivs::~CompactDerivs() = default;
 
 std::vector<double> createMatrix(
     const std::vector<std::vector<double>> &diag_boundary,

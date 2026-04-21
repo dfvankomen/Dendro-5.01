@@ -122,10 +122,6 @@ class CompactDerivs : public Derivs {
    protected:
     MatrixDiagonalEntries *diagEntries;
 
-    // matrices
-    std::vector<double> P_;  ///< P matrix deriv
-    std::vector<double> Q_;  ///< Q matrix deriv
-
     // protected as this class should ONLY be inherited, never instantiated!
     CompactDerivs(unsigned int ele_order) : Derivs{ele_order} {}
 
@@ -137,8 +133,9 @@ class CompactDerivs : public Derivs {
      */
     CompactDerivs(const CompactDerivs &obj) : Derivs(obj) {};
 
-    // if you want to access this outside of class implementations, consider
-    // moving to util.h/util.cpp
+    // build a dense matrix from diagonal entries + boundary rows. only used
+    // by the banded subclass today; kept here in case another compact scheme
+    // needs it without the banded storage machinery
     void buildMatrix(double *M, std::vector<double> &diag,
                      std::vector<std::vector<double>> &bound, double parity,
                      unsigned int n);
@@ -169,9 +166,6 @@ class CompactDerivs : public Derivs {
     virtual void do_grad_z(double *const du, const double *const u,
                            const double dx, const unsigned int *sz,
                            const unsigned int bflag) = 0;
-
-    inline const double *getP() const { return P_.data(); }
-    inline const double *getQ() const { return Q_.data(); }
 };
 
 }  // namespace dendroderivs

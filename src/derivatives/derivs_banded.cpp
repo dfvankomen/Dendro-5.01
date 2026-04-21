@@ -54,20 +54,14 @@ BandedMatrixSolveVars::BandedMatrixSolveVars(char FACT, char TRANS, int N,
     this->B =
         new double[*(this->LDB) * NRHS]{};  // RHS of the solver (input from
                                             // matrix vector multiply each step)
-    this->X    = new double[*(this->LDX) * NRHS]{};
-    this->FERR = new double[NRHS]{};
-    std::cout << "FERR: " << this->FERR << std::endl;
-    std::cout << "NRHS: " << NRHS << std::endl;
+    this->X     = new double[*(this->LDX) * NRHS]{};
+    this->FERR  = new double[NRHS]{};
     this->BERR  = new double[NRHS]{};
     this->WORK  = new double[3 * N]{};
     this->IWORK = new int[N]{};
 }
 
 BandedMatrixSolveVars::~BandedMatrixSolveVars() {
-#ifdef DEBUG
-    std::cout << "in BandedMatrixSolveVars destructor" << std::endl;
-#endif
-
     // IMPORTANT NOTE we do not delete AB as it is simply a pointer to
     //  an array that belongs to a class of type BandedCompactDerivs
     // It is the responsibility of this said class to delete AB
@@ -116,17 +110,6 @@ BandedMatrixSolveVars::~BandedMatrixSolveVars() {
  */
 void BandedCompactDerivs::init(BandedMatrixDiagonalWidths *kVals,
                                MatrixDiagonalEntries *entries) {
-#ifdef DEBUG
-    std::cout << "initializing BandedCompactDerivs" << std::endl;
-#endif
-
-    // todo here
-    // instantiate lapackvars
-    // create matrices
-    // banded store them
-    // (@TODO) run the solver once to factorize the matrices
-    // then set params to not factorize them anymore
-
     // allocate derivative arrays
     this->P_         = std::vector(p_n * p_n, 0.0);
     this->Q_         = std::vector(p_n * p_n, 0.0);
@@ -137,10 +120,6 @@ void BandedCompactDerivs::init(BandedMatrixDiagonalWidths *kVals,
     // TODO: this needs to be modified to be larger!
     // This should *always* be overwritten, NOT zero initialized
     this->workspace_ = new double[p_n * p_n * p_n];
-
-#ifdef DEBUG
-    std::cout << "just allocated D_x and array, banded and full" << std::endl;
-#endif
 
     // TODO: NRHS is whatever the maximum number of RHS variables we're going to
     // solve is this class needs to be modified if it's what we're using at some
@@ -156,10 +135,6 @@ void BandedCompactDerivs::init(BandedMatrixDiagonalWidths *kVals,
                                   this->Pb_    // AB
         );
 
-#ifdef DEBUG
-    std::cout << "just built grad_xVars" << std::endl;
-#endif
-
     // build derivative matrices and banded store them
     buildMatrix(P_.data(), entries->PDiagInterior, entries->PDiagBoundary, 1.0,
                 p_n);
@@ -167,34 +142,15 @@ void BandedCompactDerivs::init(BandedMatrixDiagonalWidths *kVals,
                 p_n);
     bandedMatrixStore(Pb_, P_.data(), kVals->pkl, kVals->pku, p_n);
     bandedMatrixStore(Qb_, Q_.data(), kVals->qkl, kVals->qku, p_n);
-#ifdef DEBUG
-    std::cout << "just built and banded stored D_x matrices" << std::endl;
-#endif
 
-    /**
-     * Factor the matrices and store them
-     * Then tell LAPACK that they're already factored for future runs
-     */
+    // factor P once and mark as factored so subsequent solves reuse it
     bandedMatrixSolve(grad_xVars);
     *(grad_xVars->FACT) = 'F';
-#ifdef DEBUG
-    std::cout << "just stored factorization of matrices" << std::endl;
-#endif
 }
 
-/**
- * Destructor
- */
 BandedCompactDerivs::~BandedCompactDerivs() {
-#ifdef DEBUG
-    std::cout << "in BandedCompactDerivs deconstructor" << std::endl;
-#endif
-    // delete[] P_;
-    // delete[] Q_;
-
     delete[] Pb_;
     delete[] Qb_;
-
     delete[] workspace_;
 
     delete grad_xVars;

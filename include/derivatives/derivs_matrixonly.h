@@ -16,49 +16,50 @@
 
 namespace dendroderivs {
 
+namespace detail {
+template <typename T>
+inline std::unique_ptr<InMatrixFilter> make_filter(
+    const std::vector<double>& c) {
+    return std::make_unique<T>(c);
+}
+using InMatrixFilterMaker =
+    std::unique_ptr<InMatrixFilter> (*)(const std::vector<double>&);
+}  // namespace detail
+
+// registry-based dispatch — adding a new filter is one line in the map.
+// inline-scoped so we keep the header-only setup; the map is constructed
+// once per TU (acceptable; each entry is just two pointers)
 inline std::unique_ptr<InMatrixFilter> createInMatrixFilterByType(
     const std::string &in_matrix_filter,
     const std::vector<double> &in_matrix_filter_coeffs) {
-    if (in_matrix_filter == "none") {
-        return std::make_unique<NoneFilter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "BYUT4") {
-        return std::make_unique<BYUT4Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "BYUT6") {
-        return std::make_unique<BYUT6Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "BYUT8") {
-        return std::make_unique<BYUT8Filter_InMatrix>(in_matrix_filter_coeffs);
-    }else if (in_matrix_filter == "KIM") {
-        return std::make_unique<KimFilter_InMatrix>(in_matrix_filter_coeffs);
-    }  else if (in_matrix_filter == "KIM_1_P6") {
-    return std::make_unique<Kim1P6Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_2_P6") {
-        return std::make_unique<Kim2P6Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_3_P6") {
-        return std::make_unique<Kim3P6Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_4_P6") {
-        return std::make_unique<Kim4P6Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_P6") {
-        return std::make_unique<KimP6Filter_InMatrix>(in_matrix_filter_coeffs);
-    }else if (in_matrix_filter == "A4") {
-        return std::make_unique<A4_Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_06_P6") {
-        return std::make_unique<Kim_06_P6_Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_075_P6") {
-        return std::make_unique<Kim_075_P6_Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_08_P6") {
-        return std::make_unique<Kim_08_P6_Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_085_P6") {
-        return std::make_unique<Kim_085_P6_Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_09_P6") {
-        return std::make_unique<Kim_09_P6_Filter_InMatrix>(in_matrix_filter_coeffs);
-    } else if (in_matrix_filter == "KIM_09_P2") {
-        return std::make_unique<Kim_09_P2_Filter_InMatrix>(in_matrix_filter_coeffs);
-    }else if (in_matrix_filter == "KIM_08_P2") {
-        return std::make_unique<Kim_08_P2_Filter_InMatrix>(in_matrix_filter_coeffs);
+    static const std::unordered_map<std::string, detail::InMatrixFilterMaker>
+        registry = {
+            {"none",       detail::make_filter<NoneFilter_InMatrix>},
+            {"BYUT4",      detail::make_filter<BYUT4Filter_InMatrix>},
+            {"BYUT6",      detail::make_filter<BYUT6Filter_InMatrix>},
+            {"BYUT8",      detail::make_filter<BYUT8Filter_InMatrix>},
+            {"KIM",        detail::make_filter<KimFilter_InMatrix>},
+            {"KIM_1_P6",   detail::make_filter<Kim1P6Filter_InMatrix>},
+            {"KIM_2_P6",   detail::make_filter<Kim2P6Filter_InMatrix>},
+            {"KIM_3_P6",   detail::make_filter<Kim3P6Filter_InMatrix>},
+            {"KIM_4_P6",   detail::make_filter<Kim4P6Filter_InMatrix>},
+            {"KIM_P6",     detail::make_filter<KimP6Filter_InMatrix>},
+            {"A4",         detail::make_filter<A4_Filter_InMatrix>},
+            {"KIM_06_P6",  detail::make_filter<Kim_06_P6_Filter_InMatrix>},
+            {"KIM_075_P6", detail::make_filter<Kim_075_P6_Filter_InMatrix>},
+            {"KIM_08_P6",  detail::make_filter<Kim_08_P6_Filter_InMatrix>},
+            {"KIM_085_P6", detail::make_filter<Kim_085_P6_Filter_InMatrix>},
+            {"KIM_09_P6",  detail::make_filter<Kim_09_P6_Filter_InMatrix>},
+            {"KIM_09_P2",  detail::make_filter<Kim_09_P2_Filter_InMatrix>},
+            {"KIM_08_P2",  detail::make_filter<Kim_08_P2_Filter_InMatrix>},
+        };
+
+    auto it = registry.find(in_matrix_filter);
+    if (it == registry.end()) {
+        throw std::invalid_argument("Unsupported 'In-Matrix' Filter Type: " +
+                                    in_matrix_filter);
     }
-    else {
-        throw std::invalid_argument("Unsupported 'In-Matrix' Filter Type!");
-    }
+    return it->second(in_matrix_filter_coeffs);
 }
 
 template <unsigned int DerivOrder>
