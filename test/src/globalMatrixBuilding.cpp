@@ -222,10 +222,12 @@ void build_the_vector_thingy(ot::Mesh* mesh) {
     }
 }
 
+#include "dendro_mpi_init.h"
+
 int main(int argc, char* argv[]) {
     std::cout << "Now initializing program!" << std::endl;
 
-    MPI_Init(&argc, &argv);
+    dendro_mpi_init(&argc, &argv);
     MPI_Comm comm = MPI_COMM_WORLD;
 
     int rank, npes;

@@ -468,9 +468,10 @@ void weakScalingDriver(char* ptsFile, bool genPts, DendroIntL numPts,
 #endif
 }
 
+#include "dendro_mpi_init.h"
+
 int main(int argc, char** argv) {
-    int provided;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_SINGLE, &provided);
+    dendro_mpi_init(&argc, &argv);
 
     int rank, npes;
 

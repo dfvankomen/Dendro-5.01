@@ -16,9 +16,10 @@
 #include "sfcSort.h"
 #define ROOT_ROT_ID 0
 
+#include "dendro_mpi_init.h"
+
 int main(int argc, char** argv) {
-    int provided;
-    MPI_Init_thread(&argc, &argv, MPI_THREAD_SINGLE, &provided);
+    dendro_mpi_init(&argc, &argv);
     int rank, npes;
     MPI_Comm comm = MPI_COMM_WORLD;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);

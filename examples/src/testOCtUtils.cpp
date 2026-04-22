@@ -46,8 +46,10 @@ int readPtsFromFile(char* filename, std::vector<double>& pts) {
     return 1;
 }  // end function
 
+#include "dendro_mpi_init.h"
+
 int main(int argc, char** argv) {
-    MPI_Init(&argc, &argv);
+    dendro_mpi_init(&argc, &argv);
 
     int rank, npes;
     MPI_Comm GLOBAL_COMM = MPI_COMM_WORLD;

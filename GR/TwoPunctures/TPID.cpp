@@ -14,10 +14,12 @@
 #include "mpi.h"
 #include "grUtils.h"
 
+#include "dendro_mpi_init.h"
+
 int main(int argc, char **argv)
 {   
     MPI_Comm comm = MPI_COMM_WORLD;
-    MPI_Init(&argc, &argv);
+    dendro_mpi_init(&argc, &argv);
 
     int npes, rank;
     MPI_Comm_size(comm, &npes);

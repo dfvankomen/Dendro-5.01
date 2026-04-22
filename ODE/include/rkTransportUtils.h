@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "block.h"
+#include "dendro_omp.h"
 #include "fdCoefficient.h"
 #include "mesh.h"
 
@@ -36,30 +37,32 @@ template <typename T>
 void grad(const ot::Mesh* pMesh, unsigned int dir, const T* uZipIn,
           T* uZipOut) {
     const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
-    ot::TreeNode blkNode;
-    double h;
-    unsigned int blkNpe_1D;
 
-    unsigned int grid_min = 0;
-    unsigned int grid_max = (1u << m_uiMaxDepth);
-    unsigned int paddWidth;
+    // grid bounds are read-only shared across threads; per-block state
+    // (blkNode, h, blkNpe_1D, paddWidth, lx/ly/lz, offset) is declared
+    // inside each parallel loop body so every thread gets its own copy
+    const unsigned int grid_min  = 0;
+    const unsigned int grid_max  = (1u << m_uiMaxDepth);
     const unsigned int stencilSz = 5;
-    unsigned int lx, ly, lz, offset;
 
     if (dir == 0) {  // compute the derivative in w.r.t x direction
 
-        for (unsigned int blk = 0; blk < blkList.size(); blk++) {
-            blkNode   = blkList[blk].getBlockNode();
-            paddWidth = blkList[blk].get1DPadWidth();
-            blkNpe_1D = blkList[blk].get1DArraySize();
-            h         = 1.0 / (blkList[blk].computeDx(adv_param::domain_min,
-                                                      adv_param::domain_max));
+        // per-block work is fully independent (each block writes to a
+        // disjoint region of uZipOut via its own offset). scheduling is
+        // dynamic so heterogeneous boundary work doesn't cause imbalance
+        DENDRO_OMP_PARALLEL_FOR_DYNAMIC(4)
+        for (int blk = 0; blk < (int)blkList.size(); blk++) {
+            ot::TreeNode blkNode = blkList[blk].getBlockNode();
+            unsigned int paddWidth = blkList[blk].get1DPadWidth();
+            unsigned int blkNpe_1D = blkList[blk].get1DArraySize();
+            double h = 1.0 / (blkList[blk].computeDx(adv_param::domain_min,
+                                                     adv_param::domain_max));
 
-            lx        = blkList[blk].getAllocationSzX();
-            ly        = blkList[blk].getAllocationSzY();
-            lz        = blkList[blk].getAllocationSzZ();
+            unsigned int lx = blkList[blk].getAllocationSzX();
+            unsigned int ly = blkList[blk].getAllocationSzY();
+            unsigned int lz = blkList[blk].getAllocationSzZ();
 
-            offset    = blkList[blk].getOffset();
+            unsigned int offset = blkList[blk].getOffset();
 
             assert(blkNpe_1D > paddWidth);
 
@@ -247,18 +250,22 @@ void grad(const ot::Mesh* pMesh, unsigned int dir, const T* uZipIn,
         }
     } else if (dir == 1) {  // compute the derivative in w.r.t y direction
 
-        for (unsigned int blk = 0; blk < blkList.size(); blk++) {
-            blkNode   = blkList[blk].getBlockNode();
-            paddWidth = blkList[blk].get1DPadWidth();
-            blkNpe_1D = blkList[blk].get1DArraySize();
-            h         = 1.0 / (blkList[blk].computeDy(adv_param::domain_min,
-                                                      adv_param::domain_max));
+        // per-block work is fully independent (each block writes to a
+        // disjoint region of uZipOut via its own offset). scheduling is
+        // dynamic so heterogeneous boundary work doesn't cause imbalance
+        DENDRO_OMP_PARALLEL_FOR_DYNAMIC(4)
+        for (int blk = 0; blk < (int)blkList.size(); blk++) {
+            ot::TreeNode blkNode = blkList[blk].getBlockNode();
+            unsigned int paddWidth = blkList[blk].get1DPadWidth();
+            unsigned int blkNpe_1D = blkList[blk].get1DArraySize();
+            double h = 1.0 / (blkList[blk].computeDy(adv_param::domain_min,
+                                                     adv_param::domain_max));
 
-            lx        = blkList[blk].getAllocationSzX();
-            ly        = blkList[blk].getAllocationSzY();
-            lz        = blkList[blk].getAllocationSzZ();
+            unsigned int lx = blkList[blk].getAllocationSzX();
+            unsigned int ly = blkList[blk].getAllocationSzY();
+            unsigned int lz = blkList[blk].getAllocationSzZ();
 
-            offset    = blkList[blk].getOffset();
+            unsigned int offset = blkList[blk].getOffset();
 
             assert(blkNpe_1D > paddWidth);
 
@@ -456,18 +463,22 @@ void grad(const ot::Mesh* pMesh, unsigned int dir, const T* uZipIn,
 
     } else if (dir == 2) {  // compute the derivative in w.r.t z direction
 
-        for (unsigned int blk = 0; blk < blkList.size(); blk++) {
-            blkNode   = blkList[blk].getBlockNode();
-            paddWidth = blkList[blk].get1DPadWidth();
-            blkNpe_1D = blkList[blk].get1DArraySize();
-            h         = 1.0 / (blkList[blk].computeDz(adv_param::domain_min,
-                                                      adv_param::domain_max));
+        // per-block work is fully independent (each block writes to a
+        // disjoint region of uZipOut via its own offset). scheduling is
+        // dynamic so heterogeneous boundary work doesn't cause imbalance
+        DENDRO_OMP_PARALLEL_FOR_DYNAMIC(4)
+        for (int blk = 0; blk < (int)blkList.size(); blk++) {
+            ot::TreeNode blkNode = blkList[blk].getBlockNode();
+            unsigned int paddWidth = blkList[blk].get1DPadWidth();
+            unsigned int blkNpe_1D = blkList[blk].get1DArraySize();
+            double h = 1.0 / (blkList[blk].computeDz(adv_param::domain_min,
+                                                     adv_param::domain_max));
 
-            lx        = blkList[blk].getAllocationSzX();
-            ly        = blkList[blk].getAllocationSzY();
-            lz        = blkList[blk].getAllocationSzZ();
+            unsigned int lx = blkList[blk].getAllocationSzX();
+            unsigned int ly = blkList[blk].getAllocationSzY();
+            unsigned int lz = blkList[blk].getAllocationSzZ();
 
-            offset    = blkList[blk].getOffset();
+            unsigned int offset = blkList[blk].getOffset();
 
             assert(blkNpe_1D > paddWidth);
 

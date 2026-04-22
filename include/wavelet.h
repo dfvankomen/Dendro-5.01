@@ -46,12 +46,16 @@ const double BH_EH_THRESHOLD_COARSEN = 0.4;
 // Below matrices are generated from HOMG (for uniform points.) matlab code.
 // Don't change those unless you know exactly what you are doing.
 
-static int isRefEleSetup             = 0;
-static RefElement refEl;
-static std::vector<double> wIn;
-static std::vector<double> wOut;
-static std::vector<double> interpIn;
-static std::vector<double> interpOut;
+// header-static with thread_local: each thread gets its own setup flag
+// and scratch vectors so concurrent wavelet calls don't race. the first
+// call on each thread pays the setup cost (populating refEl + the four
+// vectors); subsequent calls on that thread reuse
+static thread_local int isRefEleSetup = 0;
+static thread_local RefElement refEl;
+static thread_local std::vector<double> wIn;
+static thread_local std::vector<double> wOut;
+static thread_local std::vector<double> interpIn;
+static thread_local std::vector<double> interpOut;
 
 static const double
     IW_5_2_REFINE[NUM_REFINE_WAVELET_COEF][NUM_REFINE_INPUT_PTS] = {

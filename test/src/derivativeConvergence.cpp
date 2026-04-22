@@ -203,6 +203,8 @@ int derivtest_driver(MPI_Comm comm, std::ostream& outfile) {
     return 0;
 }
 
+#include "dendro_mpi_init.h"
+
 int main(int argc, char** argv) {
     // if (argc < 2) {
     //     std::cout << "Usage: " << argv[0] << " paramFile " << std::endl;
@@ -211,7 +213,7 @@ int main(int argc, char** argv) {
     //
     std::cout << "Now initializing program!" << std::endl;
 
-    MPI_Init(&argc, &argv);
+    dendro_mpi_init(&argc, &argv);
     MPI_Comm comm = MPI_COMM_WORLD;
 
     int rank, npes;

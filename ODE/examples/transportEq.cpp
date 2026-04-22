@@ -20,8 +20,10 @@
 #include "sfcSort.h"
 #include "stencil.h"
 
+#include "dendro_mpi_init.h"
+
 int main(int argc, char** argv) {
-    MPI_Init(&argc, &argv);
+    dendro_mpi_init(&argc, &argv);
     MPI_Comm comm = MPI_COMM_WORLD;
 
     int rank, npes;

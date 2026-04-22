@@ -547,6 +547,8 @@ void ZoltanHibertLBandSort(DendroIntL grainSz, unsigned int dim,
     Zoltan_Destroy(&zz);
 }
 
+#include "dendro_mpi_init.h"
+
 int main(int argc, char *argv[]) {
     int rc;
     int rank, npes;
@@ -557,7 +559,7 @@ int main(int argc, char *argv[]) {
     ** Initialize MPI and Zoltan
     ******************************************************************/
 
-    MPI_Init(&argc, &argv);
+    dendro_mpi_init(&argc, &argv);
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &npes);
 

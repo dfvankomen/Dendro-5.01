@@ -47,6 +47,16 @@
 #include "treenode2vtk.h"
 #include "wavelet.h"
 
+// ---------------------------------------------------------------------------
+// mesh-construction timing counters.
+//
+// THREAD SAFETY: these are plain doubles with no synchronization. they're
+// written during single-threaded mesh construction / balancing paths today,
+// which is fine. if a future change parallelizes those paths, these counters
+// will race silently — wrap writes in an atomic or a per-thread accumulator,
+// or guard the whole section behind `#ifdef DENDRO_PROFILING` and accept that
+// profiled builds are single-threaded only.
+// ---------------------------------------------------------------------------
 extern double t_e2e;  // e2e map generation time
 extern double t_e2n;  // e2n map generation time
 extern double t_sm;   // sm map generation time
