@@ -593,21 +593,43 @@ class Mesh {
     std::vector<unsigned int> m_e2b_unzip_counts;
 
     // ---- unzip plan -------------------------------------------------------
-    // precomputed plan that turns per-block unzip into a flat gather:
-    // for each block b, `m_unzipPlan_entries[start..end)` lists
-    // (block_offset, zipped_idx) pairs, meaning `out_block[block_offset] =
-    // zipped[zipped_idx]`. hanging-node / cross-level-neighbor padding cells
-    // can't be expressed as a single-index copy; for those the block is
-    // marked "dirty" and the fallback path (the block-outer unzip) fills
-    // those blocks in full after the plan phase. the plan is extracted by
-    // running the fallback unzip once on a probe input of sentinel values;
-    // rebuild on every mesh topology change (remesh).
+    // precomputed plan that turns per-block unzip into a flat gather. split
+    // into two arrays per block:
+    //
+    //   1. direct-copy entries: `out_block[block_offset] = zipped[zipped_idx]`
+    //      — the dominant case (same-level neighbors, finer-to-coarser
+    //      node-aligned injections). 8 bytes per entry, tight hot loop.
+    //   2. multi-term entries: `out_block[block_offset] = sum_k w_k *
+    //      zipped[idx_k]` — hanging-node / parent-to-child interpolation.
+    //      per-entry header (block_offset, term_count, term_start) points
+    //      into a flat terms[] array of (zipped_idx, weight).
+    //
+    // cells the plan-builder can't express land in `m_unzipPlan_dirtyBlocks`
+    // and are filled by the block-outer unzip fallback.
+    //
+    // the probe-based builder (default today) only emits direct entries;
+    // Phase D's analytical builder will populate multi entries and shrink
+    // the dirty-block list toward empty. the apply path is the same for
+    // both builders — iterate direct then multi per block.
     struct UnzipPlanEntry {
         unsigned int block_offset;  // index into block's padded grid
         unsigned int zipped_idx;    // source in zipped vector
     };
-    std::vector<unsigned int> m_unzipPlan_blockStart;  // size num_blocks + 1
-    std::vector<UnzipPlanEntry> m_unzipPlan_entries;
+    struct UnzipPlanMultiEntry {
+        unsigned int block_offset;  // index into block's padded grid
+        unsigned int term_count;    // number of terms in the linear combo
+        unsigned int term_start;    // offset into m_unzipPlan_terms[]
+    };
+    struct UnzipPlanTerm {
+        unsigned int zipped_idx;
+        double weight;
+    };
+
+    std::vector<unsigned int> m_unzipPlan_directStart;  // num_blocks + 1
+    std::vector<UnzipPlanEntry> m_unzipPlan_direct;
+    std::vector<unsigned int> m_unzipPlan_multiStart;   // num_blocks + 1
+    std::vector<UnzipPlanMultiEntry> m_unzipPlan_multi;
+    std::vector<UnzipPlanTerm> m_unzipPlan_terms;
     std::vector<unsigned int> m_unzipPlan_dirtyBlocks;
     bool m_unzipPlanBuilt = false;
 

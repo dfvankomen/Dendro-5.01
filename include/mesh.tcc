@@ -11034,8 +11034,11 @@ void Mesh::buildUnzipPlan() {
     for (unsigned int i = 0; i < nb; i++) allBlks[i] = i;
     this->unzip(probe_in.data(), probe_out.data(), allBlks.data(), nb, 1);
 
-    m_unzipPlan_blockStart.assign(nb + 1, 0u);
-    m_unzipPlan_entries.clear();
+    m_unzipPlan_directStart.assign(nb + 1, 0u);
+    m_unzipPlan_direct.clear();
+    m_unzipPlan_multiStart.assign(nb + 1, 0u);
+    m_unzipPlan_multi.clear();
+    m_unzipPlan_terms.clear();
     m_unzipPlan_dirtyBlocks.clear();
 
     // tolerance for "is this value an integer?" test. probe values go up
@@ -11045,7 +11048,9 @@ void Mesh::buildUnzipPlan() {
     const double tol = 1e-6;
 
     for (unsigned int b = 0; b < nb; b++) {
-        m_unzipPlan_blockStart[b] = (unsigned int)m_unzipPlan_entries.size();
+        m_unzipPlan_directStart[b] = (unsigned int)m_unzipPlan_direct.size();
+        m_unzipPlan_multiStart[b]  = (unsigned int)m_unzipPlan_multi.size();
+
         const auto& block         = m_uiLocalBlockList[b];
         const unsigned int offset = block.getOffset();
         const unsigned int lx     = block.getAllocationSzX();
@@ -11064,19 +11069,22 @@ void Mesh::buildUnzipPlan() {
                 continue;
             }
             if (std::abs(val - rounded) > tol * (std::abs(val) + 1.0)) {
-                // not an integer — interpolated
+                // not an integer — interpolated. Phase D's analytical
+                // builder will emit a multi-term entry here; the probe
+                // builder can't infer weights, so mark dirty for fallback
                 dirty = true;
                 continue;
             }
             UnzipPlanEntry e;
             e.block_offset = k;
             e.zipped_idx   = (unsigned int)rounded;
-            m_unzipPlan_entries.push_back(e);
+            m_unzipPlan_direct.push_back(e);
         }
         if (dirty) m_unzipPlan_dirtyBlocks.push_back(b);
     }
-    m_unzipPlan_blockStart[nb] = (unsigned int)m_unzipPlan_entries.size();
-    m_unzipPlanBuilt           = true;
+    m_unzipPlan_directStart[nb] = (unsigned int)m_unzipPlan_direct.size();
+    m_unzipPlan_multiStart[nb]  = (unsigned int)m_unzipPlan_multi.size();
+    m_unzipPlanBuilt            = true;
 }
 
 template <typename T>
@@ -11090,18 +11098,37 @@ void Mesh::unzip_planned(const T* in, T* out, unsigned int dof) {
         const T* zipped = in + v * m_uiNumActualNodes;
         T* unzipped     = out + v * m_uiUnZippedVecSz;
 
-        // phase 1: planned direct copies — trivially parallel, block
-        // outputs are disjoint by offset. handles ~90% of cells on typical
-        // AMR meshes in a tight gather loop with high cache locality
+        // phase 1: planned copies + interpolations — trivially parallel,
+        // block outputs are disjoint by offset. direct-copy entries are
+        // the hot majority path (tight 8-byte gather); multi-term entries
+        // handle hanging-node interpolation via a weighted sum. the inner
+        // loops stay tight because the two arrays are independent: no
+        // branch per entry, just two back-to-back loops per block
 #pragma omp parallel for schedule(static)
         for (int b = 0; b < nb; b++) {
             T* const block_out =
                 unzipped + m_uiLocalBlockList[b].getOffset();
-            const unsigned int s = m_unzipPlan_blockStart[b];
-            const unsigned int e = m_unzipPlan_blockStart[b + 1];
-            for (unsigned int k = s; k < e; k++) {
-                const UnzipPlanEntry& p = m_unzipPlan_entries[k];
+
+            // direct copies
+            const unsigned int ds = m_unzipPlan_directStart[b];
+            const unsigned int de = m_unzipPlan_directStart[b + 1];
+            for (unsigned int k = ds; k < de; k++) {
+                const UnzipPlanEntry& p = m_unzipPlan_direct[k];
                 block_out[p.block_offset] = zipped[p.zipped_idx];
+            }
+
+            // multi-term interpolations
+            const unsigned int ms = m_unzipPlan_multiStart[b];
+            const unsigned int me = m_unzipPlan_multiStart[b + 1];
+            for (unsigned int k = ms; k < me; k++) {
+                const UnzipPlanMultiEntry& m = m_unzipPlan_multi[k];
+                double v = 0.0;
+                for (unsigned int t = 0; t < m.term_count; t++) {
+                    const UnzipPlanTerm& term =
+                        m_unzipPlan_terms[m.term_start + t];
+                    v += term.weight * (double)zipped[term.zipped_idx];
+                }
+                block_out[m.block_offset] = (T)v;
             }
         }
 
