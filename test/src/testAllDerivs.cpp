@@ -396,6 +396,15 @@ int main() {
     std::vector<unsigned int> var_counts = {1, 4, 8, 24};
     const unsigned int profile_iters = 5000;
 
+    // prewarm libxsmm kernel caches for every shape we'll hit in this sweep.
+    // exercises the thread-safe prewarm path and makes the first calls cheap
+    std::vector<BlockShape> prewarm_shapes;
+    for (auto ninterior : fused_counts) {
+        unsigned int fn = eleorder * (ninterior + 1) + 1;
+        prewarm_shapes.push_back({fn, fn, fn});
+    }
+    prewarm_kernel_cache(prewarm_shapes, pw);
+
     int fused_pass = 0, fused_fail = 0;
 
     for (auto &dtype : profile_types) {

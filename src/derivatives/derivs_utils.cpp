@@ -15,12 +15,33 @@ using KernelType = libxsmm_mmfunction<double>;
 
 std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
     kernel_cache_x;
+std::shared_mutex kernel_cache_x_mutex;
 std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
     kernel_cache_yz;
+std::shared_mutex kernel_cache_yz_mutex;
 std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
     kernel_cache_y_direct;
+std::shared_mutex kernel_cache_y_direct_mutex;
 std::unordered_map<ZDirectKernelKey, KernelType, ZDirectKernelKeyHash>
     kernel_cache_z_direct;
+std::shared_mutex kernel_cache_z_direct_mutex;
+
+void prewarm_kernel_cache(const std::vector<BlockShape> &shapes,
+                          unsigned int pw) {
+    for (const auto &s : shapes) {
+        // X-dim: interior (bflag=0) case uses the full z range
+        get_or_create_kernel_x(s.nx, s.ny * s.nz, s.nx);
+        // X-dim: boundary variants shrink the active z range by pw on one
+        // or both sides. skip if pw=0 or if the variant would be degenerate
+        if (pw > 0 && 2u * pw < s.nz) {
+            get_or_create_kernel_x(s.nx, s.ny * (s.nz - pw), s.nx);
+            get_or_create_kernel_x(s.nx, s.ny * (s.nz - 2u * pw), s.nx);
+        }
+        // y-direct and z-direct are bflag-independent
+        get_or_create_kernel_y_direct(s.nx, s.ny);
+        get_or_create_kernel_z_direct(s.nx, s.ny, s.nz);
+    }
+}
 
 void mulMM(double *C, double *A, double *B, int na, int nb) {
     /*  M = number of rows of A and C
@@ -172,14 +193,6 @@ int bandedMatrixSolve(char FACT, char TRANS, double *X, double *AB, double *B,
 }
 
 void bandedMatrixSolve(BandedMatrixSolveVars *vars) {
-    // NOTE: original implementation of this in 1D repository wondered if this
-    // would have a performance impact. Here's a bit of an answer: yes and no.
-    // This one might have an advantage for not needing to initialize so many
-    // variables, but we're also accessing struct members, which could be
-    // potentially costly. Though with the fact that Dendro uses mostly small
-    // blocks and this should only be handled upon initialization, I think the
-    // "more elegant" solution is fine.
-
     // make the call
     dgbsvx_(vars->FACT, vars->TRANS, vars->N, vars->KL, vars->KU, vars->NRHS,
             vars->AB, vars->LDAB, vars->AFB, vars->LDAFB, vars->IPIV,

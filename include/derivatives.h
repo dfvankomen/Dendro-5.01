@@ -225,6 +225,24 @@ enum DerivFamily {
  * This includes first and second order derivatives, explicit methods, and
  * compact methods. It primarily is to provide a common interface for the
  * different types and orders of derivatives.
+ *
+ * ## Thread safety
+ *
+ * A single Derivs instance is **not** safe to use concurrently from multiple
+ * threads — internal state (workspace buffers, the per-size D storage map,
+ * and the last-used-size memoization inside MatrixCompactDerivs) is mutated
+ * during `do_grad_*`. The intended model for multi-threaded callers is:
+ *
+ *   1. Build one "prototype" Derivs instance on the main thread.
+ *   2. Call `clone()` once per thread to get private copies. Clone cost is
+ *      small (copies only the already-built matrices; workspaces re-allocate
+ *      lazily on first call).
+ *   3. Each thread exclusively owns its clone for the duration of the work.
+ *
+ * The process-wide libxsmm kernel caches in `derivs_utils.h` *are*
+ * thread-safe (shared_mutex-protected). For best performance, call
+ * `dendroderivs::prewarm_kernel_cache(...)` on the main thread after mesh
+ * setup so the hot path only ever takes the shared read lock.
  */
 class Derivs {
    protected:
