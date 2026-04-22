@@ -354,6 +354,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(benchUtils test/src/benchUtils.cpp)
 
   dendro_add_example(testLTSBlkVec ODE/examples/testLTSBlkVec.cpp)
+  dendro_add_example(testGradOmp test/src/testGradOmp.cpp)
   dendro_add_example(dgVecTest FEM/examples/src/dgVecTest.cpp)
   dendro_add_example(testInterp FEM/examples/src/testInterp.cpp)
   dendro_add_example(meshLoop examples/src/meshLooping.cpp)

@@ -42,6 +42,7 @@
 #include "sfcSearch.h"
 #include "sfcSort.h"
 #include "skey.h"
+#include "dendro_omp.h"
 #include "stencil.h"
 #include "testUtils.h"
 #include "treenode2vtk.h"
@@ -590,6 +591,35 @@ class Mesh {
     /**@brief element to block map count, if ele has no dependence then count
      * will be zero. */
     std::vector<unsigned int> m_e2b_unzip_counts;
+
+    // ---- unzip plan -------------------------------------------------------
+    // precomputed plan that turns per-block unzip into a flat gather:
+    // for each block b, `m_unzipPlan_entries[start..end)` lists
+    // (block_offset, zipped_idx) pairs, meaning `out_block[block_offset] =
+    // zipped[zipped_idx]`. hanging-node / cross-level-neighbor padding cells
+    // can't be expressed as a single-index copy; for those the block is
+    // marked "dirty" and the fallback path (the block-outer unzip) fills
+    // those blocks in full after the plan phase. the plan is extracted by
+    // running the fallback unzip once on a probe input of sentinel values;
+    // rebuild on every mesh topology change (remesh).
+    struct UnzipPlanEntry {
+        unsigned int block_offset;  // index into block's padded grid
+        unsigned int zipped_idx;    // source in zipped vector
+    };
+    std::vector<unsigned int> m_unzipPlan_blockStart;  // size num_blocks + 1
+    std::vector<UnzipPlanEntry> m_unzipPlan_entries;
+    std::vector<unsigned int> m_unzipPlan_dirtyBlocks;
+    bool m_unzipPlanBuilt = false;
+
+   public:
+    /**@brief build the unzip plan by probing the existing unzip. called
+     * lazily on first unzip_planned; must be rebuilt after remesh. */
+    template <typename T>
+    void buildUnzipPlan();
+
+    /**@brief invalidate cached plan so the next unzip_planned rebuilds. call
+     * after remesh or anything that changes block/element topology. */
+    inline void invalidateUnzipPlan() { m_unzipPlanBuilt = false; }
 
    private:
     /**@brief build E2N map for FEM computation*/
@@ -2109,6 +2139,17 @@ class Mesh {
      */
     template <typename T>
     void unzip_scatter(const T *in, T *out, unsigned int dof = 1);
+
+    /**
+     * @brief plan-based unzip. direct-copy cells are served via a flat
+     * gather of precomputed (block_offset, zipped_idx) pairs (trivially
+     * parallel over blocks, high cache locality); hanging-node cells are
+     * handled by falling back to the existing block-outer unzip on only
+     * the affected "dirty" blocks. plan is built on first call and cached
+     * on the Mesh; call invalidateUnzipPlan() after remesh.
+     */
+    template <typename T>
+    void unzip_planned(const T *in, T *out, unsigned int dof = 1);
 
     /**
      * @brief performs unzip operation for a given block id.

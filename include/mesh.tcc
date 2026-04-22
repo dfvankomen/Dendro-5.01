@@ -1,3 +1,4 @@
+#include <chrono>
 //
 // Created by milinda on 9/22/17.
 /**
@@ -4550,31 +4551,32 @@ template <typename T>
 void Mesh::zip(const T* unzippedVec, T* zippedVec) {
     if (!m_uiIsActive) return;
 
-    ot::TreeNode blkNode;
-    unsigned int ei, ej, ek;
-    unsigned int regLev;
     const ot::TreeNode* pNodes = &(*(m_uiAllElements.begin()));
 
-    unsigned int lx, ly, lz, offset, paddWidth;
+    // per-block: each block owns its elements, and the DG/CG mapping's
+    // "owner-only writes" condition (`/m_uiNpE == elem`) guarantees each
+    // zipped index is written by exactly one element across the whole
+    // rank. so writes from different blocks never collide and the loop
+    // is fully thread-disjoint
+    DENDRO_OMP_PARALLEL_FOR_DYNAMIC(4)
+    for (int blk = 0; blk < (int)m_uiLocalBlockList.size(); blk++) {
+        const ot::TreeNode blkNode = m_uiLocalBlockList[blk].getBlockNode();
+        const unsigned int regLev  = m_uiLocalBlockList[blk].getRegularGridLev();
 
-    for (unsigned int blk = 0; blk < m_uiLocalBlockList.size(); blk++) {
-        blkNode   = m_uiLocalBlockList[blk].getBlockNode();
-        regLev    = m_uiLocalBlockList[blk].getRegularGridLev();
-
-        lx        = m_uiLocalBlockList[blk].getAllocationSzX();
-        ly        = m_uiLocalBlockList[blk].getAllocationSzY();
-        lz        = m_uiLocalBlockList[blk].getAllocationSzZ();
-        offset    = m_uiLocalBlockList[blk].getOffset();
-        paddWidth = m_uiLocalBlockList[blk].get1DPadWidth();
+        const unsigned int lx = m_uiLocalBlockList[blk].getAllocationSzX();
+        const unsigned int ly = m_uiLocalBlockList[blk].getAllocationSzY();
+        const unsigned int lz = m_uiLocalBlockList[blk].getAllocationSzZ();
+        const unsigned int offset    = m_uiLocalBlockList[blk].getOffset();
+        const unsigned int paddWidth = m_uiLocalBlockList[blk].get1DPadWidth();
 
         for (unsigned int elem = m_uiLocalBlockList[blk].getLocalElementBegin();
              elem < m_uiLocalBlockList[blk].getLocalElementEnd(); elem++) {
-            ei = (pNodes[elem].getX() - blkNode.getX()) >>
-                 (m_uiMaxDepth - regLev);
-            ej = (pNodes[elem].getY() - blkNode.getY()) >>
-                 (m_uiMaxDepth - regLev);
-            ek = (pNodes[elem].getZ() - blkNode.getZ()) >>
-                 (m_uiMaxDepth - regLev);
+            const unsigned int ei = (pNodes[elem].getX() - blkNode.getX()) >>
+                                    (m_uiMaxDepth - regLev);
+            const unsigned int ej = (pNodes[elem].getY() - blkNode.getY()) >>
+                                    (m_uiMaxDepth - regLev);
+            const unsigned int ek = (pNodes[elem].getZ() - blkNode.getZ()) >>
+                                    (m_uiMaxDepth - regLev);
 
             assert(pNodes[elem].getLevel() ==
                    regLev);  // this is enforced by block construction
@@ -8971,117 +8973,103 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                  unsigned int numblks, unsigned int dof) {
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
 
-    ot::TreeNode blkNode;
-    unsigned int ei, ej, ek;  // element wise xyz coordinates.
     const ot::TreeNode* pNodes = &(*(m_uiAllElements.begin()));
-    unsigned int regLev;
-    // unsigned int blkNpe_1D;
-
-    unsigned int lookUp;
-    unsigned int lookUp1;
-    unsigned int cnum;
-    unsigned int faceCnum;
-
-    unsigned int faceNeighCnum1[4] = {0, 0, 0, 0};  // immidiate neighbors
-    unsigned int faceNeighCnum2[4] = {0, 0, 0, 0};  // neighbor's neighbors
-
-    DendroRegister unsigned int nodeLookUp_CG;
-    DendroRegister unsigned int nodeLookUp_DG;
-
-    std::vector<T> interpOrInjectionOut;  // interpolation or injection output.
-    std::vector<T> injectionInput;  // input for the injection (values from all
-                                    // the 8 children) (This should be put in
-                                    // the order of the morton ordering. )
-    std::vector<T> interpolationInput;
-
-    std::vector<T> edgeInterpIn;
-    std::vector<T> edgeInterpOut;
-
-    std::vector<T> faceInterpIn;
-    std::vector<T> faceInterpOut;
-
-    std::vector<unsigned int> edgeIndex;
-    std::vector<unsigned int> faceIndex;
-    std::vector<unsigned int> child;
-    child.resize(NUM_CHILDREN);
-
-    interpOrInjectionOut.resize(m_uiNpE);
-    interpolationInput.resize(m_uiNpE);
-    // injectionInput.resize(m_uiNpE*NUM_CHILDREN);
-
-    std::vector<T> injectionTest;
-    injectionTest.resize(m_uiNpE * NUM_CHILDREN);
-
-    edgeIndex.resize((m_uiElementOrder + 1));
-    faceIndex.resize((m_uiElementOrder + 1) * (m_uiElementOrder + 1));
-
-    edgeInterpIn.resize((m_uiElementOrder + 1));
-    edgeInterpOut.resize((m_uiElementOrder + 1));
-
-    faceInterpIn.resize((m_uiElementOrder + 1) * (m_uiElementOrder + 1));
-    faceInterpOut.resize((m_uiElementOrder + 1) * (m_uiElementOrder + 1));
-
-    unsigned int mid_bit = 0;
-    unsigned int sz;
-    bool isHanging;
-    unsigned int ownerID, ii_x, jj_y, kk_z;
-    unsigned int eleIndexMin = 0;
-    unsigned int eleIndexMax = 0;
-    bool edgeHanging;
-    bool faceHanging;
-
-    unsigned int lx, ly, lz, offset, paddWidth;
-    bool isParentValue = false;
-
-    unsigned int fid[(NUM_CHILDREN >> 1u)];
-    unsigned int cid[(NUM_CHILDREN >> 1u)];
-
-/*if(!rank) std::cout<<"begin unzip "<<std::endl;*/
-#ifdef DEBUG_UNZIP_OP
-    double d_min, d_max;
-    d_min = -0.5;
-    d_max = 0.5;
-    double x, y, z;
-    unsigned int x1, y1, z1;
-    std::function<double(double, double, double)> func =
-        [d_min, d_max](const double x, const double y, const double z) {
-            return (
-                sin(2 * M_PI *
-                    ((x / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min)) *
-                sin(2 * M_PI *
-                    ((y / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min)) *
-                sin(2 * M_PI *
-                    ((z / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min)));
-        };
-#endif
 
     // NOTE: Be careful when you access ghost elements for padding. (You should
     // only access the level 1 ghost elements. You should not access the level 2
     // ghost elements at any time. )
-    paddWidth = m_uiLocalBlockList[0].get1DPadWidth();
-
-    if ((m_uiElementOrder + 1) / 2 < paddWidth) {
-        std::cout << "rank: " << m_uiActiveRank
-                  << " paddiging with size : " << paddWidth
-                  << " is too large for element order : " << m_uiElementOrder
-                  << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+    {
+        const unsigned int pw_check = m_uiLocalBlockList[0].get1DPadWidth();
+        if ((m_uiElementOrder + 1) / 2 < pw_check) {
+            std::cout << "rank: " << m_uiActiveRank
+                      << " paddiging with size : " << pw_check
+                      << " is too large for element order : "
+                      << m_uiElementOrder << std::endl;
+            MPI_Abort(m_uiCommGlobal, 0);
+        }
     }
 
     assert(numblks <= m_uiLocalBlockList.size());
 
-    std::vector<T> ele_dg_vec;
-    ele_dg_vec.resize(m_uiNumTotalElements * m_uiNpE, (T)0);
-    bool* eleVec_valid = new bool[m_uiAllElements.size()];
-
+    // block-outer parallelization: each block's output region in `unzippedVec`
+    // is disjoint. per-thread lazy element-DG-value cache — we allocate
+    // uninitialized storage via std::unique_ptr<T[]> so OS-lazy-paging only
+    // commits pages for elements this thread actually touches. eleVec_valid
+    // drives the lazy-fill branch so uninitialized memory is never read
     for (unsigned int v = 0; v < dof; v++) {
         const T* zippedVec = in + v * m_uiNumActualNodes;
         T* unzippedVec     = out + v * m_uiUnZippedVecSz;
 
-        for (unsigned int ii = 0; ii < m_uiAllElements.size(); ii++)
-            eleVec_valid[ii] = false;
+#pragma omp parallel
+        {
+            // per-thread scratch state (formerly function-scope)
+            ot::TreeNode blkNode;
+            unsigned int ei, ej, ek;
+            unsigned int regLev;
 
-        for (unsigned int b = 0; b < numblks; b++) {
+            unsigned int lookUp;
+            unsigned int lookUp1;
+            unsigned int cnum;
+            unsigned int faceCnum;
+
+            unsigned int faceNeighCnum1[4] = {0, 0, 0, 0};
+            unsigned int faceNeighCnum2[4] = {0, 0, 0, 0};
+
+            DendroRegister unsigned int nodeLookUp_CG;
+            DendroRegister unsigned int nodeLookUp_DG;
+
+            std::vector<T> interpOrInjectionOut(m_uiNpE);
+            std::vector<T> injectionInput;
+            std::vector<T> interpolationInput(m_uiNpE);
+            std::vector<T> edgeInterpIn(m_uiElementOrder + 1);
+            std::vector<T> edgeInterpOut(m_uiElementOrder + 1);
+            std::vector<T> faceInterpIn((m_uiElementOrder + 1) *
+                                        (m_uiElementOrder + 1));
+            std::vector<T> faceInterpOut((m_uiElementOrder + 1) *
+                                         (m_uiElementOrder + 1));
+            std::vector<unsigned int> edgeIndex(m_uiElementOrder + 1);
+            std::vector<unsigned int> faceIndex((m_uiElementOrder + 1) *
+                                                (m_uiElementOrder + 1));
+            std::vector<unsigned int> child(NUM_CHILDREN);
+            std::vector<T> injectionTest(m_uiNpE * NUM_CHILDREN);
+
+            unsigned int mid_bit = 0;
+            unsigned int sz;
+            bool isHanging;
+            unsigned int ownerID, ii_x, jj_y, kk_z;
+            unsigned int eleIndexMin = 0;
+            unsigned int eleIndexMax = 0;
+            bool edgeHanging;
+            bool faceHanging;
+
+            unsigned int lx, ly, lz, offset, paddWidth;
+            bool isParentValue = false;
+
+            unsigned int fid[(NUM_CHILDREN >> 1u)];
+            unsigned int cid[(NUM_CHILDREN >> 1u)];
+
+            // per-thread lazy cache: UNINITIALIZED storage — we rely on
+            // eleVec_valid to guard every read of ele_dg_vec. OS lazy
+            // page allocation means only elements this thread touches
+            // actually commit memory, so at T=8 the working set stays in
+            // L3 even though the nominal size is num_elements * nPe.
+            // eleVec_valid starts all-false (zero-init is a memset and is
+            // fast; also vector<bool>'s packed form is 1 bit per entry so
+            // 7000 elements = ~900 bytes — trivial)
+            std::unique_ptr<T[]> ele_dg_buf(
+                new T[m_uiNumTotalElements * m_uiNpE]);
+            struct ELEDGVec {
+                T* p;
+                T* data() { return p; }
+                T& operator[](size_t i) { return p[i]; }
+            } ele_dg_vec{ele_dg_buf.get()};
+            std::vector<unsigned char> eleVec_valid_buf(
+                m_uiAllElements.size(), 0);
+            bool* eleVec_valid =
+                reinterpret_cast<bool*>(eleVec_valid_buf.data());
+
+#pragma omp for schedule(dynamic, 4)
+            for (int b = 0; b < (int)numblks; b++) {
             const unsigned int blk = blkIDs[b];
             blkNode                = m_uiLocalBlockList[blk].getBlockNode();
             assert(blkNode.maxX() <= m_uiMeshDomain_max &&
@@ -11013,10 +11001,120 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
             dendro::timer::t_unzip_sync_vtex.stop();
 #endif
-        }
+        }  // end for b (block loop)
+        }  // end omp parallel region
+    }  // end for v (dof loop)
+}
+
+template <typename T>
+void Mesh::buildUnzipPlan() {
+    // probe the existing block-outer unzip with in[i] = i (as T). for each
+    // output cell, check whether the value equals an integer index (i.e.
+    // direct copy) or something else (interpolated — dirty block). record
+    // direct copies as plan entries. this works because unzip is a linear
+    // operator: out[j] = sum w_k * in[idx_k]; with in[i]=i a direct copy
+    // yields out[j] = idx_k exactly, while interpolation yields a weighted
+    // sum of indices which generally isn't an integer.
+    if (!m_uiIsActive || m_uiLocalBlockList.empty()) {
+        m_unzipPlanBuilt = true;
+        return;
     }
 
-    delete[] eleVec_valid;
+    const unsigned int nb = (unsigned int)m_uiLocalBlockList.size();
+    const unsigned int nz = m_uiNumActualNodes;
+
+    std::vector<T> probe_in(nz);
+    for (unsigned int i = 0; i < nz; i++) probe_in[i] = (T)i;
+
+    std::vector<T> probe_out(m_uiUnZippedVecSz, (T)0);
+
+    // use the block-outer variant directly so we don't recurse through
+    // unzip_planned's dispatcher
+    std::vector<unsigned int> allBlks(nb);
+    for (unsigned int i = 0; i < nb; i++) allBlks[i] = i;
+    this->unzip(probe_in.data(), probe_out.data(), allBlks.data(), nb, 1);
+
+    m_unzipPlan_blockStart.assign(nb + 1, 0u);
+    m_unzipPlan_entries.clear();
+    m_unzipPlan_dirtyBlocks.clear();
+
+    // tolerance for "is this value an integer?" test. probe values go up
+    // to nz which is modest; double precision holds them exactly. use a
+    // small tolerance to allow for round-to-nearest jitter if any helper
+    // uses FMA paths
+    const double tol = 1e-6;
+
+    for (unsigned int b = 0; b < nb; b++) {
+        m_unzipPlan_blockStart[b] = (unsigned int)m_unzipPlan_entries.size();
+        const auto& block         = m_uiLocalBlockList[b];
+        const unsigned int offset = block.getOffset();
+        const unsigned int lx     = block.getAllocationSzX();
+        const unsigned int ly     = block.getAllocationSzY();
+        const unsigned int lz     = block.getAllocationSzZ();
+        const unsigned int bsz    = lx * ly * lz;
+
+        bool dirty = false;
+        for (unsigned int k = 0; k < bsz; k++) {
+            double val     = (double)probe_out[offset + k];
+            double rounded = std::round(val);
+            if (rounded < 0.0 || rounded >= (double)nz) {
+                // out-of-range — unwritten cell or interpolated past index
+                // range. treat as dirty so fallback fills it
+                dirty = true;
+                continue;
+            }
+            if (std::abs(val - rounded) > tol * (std::abs(val) + 1.0)) {
+                // not an integer — interpolated
+                dirty = true;
+                continue;
+            }
+            UnzipPlanEntry e;
+            e.block_offset = k;
+            e.zipped_idx   = (unsigned int)rounded;
+            m_unzipPlan_entries.push_back(e);
+        }
+        if (dirty) m_unzipPlan_dirtyBlocks.push_back(b);
+    }
+    m_unzipPlan_blockStart[nb] = (unsigned int)m_unzipPlan_entries.size();
+    m_unzipPlanBuilt           = true;
+}
+
+template <typename T>
+void Mesh::unzip_planned(const T* in, T* out, unsigned int dof) {
+    if ((!m_uiIsActive) || m_uiLocalBlockList.empty()) return;
+    if (!m_unzipPlanBuilt) this->buildUnzipPlan<T>();
+
+    const int nb = (int)m_uiLocalBlockList.size();
+
+    for (unsigned int v = 0; v < dof; v++) {
+        const T* zipped = in + v * m_uiNumActualNodes;
+        T* unzipped     = out + v * m_uiUnZippedVecSz;
+
+        // phase 1: planned direct copies — trivially parallel, block
+        // outputs are disjoint by offset. handles ~90% of cells on typical
+        // AMR meshes in a tight gather loop with high cache locality
+#pragma omp parallel for schedule(static)
+        for (int b = 0; b < nb; b++) {
+            T* const block_out =
+                unzipped + m_uiLocalBlockList[b].getOffset();
+            const unsigned int s = m_unzipPlan_blockStart[b];
+            const unsigned int e = m_unzipPlan_blockStart[b + 1];
+            for (unsigned int k = s; k < e; k++) {
+                const UnzipPlanEntry& p = m_unzipPlan_entries[k];
+                block_out[p.block_offset] = zipped[p.zipped_idx];
+            }
+        }
+
+        // phase 2: fallback for "dirty" blocks (those with hanging-node
+        // interpolation cells that don't reduce to a single-index copy).
+        // runs the existing block-outer unzip on just this subset; it
+        // rewrites direct-copy cells identically, so there's no need to
+        // track which cells the plan already filled
+        if (!m_unzipPlan_dirtyBlocks.empty()) {
+            this->unzip(zipped, unzipped, m_unzipPlan_dirtyBlocks.data(),
+                        (unsigned int)m_unzipPlan_dirtyBlocks.size(), 1);
+        }
+    }
 }
 
 template <typename T>
@@ -11035,22 +11133,28 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
     const unsigned int* e2e    = this->getE2EMapping().data();
 
     const unsigned int dgSz    = nPe;
-    std::vector<T> dg_ele_vec;
-    dg_ele_vec.resize(dof * dgSz);
+    T* uzWVec                  = out;
 
-    T* dgWVec = dg_ele_vec.data();
-    T* uzWVec = out;
+    const double d_compar_tol  = 1e-10;
 
-    std::vector<T> p2cI_all;
-    p2cI_all.resize(NUM_CHILDREN * dof * nPe);
-    bool p2c_interp_valid[NUM_CHILDREN];
-
-    const double d_compar_tol = 1e-10;
-
-    std::vector<ot::TreeNode> childOct;
-    childOct.reserve(NUM_CHILDREN);
-
-    for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+    // NOTE: this loop is intentionally serial.
+    // element-outer scatter writes to block padding regions via the
+    // e2b_unzip map. at hanging-node / cross-level-neighbor interfaces,
+    // interpolation produces writes from multiple elements into the same
+    // padding cells of the same block. observed end-to-end under
+    // OMP_NUM_THREADS>1 with a roundtrip test (max abs diff ~10^2, far
+    // above FP noise). to parallelize here safely we'd need either
+    // (a) invert to a block-outer loop using the per-block element list
+    // (see Mesh::unzip(in, out, blkIDs, ...) in this file — already block-
+    // outer, just not wired up as the default), or (b) a per-thread scratch
+    // per block followed by a reduction.
+    for (int ele = 0; ele < (int)m_uiNumTotalElements; ele++) {
+        std::vector<T> dg_ele_vec(dof * dgSz);
+        T* dgWVec = dg_ele_vec.data();
+        std::vector<T> p2cI_all(NUM_CHILDREN * dof * nPe);
+        bool p2c_interp_valid[NUM_CHILDREN];
+        std::vector<ot::TreeNode> childOct;
+        childOct.reserve(NUM_CHILDREN);
         if (m_e2b_unzip_counts[ele] == 0) continue;
 
         for (unsigned int ii = 0; ii < NUM_CHILDREN; ii++)
@@ -11292,14 +11396,10 @@ template <typename T>
 void Mesh::unzip(const T* in, T* out, unsigned int dof) {
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
 
-    // std::vector<unsigned int > blkIDs;
-    // blkIDs.resize(m_uiLocalBlockList.size());
-
-    // for(unsigned int i=0; i< m_uiLocalBlockList.size(); i++)
-    //     blkIDs[i] = i ;
-    // unzip all the blocks.
-    // this->unzip(in,out,blkIDs.data(),blkIDs.size(),dof);
-    this->unzip_scatter(in, out, dof);
+    // planned path: most blocks resolve to flat per-block direct-copy
+    // gathers (populated on first call via probe of the block-outer unzip);
+    // hanging-node-heavy "dirty" blocks fall back to the block-outer path
+    this->unzip_planned(in, out, dof);
 }
 
 #if 0
