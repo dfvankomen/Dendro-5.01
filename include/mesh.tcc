@@ -1447,18 +1447,24 @@ void Mesh::writeFromGhostBegin(T* vec, unsigned int dof) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
             sendB = (T*)ctx.getSendBuffer();
 
-            for (unsigned int send_p = 0; send_p < sendProcList.size();
-                 send_p++) {
-                proc_id = sendProcList[send_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeSendOffset[proc_id];
-                         k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
-                         k++) {
-                        sendB[dof * (nodeSendOffset[proc_id]) +
-                              (var * nodeSendCount[proc_id]) +
-                              (k - nodeSendOffset[proc_id])] =
-                            (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
+            // reverse-direction gather: threads pack sendB from `vec` via
+            // sendNodeSM (which aliases recv-side scatter map). writes to
+            // sendB are disjoint by (proc_id, var, k). see readFromGhost
+            // for the full pattern rationale
+#pragma omp parallel
+            {
+                for (unsigned int send_p = 0; send_p < sendProcList.size();
+                     send_p++) {
+                    const unsigned int pid = sendProcList[send_p];
+                    const unsigned int off = nodeSendOffset[pid];
+                    const unsigned int cnt = nodeSendCount[pid];
+                    for (unsigned int var = 0; var < dof; var++) {
+#pragma omp for schedule(static) nowait
+                        for (unsigned int k = 0; k < cnt; k++) {
+                            sendB[dof * off + var * cnt + k] =
+                                (vec + var * m_uiNumActualNodes)
+                                    [sendNodeSM[off + k]];
+                        }
                     }
                 }
             }
