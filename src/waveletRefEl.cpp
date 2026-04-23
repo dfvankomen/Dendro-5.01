@@ -95,6 +95,8 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
     const unsigned int eleOrder    = m_uiRefEl->getElementOrder();
     const unsigned int np_1d       = eleOrder + 1;
     const unsigned int nPe         = np_1d * np_1d * np_1d;
+    const unsigned int nPe_ch = (2 * eleOrder + 1) * (2 * eleOrder + 1) *
+                                (2 * eleOrder + 1);
 
     const unsigned int num_wc_1d   = m_uiCIndex.size();
     const unsigned int num_wc      = num_wc_1d * num_wc_1d * num_wc_1d;
@@ -107,6 +109,21 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
 
     // initialize the wavelets to zero.
     for (unsigned int i = 0; i < wc.size(); i++) wc[i] = 0;
+
+    // thread-local scratch: m_uiVIn / m_uiNVec / m_uiVOut are instance-
+    // shared member vectors and not safe under concurrent callers. Each
+    // thread holds its own grow-only buffers sized on first touch. Used
+    // via local pointers below (vin, nvec, vout) so the rest of the code
+    // reads like the member-vector version did
+    thread_local std::vector<double> tls_vIn;
+    thread_local std::vector<double> tls_nVec;
+    thread_local std::vector<double> tls_vOut;
+    if (tls_vIn.size() < nPe) tls_vIn.resize(nPe);
+    if (tls_nVec.size() < nPe) tls_nVec.resize(nPe);
+    if (tls_vOut.size() < nPe_ch) tls_vOut.resize(nPe_ch);
+    double* const vin  = tls_vIn.data();
+    double* const nvec = tls_nVec.data();
+    double* const vout = tls_vOut.data();
 
     if (isBdy) {
         // element is a boundary element.
@@ -123,12 +140,12 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
                     const unsigned int pp1 =
                         ((k - pw) >> 1u) * (bnp_1d * bnp_1d) +
                         ((j - pw) >> 1u) * bnp_1d + ((i - pw) >> 1u);
-                    m_uiVIn[pp1] = in[pp];
+                    vin[pp1] = in[pp];
                 }
 
         int bit[3];
         for (unsigned int cnum = 0; cnum < NUM_CHILDREN; cnum++) {
-            m_uiRefElBdy->I3D_Parent2Child(m_uiVIn.data(), m_uiNVec.data(),
+            m_uiRefElBdy->I3D_Parent2Child(vin, nvec,
                                            cnum);
 
             bit[0]                = binOp::getBit(cnum, 0);
@@ -142,9 +159,9 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
             for (unsigned int k = kb; k < (kb + (bdyEOrder + 1)); k++)
                 for (unsigned int j = jb; j < (jb + (bdyEOrder + 1)); j++)
                     for (unsigned int i = ib; i < (ib + (bdyEOrder + 1)); i++)
-                        m_uiVOut[k * bnp_child_1d * bnp_child_1d +
+                        vout[k * bnp_child_1d * bnp_child_1d +
                                  j * bnp_child_1d + i] =
-                            m_uiNVec[(k - kb) * bnp_1d * bnp_1d +
+                            nvec[(k - kb) * bnp_1d * bnp_1d +
                                      (j - jb) * bnp_1d + (i - ib)];
         }
 
@@ -159,7 +176,7 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
                             (k - pw) * (bnp_child_1d * bnp_child_1d) +
                             (j - pw) * bnp_child_1d + (i - pw);
                         wc[wcount] =
-                            fabs(in[pp] - m_uiVOut[pp1]) /
+                            fabs(in[pp] - vout[pp1]) /
                             std::max(in_min,
                                      fabs(in[pp]));  // relative wavelet tol.
                     }
@@ -175,7 +192,7 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
                             (k - pw) * (bnp_child_1d * bnp_child_1d) +
                             (j - pw) * bnp_child_1d + (i - pw);
                         wc[wcount] = fabs(
-                            in[pp] - m_uiVOut[pp1]);  // absolute wavelet tol.
+                            in[pp] - vout[pp1]);  // absolute wavelet tol.
                     }
         }
 
@@ -187,12 +204,12 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
             for (unsigned int i = 0; i < m_uiPIndex.size(); i++) {
                 const unsigned int pp = m_uiPIndex[k] * (iny * inx) +
                                         m_uiPIndex[j] * (inx) + m_uiPIndex[i];
-                m_uiVIn[k * (np_1d) * (np_1d) + j * (np_1d) + i] = in[pp];
+                vin[k * (np_1d) * (np_1d) + j * (np_1d) + i] = in[pp];
             }
 
     int bit[3];
     for (unsigned int cnum = 0; cnum < NUM_CHILDREN; cnum++) {
-        m_uiRefEl->I3D_Parent2Child(m_uiVIn.data(), m_uiNVec.data(), cnum);
+        m_uiRefEl->I3D_Parent2Child(vin, nvec, cnum);
 
         bit[0]                = binOp::getBit(cnum, 0);
         bit[1]                = binOp::getBit(cnum, 1);
@@ -205,14 +222,14 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
         for (unsigned int k = kb; k < (kb + (eleOrder + 1)); k++)
             for (unsigned int j = jb; j < (jb + (eleOrder + 1)); j++)
                 for (unsigned int i = ib; i < (ib + (eleOrder + 1)); i++)
-                    m_uiVOut[k * iny * inx + j * inx + i] =
-                        m_uiNVec[(k - kb) * np_1d * np_1d + (j - jb) * np_1d +
+                    vout[k * iny * inx + j * inx + i] =
+                        nvec[(k - kb) * np_1d * np_1d + (j - jb) * np_1d +
                                  (i - ib)];
     }
 
     // for(unsigned int w=0; w < inx*iny*inz; w++)
     //     std::cout<<"in["<<w<<"]:"<<in[w] <<" \t | \t
-    //     out["<<w<<"]:"<<m_uiVOut[w]<<std::endl;
+    //     out["<<w<<"]:"<<vout[w]<<std::endl;
 
     // for(unsigned int k=0; k < inz; k++)
     // for(unsigned int j=0; j < iny; j++)
@@ -220,7 +237,7 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
     // {
     //     unsigned int pp = k*iny*inx + j* inx + i;
     //     printf("in (%d, %d, %d) : %f    out(%d, %d, %d ): %f
-    //     \n",i,j,k,in[pp],i,j,k,m_uiVOut[pp]);
+    //     \n",i,j,k,in[pp],i,j,k,vout[pp]);
     // }
 
     // {
@@ -228,7 +245,7 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
     //     double beta=0.0;
     //     int incx=1;
     //     int incy=1;
-    //     dgemv_((char*)"N",(int*)&num_wc,(int*)&nPe,&alpha,m_uiWInterp_3d.data(),(int*)&num_wc,m_uiVIn.data(),&incx,&beta,m_uiVOut.data(),&incy);
+    //     dgemv_((char*)"N",(int*)&num_wc,(int*)&nPe,&alpha,m_uiWInterp_3d.data(),(int*)&num_wc,vin,&incx,&beta,vout,&incy);
 
     // }
 
@@ -240,7 +257,7 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
                     const unsigned int pp = m_uiCIndex[k] * (iny * inx) +
                                             m_uiCIndex[j] * (inx) +
                                             m_uiCIndex[i];
-                    wc[wcount] = fabs(m_uiVOut[pp] - in[pp]) /
+                    wc[wcount] = fabs(vout[pp] - in[pp]) /
                                  std::max(in_min, fabs(in[pp]));
                 }
 
@@ -252,7 +269,7 @@ void WaveletEl::compute_wavelets_3D(const double* in, const unsigned int* isz,
                     const unsigned int pp = m_uiCIndex[k] * (iny * inx) +
                                             m_uiCIndex[j] * (inx) +
                                             m_uiCIndex[i];
-                    wc[wcount] = fabs(m_uiVOut[pp] - in[pp]);  // abs wavelets.
+                    wc[wcount] = fabs(vout[pp] - in[pp]);  // abs wavelets.
                 }
     }
 }

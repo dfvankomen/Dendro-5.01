@@ -2222,6 +2222,15 @@ class Mesh {
     template <typename T>
     void zip(const T *unzippedVec, T *zippedVec);
 
+    /**@brief dof-aware zip: zip `dof` variables stored consecutively in
+     * unzippedVec / zippedVec in a single OMP parallel region. Eliminates
+     * the per-variable fork/join overhead a caller would otherwise pay by
+     * looping externally at `dof` > 1 (e.g. Ctx::zip with BSSN_NUM_VARS=24).
+     * The single-var zip overload forwards to this implementation.
+     */
+    template <typename T>
+    void zip(const T *unzippedVec, T *zippedVec, unsigned int dof);
+
     /**
      * @brief perform block wise zip operation.
      *

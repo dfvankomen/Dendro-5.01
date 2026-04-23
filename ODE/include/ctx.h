@@ -705,9 +705,10 @@ void Ctx<DerivedCtx, T, I>::zip(ot::DVector<T, I>& in, ot::DVector<T, I>& out) {
     m_uiCtxpt[CTXPROFILE::ZIP].start();
 #endif
     if (in.get_loc() == ot::DVEC_LOC::HOST) {
-        for (unsigned int j = 0; j < dof; j++)
-            m_uiMesh->zip(in_ptr + j * sz_per_dof_uzip,
-                          out_ptr + j * sz_per_dof_zip);
+        // dof-aware zip: all variables batched into one OMP parallel
+        // region (was: one parallel region per variable — at BSSN's
+        // dof=24 that was 23 extra fork/joins per RK stage zip)
+        m_uiMesh->zip(in_ptr, out_ptr, dof);
 
     } else if (in.get_loc() == ot::DVEC_LOC::DEVICE) {
 #ifdef __CUDACC__

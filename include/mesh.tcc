@@ -4596,62 +4596,99 @@ void Mesh::interGridTransferCellVec(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
 
 template <typename T>
 void Mesh::zip(const T* unzippedVec, T* zippedVec) {
+    // forward to the dof-aware overload
+    this->zip(unzippedVec, zippedVec, 1u);
+}
+
+template <typename T>
+void Mesh::zip(const T* unzippedVec, T* zippedVec, unsigned int dof) {
     if (!m_uiIsActive) return;
+    if (dof == 0) return;
 
     const ot::TreeNode* pNodes = &(*(m_uiAllElements.begin()));
+    const int nb               = (int)m_uiLocalBlockList.size();
 
     // per-block: each block owns its elements, and the DG/CG mapping's
     // "owner-only writes" condition (`/m_uiNpE == elem`) guarantees each
     // zipped index is written by exactly one element across the whole
     // rank. so writes from different blocks never collide and the loop
-    // is fully thread-disjoint
-    DENDRO_OMP_PARALLEL_FOR_DYNAMIC(4)
-    for (int blk = 0; blk < (int)m_uiLocalBlockList.size(); blk++) {
-        const ot::TreeNode blkNode = m_uiLocalBlockList[blk].getBlockNode();
-        const unsigned int regLev  = m_uiLocalBlockList[blk].getRegularGridLev();
+    // is fully thread-disjoint.
+    //
+    // dof loop is INSIDE the parallel region so we pay one fork/join for
+    // any number of variables. BSSN's Ctx::zip loops externally at dof=24
+    // and previously caused 24 fork/joins per zip call; with this overload
+    // it's 1. pre-existing single-var callers forward through the wrapper
+    // above and pay the same one fork/join they always did.
+#pragma omp parallel
+    {
+        for (unsigned int v = 0; v < dof; v++) {
+            const T* uzip_ptr = unzippedVec + v * m_uiUnZippedVecSz;
+            T* zip_ptr        = zippedVec + v * m_uiNumActualNodes;
 
-        const unsigned int lx = m_uiLocalBlockList[blk].getAllocationSzX();
-        const unsigned int ly = m_uiLocalBlockList[blk].getAllocationSzY();
-        const unsigned int lz = m_uiLocalBlockList[blk].getAllocationSzZ();
-        const unsigned int offset    = m_uiLocalBlockList[blk].getOffset();
-        const unsigned int paddWidth = m_uiLocalBlockList[blk].get1DPadWidth();
+#pragma omp for schedule(dynamic, 4) nowait
+            for (int blk = 0; blk < nb; blk++) {
+                const ot::TreeNode blkNode =
+                    m_uiLocalBlockList[blk].getBlockNode();
+                const unsigned int regLev =
+                    m_uiLocalBlockList[blk].getRegularGridLev();
 
-        for (unsigned int elem = m_uiLocalBlockList[blk].getLocalElementBegin();
-             elem < m_uiLocalBlockList[blk].getLocalElementEnd(); elem++) {
-            const unsigned int ei = (pNodes[elem].getX() - blkNode.getX()) >>
-                                    (m_uiMaxDepth - regLev);
-            const unsigned int ej = (pNodes[elem].getY() - blkNode.getY()) >>
-                                    (m_uiMaxDepth - regLev);
-            const unsigned int ek = (pNodes[elem].getZ() - blkNode.getZ()) >>
-                                    (m_uiMaxDepth - regLev);
+                const unsigned int lx =
+                    m_uiLocalBlockList[blk].getAllocationSzX();
+                const unsigned int ly =
+                    m_uiLocalBlockList[blk].getAllocationSzY();
+                const unsigned int lz =
+                    m_uiLocalBlockList[blk].getAllocationSzZ();
+                const unsigned int offset =
+                    m_uiLocalBlockList[blk].getOffset();
+                const unsigned int paddWidth =
+                    m_uiLocalBlockList[blk].get1DPadWidth();
 
-            assert(pNodes[elem].getLevel() ==
-                   regLev);  // this is enforced by block construction
+                for (unsigned int elem =
+                         m_uiLocalBlockList[blk].getLocalElementBegin();
+                     elem < m_uiLocalBlockList[blk].getLocalElementEnd();
+                     elem++) {
+                    const unsigned int ei =
+                        (pNodes[elem].getX() - blkNode.getX()) >>
+                        (m_uiMaxDepth - regLev);
+                    const unsigned int ej =
+                        (pNodes[elem].getY() - blkNode.getY()) >>
+                        (m_uiMaxDepth - regLev);
+                    const unsigned int ek =
+                        (pNodes[elem].getZ() - blkNode.getZ()) >>
+                        (m_uiMaxDepth - regLev);
 
-            // (1). local nodes copy. Not need to interpolate or inject values.
-            // By block construction local octants in the block has is the same
-            // level as regular grid.
-            for (unsigned int k = 0; k < m_uiElementOrder + 1; k++)
-                for (unsigned int j = 0; j < m_uiElementOrder + 1; j++)
-                    for (unsigned int i = 0; i < m_uiElementOrder + 1; i++) {
-                        if ((m_uiE2NMapping_DG[elem * m_uiNpE +
-                                               k * (m_uiElementOrder + 1) *
-                                                   (m_uiElementOrder + 1) +
-                                               j * (m_uiElementOrder + 1) + i] /
-                             m_uiNpE) == elem)
-                            zippedVec[m_uiE2NMapping_CG
-                                          [elem * m_uiNpE +
-                                           k * (m_uiElementOrder + 1) *
-                                               (m_uiElementOrder + 1) +
-                                           j * (m_uiElementOrder + 1) + i]] =
-                                unzippedVec
-                                    [offset +
-                                     (ek * m_uiElementOrder + k + paddWidth) *
-                                         (ly * lx) +
-                                     (ej * m_uiElementOrder + j + paddWidth) *
-                                         (lx) +
-                                     (ei * m_uiElementOrder + i + paddWidth)];
-                    }
+                    assert(pNodes[elem].getLevel() == regLev);
+
+                    for (unsigned int k = 0; k < m_uiElementOrder + 1; k++)
+                        for (unsigned int j = 0; j < m_uiElementOrder + 1;
+                             j++)
+                            for (unsigned int i = 0; i < m_uiElementOrder + 1;
+                                 i++) {
+                                if ((m_uiE2NMapping_DG
+                                         [elem * m_uiNpE +
+                                          k * (m_uiElementOrder + 1) *
+                                              (m_uiElementOrder + 1) +
+                                          j * (m_uiElementOrder + 1) + i] /
+                                     m_uiNpE) == elem)
+                                    zip_ptr[m_uiE2NMapping_CG
+                                                [elem * m_uiNpE +
+                                                 k * (m_uiElementOrder + 1) *
+                                                     (m_uiElementOrder + 1) +
+                                                 j * (m_uiElementOrder + 1) +
+                                                 i]] =
+                                        uzip_ptr
+                                            [offset +
+                                             (ek * m_uiElementOrder + k +
+                                              paddWidth) *
+                                                 (ly * lx) +
+                                             (ej * m_uiElementOrder + j +
+                                              paddWidth) *
+                                                 (lx) +
+                                             (ei * m_uiElementOrder + i +
+                                              paddWidth)];
+                            }
+                }
+            }
         }
     }
 }
@@ -9043,14 +9080,13 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
     // uninitialized storage via std::unique_ptr<T[]> so OS-lazy-paging only
     // commits pages for elements this thread actually touches. eleVec_valid
     // drives the lazy-fill branch so uninitialized memory is never read
-    for (unsigned int v = 0; v < dof; v++) {
-        const T* zippedVec = in + v * m_uiNumActualNodes;
-        T* unzippedVec     = out + v * m_uiUnZippedVecSz;
-
+    // hoist the dof loop INSIDE the parallel region: one fork/join for
+    // any dof, per-thread scratch allocated once total (was: dof times),
+    // ele_dg_vec's ~7MB is paid once per thread per call not `dof` times
 #pragma omp parallel
-        {
-            // per-thread scratch state (formerly function-scope)
-            ot::TreeNode blkNode;
+    {
+        // per-thread scratch state (formerly function-scope)
+        ot::TreeNode blkNode;
             unsigned int ei, ej, ek;
             unsigned int regLev;
 
@@ -9114,6 +9150,21 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                 m_uiAllElements.size(), 0);
             bool* eleVec_valid =
                 reinterpret_cast<bool*>(eleVec_valid_buf.data());
+
+        // dof loop is now inside the parallel region — per-thread scratch
+        // is reused across variables (values differ per var so ele_dg_vec
+        // and eleVec_valid are cleared at the start of each v). The omp
+        // for's implicit barrier between vs synchronizes threads.
+        for (unsigned int v = 0; v < dof; v++) {
+            const T* zippedVec = in + v * m_uiNumActualNodes;
+            T* unzippedVec     = out + v * m_uiUnZippedVecSz;
+
+            // each thread clears its own valid flags before this v so the
+            // lazy-fill cache starts fresh. ele_dg_vec data is read only
+            // after eleVec_valid[i] is set true, so stale data is never
+            // observed
+            std::fill(eleVec_valid_buf.begin(), eleVec_valid_buf.end(),
+                      (unsigned char)0);
 
 #pragma omp for schedule(dynamic, 4)
             for (int b = 0; b < (int)numblks; b++) {
@@ -11049,8 +11100,8 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
             dendro::timer::t_unzip_sync_vtex.stop();
 #endif
         }  // end for b (block loop)
-        }  // end omp parallel region
-    }  // end for v (dof loop)
+        }  // end for v (dof loop, now inside parallel region)
+    }  // end omp parallel region
 }
 
 template <typename T>
@@ -11182,53 +11233,55 @@ void Mesh::unzip_planned(const T* in, T* out, unsigned int dof) {
 
     const int nb = (int)m_uiLocalBlockList.size();
 
-    for (unsigned int v = 0; v < dof; v++) {
-        const T* zipped = in + v * m_uiNumActualNodes;
-        T* unzipped     = out + v * m_uiUnZippedVecSz;
+    // phase 1: one parallel region covers all dof variables. Each thread
+    // participates in the omp-for per v with static scheduling. nowait
+    // removes the end-of-v barrier; the next v's omp for re-synchronizes
+    // on entry. In pre-refactor code this was `dof` separate omp parallel
+    // regions — a fork/join per variable per call. BSSN hot path calls
+    // this with dof=12 and async_k=2, so we were paying ~24 fork/joins
+    // per unzip_planned call; now it's 1.
+#pragma omp parallel
+    {
+        for (unsigned int v = 0; v < dof; v++) {
+            const T* zipped = in + v * m_uiNumActualNodes;
+            T* unzipped     = out + v * m_uiUnZippedVecSz;
 
-        // phase 1: planned copies + interpolations — trivially parallel,
-        // block outputs are disjoint by offset. direct-copy entries are
-        // the hot majority path (tight 8-byte gather); multi-term entries
-        // handle hanging-node interpolation via a weighted sum. the inner
-        // loops stay tight because the two arrays are independent: no
-        // branch per entry, just two back-to-back loops per block
-#pragma omp parallel for schedule(static)
-        for (int b = 0; b < nb; b++) {
-            T* const block_out =
-                unzipped + m_uiLocalBlockList[b].getOffset();
+#pragma omp for schedule(static) nowait
+            for (int b = 0; b < nb; b++) {
+                T* const block_out =
+                    unzipped + m_uiLocalBlockList[b].getOffset();
 
-            // direct copies
-            const unsigned int ds = m_unzipPlan_directStart[b];
-            const unsigned int de = m_unzipPlan_directStart[b + 1];
-            for (unsigned int k = ds; k < de; k++) {
-                const UnzipPlanEntry& p = m_unzipPlan_direct[k];
-                block_out[p.block_offset] = zipped[p.zipped_idx];
-            }
-
-            // multi-term interpolations
-            const unsigned int ms = m_unzipPlan_multiStart[b];
-            const unsigned int me = m_unzipPlan_multiStart[b + 1];
-            for (unsigned int k = ms; k < me; k++) {
-                const UnzipPlanMultiEntry& m = m_unzipPlan_multi[k];
-                double v = 0.0;
-                for (unsigned int t = 0; t < m.term_count; t++) {
-                    const UnzipPlanTerm& term =
-                        m_unzipPlan_terms[m.term_start + t];
-                    v += term.weight * (double)zipped[term.zipped_idx];
+                // direct copies (the hot majority path)
+                const unsigned int ds = m_unzipPlan_directStart[b];
+                const unsigned int de = m_unzipPlan_directStart[b + 1];
+                for (unsigned int k = ds; k < de; k++) {
+                    const UnzipPlanEntry& p = m_unzipPlan_direct[k];
+                    block_out[p.block_offset] = zipped[p.zipped_idx];
                 }
-                block_out[m.block_offset] = (T)v;
+
+                // multi-term interpolations
+                const unsigned int ms = m_unzipPlan_multiStart[b];
+                const unsigned int me = m_unzipPlan_multiStart[b + 1];
+                for (unsigned int k = ms; k < me; k++) {
+                    const UnzipPlanMultiEntry& m = m_unzipPlan_multi[k];
+                    double val = 0.0;
+                    for (unsigned int t = 0; t < m.term_count; t++) {
+                        const UnzipPlanTerm& term =
+                            m_unzipPlan_terms[m.term_start + t];
+                        val += term.weight * (double)zipped[term.zipped_idx];
+                    }
+                    block_out[m.block_offset] = (T)val;
+                }
             }
         }
+    }
 
-        // phase 2: fallback for "dirty" blocks (those with hanging-node
-        // interpolation cells that don't reduce to a single-index copy).
-        // runs the existing block-outer unzip on just this subset; it
-        // rewrites direct-copy cells identically, so there's no need to
-        // track which cells the plan already filled
-        if (!m_unzipPlan_dirtyBlocks.empty()) {
-            this->unzip(zipped, unzipped, m_unzipPlan_dirtyBlocks.data(),
-                        (unsigned int)m_unzipPlan_dirtyBlocks.size(), 1);
-        }
+    // phase 2: fallback for "dirty" blocks. block-outer unzip is now also
+    // dof-aware inside a single parallel region, so we can call it once
+    // for the whole (in, out, dof) block rather than per-variable
+    if (!m_unzipPlan_dirtyBlocks.empty()) {
+        this->unzip(in, out, m_unzipPlan_dirtyBlocks.data(),
+                    (unsigned int)m_unzipPlan_dirtyBlocks.size(), dof);
     }
 }
 

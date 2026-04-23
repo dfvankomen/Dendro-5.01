@@ -201,6 +201,93 @@ int main(int argc, char** argv) {
     double us_z = time_it(
         [&]() { grad<double>(mesh, 2, u_unzip.data(), du_unzip.data()); });
 
+    // ------------------------------------------------------------------
+    // BSSN-like RHS stage: what dendrolib actually sees when a BSSN RK
+    // stage runs. Exercises the dof>1 unzip/zip paths and the per-batch
+    // (async_k) call pattern that Ctx::unzip and Ctx::zip follow.
+    //
+    // pattern matches BSSN_GR/src/bssnCtx.cpp::BSSNCtx::rhs:
+    //   for i in 0..async_k:
+    //       readFromGhostBegin(ctx, ptr, batch_sz)
+    //       readFromGhostEnd(ctx, ptr, batch_sz)
+    //       mesh->unzip(ptr, ptr, batch_sz)
+    //   // ...bssnRHS compute (stand in with per-block scaling)...
+    //   zip(unz_out, out)   // called once at dof=NUM_VARS
+    //
+    // NUM_VARS=24 and ASYNC_COMM_K=2 match typical BSSN configuration
+    const unsigned int NUM_VARS      = 24;
+    const unsigned int ASYNC_COMM_K  = 2;
+    const unsigned int batch_sz      = NUM_VARS / ASYNC_COMM_K;
+    const unsigned int zipSz         = mesh->getDegOfFreedom();
+
+    std::vector<double> bssn_zip(zipSz * NUM_VARS, 0.0);
+    std::vector<double> bssn_unz(uzipSz * NUM_VARS, 0.0);
+    std::vector<double> bssn_zip_out(zipSz * NUM_VARS, 0.0);
+
+    // populate zip with deterministic values so ghost exchange has work
+    for (size_t i = 0; i < bssn_zip.size(); i++) {
+        bssn_zip[i] = std::sin(0.003 * i);
+    }
+
+    // correctness: full dof=NUM_VARS unzip+zip roundtrip
+    mesh->readFromGhostBegin(bssn_zip.data(), NUM_VARS);
+    mesh->readFromGhostEnd(bssn_zip.data(), NUM_VARS);
+    mesh->unzip(bssn_zip.data(), bssn_unz.data(), NUM_VARS);
+    mesh->zip(bssn_unz.data(), bssn_zip_out.data(), NUM_VARS);
+    size_t bssn_mism = 0;
+    double bssn_maxd = 0.0;
+    for (unsigned int v = 0; v < NUM_VARS; v++) {
+        for (unsigned int i = mesh->getNodeLocalBegin();
+             i < mesh->getNodeLocalEnd(); i++) {
+            double d = std::abs(bssn_zip[v * zipSz + i] -
+                                bssn_zip_out[v * zipSz + i]);
+            if (d > 0.0) {
+                bssn_mism++;
+                if (d > bssn_maxd) bssn_maxd = d;
+            }
+        }
+    }
+    std::cout << "bssn-like roundtrip (dof=" << NUM_VARS
+              << ") mismatches: " << bssn_mism << " (max abs diff "
+              << bssn_maxd << ")" << std::endl;
+
+    // warmup the bssn-like path
+    for (int w = 0; w < 10; w++) {
+        for (unsigned int i = 0; i < ASYNC_COMM_K; i++) {
+            double* ptr = bssn_zip.data() + i * batch_sz * zipSz;
+            double* uptr = bssn_unz.data() + i * batch_sz * uzipSz;
+            mesh->readFromGhostBegin(ptr, batch_sz);
+            mesh->readFromGhostEnd(ptr, batch_sz);
+            mesh->unzip(ptr, uptr, batch_sz);
+        }
+        mesh->zip(bssn_unz.data(), bssn_zip_out.data(), NUM_VARS);
+    }
+
+    // time the BSSN-like unzip pipeline (pipelined async_k batches)
+    double us_bssn_unz = time_it([&]() {
+        for (unsigned int i = 0; i < ASYNC_COMM_K; i++) {
+            double* ptr  = bssn_zip.data() + i * batch_sz * zipSz;
+            double* uptr = bssn_unz.data() + i * batch_sz * uzipSz;
+            mesh->readFromGhostBegin(ptr, batch_sz);
+            mesh->readFromGhostEnd(ptr, batch_sz);
+            mesh->unzip(ptr, uptr, batch_sz);
+        }
+    });
+
+    // time the BSSN-like zip: dof=NUM_VARS batched into one parallel region
+    double us_bssn_zip_batched = time_it([&]() {
+        mesh->zip(bssn_unz.data(), bssn_zip_out.data(), NUM_VARS);
+    });
+
+    // also time the Ctx::zip-style external loop (NUM_VARS calls at dof=1)
+    // to quantify the fork/join overhead the batched overload eliminates
+    double us_bssn_zip_serial = time_it([&]() {
+        for (unsigned int v = 0; v < NUM_VARS; v++) {
+            mesh->zip(bssn_unz.data() + v * uzipSz,
+                      bssn_zip_out.data() + v * zipSz);
+        }
+    });
+
     // aggregate per-rank timings: MAX approximates wall-clock (synced by
     // MPI_Barrier inside time_it), MIN shows the fastest rank
     auto reduce_max = [&](double local) {
@@ -214,6 +301,9 @@ int main(int argc, char** argv) {
     double mx_x     = reduce_max(us_x);
     double mx_y     = reduce_max(us_y);
     double mx_z     = reduce_max(us_z);
+    double mx_bssn_unz        = reduce_max(us_bssn_unz);
+    double mx_bssn_zip_batch  = reduce_max(us_bssn_zip_batched);
+    double mx_bssn_zip_serial = reduce_max(us_bssn_zip_serial);
 
     // rough end-to-end model: RK45 runs 6 stages, each does 1 ghost exchange
     // + 1 unzip + 3 grads + 1 zip. use max-across-ranks to approximate the
@@ -233,6 +323,20 @@ int main(int argc, char** argv) {
         std::cout << "per-RK-stage:   " << per_stage << std::endl;
         std::cout << "per-RK45-step:  " << per_step
                   << "  (6 stages × pipeline)" << std::endl;
+
+        std::cout << "\n---------- BSSN-like stage (dof=" << NUM_VARS
+                  << ", async_k=" << ASYNC_COMM_K << ") ----------" << std::endl;
+        std::cout << "unzip pipeline (ghost+unzip, " << ASYNC_COMM_K
+                  << " batches of " << batch_sz << "): " << mx_bssn_unz
+                  << std::endl;
+        std::cout << "zip batched (dof=" << NUM_VARS
+                  << " in one region):             " << mx_bssn_zip_batch
+                  << std::endl;
+        std::cout << "zip per-var loop (" << NUM_VARS << "x dof=1 calls):          "
+                  << mx_bssn_zip_serial
+                  << "   (speedup: "
+                  << (mx_bssn_zip_serial / mx_bssn_zip_batch) << "x)"
+                  << std::endl;
     }
 
     delete mesh;
