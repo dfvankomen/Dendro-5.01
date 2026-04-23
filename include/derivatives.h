@@ -318,6 +318,19 @@ class Derivs {
     inline unsigned int getN() const { return p_n; }
 
     /**
+     * @brief Get the padding width (half-stencil reach in cells) for this
+     * derivative. Callers that need to inflate a bounding box by the
+     * deriv's reach (e.g. BSSN's per-block puncture-fallback policy) read
+     * this to know how far the stencil reads outside the query region.
+     */
+    inline unsigned int getPaddingWidth() const { return p_pw; }
+
+    /**
+     * @brief Get the element order used to size the derivative.
+     */
+    inline unsigned int getEleOrder() const { return p_ele_order; }
+
+    /**
      * @brief Get a string representation.
      * @return A string describing the Derivs object.
      */
