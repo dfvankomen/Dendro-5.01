@@ -162,10 +162,17 @@ int main(int argc, char** argv) {
     std::cout << "unzip/zip roundtrip mismatches: " << mismatches
               << " (max abs diff " << max_absdiff << ")" << std::endl;
 
-    // warmup: once per direction
-    grad<double>(mesh, 0, u_unzip.data(), du_unzip.data());
-    grad<double>(mesh, 1, u_unzip.data(), du_unzip.data());
-    grad<double>(mesh, 2, u_unzip.data(), du_unzip.data());
+    // warmup: run each op multiple times so CPU frequency saturates and
+    // plans are built before we measure
+    for (int w = 0; w < 20; w++) {
+        mesh->readFromGhostBegin(zip_ref.data(), 1);
+        mesh->readFromGhostEnd(zip_ref.data(), 1);
+        mesh->unzip(zip_ref.data(), u_unzip.data(), 1);
+        mesh->zip(u_unzip.data(), zip_back.data());
+        grad<double>(mesh, 0, u_unzip.data(), du_unzip.data());
+        grad<double>(mesh, 1, u_unzip.data(), du_unzip.data());
+        grad<double>(mesh, 2, u_unzip.data(), du_unzip.data());
+    }
 
     auto time_it = [&](auto fn) -> double {
         MPI_Barrier(comm);  // align starts across ranks for meaningful max

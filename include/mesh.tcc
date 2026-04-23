@@ -11023,8 +11023,11 @@ void Mesh::buildUnzipPlan() {
     const unsigned int nb = (unsigned int)m_uiLocalBlockList.size();
     const unsigned int nz = m_uiNumActualNodes;
 
+    // probe with in[i] = i + 1 (offset by 1). this lets us distinguish
+    // "unwritten cell, out stays 0" from "direct copy from zipped index 0";
+    // also preserves the easy round-to-integer detection of direct copies
     std::vector<T> probe_in(nz);
-    for (unsigned int i = 0; i < nz; i++) probe_in[i] = (T)i;
+    for (unsigned int i = 0; i < nz; i++) probe_in[i] = (T)(i + 1);
 
     std::vector<T> probe_out(m_uiUnZippedVecSz, (T)0);
 
@@ -11061,17 +11064,25 @@ void Mesh::buildUnzipPlan() {
         bool dirty = false;
         for (unsigned int k = 0; k < bsz; k++) {
             double val     = (double)probe_out[offset + k];
-            double rounded = std::round(val);
-            if (rounded < 0.0 || rounded >= (double)nz) {
-                // out-of-range — unwritten cell or interpolated past index
-                // range. treat as dirty so fallback fills it
+            // unwritten cell stays at 0 (caller is expected to zero-init,
+            // and even if not, a cell never visited by the fallback unzip
+            // stays at whatever we set). flag as dirty so fallback writes
+            // whatever it should write here
+            if (val == 0.0) {
                 dirty = true;
                 continue;
             }
-            if (std::abs(val - rounded) > tol * (std::abs(val) + 1.0)) {
-                // not an integer — interpolated. Phase D's analytical
-                // builder will emit a multi-term entry here; the probe
-                // builder can't infer weights, so mark dirty for fallback
+            // direct-copy probe value is (zipped_idx + 1). subtract 1 and
+            // round-to-integer to recover the source index
+            double rounded = std::round(val - 1.0);
+            if (rounded < 0.0 || rounded >= (double)nz) {
+                dirty = true;
+                continue;
+            }
+            if (std::abs((val - 1.0) - rounded) > tol * (std::abs(val) + 1.0)) {
+                // not an integer offset from 1 — interpolated cell. Phase D's
+                // analytical builder will emit a multi-term entry here; the
+                // probe builder can't infer weights, so mark dirty for fallback
                 dirty = true;
                 continue;
             }
@@ -11085,6 +11096,36 @@ void Mesh::buildUnzipPlan() {
     m_unzipPlan_directStart[nb] = (unsigned int)m_unzipPlan_direct.size();
     m_unzipPlan_multiStart[nb]  = (unsigned int)m_unzipPlan_multi.size();
     m_unzipPlanBuilt            = true;
+
+    if (getenv("UNZIP_PLAN_STATS") != nullptr) {
+        size_t total_cells = 0;
+        for (unsigned int b = 0; b < nb; b++) {
+            const auto& bl = m_uiLocalBlockList[b];
+            total_cells += (size_t)bl.getAllocationSzX() *
+                           bl.getAllocationSzY() * bl.getAllocationSzZ();
+        }
+        size_t direct_cells = m_unzipPlan_direct.size();
+        size_t dirty_blocks = m_unzipPlan_dirtyBlocks.size();
+        size_t dirty_cells  = total_cells - direct_cells;
+        size_t dirty_block_cells = 0;
+        for (unsigned int b : m_unzipPlan_dirtyBlocks) {
+            const auto& bl = m_uiLocalBlockList[b];
+            dirty_block_cells += (size_t)bl.getAllocationSzX() *
+                                 bl.getAllocationSzY() *
+                                 bl.getAllocationSzZ();
+        }
+        std::cerr << "[unzip_plan] total_blocks=" << nb
+                  << " dirty_blocks=" << dirty_blocks << " ("
+                  << (100.0 * dirty_blocks / (double)nb) << "%)"
+                  << " total_cells=" << total_cells
+                  << " direct_cells=" << direct_cells << " ("
+                  << (100.0 * direct_cells / (double)total_cells) << "%)"
+                  << " dirty_cells(unwritten/interp)=" << dirty_cells << " ("
+                  << (100.0 * dirty_cells / (double)total_cells) << "%)"
+                  << " dirty_block_cells=" << dirty_block_cells << " ("
+                  << (100.0 * dirty_block_cells / (double)total_cells) << "%)"
+                  << std::endl;
+    }
 }
 
 template <typename T>
