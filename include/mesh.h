@@ -2844,14 +2844,23 @@ inline void Mesh::currentElementNodeList_DG(unsigned int *nodeList) {
 inline void Mesh::parent2ChildInterpolation(const double *in, double *out,
                                             unsigned int cnum,
                                             unsigned int dim) const {
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+    // profiler writes to a process-global profiler_t; under OMP the writes
+    // to `seconds`/`_pri_seconds` race and ping-pong the containing cache
+    // line across cores. costs ~8% of cycles at T=8 for zero production
+    // value. guard behind the profile-counters macro like every other
+    // timer site in this codebase.
     dendro::timer::t_unzip_p2c.start();
+#endif
     if (dim == 3)
         m_uiRefEl.I3D_Parent2Child(in, out, cnum);
     else if (dim == 2)
         m_uiRefEl.I2D_Parent2Child(in, out, cnum);
     else if (dim == 1)
         m_uiRefEl.I1D_Parent2Child(in, out, cnum);
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
     dendro::timer::t_unzip_p2c.stop();
+#endif
 }
 
 inline void Mesh::child2ParentInterpolation(const double *in, double *out,
