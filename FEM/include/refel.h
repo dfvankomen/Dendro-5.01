@@ -271,8 +271,15 @@ class RefElement {
      */
     inline void I3D_Parent2Child(const double *in, double *out,
                                  unsigned int childNum) const {
-        double *im1 = (double *)&(*(im_vec1.begin()));
-        double *im2 = (double *)&(*(im_vec2.begin()));
+        // thread-local scratch: im_vec1/im_vec2 are shared instance state
+        // and NOT safe under concurrent callers. Each thread holds its
+        // own grow-only scratch that's resized on first use
+        thread_local std::vector<double> tls_im1;
+        thread_local std::vector<double> tls_im2;
+        if ((int)tls_im1.size() < m_uiNp) tls_im1.resize(m_uiNp);
+        if ((int)tls_im2.size() < m_uiNp) tls_im2.resize(m_uiNp);
+        double *im1 = tls_im1.data();
+        double *im2 = tls_im2.data();
 
         switch (childNum) {
             case 0:
@@ -363,8 +370,12 @@ class RefElement {
 
     inline void I3D_Child2Parent(const double *in, double *out,
                                  unsigned int childNum) const {
-        double *im1 = (double *)&(*(im_vec1.begin()));
-        double *im2 = (double *)&(*(im_vec2.begin()));
+        thread_local std::vector<double> tls_im1;
+        thread_local std::vector<double> tls_im2;
+        if ((int)tls_im1.size() < m_uiNp) tls_im1.resize(m_uiNp);
+        if ((int)tls_im2.size() < m_uiNp) tls_im2.resize(m_uiNp);
+        double *im1 = tls_im1.data();
+        double *im2 = tls_im2.data();
 
         switch (childNum) {
             case 0:
@@ -455,8 +466,9 @@ class RefElement {
 
     inline void I2D_Parent2Child(const double *in, double *out,
                                  unsigned int childNum) const {
-        double *im1 = (double *)&(*(im_vec1.begin()));
-        double *im2 = (double *)&(*(im_vec2.begin()));
+        thread_local std::vector<double> tls_im1;
+        if ((int)tls_im1.size() < m_uiNp) tls_im1.resize(m_uiNp);
+        double *im1 = tls_im1.data();
 
         switch (childNum) {
             case 0:
@@ -503,8 +515,9 @@ class RefElement {
 
     inline void I2D_Child2Parent(const double *in, double *out,
                                  unsigned int childNum) const {
-        double *im1 = (double *)&(*(im_vec1.begin()));
-        double *im2 = (double *)&(*(im_vec2.begin()));
+        thread_local std::vector<double> tls_im1;
+        if ((int)tls_im1.size() < m_uiNp) tls_im1.resize(m_uiNp);
+        double *im1 = tls_im1.data();
 
         switch (childNum) {
             case 0:
