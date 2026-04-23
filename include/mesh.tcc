@@ -648,12 +648,18 @@ void Mesh::ghostExchangeStart(T* vec, T* sendNodeBuffer, T* recvNodeBuffer,
                        &recv_reqs[recv_p]);
     }
 
-    for (unsigned int send_p = 0; send_p < m_uiSendProcList.size(); send_p++) {
-        proc_id = m_uiSendProcList[send_p];
-        for (unsigned int k = m_uiSendNodeOffset[proc_id];
-             k < (m_uiSendNodeOffset[proc_id] + m_uiSendNodeCount[proc_id]);
-             k++) {
-            sendNodeBuffer[k] = (T)vec[m_uiScatterMapActualNodeSend[k]];
+#pragma omp parallel
+    {
+        for (unsigned int send_p = 0; send_p < m_uiSendProcList.size();
+             send_p++) {
+            const unsigned int pid = m_uiSendProcList[send_p];
+            const unsigned int off = m_uiSendNodeOffset[pid];
+            const unsigned int cnt = m_uiSendNodeCount[pid];
+#pragma omp for schedule(static) nowait
+            for (unsigned int k = 0; k < cnt; k++) {
+                sendNodeBuffer[off + k] =
+                    (T)vec[m_uiScatterMapActualNodeSend[off + k]];
+            }
         }
     }
     // active send procs
@@ -671,17 +677,28 @@ void Mesh::ghostExchangeRecvSync(T* vec, T* recvNodeBuffer,
                                  MPI_Request* recv_reqs, MPI_Status* recv_sts) {
     if ((m_uiActiveNpes == 1) || (!m_uiIsActive)) return;
 
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+    // profiler_t writes shared state — race under OMP. guarded like every
+    // other timer site; see parent2ChildInterpolation for the full story
     dendro::timer::t_unzip_async_comm.start();
+#endif
     MPI_Waitall(m_uiRecvProcList.size(), recv_reqs, recv_sts);
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
     dendro::timer::t_unzip_async_comm.stop();
+#endif
 
-    unsigned int proc_id = 0;
-    for (unsigned int recv_p = 0; recv_p < m_uiRecvProcList.size(); recv_p++) {
-        proc_id = m_uiRecvProcList[recv_p];
-        for (unsigned int k = m_uiRecvNodeOffset[proc_id];
-             k < (m_uiRecvNodeOffset[proc_id] + m_uiRecvNodeCount[proc_id]);
-             k++) {
-            vec[m_uiScatterMapActualNodeRecv[k]] = (T)recvNodeBuffer[k];
+#pragma omp parallel
+    {
+        for (unsigned int recv_p = 0; recv_p < m_uiRecvProcList.size();
+             recv_p++) {
+            const unsigned int pid = m_uiRecvProcList[recv_p];
+            const unsigned int off = m_uiRecvNodeOffset[pid];
+            const unsigned int cnt = m_uiRecvNodeCount[pid];
+#pragma omp for schedule(static) nowait
+            for (unsigned int k = 0; k < cnt; k++) {
+                vec[m_uiScatterMapActualNodeRecv[off + k]] =
+                    (T)recvNodeBuffer[off + k];
+            }
         }
     }
 }
@@ -745,18 +762,24 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
             sendB = (T*)ctx.getSendBuffer();
 
-            for (unsigned int send_p = 0; send_p < sendProcList.size();
-                 send_p++) {
-                proc_id = sendProcList[send_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeSendOffset[proc_id];
-                         k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
-                         k++) {
-                        sendB[dof * (nodeSendOffset[proc_id]) +
-                              (var * nodeSendCount[proc_id]) +
-                              (k - nodeSendOffset[proc_id])] =
-                            (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
+            // gather into send buffers. writes are indexed by unique
+            // (proc_id, var, k) triples so they're disjoint — safe to do
+            // in parallel. One outer parallel region with nowait `omp for`
+            // per proc keeps fork/join overhead to 1 per exchange.
+#pragma omp parallel
+            {
+                for (unsigned int send_p = 0; send_p < sendProcList.size();
+                     send_p++) {
+                    const unsigned int pid = sendProcList[send_p];
+                    const unsigned int off = nodeSendOffset[pid];
+                    const unsigned int cnt = nodeSendCount[pid];
+                    for (unsigned int var = 0; var < dof; var++) {
+#pragma omp for schedule(static) nowait
+                        for (unsigned int k = 0; k < cnt; k++) {
+                            sendB[dof * off + var * cnt + k] =
+                                (vec + var * m_uiNumActualNodes)
+                                    [sendNodeSM[off + k]];
+                        }
                     }
                 }
             }
@@ -839,21 +862,24 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
         }
 
         if (recvBSz) {
-            // copy the recv data to the vec
+            // copy the recv data to the vec — recvNodeSM maps each recv
+            // slot to a unique target in `vec`, so writes are disjoint
             recvB = (T*)m_uiMPIContexts[ctxIndex].getRecvBuffer();
 
-            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
-                 recv_p++) {
-                proc_id = recvProcList[recv_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeRecvOffset[proc_id];
-                         k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
-                         k++) {
-                        (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
-                            recvB[dof * (nodeRecvOffset[proc_id]) +
-                                  (var * nodeRecvCount[proc_id]) +
-                                  (k - nodeRecvOffset[proc_id])];
+#pragma omp parallel
+            {
+                for (unsigned int recv_p = 0; recv_p < recvProcList.size();
+                     recv_p++) {
+                    const unsigned int pid = recvProcList[recv_p];
+                    const unsigned int off = nodeRecvOffset[pid];
+                    const unsigned int cnt = nodeRecvCount[pid];
+                    for (unsigned int var = 0; var < dof; var++) {
+#pragma omp for schedule(static) nowait
+                        for (unsigned int k = 0; k < cnt; k++) {
+                            (vec + var * m_uiNumActualNodes)
+                                [recvNodeSM[off + k]] =
+                                recvB[dof * off + var * cnt + k];
+                        }
                     }
                 }
             }
@@ -927,18 +953,22 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 
         if (sendBSz) {
             sendB = (T*)ctx.getSendBuffer();
-            for (unsigned int send_p = 0; send_p < sendProcList.size();
-                 send_p++) {
-                proc_id = sendProcList[send_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeSendOffset[proc_id];
-                         k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
-                         k++) {
-                        sendB[dof * (nodeSendOffset[proc_id]) +
-                              (var * nodeSendCount[proc_id]) +
-                              (k - nodeSendOffset[proc_id])] =
-                            (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
+            // see non-ctx overload above — writes are disjoint by unique
+            // (proc_id, var, k); one outer parallel region + nowait per proc
+#pragma omp parallel
+            {
+                for (unsigned int send_p = 0; send_p < sendProcList.size();
+                     send_p++) {
+                    const unsigned int pid = sendProcList[send_p];
+                    const unsigned int off = nodeSendOffset[pid];
+                    const unsigned int cnt = nodeSendCount[pid];
+                    for (unsigned int var = 0; var < dof; var++) {
+#pragma omp for schedule(static) nowait
+                        for (unsigned int k = 0; k < cnt; k++) {
+                            sendB[dof * off + var * cnt + k] =
+                                (vec + var * m_uiNumActualNodes)
+                                    [sendNodeSM[off + k]];
+                        }
                     }
                 }
             }
@@ -1002,21 +1032,23 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
                     MPI_STATUSES_IGNORE);
 
         if (recvBSz) {
-            // copy the recv data to the vec
+            // copy the recv data to the vec — see non-ctx overload above
             recvB = (T*)ctx.getRecvBuffer();
 
-            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
-                 recv_p++) {
-                proc_id = recvProcList[recv_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeRecvOffset[proc_id];
-                         k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
-                         k++) {
-                        (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
-                            recvB[dof * (nodeRecvOffset[proc_id]) +
-                                  (var * nodeRecvCount[proc_id]) +
-                                  (k - nodeRecvOffset[proc_id])];
+#pragma omp parallel
+            {
+                for (unsigned int recv_p = 0; recv_p < recvProcList.size();
+                     recv_p++) {
+                    const unsigned int pid = recvProcList[recv_p];
+                    const unsigned int off = nodeRecvOffset[pid];
+                    const unsigned int cnt = nodeRecvCount[pid];
+                    for (unsigned int var = 0; var < dof; var++) {
+#pragma omp for schedule(static) nowait
+                        for (unsigned int k = 0; k < cnt; k++) {
+                            (vec + var * m_uiNumActualNodes)
+                                [recvNodeSM[off + k]] =
+                                recvB[dof * off + var * cnt + k];
+                        }
                     }
                 }
             }
@@ -1065,21 +1097,21 @@ void Mesh::readFromGhostBeginElementVec(T* vec, unsigned int dof) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
             sendB = (T*)ctx.getSendBuffer();
 
-            for (unsigned int send_p = 0;
-                 send_p < m_uiElementSendProcList.size(); send_p++) {
-                proc_id = m_uiElementSendProcList[send_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = m_uiSendEleOffset[proc_id];
-                         k < (m_uiSendEleOffset[proc_id] +
-                              m_uiSendEleCount[proc_id]);
-                         k++) {
-                        sendB[dof * (m_uiSendEleOffset[proc_id]) +
-                              (var * m_uiSendEleCount[proc_id]) +
-                              (k - m_uiSendEleOffset[proc_id])] =
-                            (vec + var * m_uiNumTotalElements)
-                                [m_uiElementLocalBegin +
-                                 m_uiScatterMapElementRound1[k]];
+#pragma omp parallel
+            {
+                for (unsigned int send_p = 0;
+                     send_p < m_uiElementSendProcList.size(); send_p++) {
+                    const unsigned int pid = m_uiElementSendProcList[send_p];
+                    const unsigned int off = m_uiSendEleOffset[pid];
+                    const unsigned int cnt = m_uiSendEleCount[pid];
+                    for (unsigned int var = 0; var < dof; var++) {
+#pragma omp for schedule(static) nowait
+                        for (unsigned int k = 0; k < cnt; k++) {
+                            sendB[dof * off + var * cnt + k] =
+                                (vec + var * m_uiNumTotalElements)
+                                    [m_uiElementLocalBegin +
+                                     m_uiScatterMapElementRound1[off + k]];
+                        }
                     }
                 }
             }
@@ -1147,19 +1179,21 @@ void Mesh::readFromGhostEndElementVec(T* vec, unsigned int dof) {
             // copy the recv data to the vec
             recvB = (T*)m_uiMPIContexts[ctxIndex].getRecvBuffer();
 
-            for (unsigned int recv_p = 0;
-                 recv_p < m_uiElementRecvProcList.size(); recv_p++) {
-                proc_id = m_uiElementRecvProcList[recv_p];
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = m_uiRecvEleOffset[proc_id];
-                         k < (m_uiRecvEleOffset[proc_id] +
-                              m_uiRecvEleCount[proc_id]);
-                         k++)
-                        (vec + var * m_uiNumTotalElements)
-                            [m_uiGhostElementRound1Index[k]] =
-                                recvB[dof * (m_uiRecvEleOffset[proc_id]) +
-                                      (var * m_uiRecvEleCount[proc_id]) +
-                                      (k - m_uiRecvEleOffset[proc_id])];
+#pragma omp parallel
+            {
+                for (unsigned int recv_p = 0;
+                     recv_p < m_uiElementRecvProcList.size(); recv_p++) {
+                    const unsigned int pid = m_uiElementRecvProcList[recv_p];
+                    const unsigned int off = m_uiRecvEleOffset[pid];
+                    const unsigned int cnt = m_uiRecvEleCount[pid];
+                    for (unsigned int var = 0; var < dof; var++) {
+#pragma omp for schedule(static) nowait
+                        for (unsigned int k = 0; k < cnt; k++) {
+                            (vec + var * m_uiNumTotalElements)
+                                [m_uiGhostElementRound1Index[off + k]] =
+                                recvB[dof * off + var * cnt + k];
+                        }
+                    }
                 }
             }
         }
@@ -1222,26 +1256,29 @@ void Mesh::readFromGhostBeginEleDGVec(T* vec, unsigned int dof) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
             sendB = (T*)ctx.getSendBuffer();
 
-            for (unsigned int send_p = 0;
-                 send_p < m_uiElementSendProcList.size(); send_p++) {
-                proc_id = m_uiElementSendProcList[send_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = m_uiSendEleOffset[proc_id];
-                         k < (m_uiSendEleOffset[proc_id] +
-                              m_uiSendEleCount[proc_id]);
-                         k++) {
-                        for (unsigned int node = 0; node < m_uiNpE; node++)
-                            sendB[dof * m_uiNpE * (m_uiSendEleOffset[proc_id]) +
-                                  (var * m_uiNpE * m_uiSendEleCount[proc_id]) +
-                                  (k - m_uiSendEleOffset[proc_id]) * m_uiNpE +
-                                  node] =
-                                (vec +
-                                 var * m_uiNumTotalElements *
-                                     m_uiNpE)[(m_uiElementLocalBegin +
-                                               m_uiScatterMapElementRound1[k]) *
-                                                  m_uiNpE +
-                                              node];
+#pragma omp parallel
+            {
+                for (unsigned int send_p = 0;
+                     send_p < m_uiElementSendProcList.size(); send_p++) {
+                    const unsigned int pid = m_uiElementSendProcList[send_p];
+                    const unsigned int off = m_uiSendEleOffset[pid];
+                    const unsigned int cnt = m_uiSendEleCount[pid];
+                    for (unsigned int var = 0; var < dof; var++) {
+#pragma omp for schedule(static) nowait
+                        for (unsigned int k = 0; k < cnt; k++) {
+                            for (unsigned int node = 0; node < m_uiNpE;
+                                 node++)
+                                sendB[dof * m_uiNpE * off +
+                                      var * m_uiNpE * cnt +
+                                      k * m_uiNpE + node] =
+                                    (vec + var * m_uiNumTotalElements *
+                                               m_uiNpE)
+                                        [(m_uiElementLocalBegin +
+                                          m_uiScatterMapElementRound1
+                                              [off + k]) *
+                                             m_uiNpE +
+                                         node];
+                        }
                     }
                 }
             }
@@ -1312,23 +1349,27 @@ void Mesh::readFromGhostEndEleDGVec(T* vec, unsigned int dof) {
             // copy the recv data to the vec
             recvB = (T*)m_uiMPIContexts[ctxIndex].getRecvBuffer();
 
-            for (unsigned int recv_p = 0;
-                 recv_p < m_uiElementRecvProcList.size(); recv_p++) {
-                proc_id = m_uiElementRecvProcList[recv_p];
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = m_uiRecvEleOffset[proc_id];
-                         k < (m_uiRecvEleOffset[proc_id] +
-                              m_uiRecvEleCount[proc_id]);
-                         k++)
-                        for (unsigned int node = 0; node < m_uiNpE; node++)
-                            (vec + var * m_uiNumTotalElements *
-                                       m_uiNpE)[m_uiGhostElementRound1Index[k] *
-                                                    m_uiNpE +
-                                                node] = recvB
-                                [dof * (m_uiRecvEleOffset[proc_id] * m_uiNpE) +
-                                 (var * m_uiNpE * m_uiRecvEleCount[proc_id]) +
-                                 (k - m_uiRecvEleOffset[proc_id]) * m_uiNpE +
-                                 node];
+#pragma omp parallel
+            {
+                for (unsigned int recv_p = 0;
+                     recv_p < m_uiElementRecvProcList.size(); recv_p++) {
+                    const unsigned int pid = m_uiElementRecvProcList[recv_p];
+                    const unsigned int off = m_uiRecvEleOffset[pid];
+                    const unsigned int cnt = m_uiRecvEleCount[pid];
+                    for (unsigned int var = 0; var < dof; var++) {
+#pragma omp for schedule(static) nowait
+                        for (unsigned int k = 0; k < cnt; k++) {
+                            for (unsigned int node = 0; node < m_uiNpE;
+                                 node++)
+                                (vec + var * m_uiNumTotalElements * m_uiNpE)
+                                    [m_uiGhostElementRound1Index[off + k] *
+                                         m_uiNpE +
+                                     node] =
+                                    recvB[dof * (off * m_uiNpE) +
+                                          var * m_uiNpE * cnt +
+                                          k * m_uiNpE + node];
+                        }
+                    }
                 }
             }
         }
