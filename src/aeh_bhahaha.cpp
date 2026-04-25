@@ -16,6 +16,7 @@ namespace dendro_aeh {
 HorizonMassSpinCharge compute_mass_spin_charge(
     const int which_horizon,
     const bhahaha_params_and_data_struct& bha,
+    const bhahaha_diagnostics_struct& bhahaha_diags,
     const std::vector<double>& prev_horizon_m1,
     const int ntheta,
     const int nphi
@@ -30,25 +31,16 @@ HorizonMassSpinCharge compute_mass_spin_charge(
         static_cast<size_t>(ntheta) *
         static_cast<size_t>(nphi);
 
-    // Debug quantities for checking that prev_horizon_m1 is indexed correctly.
+    // ------------------------------------------------------------
+    // Debug: verify horizon surface radii are being read correctly
+    // ------------------------------------------------------------
     double rmin = 1.0e300;
     double rmax = -1.0e300;
     double rsum = 0.0;
     int count = 0;
 
-    // ------------------------------------------------------------------
-    // Crude coordinate-area estimate:
-    //
-    //   A_coord ≈ ∫ r(theta,phi)^2 sin(theta) dtheta dphi
-    //
-    // This is NOT the true apparent-horizon area in curved spacetime.
-    // It is only useful as a first debug diagnostic.
-    // ------------------------------------------------------------------
     for (int iphi = 0; iphi < nphi; ++iphi) {
         for (int itheta = 0; itheta < ntheta; ++itheta) {
-
-            const double theta =
-                (static_cast<double>(itheta) + 0.5) * dtheta;
 
             const size_t idx =
                 horizon_offset
@@ -61,33 +53,52 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             rmax = std::max(rmax, r);
             rsum += r;
             count++;
-
-            q.area += r * r * std::sin(theta) * dtheta * dphi;
         }
     }
 
-    const double rmean = (count > 0) ? (rsum / static_cast<double>(count)) : 0.0;
+    const double rmean =
+        (count > 0) ? (rsum / static_cast<double>(count)) : 0.0;
 
     std::cout << "[DEBUG AH RADIUS] horizon=" << which_horizon
               << " rmin=" << rmin
               << " rmax=" << rmax
               << " rmean=" << rmean
-              << " crude_area=" << q.area
               << std::endl;
 
-    // Irreducible mass computed from the crude coordinate area.
-    // This is currently a debug value, not the final physical M_irr.
+    // ------------------------------------------------------------
+    // Use BHaHAHA’s proper geometric area (NOT coordinate area)
+    // ------------------------------------------------------------
+    q.area = bhahaha_diags.area;
+
+    // Irreducible mass from proper area
     q.Mirr = std::sqrt(q.area / (16.0 * M_PI));
 
-    // Spin and charge are placeholders until we add the proper surface
-    // integrals using K_ij, E^i, B^i, dilaton, and axion on the horizon.
-    q.Q = 0.0;
-    q.J = 0.0;
+    // ------------------------------------------------------------
+    // Spin (temporary): use BHaHAHA circumference-based estimate
+    // ------------------------------------------------------------
+    double chi_z = bhahaha_diags.spin_a_z_from_xz_over_xy_prop_circumfs;
 
-    // With J = Q = 0, this reduces to M = M_irr.
-    // This is also only a debug value until area, spin, and charge are fixed.
+    // Filter invalid values (BHaHAHA uses -10 as "invalid")
+    if (chi_z < -1.0 || chi_z > 1.0) {
+        chi_z = 0.0;
+    }
+
+    q.chi = std::abs(chi_z);
+
+    // Convert dimensionless spin → angular momentum
+    // J = chi * M^2  (using M ≈ Mirr for now)
+    q.J = q.chi * q.Mirr * q.Mirr;
+
+    // ------------------------------------------------------------
+    // Charge (not implemented yet)
+    // ------------------------------------------------------------
+    q.Q = 0.0;
+
+    // ------------------------------------------------------------
+    // Mass (temporary approximation)
+    // ------------------------------------------------------------
+    // For now: M ≈ Mirr (valid only for non-spinning, uncharged case)
     q.M = q.Mirr;
-    q.chi = 0.0;
 
     return q;
 }
@@ -520,13 +531,14 @@ if (bah_return_code == BHAHAHA_SUCCESS) {
     // Compute horizon physical quantities (area, irreducible mass, etc.)
     // Uses the stored horizon surface prev_horizon_m1_
     // ------------------------------------------------------------------
-    HorizonMassSpinCharge hq = compute_mass_spin_charge(
-        which_horizon,
-        bha_param_data_[which_horizon],
-        prev_horizon_m1_,
-        max_ntheta_,
-        max_nphi_
-    );
+HorizonMassSpinCharge hq = compute_mass_spin_charge(
+    which_horizon,
+    bha_param_data_[which_horizon],
+    bhahaha_diags,
+    prev_horizon_m1_,
+    max_ntheta_,
+    max_nphi_
+);
 
     // Print to stdout for quick debugging/monitoring
     std::cout << "[AH QUANTS] horizon=" << which_horizon
