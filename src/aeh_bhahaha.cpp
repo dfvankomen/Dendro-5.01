@@ -31,28 +31,134 @@ HorizonMassSpinCharge compute_mass_spin_charge(
         static_cast<size_t>(ntheta) *
         static_cast<size_t>(nphi);
 
-    // ------------------------------------------------------------
-    // Debug: verify horizon surface radii are being read correctly
-    // ------------------------------------------------------------
+    const int nr = bha.Nr_external_input;
+    const double rmin_grid = bha.r_min_external_input;
+    const double dr = bha.dr_external_input;
+
+    const int total_pts = nr * ntheta * nphi;
+
+    auto get_metric_data = [&](int field, int ir, int itheta, int iphi) {
+        const int idx = idx3_spherical(ir, itheta, iphi, ntheta, nr);
+        return bha.input_metric_data[field * total_pts + idx];
+    };
+
+    auto interp_metric_data = [&](int field, double r, int itheta, int iphi) {
+        // BHaHAHA radial grid is cell-centered:
+        // r_i = r_min + (i + 0.5) dr
+        double x = (r - (rmin_grid + 0.5 * dr)) / dr;
+
+        int i0 = static_cast<int>(std::floor(x));
+        double a = x - static_cast<double>(i0);
+
+        if (i0 < 0) {
+            i0 = 0;
+            a = 0.0;
+        }
+
+        if (i0 >= nr - 1) {
+            i0 = nr - 2;
+            a = 1.0;
+        }
+
+        const double f0 = get_metric_data(field, i0,     itheta, iphi);
+        const double f1 = get_metric_data(field, i0 + 1, itheta, iphi);
+
+        return (1.0 - a) * f0 + a * f1;
+    };
+
+    // ------------------------------------------------------------------
+    // Proper area and irreducible mass from BHaHAHA
+    // ------------------------------------------------------------------
+    q.area = bhahaha_diags.area;
+    q.Mirr = std::sqrt(q.area / (16.0 * M_PI));
+
+    // ------------------------------------------------------------------
+    // Approximate spin integral
+    //
+    // Assumed input_metric_data layout:
+    //   0: g_xx
+    //   1: g_xy
+    //   2: g_xz
+    //   3: g_yy
+    //   4: g_yz
+    //   5: g_zz
+    //   6: K_xx
+    //   7: K_xy
+    //   8: K_xz
+    //   9: K_yy
+    //  10: K_yz
+    //  11: K_zz
+    //
+    // If transform_ uses a different order, fix the indices below.
+    // ------------------------------------------------------------------
+    double Jz_integral = 0.0;
+    double weight_sum = 0.0;
+
     double rmin = 1.0e300;
     double rmax = -1.0e300;
     double rsum = 0.0;
     int count = 0;
 
     for (int iphi = 0; iphi < nphi; ++iphi) {
-        for (int itheta = 0; itheta < ntheta; ++itheta) {
+        const double phi =
+            -M_PI + (static_cast<double>(iphi) + 0.5) * dphi;
 
-            const size_t idx =
+        const double sinphi = std::sin(phi);
+        const double cosphi = std::cos(phi);
+
+        for (int itheta = 0; itheta < ntheta; ++itheta) {
+            const double theta =
+                (static_cast<double>(itheta) + 0.5) * dtheta;
+
+            const double sintheta = std::sin(theta);
+            const double costheta = std::cos(theta);
+
+            const size_t hidx =
                 horizon_offset
               + static_cast<size_t>(iphi) * static_cast<size_t>(ntheta)
               + static_cast<size_t>(itheta);
 
-            const double r = prev_horizon_m1[idx];
+            const double r = prev_horizon_m1[hidx];
 
             rmin = std::min(rmin, r);
             rmax = std::max(rmax, r);
             rsum += r;
             count++;
+
+            // Approximate outward normal direction in Cartesian coordinates.
+            // This ignores angular derivatives of r(theta,phi), so it is a
+            // first-pass approximation.
+            const double sx = sintheta * cosphi;
+            const double sy = sintheta * sinphi;
+            const double sz = costheta;
+
+            // Cartesian position relative to the horizon center.
+            const double xrel = r * sx;
+            const double yrel = r * sy;
+
+            // Rotational vector around z-axis: phi_z = (-y, x, 0)
+            const double phix = -yrel;
+            const double phiy =  xrel;
+            const double phiz =  0.0;
+
+            // Extrinsic curvature interpolated to the horizon surface.
+            const double Kxx = interp_metric_data(6,  r, itheta, iphi);
+            const double Kxy = interp_metric_data(7,  r, itheta, iphi);
+            const double Kxz = interp_metric_data(8,  r, itheta, iphi);
+            const double Kyy = interp_metric_data(9,  r, itheta, iphi);
+            const double Kyz = interp_metric_data(10, r, itheta, iphi);
+            const double Kzz = interp_metric_data(11, r, itheta, iphi);
+
+            // K_ij s^i phi^j
+            const double Ks_phi =
+                (Kxx * sx + Kxy * sy + Kxz * sz) * phix +
+                (Kxy * sx + Kyy * sy + Kyz * sz) * phiy +
+                (Kxz * sx + Kyz * sy + Kzz * sz) * phiz;
+
+            const double weight = sintheta * dtheta * dphi;
+
+            Jz_integral += Ks_phi * weight;
+            weight_sum += weight;
         }
     }
 
@@ -65,40 +171,33 @@ HorizonMassSpinCharge compute_mass_spin_charge(
               << " rmean=" << rmean
               << std::endl;
 
-    // ------------------------------------------------------------
-    // Use BHaHAHA’s proper geometric area (NOT coordinate area)
-    // ------------------------------------------------------------
-    q.area = bhahaha_diags.area;
+    // Rescale the weighted integral to BHaHAHA's proper total area.
+    // This is still approximate because we do not yet have local dA.
+    const double area_rescale =
+        (weight_sum > 0.0) ? (q.area / weight_sum) : 0.0;
 
-    // Irreducible mass from proper area
-    q.Mirr = std::sqrt(q.area / (16.0 * M_PI));
+    q.J = (1.0 / (8.0 * M_PI)) * Jz_integral * area_rescale;
 
-    // ------------------------------------------------------------
-    // Spin (temporary): use BHaHAHA circumference-based estimate
-    // ------------------------------------------------------------
-    double chi_z = bhahaha_diags.spin_a_z_from_xz_over_xy_prop_circumfs;
-
-    // Filter invalid values (BHaHAHA uses -10 as "invalid")
-    if (chi_z < -1.0 || chi_z > 1.0) {
-        chi_z = 0.0;
-    }
-
-    q.chi = std::abs(chi_z);
-
-    // Convert dimensionless spin → angular momentum
-    // J = chi * M^2  (using M ≈ Mirr for now)
-    q.J = q.chi * q.Mirr * q.Mirr;
-
-    // ------------------------------------------------------------
-    // Charge (not implemented yet)
-    // ------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Charge placeholder
+    //
+    // This cannot be computed correctly from the current 12-field
+    // input_metric_data. Need E, B, dilaton, and axion interpolated too.
+    // ------------------------------------------------------------------
     q.Q = 0.0;
 
-    // ------------------------------------------------------------
-    // Mass (temporary approximation)
-    // ------------------------------------------------------------
-    // For now: M ≈ Mirr (valid only for non-spinning, uncharged case)
-    q.M = q.Mirr;
+    // ------------------------------------------------------------------
+    // Mass and dimensionless spin
+    //
+    // Temporary spinning, uncharged Christodoulou formula:
+    // M^2 = M_irr^2 + J^2 / (4 M_irr^2)
+    // ------------------------------------------------------------------
+    q.M = std::sqrt(
+        q.Mirr * q.Mirr +
+        (q.J * q.J) / (4.0 * q.Mirr * q.Mirr)
+    );
+
+    q.chi = q.J / (q.M * q.M);
 
     return q;
 }
