@@ -4,6 +4,58 @@
 #include "daUtils.h"
 
 namespace dendro_aeh {
+    struct HorizonMassSpinCharge {
+    double area = 0.0;
+    double Mirr = 0.0;
+    double Q = 0.0;
+    double J = 0.0;
+    double M = 0.0;
+    double chi = 0.0;
+};
+
+HorizonMassSpinCharge compute_mass_spin_charge(
+    const int which_horizon,
+    const bhahaha_params_and_data_struct& bha,
+    const std::vector<double>& prev_horizon_m1,
+    const int ntheta,
+    const int nphi
+) {
+    HorizonMassSpinCharge q;
+
+    const double dtheta = M_PI / static_cast<double>(ntheta);
+    const double dphi   = 2.0 * M_PI / static_cast<double>(nphi);
+
+    const size_t horizon_offset =
+        static_cast<size_t>(which_horizon) * ntheta * nphi;
+
+    // Crude spherical-surface area estimate:
+    // A ≈ ∫ r(theta,phi)^2 sin(theta) dtheta dphi
+    for (int iphi = 0; iphi < nphi; ++iphi) {
+        for (int itheta = 0; itheta < ntheta; ++itheta) {
+            const double theta =
+                (static_cast<double>(itheta) + 0.5) * dtheta;
+
+            const size_t idx =
+                horizon_offset + static_cast<size_t>(iphi) * ntheta + itheta;
+
+            const double r = prev_horizon_m1[idx];
+
+            q.area += r * r * std::sin(theta) * dtheta * dphi;
+        }
+    }
+
+    q.Mirr = std::sqrt(q.area / (16.0 * M_PI));
+
+    // For now: no spin/charge yet
+    q.Q = 0.0;
+    q.J = 0.0;
+
+    // With J=Q=0, horizon mass = irreducible mass
+    q.M = q.Mirr;
+    q.chi = 0.0;
+
+    return q;
+}
 void AEH_BHaHAHA::find_horizons(
     const ot::Mesh* mesh, const double** var, const unsigned int current_step,
     const double current_time, const std::vector<Point> tracked_location_data) {
@@ -422,26 +474,74 @@ void AEH_BHaHAHA::find_horizons(
             const int bah_return_code = bah_find_horizon(
                 &bha_param_data_[which_horizon], &bhahaha_diags);
 
-            // if found successfully, we update the "persistent" storage
-            if (bah_return_code == BHAHAHA_SUCCESS) {
-                // update storage
-                transfer_to_persistent_from_bhahaha(
-                    &bha_param_data_[which_horizon]);
+// if found successfully, we update the "persistent" storage
+if (bah_return_code == BHAHAHA_SUCCESS) {
 
-                // output horizon diagnostics to file
-                if (current_step % file_output_freq_ == 0) {
-                    bah_diagnostics_file_output(
-                        &bhahaha_diags, &bha_param_data_[which_horizon],
-                        num_horizons_, x_guess_[which_horizon],
-                        y_guess_[which_horizon], z_guess_[which_horizon],
-                        out_dir_.c_str());
-                }
+    // Copy newly found horizon data into persistent storage
+    transfer_to_persistent_from_bhahaha(
+        &bha_param_data_[which_horizon]);
 
-                // next time don't force full guess
-                bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 0;
-                failed_last_find_[which_horizon]     = false;
-                failed_last_find_int_[which_horizon] = 0;
-            } else {
+    // ------------------------------------------------------------------
+    // Compute horizon physical quantities (area, irreducible mass, etc.)
+    // Uses the stored horizon surface prev_horizon_m1_
+    // ------------------------------------------------------------------
+    HorizonMassSpinCharge hq = compute_mass_spin_charge(
+        which_horizon,
+        bha_param_data_[which_horizon],
+        prev_horizon_m1_,
+        max_ntheta_,
+        max_nphi_
+    );
+
+    // Print to stdout for quick debugging/monitoring
+    std::cout << "[AH QUANTS] horizon=" << which_horizon
+              << " area=" << hq.area
+              << " Mirr=" << hq.Mirr
+              << " M=" << hq.M
+              << " J=" << hq.J
+              << " Q=" << hq.Q
+              << " chi=" << hq.chi
+              << std::endl;
+
+    // ------------------------------------------------------------------
+    // File output (same cadence as other diagnostics)
+    // This ensures consistency with existing BHaHAHA outputs
+    // ------------------------------------------------------------------
+    if (current_step % file_output_freq_ == 0) {
+
+        // Append horizon quantities to file
+        std::ofstream fout(
+            out_dir_ + "/emda_prof_HorizonMassSpinCharge.dat",
+            std::ios::app
+        );
+
+        fout << current_step << " "
+             << current_time << " "
+             << which_horizon << " "
+             << hq.area << " "
+             << hq.Mirr << " "
+             << hq.M << " "
+             << hq.J << " "
+             << hq.Q << " "
+             << hq.chi << "\n";
+
+        fout.close();
+
+        // Existing BHaHAHA diagnostics output
+        bah_diagnostics_file_output(
+            &bhahaha_diags, &bha_param_data_[which_horizon],
+            num_horizons_, x_guess_[which_horizon],
+            y_guess_[which_horizon], z_guess_[which_horizon],
+            out_dir_.c_str());
+    }
+
+    // ------------------------------------------------------------------
+    // Reset failure flags and allow next iteration to use refined guesses
+    // ------------------------------------------------------------------
+    bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 0;
+    failed_last_find_[which_horizon]     = false;
+    failed_last_find_int_[which_horizon] = 0;
+} else {
                 std::cerr << "ERROR[HORIZON]: Failure to find horizon "
                           << which_horizon << " with error code "
                           << bah_return_code << ": "
