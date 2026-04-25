@@ -26,31 +26,66 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     const double dphi   = 2.0 * M_PI / static_cast<double>(nphi);
 
     const size_t horizon_offset =
-        static_cast<size_t>(which_horizon) * ntheta * nphi;
+        static_cast<size_t>(which_horizon) *
+        static_cast<size_t>(ntheta) *
+        static_cast<size_t>(nphi);
 
-    // Crude spherical-surface area estimate:
-    // A ≈ ∫ r(theta,phi)^2 sin(theta) dtheta dphi
+    // Debug quantities for checking that prev_horizon_m1 is indexed correctly.
+    double rmin = 1.0e300;
+    double rmax = -1.0e300;
+    double rsum = 0.0;
+    int count = 0;
+
+    // ------------------------------------------------------------------
+    // Crude coordinate-area estimate:
+    //
+    //   A_coord ≈ ∫ r(theta,phi)^2 sin(theta) dtheta dphi
+    //
+    // This is NOT the true apparent-horizon area in curved spacetime.
+    // It is only useful as a first debug diagnostic.
+    // ------------------------------------------------------------------
     for (int iphi = 0; iphi < nphi; ++iphi) {
         for (int itheta = 0; itheta < ntheta; ++itheta) {
+
             const double theta =
                 (static_cast<double>(itheta) + 0.5) * dtheta;
 
             const size_t idx =
-                horizon_offset + static_cast<size_t>(iphi) * ntheta + itheta;
+                horizon_offset
+              + static_cast<size_t>(iphi) * static_cast<size_t>(ntheta)
+              + static_cast<size_t>(itheta);
 
             const double r = prev_horizon_m1[idx];
+
+            rmin = std::min(rmin, r);
+            rmax = std::max(rmax, r);
+            rsum += r;
+            count++;
 
             q.area += r * r * std::sin(theta) * dtheta * dphi;
         }
     }
 
+    const double rmean = (count > 0) ? (rsum / static_cast<double>(count)) : 0.0;
+
+    std::cout << "[DEBUG AH RADIUS] horizon=" << which_horizon
+              << " rmin=" << rmin
+              << " rmax=" << rmax
+              << " rmean=" << rmean
+              << " crude_area=" << q.area
+              << std::endl;
+
+    // Irreducible mass computed from the crude coordinate area.
+    // This is currently a debug value, not the final physical M_irr.
     q.Mirr = std::sqrt(q.area / (16.0 * M_PI));
 
-    // For now: no spin/charge yet
+    // Spin and charge are placeholders until we add the proper surface
+    // integrals using K_ij, E^i, B^i, dilaton, and axion on the horizon.
     q.Q = 0.0;
     q.J = 0.0;
 
-    // With J=Q=0, horizon mass = irreducible mass
+    // With J = Q = 0, this reduces to M = M_irr.
+    // This is also only a debug value until area, spin, and charge are fixed.
     q.M = q.Mirr;
     q.chi = 0.0;
 
