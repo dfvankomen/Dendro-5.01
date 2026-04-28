@@ -137,6 +137,49 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     double rsum = 0.0;
     int count = 0;
 
+    const double weights_2nd_order[1] = {1.0};
+    const double weights_4th_order[4] = {
+        13.0 / 12.0, 11.0 / 12.0, 11.0 / 12.0, 13.0 / 12.0
+    };
+    const double weights_8th_order[8] = {
+        295627.0 / 241920.0, 71329.0 / 241920.0,
+        17473.0 / 8960.0,   128953.0 / 241920.0,
+        128953.0 / 241920.0, 17473.0 / 8960.0,
+        71329.0 / 241920.0,  295627.0 / 241920.0
+    };
+
+    const double* integration_weights = weights_2nd_order;
+    int weight_stencil_size = 1;
+    if (ntheta % 8 == 0 && nphi % 8 == 0) {
+        integration_weights = weights_8th_order;
+        weight_stencil_size = 8;
+    } else if (ntheta % 4 == 0 && nphi % 4 == 0) {
+        integration_weights = weights_4th_order;
+        weight_stencil_size = 4;
+    }
+
+    const auto horizon_r = [&](int theta_idx, int phi_idx) {
+        while (theta_idx < 0 || theta_idx >= ntheta) {
+            if (theta_idx < 0) {
+                theta_idx = -theta_idx - 1;
+            } else {
+                theta_idx = 2 * ntheta - theta_idx - 1;
+            }
+            phi_idx += nphi / 2;
+        }
+
+        phi_idx %= nphi;
+        if (phi_idx < 0) {
+            phi_idx += nphi;
+        }
+
+        const size_t idx =
+            horizon_offset +
+            static_cast<size_t>(phi_idx) * static_cast<size_t>(ntheta) +
+            static_cast<size_t>(theta_idx);
+        return prev_horizon_m1[idx];
+    };
+
     for (int iphi = 0; iphi < nphi; ++iphi) {
         const double phi =
             -M_PI + (static_cast<double>(iphi) + 0.5) * dphi;
@@ -151,40 +194,31 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             const double sintheta = std::sin(theta);
             const double costheta = std::cos(theta);
 
-            const size_t hidx =
-                horizon_offset
-              + static_cast<size_t>(iphi) * static_cast<size_t>(ntheta)
-              + static_cast<size_t>(itheta);
+            const double r = horizon_r(itheta, iphi);
 
-            const double r = prev_horizon_m1[hidx];
-
-            const auto horizon_r = [&](int theta_idx, int phi_idx) {
-                phi_idx = (phi_idx + nphi) % nphi;
-                theta_idx = std::max(0, std::min(ntheta - 1, theta_idx));
-                const size_t idx =
-                    horizon_offset +
-                    static_cast<size_t>(phi_idx) *
-                        static_cast<size_t>(ntheta) +
-                    static_cast<size_t>(theta_idx);
-                return prev_horizon_m1[idx];
-            };
-
-            double r_theta = 0.0;
-            if (itheta == 0) {
-                r_theta = (horizon_r(itheta + 1, iphi) - r) / dtheta;
-            } else if (itheta == ntheta - 1) {
-                r_theta = (r - horizon_r(itheta - 1, iphi)) / dtheta;
-            } else {
-                r_theta =
-                    (horizon_r(itheta + 1, iphi) -
-                     horizon_r(itheta - 1, iphi)) /
-                    (2.0 * dtheta);
-            }
+            const double r_theta =
+                ((1.0 / 60.0) *
+                     (-horizon_r(itheta - 3, iphi) +
+                       horizon_r(itheta + 3, iphi)) +
+                 (3.0 / 20.0) *
+                     ( horizon_r(itheta - 2, iphi) -
+                       horizon_r(itheta + 2, iphi)) +
+                 (3.0 / 4.0) *
+                     (-horizon_r(itheta - 1, iphi) +
+                       horizon_r(itheta + 1, iphi))) /
+                dtheta;
 
             const double r_phi =
-                (horizon_r(itheta, iphi + 1) -
-                 horizon_r(itheta, iphi - 1)) /
-                (2.0 * dphi);
+                ((1.0 / 60.0) *
+                     (-horizon_r(itheta, iphi - 3) +
+                       horizon_r(itheta, iphi + 3)) +
+                 (3.0 / 20.0) *
+                     ( horizon_r(itheta, iphi - 2) -
+                       horizon_r(itheta, iphi + 2)) +
+                 (3.0 / 4.0) *
+                     (-horizon_r(itheta, iphi - 1) +
+                       horizon_r(itheta, iphi + 1))) /
+                dphi;
 
             rmin = std::min(rmin, r);
             rmax = std::max(rmax, r);
@@ -281,8 +315,14 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             const double qpp = gamma_dot(Xphi_x, Xphi_y, Xphi_z,
                                          Xphi_x, Xphi_y, Xphi_z);
             const double qdet = qtt * qpp - qtp * qtp;
-            const double dA = (qdet > 0.0) ? std::sqrt(qdet) * dtheta * dphi
-                                           : 0.0;
+            const double weight_theta =
+                integration_weights[itheta % weight_stencil_size];
+            const double weight_phi =
+                integration_weights[iphi % weight_stencil_size];
+            const double dA = (qdet > 0.0)
+                                  ? std::sqrt(qdet) * weight_theta *
+                                        weight_phi * dtheta * dphi
+                                  : 0.0;
             computed_area_from_dA += dA;
 
             // Surface normal from finite-difference tangents. This replaces
