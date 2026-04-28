@@ -884,7 +884,10 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
     std::cout << "[AH QUANTS] H" << which_horizon
               << " area=" << hq.area
               << " M=" << hq.M
-              << " J=" << hq.J
+              << " Jx=" << hq.Jx
+              << " Jy=" << hq.Jy
+              << " Jz=" << hq.Jz
+              << " Jmag=" << hq.Jmag
               << " Q=" << hq.Q
               << " chi=" << hq.chi
               << " D=" << hq.D
@@ -909,7 +912,7 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
         std::ofstream fout(quasilocal_file, std::ios::app);
 
         if (write_header) {
-            fout << "# step time horizon area Mirr M J Q chi D\n";
+            fout << "# step time horizon area Mirr M Jx Jy Jz Jmag Q chi D\n";
         }
 
         fout << current_step << " "
@@ -918,7 +921,10 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
              << hq.area << " "
              << hq.Mirr << " "
              << hq.M << " "
-             << hq.J << " "
+             << hq.Jx << " "
+             << hq.Jy << " "
+             << hq.Jz << " "
+             << hq.Jmag << " "
              << hq.Q << " "
              << hq.chi << " "
              << hq.D << "\n";
