@@ -894,44 +894,42 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
               << std::endl;
 
     // ------------------------------------------------------------------
-    // File output (same cadence as other diagnostics)
-    // This ensures consistency with existing BHaHAHA outputs
+    // Quasilocal file output: append once per successful horizon find.
     // ------------------------------------------------------------------
+    const std::string quasilocal_file =
+        out_dir_ + "/emda_prof_HorizonMassSpinCharge_H" +
+        std::to_string(which_horizon) + ".dat";
+
+    std::ifstream existing(quasilocal_file, std::ios::ate);
+    const bool write_header =
+        !existing.good() || existing.tellg() == std::streampos(0);
+    existing.close();
+
+    // Append horizon quantities to per-horizon file.
+    std::ofstream fout(quasilocal_file, std::ios::app);
+
+    if (write_header) {
+        fout << "# step time horizon area Mirr M Jx Jy Jz Jmag Q chi D\n";
+    }
+
+    fout << current_step << " "
+         << current_time << " "
+         << which_horizon << " "
+         << hq.area << " "
+         << hq.Mirr << " "
+         << hq.M << " "
+         << hq.Jx << " "
+         << hq.Jy << " "
+         << hq.Jz << " "
+         << hq.Jmag << " "
+         << hq.Q << " "
+         << hq.chi << " "
+         << hq.D << "\n";
+
+    fout.close();
+
+    // Existing BHaHAHA diagnostics output keeps its configured cadence.
     if (current_step % file_output_freq_ == 0) {
-
-        const std::string quasilocal_file =
-            out_dir_ + "/emda_prof_HorizonMassSpinCharge_H" +
-            std::to_string(which_horizon) + ".dat";
-
-        std::ifstream existing(quasilocal_file, std::ios::ate);
-        const bool write_header =
-            !existing.good() || existing.tellg() == std::streampos(0);
-        existing.close();
-
-        // Append horizon quantities to per-horizon file.
-        std::ofstream fout(quasilocal_file, std::ios::app);
-
-        if (write_header) {
-            fout << "# step time horizon area Mirr M Jx Jy Jz Jmag Q chi D\n";
-        }
-
-        fout << current_step << " "
-             << current_time << " "
-             << which_horizon << " "
-             << hq.area << " "
-             << hq.Mirr << " "
-             << hq.M << " "
-             << hq.Jx << " "
-             << hq.Jy << " "
-             << hq.Jz << " "
-             << hq.Jmag << " "
-             << hq.Q << " "
-             << hq.chi << " "
-             << hq.D << "\n";
-
-        fout.close();
-
-        // Existing BHaHAHA diagnostics output
         bah_diagnostics_file_output(
             &bhahaha_diags, &bha_param_data_[which_horizon],
             num_horizons_, x_guess_[which_horizon],
