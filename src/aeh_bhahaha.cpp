@@ -40,6 +40,10 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     const int nr = bha.Nr_external_input;
     const double rmin_grid = bha.r_min_external_input;
     const double dr = bha.dr_external_input;
+    int mpi_rank = 0;
+    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
+    const bool debug_dilaton_charge =
+        (mpi_rank == 0 && which_horizon == 0);
 
     const int total_pts = nr * ntheta * nphi;
 
@@ -139,6 +143,14 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     double Jz_integral = 0.0;
     double D_integral = 0.0;
     double computed_area_from_dA = 0.0;
+    double phi_sum = 0.0;
+    double phi_min = 1.0e300;
+    double phi_max = -1.0e300;
+    double dphi_dr_sum = 0.0;
+    double dphi_dr_min = 1.0e300;
+    double dphi_dr_max = -1.0e300;
+    int dilaton_debug_count = 0;
+    int dilaton_debug_printed = 0;
 
     double rmin = 1.0e300;
     double rmax = -1.0e300;
@@ -386,11 +398,38 @@ HorizonMassSpinCharge compute_mass_spin_charge(
 
             Q_integral += (Ex * ncovx + Ey * ncovy + Ez * ncovz) * dA;
             {
+                const double phi_minus =
+                    interp_emda_data(6, r - dr, itheta, iphi);
+                const double phi_center =
+                    interp_emda_data(6, r, itheta, iphi);
+                const double phi_plus =
+                    interp_emda_data(6, r + dr, itheta, iphi);
                 const double dphi_dr =
-                    (interp_emda_data(6, r + dr, itheta, iphi) -
-                     interp_emda_data(6, r - dr, itheta, iphi)) /
-                    (2.0 * dr);
+                    (phi_plus - phi_minus) / (2.0 * dr);
                 D_integral += dphi_dr * dA;
+
+                phi_sum += phi_center;
+                phi_min = std::min(phi_min, phi_center);
+                phi_max = std::max(phi_max, phi_center);
+                dphi_dr_sum += dphi_dr;
+                dphi_dr_min = std::min(dphi_dr_min, dphi_dr);
+                dphi_dr_max = std::max(dphi_dr_max, dphi_dr);
+                dilaton_debug_count++;
+
+                if (debug_dilaton_charge && dilaton_debug_printed < 5) {
+                    const double contribution =
+                        -(1.0 / (4.0 * M_PI)) * dphi_dr * dA;
+                    std::cout << "[AEH DEBUG] dilaton point="
+                              << dilaton_debug_printed
+                              << " phi_minus=" << phi_minus
+                              << " phi_center=" << phi_center
+                              << " phi_plus=" << phi_plus
+                              << " dphi_dr=" << dphi_dr
+                              << " dA=" << dA
+                              << " contribution=" << contribution
+                              << std::endl;
+                    dilaton_debug_printed++;
+                }
             }
             Jx_integral +=
                 (phix_x * Psx + phix_y * Psy + phix_z * Psz) * dA;
@@ -432,6 +471,23 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     );
 
     q.chi = q.Jmag / (q.M * q.M);
+
+    if (debug_dilaton_charge) {
+        const double inv_count =
+            (dilaton_debug_count > 0)
+                ? 1.0 / static_cast<double>(dilaton_debug_count)
+                : 0.0;
+        std::cout << "[AEH DEBUG] dilaton summary"
+                  << " avg_phi=" << phi_sum * inv_count
+                  << " min_phi=" << phi_min
+                  << " max_phi=" << phi_max
+                  << " avg_dphi_dr=" << dphi_dr_sum * inv_count
+                  << " min_dphi_dr=" << dphi_dr_min
+                  << " max_dphi_dr=" << dphi_dr_max
+                  << " sum_dA=" << computed_area_from_dA
+                  << " final_D=" << q.D
+                  << std::endl;
+    }
 
     std::cout << "[AEH DEBUG] computed_area_from_dA="
               << computed_area_from_dA
