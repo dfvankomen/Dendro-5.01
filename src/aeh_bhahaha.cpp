@@ -40,10 +40,6 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     const int nr = bha.Nr_external_input;
     const double rmin_grid = bha.r_min_external_input;
     const double dr = bha.dr_external_input;
-    int mpi_rank = 0;
-    MPI_Comm_rank(MPI_COMM_WORLD, &mpi_rank);
-    const bool debug_dilaton_charge =
-        (mpi_rank == 0 && which_horizon == 0);
 
     const int total_pts = nr * ntheta * nphi;
 
@@ -143,19 +139,6 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     double Jz_integral = 0.0;
     double D_integral = 0.0;
     double computed_area_from_dA = 0.0;
-    double phi_sum = 0.0;
-    double phi_min = 1.0e300;
-    double phi_max = -1.0e300;
-    double dphi_dr_sum = 0.0;
-    double dphi_dr_min = 1.0e300;
-    double dphi_dr_max = -1.0e300;
-    int dilaton_debug_count = 0;
-    int dilaton_debug_printed = 0;
-
-    double rmin = 1.0e300;
-    double rmax = -1.0e300;
-    double rsum = 0.0;
-    int count = 0;
 
     const double weights_2nd_order[1] = {1.0};
     const double weights_4th_order[4] = {
@@ -239,11 +222,6 @@ HorizonMassSpinCharge compute_mass_spin_charge(
                      (-horizon_r(itheta, iphi - 1) +
                        horizon_r(itheta, iphi + 1))) /
                 dphi;
-
-            rmin = std::min(rmin, r);
-            rmax = std::max(rmax, r);
-            rsum += r;
-            count++;
 
             const double sx = sintheta * cosphi;
             const double sy = sintheta * sinphi;
@@ -400,36 +378,11 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             {
                 const double phi_minus =
                     interp_emda_data(6, r - dr, itheta, iphi);
-                const double phi_center =
-                    interp_emda_data(6, r, itheta, iphi);
                 const double phi_plus =
                     interp_emda_data(6, r + dr, itheta, iphi);
                 const double dphi_dr =
                     (phi_plus - phi_minus) / (2.0 * dr);
                 D_integral += dphi_dr * dA;
-
-                phi_sum += phi_center;
-                phi_min = std::min(phi_min, phi_center);
-                phi_max = std::max(phi_max, phi_center);
-                dphi_dr_sum += dphi_dr;
-                dphi_dr_min = std::min(dphi_dr_min, dphi_dr);
-                dphi_dr_max = std::max(dphi_dr_max, dphi_dr);
-                dilaton_debug_count++;
-
-                if (debug_dilaton_charge && dilaton_debug_printed < 5) {
-                    const double contribution =
-                        -(1.0 / (4.0 * M_PI)) * dphi_dr * dA;
-                    std::cout << "[AEH DEBUG] dilaton point="
-                              << dilaton_debug_printed
-                              << " phi_minus=" << phi_minus
-                              << " phi_center=" << phi_center
-                              << " phi_plus=" << phi_plus
-                              << " dphi_dr=" << dphi_dr
-                              << " dA=" << dA
-                              << " contribution=" << contribution
-                              << std::endl;
-                    dilaton_debug_printed++;
-                }
             }
             Jx_integral +=
                 (phix_x * Psx + phix_y * Psy + phix_z * Psz) * dA;
@@ -439,15 +392,6 @@ HorizonMassSpinCharge compute_mass_spin_charge(
                 (phiz_x * Psx + phiz_y * Psy + phiz_z * Psz) * dA;
         }
     }
-
-    const double rmean =
-        (count > 0) ? (rsum / static_cast<double>(count)) : 0.0;
-
-    std::cout << "[DEBUG AH RADIUS] horizon=" << which_horizon
-              << " rmin=" << rmin
-              << " rmax=" << rmax
-              << " rmean=" << rmean
-              << std::endl;
 
     q.Q = (1.0 / (4.0 * M_PI)) * Q_integral;
     q.D = -(1.0 / (4.0 * M_PI)) * D_integral;
@@ -471,35 +415,6 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     );
 
     q.chi = q.Jmag / (q.M * q.M);
-
-    if (debug_dilaton_charge) {
-        const double inv_count =
-            (dilaton_debug_count > 0)
-                ? 1.0 / static_cast<double>(dilaton_debug_count)
-                : 0.0;
-        std::cout << "[AEH DEBUG] dilaton summary"
-                  << " avg_phi=" << phi_sum * inv_count
-                  << " min_phi=" << phi_min
-                  << " max_phi=" << phi_max
-                  << " avg_dphi_dr=" << dphi_dr_sum * inv_count
-                  << " min_dphi_dr=" << dphi_dr_min
-                  << " max_dphi_dr=" << dphi_dr_max
-                  << " sum_dA=" << computed_area_from_dA
-                  << " final_D=" << q.D
-                  << std::endl;
-    }
-
-    std::cout << "[AEH DEBUG] computed_area_from_dA="
-              << computed_area_from_dA
-              << " bhahaha_area=" << q.area
-              << " QE=" << q.Q
-              << " Jx=" << q.Jx
-              << " Jy=" << q.Jy
-              << " Jz=" << q.Jz
-              << " Jmag=" << q.Jmag
-              << " chi=" << q.chi
-              << " dilaton_charge=" << q.D
-              << std::endl;
 
     if (q.area > 0.0) {
         const double rel_area_diff =
@@ -966,9 +881,8 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
 );
 
     // Print to stdout for quick debugging/monitoring
-    std::cout << "[AH QUANTS] horizon=" << which_horizon
+    std::cout << "[AH QUANTS] H" << which_horizon
               << " area=" << hq.area
-              << " Mirr=" << hq.Mirr
               << " M=" << hq.M
               << " J=" << hq.J
               << " Q=" << hq.Q
@@ -982,13 +896,19 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
     // ------------------------------------------------------------------
     if (current_step % file_output_freq_ == 0) {
 
-        // Append horizon quantities to file
-        std::ofstream fout(
-            out_dir_ + "/emda_prof_HorizonMassSpinCharge.dat",
-            std::ios::app
-        );
+        const std::string quasilocal_file =
+            out_dir_ + "/emda_prof_HorizonMassSpinCharge_H" +
+            std::to_string(which_horizon) + ".dat";
 
-        if (current_step == 0 && rankActive == 0) {
+        std::ifstream existing(quasilocal_file, std::ios::ate);
+        const bool write_header =
+            !existing.good() || existing.tellg() == std::streampos(0);
+        existing.close();
+
+        // Append horizon quantities to per-horizon file.
+        std::ofstream fout(quasilocal_file, std::ios::app);
+
+        if (write_header) {
             fout << "# step time horizon area Mirr M J Q chi D\n";
         }
 
@@ -1401,21 +1321,6 @@ void AEH_BHaHAHA::interpolate_metric_data(
                     }
                 }
             }
-        }
-    }
-    if (rankActive == which_rank && rankActive == 0 && emda_horizon_data) {
-        const int debug_points = std::min(total_elements, 5);
-        for (int idx = 0; idx < debug_points; ++idx) {
-            std::cout << "[AEH DEBUG] emda_horizon_data point=" << idx
-                      << " Ex=" << emda_horizon_data[0 * total_elements + idx]
-                      << " Ey=" << emda_horizon_data[1 * total_elements + idx]
-                      << " Ez=" << emda_horizon_data[2 * total_elements + idx]
-                      << " Bx=" << emda_horizon_data[3 * total_elements + idx]
-                      << " By=" << emda_horizon_data[4 * total_elements + idx]
-                      << " Bz=" << emda_horizon_data[5 * total_elements + idx]
-                      << " dilaton="
-                      << emda_horizon_data[6 * total_elements + idx]
-                      << std::endl;
         }
     }
     // data should now be unpacked!
