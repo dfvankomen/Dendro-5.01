@@ -50,7 +50,10 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     auto interp_metric_data = [&](int field, double r, int itheta, int iphi) {
         // BHaHAHA radial grid is cell-centered:
         // r_i = r_min + (i + 0.5) dr
-        double x = (r - (rmin_grid + 0.5 * dr)) / dr;
+        const double first_r =
+            (rmin_grid > 0.0) ? rmin_grid + (0.5 - BHAHAHA_NGHOSTS) * dr
+                              : rmin_grid + 0.5 * dr;
+        double x = (r - first_r) / dr;
 
         int i0 = static_cast<int>(std::floor(x));
         double a = x - static_cast<double>(i0);
@@ -80,7 +83,10 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     auto interp_emda_data = [&](int field, double r, int itheta, int iphi) {
         if (!emda_horizon_data) return 0.0;
 
-        double x = (r - (rmin_grid + 0.5 * dr)) / dr;
+        const double first_r =
+            (rmin_grid > 0.0) ? rmin_grid + (0.5 - BHAHAHA_NGHOSTS) * dr
+                              : rmin_grid + 0.5 * dr;
+        double x = (r - first_r) / dr;
 
         int i0 = static_cast<int>(std::floor(x));
         double a = x - static_cast<double>(i0);
