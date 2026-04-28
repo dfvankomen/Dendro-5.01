@@ -15,6 +15,7 @@ namespace dendro_aeh {
     double J = 0.0;
     double M = 0.0;
     double chi = 0.0;
+    double D = 0.0;
 };
 
 HorizonMassSpinCharge compute_mass_spin_charge(
@@ -136,6 +137,7 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     double Jx_integral = 0.0;
     double Jy_integral = 0.0;
     double Jz_integral = 0.0;
+    double D_integral = 0.0;
     double computed_area_from_dA = 0.0;
 
     double rmin = 1.0e300;
@@ -383,6 +385,13 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             const double phiz_z = 0.0;
 
             Q_integral += (Ex * ncovx + Ey * ncovy + Ez * ncovz) * dA;
+            {
+                const double dphi_dr =
+                    (interp_emda_data(6, r + dr, itheta, iphi) -
+                     interp_emda_data(6, r - dr, itheta, iphi)) /
+                    (2.0 * dr);
+                D_integral += dphi_dr * dA;
+            }
             Jx_integral +=
                 (phix_x * Psx + phix_y * Psy + phix_z * Psz) * dA;
             Jy_integral +=
@@ -402,13 +411,14 @@ HorizonMassSpinCharge compute_mass_spin_charge(
               << std::endl;
 
     q.Q = (1.0 / (4.0 * M_PI)) * Q_integral;
+    q.D = -(1.0 / (4.0 * M_PI)) * D_integral;
     q.Jx = (1.0 / (8.0 * M_PI)) * Jx_integral;
     q.Jy = (1.0 / (8.0 * M_PI)) * Jy_integral;
     q.Jz = (1.0 / (8.0 * M_PI)) * Jz_integral;
     q.Jmag = std::sqrt(q.Jx * q.Jx + q.Jy * q.Jy + q.Jz * q.Jz);
     q.J = q.Jmag;
 
-    // Magnetic charge and dilaton charge are intentionally left at zero for now.
+    // Magnetic charge is intentionally left at zero for now.
 
     // ------------------------------------------------------------------
     // Mass and dimensionless spin
@@ -432,6 +442,7 @@ HorizonMassSpinCharge compute_mass_spin_charge(
               << " Jz=" << q.Jz
               << " Jmag=" << q.Jmag
               << " chi=" << q.chi
+              << " dilaton_charge=" << q.D
               << std::endl;
 
     if (q.area > 0.0) {
@@ -906,6 +917,7 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
               << " J=" << hq.J
               << " Q=" << hq.Q
               << " chi=" << hq.chi
+              << " D=" << hq.D
               << std::endl;
 
     // ------------------------------------------------------------------
@@ -920,6 +932,10 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
             std::ios::app
         );
 
+        if (current_step == 0 && rankActive == 0) {
+            fout << "# step time horizon area Mirr M J Q chi D\n";
+        }
+
         fout << current_step << " "
              << current_time << " "
              << which_horizon << " "
@@ -928,7 +944,8 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
              << hq.M << " "
              << hq.J << " "
              << hq.Q << " "
-             << hq.chi << "\n";
+             << hq.chi << " "
+             << hq.D << "\n";
 
         fout.close();
 
