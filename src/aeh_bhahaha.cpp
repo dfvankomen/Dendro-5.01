@@ -130,6 +130,7 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     double Jx_integral = 0.0;
     double Jy_integral = 0.0;
     double Jz_integral = 0.0;
+    double computed_area_from_dA = 0.0;
 
     double rmin = 1.0e300;
     double rmax = -1.0e300;
@@ -157,22 +158,63 @@ HorizonMassSpinCharge compute_mass_spin_charge(
 
             const double r = prev_horizon_m1[hidx];
 
+            const auto horizon_r = [&](int theta_idx, int phi_idx) {
+                phi_idx = (phi_idx + nphi) % nphi;
+                theta_idx = std::max(0, std::min(ntheta - 1, theta_idx));
+                const size_t idx =
+                    horizon_offset +
+                    static_cast<size_t>(phi_idx) *
+                        static_cast<size_t>(ntheta) +
+                    static_cast<size_t>(theta_idx);
+                return prev_horizon_m1[idx];
+            };
+
+            double r_theta = 0.0;
+            if (itheta == 0) {
+                r_theta = (horizon_r(itheta + 1, iphi) - r) / dtheta;
+            } else if (itheta == ntheta - 1) {
+                r_theta = (r - horizon_r(itheta - 1, iphi)) / dtheta;
+            } else {
+                r_theta =
+                    (horizon_r(itheta + 1, iphi) -
+                     horizon_r(itheta - 1, iphi)) /
+                    (2.0 * dtheta);
+            }
+
+            const double r_phi =
+                (horizon_r(itheta, iphi + 1) -
+                 horizon_r(itheta, iphi - 1)) /
+                (2.0 * dphi);
+
             rmin = std::min(rmin, r);
             rmax = std::max(rmax, r);
             rsum += r;
             count++;
 
-            // Approximate outward normal direction in Cartesian coordinates.
-            // This ignores angular derivatives of r(theta,phi), so it is a
-            // first-pass approximation.
             const double sx = sintheta * cosphi;
             const double sy = sintheta * sinphi;
             const double sz = costheta;
+
+            const double ethetax = costheta * cosphi;
+            const double ethetay = costheta * sinphi;
+            const double ethetaz = -sintheta;
+
+            const double ephix = -sintheta * sinphi;
+            const double ephiy = sintheta * cosphi;
+            const double ephiz = 0.0;
 
             // Cartesian position relative to the horizon center.
             const double xrel = r * sx;
             const double yrel = r * sy;
             const double zrel = r * sz;
+
+            const double Xtheta_x = r_theta * sx + r * ethetax;
+            const double Xtheta_y = r_theta * sy + r * ethetay;
+            const double Xtheta_z = r_theta * sz + r * ethetaz;
+
+            const double Xphi_x = r_phi * sx + r * ephix;
+            const double Xphi_y = r_phi * sy + r * ephiy;
+            const double Xphi_z = r_phi * sz + r * ephiz;
 
             const double gxx = interp_metric_data(0, r, itheta, iphi);
             const double gxy = interp_metric_data(1, r, itheta, iphi);
@@ -200,25 +242,76 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             const double scovy = gxy * sx + gyy * sy + gyz * sz;
             const double scovz = gxz * sx + gyz * sy + gzz * sz;
 
-            Q_integral += (Ex * scovx + Ey * scovy + Ez * scovz);
-
             const double detg =
                 gxx * (gyy * gzz - gyz * gyz) -
                 gxy * (gxy * gzz - gyz * gxz) +
                 gxz * (gxy * gyz - gyy * gxz);
 
             double Ktrace = 0.0;
+            double igxx = 0.0;
+            double igxy = 0.0;
+            double igxz = 0.0;
+            double igyy = 0.0;
+            double igyz = 0.0;
+            double igzz = 0.0;
             if (std::abs(detg) > 0.0) {
-                const double igxx = (gyy * gzz - gyz * gyz) / detg;
-                const double igxy = (gxz * gyz - gxy * gzz) / detg;
-                const double igxz = (gxy * gyz - gxz * gyy) / detg;
-                const double igyy = (gxx * gzz - gxz * gxz) / detg;
-                const double igyz = (gxy * gxz - gxx * gyz) / detg;
-                const double igzz = (gxx * gyy - gxy * gxy) / detg;
+                igxx = (gyy * gzz - gyz * gyz) / detg;
+                igxy = (gxz * gyz - gxy * gzz) / detg;
+                igxz = (gxy * gyz - gxz * gyy) / detg;
+                igyy = (gxx * gzz - gxz * gxz) / detg;
+                igyz = (gxy * gxz - gxx * gyz) / detg;
+                igzz = (gxx * gyy - gxy * gxy) / detg;
 
                 Ktrace = igxx * Kxx + 2.0 * igxy * Kxy +
                          2.0 * igxz * Kxz + igyy * Kyy +
                          2.0 * igyz * Kyz + igzz * Kzz;
+            }
+
+            const auto gamma_dot = [&](double ax, double ay, double az,
+                                       double bx, double by, double bz) {
+                return ax * (gxx * bx + gxy * by + gxz * bz) +
+                       ay * (gxy * bx + gyy * by + gyz * bz) +
+                       az * (gxz * bx + gyz * by + gzz * bz);
+            };
+
+            const double qtt = gamma_dot(Xtheta_x, Xtheta_y, Xtheta_z,
+                                         Xtheta_x, Xtheta_y, Xtheta_z);
+            const double qtp = gamma_dot(Xtheta_x, Xtheta_y, Xtheta_z,
+                                         Xphi_x, Xphi_y, Xphi_z);
+            const double qpp = gamma_dot(Xphi_x, Xphi_y, Xphi_z,
+                                         Xphi_x, Xphi_y, Xphi_z);
+            const double qdet = qtt * qpp - qtp * qtp;
+            const double dA = (qdet > 0.0) ? std::sqrt(qdet) * dtheta * dphi
+                                           : 0.0;
+            computed_area_from_dA += dA;
+
+            // Surface normal from finite-difference tangents. This replaces
+            // the old flat radial normal but still depends on finite-difference
+            // angular derivatives of r(theta,phi).
+            double ncovx = Xtheta_y * Xphi_z - Xtheta_z * Xphi_y;
+            double ncovy = Xtheta_z * Xphi_x - Xtheta_x * Xphi_z;
+            double ncovz = Xtheta_x * Xphi_y - Xtheta_y * Xphi_x;
+
+            double nconx = igxx * ncovx + igxy * ncovy + igxz * ncovz;
+            double ncony = igxy * ncovx + igyy * ncovy + igyz * ncovz;
+            double nconz = igxz * ncovx + igyz * ncovy + igzz * ncovz;
+            double nnorm2 = ncovx * nconx + ncovy * ncony + ncovz * nconz;
+
+            if (nnorm2 > 0.0) {
+                const double inv_norm = 1.0 / std::sqrt(nnorm2);
+                ncovx *= inv_norm;
+                ncovy *= inv_norm;
+                ncovz *= inv_norm;
+                nconx *= inv_norm;
+                ncony *= inv_norm;
+                nconz *= inv_norm;
+            } else {
+                ncovx = scovx;
+                ncovy = scovy;
+                ncovz = scovz;
+                nconx = sx;
+                ncony = sy;
+                nconz = sz;
             }
 
             const double Pxx = Kxx - Ktrace * gxx;
@@ -228,9 +321,9 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             const double Pyz = Kyz - Ktrace * gyz;
             const double Pzz = Kzz - Ktrace * gzz;
 
-            const double Psx = Pxx * sx + Pxy * sy + Pxz * sz;
-            const double Psy = Pxy * sx + Pyy * sy + Pyz * sz;
-            const double Psz = Pxz * sx + Pyz * sy + Pzz * sz;
+            const double Psx = Pxx * nconx + Pxy * ncony + Pxz * nconz;
+            const double Psy = Pxy * nconx + Pyy * ncony + Pyz * nconz;
+            const double Psz = Pxz * nconx + Pyz * ncony + Pzz * nconz;
 
             // Approximate rotational vector fields about the horizon centroid.
             const double phix_x = 0.0;
@@ -243,9 +336,13 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             const double phiz_y = xrel;
             const double phiz_z = 0.0;
 
-            Jx_integral += phix_x * Psx + phix_y * Psy + phix_z * Psz;
-            Jy_integral += phiy_x * Psx + phiy_y * Psy + phiy_z * Psz;
-            Jz_integral += phiz_x * Psx + phiz_y * Psy + phiz_z * Psz;
+            Q_integral += (Ex * ncovx + Ey * ncovy + Ez * ncovz) * dA;
+            Jx_integral +=
+                (phix_x * Psx + phix_y * Psy + phix_z * Psz) * dA;
+            Jy_integral +=
+                (phiy_x * Psx + phiy_y * Psy + phiy_z * Psz) * dA;
+            Jz_integral +=
+                (phiz_x * Psx + phiz_y * Psy + phiz_z * Psz) * dA;
         }
     }
 
@@ -258,16 +355,10 @@ HorizonMassSpinCharge compute_mass_spin_charge(
               << " rmean=" << rmean
               << std::endl;
 
-    // Uniform surface-weight approximation.
-    // TODO: replace this dA with true surface geometry from angular
-    // derivatives of r(theta,phi).
-    const double dA =
-        q.area / static_cast<double>(ntheta * nphi);
-
-    q.Q = (1.0 / (4.0 * M_PI)) * Q_integral * dA;
-    q.Jx = (1.0 / (8.0 * M_PI)) * Jx_integral * dA;
-    q.Jy = (1.0 / (8.0 * M_PI)) * Jy_integral * dA;
-    q.Jz = (1.0 / (8.0 * M_PI)) * Jz_integral * dA;
+    q.Q = (1.0 / (4.0 * M_PI)) * Q_integral;
+    q.Jx = (1.0 / (8.0 * M_PI)) * Jx_integral;
+    q.Jy = (1.0 / (8.0 * M_PI)) * Jy_integral;
+    q.Jz = (1.0 / (8.0 * M_PI)) * Jz_integral;
     q.Jmag = std::sqrt(q.Jx * q.Jx + q.Jy * q.Jy + q.Jz * q.Jz);
     q.J = q.Jmag;
 
@@ -285,6 +376,27 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     );
 
     q.chi = q.Jmag / (q.M * q.M);
+
+    std::cout << "[AEH DEBUG] computed_area_from_dA="
+              << computed_area_from_dA
+              << " bhahaha_area=" << q.area
+              << " QE=" << q.Q
+              << " Jx=" << q.Jx
+              << " Jy=" << q.Jy
+              << " Jz=" << q.Jz
+              << " Jmag=" << q.Jmag
+              << " chi=" << q.chi
+              << std::endl;
+
+    if (q.area > 0.0) {
+        const double rel_area_diff =
+            std::abs(computed_area_from_dA - q.area) / q.area;
+        if (rel_area_diff > 0.05) {
+            std::cout << "[AEH WARNING] computed_area_from_dA differs from "
+                      << "BHaHAHA area by " << rel_area_diff
+                      << " for horizon=" << which_horizon << std::endl;
+        }
+    }
 
     return q;
 }
