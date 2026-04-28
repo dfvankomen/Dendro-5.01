@@ -528,6 +528,7 @@ void AEH_BHaHAHA::find_horizons(
     // 4: Metric interpolation
     // -- Allocate memory and interpolate metric data onto the BHaHAHA grid
     // using guesses
+    std::vector<double*> emda_horizon_data(num_horizons_, nullptr);
     for (int which_horizon = 0; which_horizon < num_horizons_;
          which_horizon++) {
         // if we're in inactive and in Binary Black HOle mode, skip
@@ -565,6 +566,17 @@ void AEH_BHaHAHA::find_horizons(
                           << std::endl;
                 exit(EXIT_FAILURE);
             }
+
+            emda_horizon_data[which_horizon] =
+                (double*)malloc(NUM_EMDA_HORIZON_FIELDS *
+                                bah_params_and_data->Nr_external_input *
+                                max_ntheta_ * max_nphi_ * sizeof(double));
+
+            if (!emda_horizon_data[which_horizon]) {
+                std::cerr << "ERROR ALLOCATING MEMORY FOR EMDA HORIZON DATA!"
+                          << std::endl;
+                exit(EXIT_FAILURE);
+            }
         }
 
         // then interpolate the metric data!
@@ -573,7 +585,8 @@ void AEH_BHaHAHA::find_horizons(
             bah_params_and_data->Nr_external_input, max_ntheta_, max_nphi_,
             radii.data(), x_guess_[which_horizon], y_guess_[which_horizon],
             z_guess_[which_horizon],
-            bha_param_data_[which_horizon].input_metric_data);
+            bha_param_data_[which_horizon].input_metric_data,
+            emda_horizon_data[which_horizon]);
     }
 
     // 5: Horizon Finding and Diagnostics
@@ -727,6 +740,7 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
 
         // free metric data
         free(bha_param_data_[which_horizon].input_metric_data);
+        free(emda_horizon_data[which_horizon]);
     }
 
     // now that we're done we can delete the whole param_data
@@ -891,7 +905,8 @@ void AEH_BHaHAHA::interpolate_metric_data(
     const ot::Mesh* mesh, const double** varData, const int which_horizon,
     const int which_rank, const int n_r, const int n_theta, const int n_phi,
     const double* radii, const double x_center, const double y_center,
-    const double z_center, double* input_metric_data) {
+    const double z_center, double* input_metric_data,
+    double* emda_horizon_data) {
     // get the active comm and information about it
     unsigned int rankActive  = mesh->getMPIRank();
     unsigned int npesActive  = mesh->getMPICommSize();
@@ -947,12 +962,11 @@ void AEH_BHaHAHA::interpolate_metric_data(
 #endif
 
     int local_num_valid = validIndex.size();
-    // 2 variables * 6 directional fields * local_num_valid
-    std::vector<double> transformed_buffer(local_num_valid * 12);
+    std::vector<double> transformed_buffer(
+        local_num_valid * NUM_HORIZON_INTERP_FIELDS, 0.0);
 
     // temporary buffers to fill for the transformation defined by the user
     std::vector<double> input_pts(variable_indices_.size());
-    std::vector<double> output_pts(12);
 
     // transform these variables to gd and Kd forms from before...
     for (unsigned int index = 0; index < local_num_valid; index++) {
@@ -967,9 +981,16 @@ void AEH_BHaHAHA::interpolate_metric_data(
         // then call the transformation function
         std::vector<double> transformed_points = transform_(input_pts);
 
-        // then for each channel put it back into the transformed buffer, ready
-        // to be sent and synchronized
-        for (unsigned int i = 0; i < NUM_EXT_INPUT_CARTESIAN_GFS; i++) {
+        if (transformed_points.size() < NUM_EXT_INPUT_CARTESIAN_GFS) {
+            throw std::runtime_error(
+                "AEH transform_ returned fewer than 12 BHaHAHA fields");
+        }
+
+        // The first 12 entries are the BHaHAHA-compatible gamma_ij/K_ij
+        // interface. Entries 12..18 are optional EMDA sidecar data.
+        const size_t num_to_copy = std::min<size_t>(
+            transformed_points.size(), NUM_HORIZON_INTERP_FIELDS);
+        for (size_t i = 0; i < num_to_copy; i++) {
             transformed_buffer[local_num_valid * i + index] =
                 transformed_points[i];
         }
@@ -1011,12 +1032,12 @@ void AEH_BHaHAHA::interpolate_metric_data(
 
     std::vector<double> receive_buffer;
     if (rankActive == which_rank) {
-        receive_buffer.resize(total_elements * 12);
+        receive_buffer.resize(total_elements * NUM_HORIZON_INTERP_FIELDS);
 
         // modify receive counts based on the number of fields coming in
         for (int i = 0; i < npesActive; ++i) {
-            displs[i]      = displs[i] * 12;
-            recv_counts[i] = recv_counts[i] * 12;
+            displs[i]      = displs[i] * NUM_HORIZON_INTERP_FIELDS;
+            recv_counts[i] = recv_counts[i] * NUM_HORIZON_INTERP_FIELDS;
         }
 
 #if 0
@@ -1025,7 +1046,8 @@ void AEH_BHaHAHA::interpolate_metric_data(
         print_vec(displs, "UPDATED DISPLS");
 #endif
     }
-    int local_num_valid_total = local_num_valid * 12;
+    int local_num_valid_total =
+        local_num_valid * NUM_HORIZON_INTERP_FIELDS;
 
     MPI_Gatherv(transformed_buffer.data(), local_num_valid_total, MPI_DOUBLE,
                 receive_buffer.data(), recv_counts.data(), displs.data(),
@@ -1038,15 +1060,43 @@ void AEH_BHaHAHA::interpolate_metric_data(
         // that we need to index in by full displacement, then by vidx * current
         // receive count,a nd then by the index that we've received.
         for (int i = 0; i < npesActive; ++i) {
-            int recv_count    = recv_counts[i] / 12;
+            int recv_count =
+                recv_counts[i] / NUM_HORIZON_INTERP_FIELDS;
             int buffer_offset = displs[i];
-            for (int vidx = 0; vidx < 12; ++vidx) {
+            int point_offset =
+                displs[i] / NUM_HORIZON_INTERP_FIELDS;
+            for (int vidx = 0; vidx < NUM_HORIZON_INTERP_FIELDS; ++vidx) {
                 for (int j = 0; j < recv_count; ++j) {
-                    int idx = receive_idxs[buffer_offset / 12 + j];
-                    input_metric_data[vidx * total_elements + idx] =
+                    int idx = receive_idxs[point_offset + j];
+                    const double value =
                         receive_buffer[buffer_offset + vidx * recv_count + j];
+
+                    if (vidx < NUM_EXT_INPUT_CARTESIAN_GFS) {
+                        input_metric_data[vidx * total_elements + idx] =
+                            value;
+                    } else if (emda_horizon_data) {
+                        const int emda_vidx =
+                            vidx - NUM_EXT_INPUT_CARTESIAN_GFS;
+                        emda_horizon_data[emda_vidx * total_elements + idx] =
+                            value;
+                    }
                 }
             }
+        }
+    }
+    if (rankActive == which_rank && rankActive == 0 && emda_horizon_data) {
+        const int debug_points = std::min(total_elements, 5);
+        for (int idx = 0; idx < debug_points; ++idx) {
+            std::cout << "[AEH DEBUG] emda_horizon_data point=" << idx
+                      << " Ex=" << emda_horizon_data[0 * total_elements + idx]
+                      << " Ey=" << emda_horizon_data[1 * total_elements + idx]
+                      << " Ez=" << emda_horizon_data[2 * total_elements + idx]
+                      << " Bx=" << emda_horizon_data[3 * total_elements + idx]
+                      << " By=" << emda_horizon_data[4 * total_elements + idx]
+                      << " Bz=" << emda_horizon_data[5 * total_elements + idx]
+                      << " dilaton="
+                      << emda_horizon_data[6 * total_elements + idx]
+                      << std::endl;
         }
     }
     // data should now be unpacked!

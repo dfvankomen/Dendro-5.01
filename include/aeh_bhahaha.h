@@ -19,6 +19,32 @@
 
 namespace dendro_aeh {
 
+enum HorizonInterpField {
+    HORIZON_GAMMADDXX = 0,
+    HORIZON_GAMMADDXY = 1,
+    HORIZON_GAMMADDXZ = 2,
+    HORIZON_GAMMADDYY = 3,
+    HORIZON_GAMMADDYZ = 4,
+    HORIZON_GAMMADDZZ = 5,
+    HORIZON_KDDXX = 6,
+    HORIZON_KDDXY = 7,
+    HORIZON_KDDXZ = 8,
+    HORIZON_KDDYY = 9,
+    HORIZON_KDDYZ = 10,
+    HORIZON_KDDZZ = 11,
+    HORIZON_EX = 12,
+    HORIZON_EY = 13,
+    HORIZON_EZ = 14,
+    HORIZON_BX = 15,
+    HORIZON_BY = 16,
+    HORIZON_BZ = 17,
+    HORIZON_DILATON = 18,
+    NUM_HORIZON_INTERP_FIELDS = 19
+};
+
+static constexpr int NUM_EMDA_HORIZON_FIELDS =
+    NUM_HORIZON_INTERP_FIELDS - NUM_EXT_INPUT_CARTESIAN_GFS;
+
 template <typename T>
 inline void print_vec(const std::vector<T>& vec, const std::string& prefix) {
     std::cout << prefix << ": ";
@@ -533,7 +559,8 @@ class AEH_BHaHAHA {
                                  const int n_phi, const double* radii,
                                  const double x_center, const double y_center,
                                  const double z_center,
-                                 double* input_metric_data);
+                                 double* input_metric_data,
+                                 double* emda_horizon_data);
 
     void find_horizons(const ot::Mesh* mesh, const double** var,
                        const unsigned int current_step,
