@@ -181,6 +181,44 @@ MatrixDiagonalEntries* create2A6_5_Diagonals();
 MatrixDiagonalEntries* create2A6_6_Diagonals();
 MatrixDiagonalEntries* create2A6_7_Diagonals();
 
+// ---- BYU A6 second-derivative generated operators ----
+MatrixDiagonalEntries* createBYU_A6_2ND_R060_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R060_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R060_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R065_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R065_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R065_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R070_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R070_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R070_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R075_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R075_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R075_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R080_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R080_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R080_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R085_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R085_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R085_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+
 // TODO: banded matrix implementations
 class BYUDerivsT64_R3_FirstOrder : public MatrixCompactDerivs<1> {
    private:
@@ -2714,6 +2752,59 @@ public:
     DerivOrder getDerivOrder() const override { return DerivOrder::D_SECOND_ORDER; }
     std::string toString() const override { return "TwoDerivs2A6_7_SecondOrder"; }
 };
+
+#define DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(OP_NAME)                         \
+class TwoDerivs##OP_NAME##_SecondOrder : public MatrixCompactDerivs<2> {    \
+private:                                                                    \
+    std::vector<double> D_coeffs_;                                          \
+    static constexpr unsigned int n_D_coeffs_ = 1;                          \
+                                                                            \
+public:                                                                     \
+    TwoDerivs##OP_NAME##_SecondOrder(                                       \
+        unsigned int ele_order, const std::string& in_matrix_filter = "none", \
+        const std::vector<double>& in_filter_coeffs = std::vector<double>(), \
+        const std::vector<double>& coeffs_in = std::vector<double>())        \
+        : MatrixCompactDerivs<2>{ele_order, in_matrix_filter,               \
+                                 in_filter_coeffs} {                        \
+        D_coeffs_ = clean_coeffs(                                           \
+            coeffs_in, TwoDerivs##OP_NAME##_SecondOrder::n_D_coeffs_);      \
+        diagEntries = create##OP_NAME##_Diagonals(D_coeffs_);               \
+        this->init();                                                       \
+    }                                                                       \
+    ~TwoDerivs##OP_NAME##_SecondOrder() override = default;                 \
+                                                                            \
+    std::unique_ptr<Derivs> clone() const override {                        \
+        return std::make_unique<TwoDerivs##OP_NAME##_SecondOrder>(*this);   \
+    }                                                                       \
+    DerivType getDerivType() const override { return DerivType::D_##OP_NAME; } \
+    DerivOrder getDerivOrder() const override {                             \
+        return DerivOrder::D_SECOND_ORDER;                                  \
+    }                                                                       \
+    std::string toString() const override {                                 \
+        return "TwoDerivs" #OP_NAME "_SecondOrder";                        \
+    }                                                                       \
+};
+
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R060_OP1)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R060_OP2)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R060_OP3)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R065_OP1)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R065_OP2)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R065_OP3)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R070_OP1)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R070_OP2)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R070_OP3)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R075_OP1)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R075_OP2)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R075_OP3)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R080_OP1)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R080_OP2)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R080_OP3)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R085_OP1)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R085_OP2)
+DENDRO_DEFINE_BYU_A6_2ND_OPERATOR(BYU_A6_2ND_R085_OP3)
+
+#undef DENDRO_DEFINE_BYU_A6_2ND_OPERATOR
 
 
 

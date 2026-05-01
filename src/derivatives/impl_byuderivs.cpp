@@ -6393,4 +6393,23 @@ double alpha0 = 0.3552519833863128;
 			};
 		return diagEntries;
 }
+#include "derivatives/generated/BYU_A6_2nd_r_060_Op1.h"
+#include "derivatives/generated/BYU_A6_2nd_r_060_Op2.h"
+#include "derivatives/generated/BYU_A6_2nd_r_060_Op3.h"
+#include "derivatives/generated/BYU_A6_2nd_r_065_Op1.h"
+#include "derivatives/generated/BYU_A6_2nd_r_065_Op2.h"
+#include "derivatives/generated/BYU_A6_2nd_r_065_Op3.h"
+#include "derivatives/generated/BYU_A6_2nd_r_070_Op1.h"
+#include "derivatives/generated/BYU_A6_2nd_r_070_Op2.h"
+#include "derivatives/generated/BYU_A6_2nd_r_070_Op3.h"
+#include "derivatives/generated/BYU_A6_2nd_r_075_Op1.h"
+#include "derivatives/generated/BYU_A6_2nd_r_075_Op2.h"
+#include "derivatives/generated/BYU_A6_2nd_r_075_Op3.h"
+#include "derivatives/generated/BYU_A6_2nd_r_080_Op1.h"
+#include "derivatives/generated/BYU_A6_2nd_r_080_Op2.h"
+#include "derivatives/generated/BYU_A6_2nd_r_080_Op3.h"
+#include "derivatives/generated/BYU_A6_2nd_r_085_Op1.h"
+#include "derivatives/generated/BYU_A6_2nd_r_085_Op2.h"
+#include "derivatives/generated/BYU_A6_2nd_r_085_Op3.h"
+
 }  // namespace dendroderivs

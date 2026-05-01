@@ -626,6 +626,60 @@ else if (name == "2A6_1") {
 } else if (name == "2A6_7") {
     return std::unique_ptr<Derivs>(new TwoDerivs2A6_7_SecondOrder(
         ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R060_OP1") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R060_OP1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R060_OP2") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R060_OP2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R060_OP3") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R060_OP3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R065_OP1") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R065_OP1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R065_OP2") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R065_OP2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R065_OP3") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R065_OP3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R070_OP1") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R070_OP1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R070_OP2") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R070_OP2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R070_OP3") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R070_OP3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R075_OP1") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R075_OP1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R075_OP2") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R075_OP2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R075_OP3") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R075_OP3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R080_OP1") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R080_OP1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R080_OP2") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R080_OP2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R080_OP3") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R080_OP3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R085_OP1") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R085_OP1_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R085_OP2") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R085_OP2_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
+} else if (name == "BYU_A6_2ND_R085_OP3") {
+    return std::unique_ptr<Derivs>(new TwoDerivsBYU_A6_2ND_R085_OP3_SecondOrder(
+        ele_order, inMatrixFilterType, in_mat_coeffs_in, coeffs_in));
 }
 
 
