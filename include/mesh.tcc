@@ -12,17 +12,17 @@ namespace ot {
 namespace detail {
 
 template <typename T>
-double compute_derivative_weighted_scale(const T* u, const unsigned int* sz,
-                                         const double* hx,
-                                         double first_weight,
-                                         double second_weight) {
+void compute_derivative_indicators(const T* u, const unsigned int* sz,
+                                   const double* hx, double& grad_l2,
+                                   double& hess_l2) {
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
     const unsigned int nz = sz[2];
 
-    if ((first_weight == 0.0 && second_weight == 0.0) || nx == 0 || ny == 0 ||
-        nz == 0)
-        return 1.0;
+    grad_l2 = 0.0;
+    hess_l2 = 0.0;
+
+    if (nx == 0 || ny == 0 || nz == 0) return;
 
     const auto idx = [nx, ny](unsigned int i, unsigned int j,
                               unsigned int k) {
@@ -108,12 +108,9 @@ double compute_derivative_weighted_scale(const T* u, const unsigned int* sz,
 
     const double h01 = (hx[0] > hx[1]) ? hx[0] : hx[1];
     const double h   = (h01 > hx[2]) ? h01 : hx[2];
-    const double grad_l2 =
-        (n > 0) ? h * std::sqrt(grad_sum / static_cast<double>(n)) : 0.0;
-    const double hess_l2 =
+    grad_l2 = (n > 0) ? h * std::sqrt(grad_sum / static_cast<double>(n)) : 0.0;
+    hess_l2 =
         (n > 0) ? h * h * std::sqrt(hess_sum / static_cast<double>(n)) : 0.0;
-
-    return 1.0 + first_weight * grad_l2 + second_weight * hess_l2;
 }
 
 }  // namespace detail
@@ -2800,10 +2797,15 @@ bool Mesh::isReMeshUnzip(
                         double weighted_l_max = l_max;
                         if (deriv_first_weight != 0.0 ||
                             deriv_second_weight != 0.0) {
-                            weighted_l_max *=
-                                detail::compute_derivative_weighted_scale(
-                                    blkIn.data() + v * sz_per_dof, isz, hx,
-                                    deriv_first_weight, deriv_second_weight);
+                            double grad_l2 = 0.0;
+                            double hess_l2 = 0.0;
+                            detail::compute_derivative_indicators(
+                                blkIn.data() + v * sz_per_dof, isz, hx,
+                                grad_l2, hess_l2);
+                            weighted_l_max = std::sqrt(
+                                l_max * l_max +
+                                deriv_first_weight * grad_l2 * grad_l2 +
+                                deriv_second_weight * hess_l2 * hess_l2);
                         }
 
                         if (wMax < weighted_l_max) wMax = weighted_l_max;
