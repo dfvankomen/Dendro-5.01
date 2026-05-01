@@ -2384,7 +2384,9 @@ class Mesh {
         const unsigned int numVars,
         std::function<double(double, double, double, double *)> wavelet_tol,
         double amr_coarse_fac = DENDRO_AMR_COARSEN_FAC,
-        double coarsen_hx     = DENDRO_REMESH_UNZIP_SCALE_FAC);
+        double coarsen_hx     = DENDRO_REMESH_UNZIP_SCALE_FAC,
+        double deriv_first_weight  = 0.0,
+        double deriv_second_weight = 0.0);
 
     /**
      * @brief

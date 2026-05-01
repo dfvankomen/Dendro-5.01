@@ -9,6 +9,115 @@
 //
 
 namespace ot {
+namespace detail {
+
+template <typename T>
+double compute_derivative_weighted_scale(const T* u, const unsigned int* sz,
+                                         const double* hx,
+                                         double first_weight,
+                                         double second_weight) {
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
+
+    if ((first_weight == 0.0 && second_weight == 0.0) || nx == 0 || ny == 0 ||
+        nz == 0)
+        return 1.0;
+
+    const auto idx = [nx, ny](unsigned int i, unsigned int j,
+                              unsigned int k) {
+        return k * nx * ny + j * nx + i;
+    };
+
+    const unsigned int n = nx * ny * nz;
+    double grad_sum      = 0.0;
+    double hess_sum      = 0.0;
+
+    for (unsigned int k = 0; k < nz; k++)
+        for (unsigned int j = 0; j < ny; j++)
+            for (unsigned int i = 0; i < nx; i++) {
+                const double uc = static_cast<double>(u[idx(i, j, k)]);
+
+                double ux = 0.0;
+                if (nx > 1) {
+                    if (i == 0)
+                        ux = (static_cast<double>(u[idx(i + 1, j, k)]) - uc) /
+                             hx[0];
+                    else if (i + 1 == nx)
+                        ux = (uc - static_cast<double>(u[idx(i - 1, j, k)])) /
+                             hx[0];
+                    else
+                        ux = (static_cast<double>(u[idx(i + 1, j, k)]) -
+                              static_cast<double>(u[idx(i - 1, j, k)])) /
+                             (2.0 * hx[0]);
+                }
+
+                double uy = 0.0;
+                if (ny > 1) {
+                    if (j == 0)
+                        uy = (static_cast<double>(u[idx(i, j + 1, k)]) - uc) /
+                             hx[1];
+                    else if (j + 1 == ny)
+                        uy = (uc - static_cast<double>(u[idx(i, j - 1, k)])) /
+                             hx[1];
+                    else
+                        uy = (static_cast<double>(u[idx(i, j + 1, k)]) -
+                              static_cast<double>(u[idx(i, j - 1, k)])) /
+                             (2.0 * hx[1]);
+                }
+
+                double uz = 0.0;
+                if (nz > 1) {
+                    if (k == 0)
+                        uz = (static_cast<double>(u[idx(i, j, k + 1)]) - uc) /
+                             hx[2];
+                    else if (k + 1 == nz)
+                        uz = (uc - static_cast<double>(u[idx(i, j, k - 1)])) /
+                             hx[2];
+                    else
+                        uz = (static_cast<double>(u[idx(i, j, k + 1)]) -
+                              static_cast<double>(u[idx(i, j, k - 1)])) /
+                             (2.0 * hx[2]);
+                }
+
+                grad_sum += ux * ux + uy * uy + uz * uz;
+
+                double uxx = 0.0;
+                if (nx > 2 && i > 0 && i + 1 < nx)
+                    uxx = (static_cast<double>(u[idx(i + 1, j, k)]) -
+                           2.0 * uc +
+                           static_cast<double>(u[idx(i - 1, j, k)])) /
+                          (hx[0] * hx[0]);
+
+                double uyy = 0.0;
+                if (ny > 2 && j > 0 && j + 1 < ny)
+                    uyy = (static_cast<double>(u[idx(i, j + 1, k)]) -
+                           2.0 * uc +
+                           static_cast<double>(u[idx(i, j - 1, k)])) /
+                          (hx[1] * hx[1]);
+
+                double uzz = 0.0;
+                if (nz > 2 && k > 0 && k + 1 < nz)
+                    uzz = (static_cast<double>(u[idx(i, j, k + 1)]) -
+                           2.0 * uc +
+                           static_cast<double>(u[idx(i, j, k - 1)])) /
+                          (hx[2] * hx[2]);
+
+                hess_sum += uxx * uxx + uyy * uyy + uzz * uzz;
+            }
+
+    const double h01 = (hx[0] > hx[1]) ? hx[0] : hx[1];
+    const double h   = (h01 > hx[2]) ? h01 : hx[2];
+    const double grad_l2 =
+        (n > 0) ? h * std::sqrt(grad_sum / static_cast<double>(n)) : 0.0;
+    const double hess_l2 =
+        (n > 0) ? h * h * std::sqrt(hess_sum / static_cast<double>(n)) : 0.0;
+
+    return 1.0 + first_weight * grad_l2 + second_weight * hess_l2;
+}
+
+}  // namespace detail
+
 template <typename T>
 T* Mesh::createVector() const {
     if (!m_uiIsActive) return NULL;
@@ -2576,7 +2685,8 @@ bool Mesh::isReMeshUnzip(
     const T** unzippedVec, const unsigned int* varIds,
     const unsigned int numVars,
     std::function<double(double, double, double, double*)> wavelet_tol,
-    double amr_coarse_fac, double coarsen_hx) {
+    double amr_coarse_fac, double coarsen_hx, double deriv_first_weight,
+    double deriv_second_weight) {
     // This is the default isRMesh code that is used as refiment criteria. (if
     // needed some complicated application specific refinement routine please
     // have a look at the waveletAMR.h(tcc) file. )
@@ -2687,8 +2797,16 @@ bool Mesh::isReMeshUnzip(
                         const double l_max =
                             (normL2(wCout.data(), wCout.size())) /
                             sqrt(wCout.size());
+                        double weighted_l_max = l_max;
+                        if (deriv_first_weight != 0.0 ||
+                            deriv_second_weight != 0.0) {
+                            weighted_l_max *=
+                                detail::compute_derivative_weighted_scale(
+                                    blkIn.data() + v * sz_per_dof, isz, hx,
+                                    deriv_first_weight, deriv_second_weight);
+                        }
 
-                        if (wMax < l_max) wMax = l_max;
+                        if (wMax < weighted_l_max) wMax = weighted_l_max;
 
                         // for early bail out.
                         if (wMax > tol_ele) break;
