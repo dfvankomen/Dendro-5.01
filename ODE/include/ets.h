@@ -218,7 +218,7 @@ class ETS {
     /**@brief: state true if the internal variables are allocated. */
     bool m_uiIsInternalAlloc = false;
 
-   private:
+   protected:
     /**
      * @brief Allocates internal variables for the time stepper.
      * @return int
@@ -238,7 +238,7 @@ class ETS {
     /**
      * @brief Destroy the ETS object
      */
-    ~ETS();
+    virtual ~ETS();
 
     /**
      * @brief Set the ets coefficients
@@ -269,7 +269,7 @@ class ETS {
     int set_evolve_vars(DVec eVar);
 
     /**@brief: initialize the ETS solver*/
-    void init();
+    virtual void init();
 
     /**@brief: returns the current time step*/
     inline DendroIntL curr_step() { return m_uiTimeInfo._m_uiStep; };
@@ -312,10 +312,10 @@ class ETS {
 
     /**@brief: perform synchronizations with correct variable allocations for
      * the new mesh: should be called after remeshing.  */
-    int sync_with_mesh();
+    virtual int sync_with_mesh();
 
     /**@brief: advance to next time step*/
-    void evolve();
+    virtual void evolve();
 
     /**@brief: dump load statistics*/
     void dump_load_statistics(std::ostream& sout);
@@ -427,27 +427,36 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
                               "ETS Coefficients set for RK4");
 
     } else if (type == ETSType::RK5) {
-        return -1;
-        // these coefficients looks wrong. - Milinda. (need to fix those and
-        // enable the rk5 method. )
-        m_uiNumStages                     = 5;
+        // Butcher's 5th-order method (6 stages).
+        // Original implementation had m_uiNumStages=5 and a 5x5 Aij
+        // matrix, which was incorrect — the method requires 6 stages.
+        // The first row of Aij (all zeros) and the a21=1/4 entry were
+        // missing.  Fixed to use the full 6x6 tableau.
+        m_uiNumStages                     = 6;
+
         static const DendroScalar ETS_C[] = {
-            7.0 / 90.0, 0, 32 / 90.0, 12.0 / 90.0, 32.0 / 90.0, 7.0 / 90.0};
-        static const DendroScalar ETS_T[] = {0,         1.0 / 4.0, 1.0 / 4.0,
+            7.0 / 90.0, 0.0, 32.0 / 90.0, 12.0 / 90.0, 32.0 / 90.0,
+            7.0 / 90.0};
+
+        static const DendroScalar ETS_T[] = {0.0,       1.0 / 4.0, 1.0 / 4.0,
                                              1.0 / 2.0, 3.0 / 4.0, 1.0};
+
+        // clang-format off
         static const DendroScalar ETS_U[] = {
-            0.0,        0.0,        0.0,        0.0,         0.0,
-            1.0 / 8.0,  1.0 / 8.0,  0.0,        0.0,         0.0,
-            0.0,        -1.0 / 2.0, 1.0,        0.0,         0.0,
-            3.0 / 16.0, 0.0,        0.0,        9.0 / 16.0,  0.0,
-            -3.0 / 7.0, 2.0 / 7.0,  12.0 / 7.0, -12.0 / 7.0, 8.0 / 7.0};
+            0.0,        0.0,        0.0,        0.0,         0.0,        0.0,
+            1.0 / 4.0,  0.0,        0.0,        0.0,         0.0,        0.0,
+            1.0 / 8.0,  1.0 / 8.0,  0.0,        0.0,         0.0,        0.0,
+            0.0,       -1.0 / 2.0,  1.0,        0.0,         0.0,        0.0,
+            3.0 / 16.0, 0.0,        0.0,        9.0 / 16.0,  0.0,        0.0,
+           -3.0 / 7.0,  2.0 / 7.0, 12.0 / 7.0,-12.0 / 7.0,  8.0 / 7.0,  0.0};
+        // clang-format on
 
         m_uiCi  = (DendroScalar*)ETS_T;
         m_uiBi  = (DendroScalar*)ETS_C;
         m_uiAij = (DendroScalar*)ETS_U;
 
         dendro::logger::debug(dendro::logger::Scope{"ETS"},
-                              "ETS Coefficients set for RK5");
+                              "ETS Coefficients set for RK5 (Butcher, 6 stages)");
 
     } else {
         dendro::logger::error(dendro::logger::Scope{"ETS"},
@@ -497,33 +506,20 @@ void ETS<T, Ctx>::evolve() {
 
     m_uiAppCtx->pre_timestep(m_uiEVar);
 
-    const unsigned int DOF    = m_uiEVar.get_dof();
-    const unsigned int szPDof = pMesh->getDegOfFreedom();
-
     if (pMesh->isActive()) {
-        int rank                              = pMesh->getMPIRank();
-
-        const unsigned int nodeLocalBegin     = pMesh->getNodeLocalBegin();
-        const unsigned int nodeLocalEnd       = pMesh->getNodeLocalEnd();
-
-        const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
-        unsigned int offset;
-        double ptmin[3], ptmax[3];
-        unsigned int sz[3];
-        unsigned int bflag;
-        double dx, dy, dz;
-
-        for (int stage = 0; stage < m_uiNumStages; stage++) {
+        for (unsigned int stage = 0; stage < m_uiNumStages; stage++) {
             dendro::logger::debug(dendro::logger::Scope{"ETS"},
                                   "Now executing ETS Evolve stage {}/{}",
                                   stage + 1, m_uiNumStages);
 
             m_uiEVecTmp[0].copy_data(m_uiEVar);
 
-            for (int p = 0; p < stage; p++)
-                DVec::axpy(m_uiAppCtx->get_mesh(),
-                           m_uiAij[(stage)*m_uiNumStages + p] * dt,
-                           m_uiStVec[p], m_uiEVecTmp[0]);
+            for (unsigned int p = 0; p < stage; p++) {
+                const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
+                if (aip != 0.0)
+                    DVec::axpy(pMesh, aip * dt, m_uiStVec[p], m_uiEVecTmp[0]);
+            }
+
             m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
 
             current_t_adv = current_t + m_uiCi[stage] * dt;
@@ -533,11 +529,8 @@ void ETS<T, Ctx>::evolve() {
             m_uiAppCtx->post_stage(m_uiStVec[stage]);
         }
 
-        dendro::logger::debug(dendro::logger::Scope{"ETS"},
-                              "Calculating next step after stages");
         for (unsigned int k = 0; k < m_uiNumStages; k++)
-            DVec::axpy(m_uiAppCtx->get_mesh(), m_uiBi[k] * dt, m_uiStVec[k],
-                       m_uiEVar);
+            DVec::axpy(pMesh, m_uiBi[k] * dt, m_uiStVec[k], m_uiEVar);
     }
 
     m_uiAppCtx->post_timestep(m_uiEVar);
