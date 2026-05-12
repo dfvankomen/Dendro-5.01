@@ -3,8 +3,10 @@
 #include "BHaHAHA.h"
 #include "daUtils.h"
 
+#include <limits>
+
 namespace dendro_aeh {
-    struct HorizonMassSpinCharge {
+struct HorizonMassSpinCharge {
     double area = 0.0;
     double Mirr = 0.0;
     double Q = 0.0;
@@ -18,6 +20,127 @@ namespace dendro_aeh {
     double D = 0.0;
 };
 
+struct HorizonQuantityError {
+    HorizonMassSpinCharge abs;
+    HorizonMassSpinCharge rel;
+};
+
+namespace {
+
+constexpr double QUASILOCAL_ERROR_REL_FLOOR = 1.0e-14;
+
+double relative_error(const double fine, const double abs_error) {
+    return abs_error / std::max(std::abs(fine), QUASILOCAL_ERROR_REL_FLOOR);
+}
+
+HorizonQuantityError compute_quantity_error(
+    const HorizonMassSpinCharge& fine,
+    const HorizonMassSpinCharge& coarse) {
+    HorizonQuantityError err;
+
+    err.abs.area = std::abs(fine.area - coarse.area);
+    err.abs.Mirr = std::abs(fine.Mirr - coarse.Mirr);
+    err.abs.M = std::abs(fine.M - coarse.M);
+    err.abs.Jx = std::abs(fine.Jx - coarse.Jx);
+    err.abs.Jy = std::abs(fine.Jy - coarse.Jy);
+    err.abs.Jz = std::abs(fine.Jz - coarse.Jz);
+    err.abs.Jmag = std::abs(fine.Jmag - coarse.Jmag);
+    err.abs.Q = std::abs(fine.Q - coarse.Q);
+    err.abs.chi = std::abs(fine.chi - coarse.chi);
+    err.abs.D = std::abs(fine.D - coarse.D);
+
+    err.rel.area = relative_error(fine.area, err.abs.area);
+    err.rel.Mirr = relative_error(fine.Mirr, err.abs.Mirr);
+    err.rel.M = relative_error(fine.M, err.abs.M);
+    err.rel.Jx = relative_error(fine.Jx, err.abs.Jx);
+    err.rel.Jy = relative_error(fine.Jy, err.abs.Jy);
+    err.rel.Jz = relative_error(fine.Jz, err.abs.Jz);
+    err.rel.Jmag = relative_error(fine.Jmag, err.abs.Jmag);
+    err.rel.Q = relative_error(fine.Q, err.abs.Q);
+    err.rel.chi = relative_error(fine.chi, err.abs.chi);
+    err.rel.D = relative_error(fine.D, err.abs.D);
+
+    return err;
+}
+
+HorizonQuantityError make_nan_quantity_error() {
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    HorizonQuantityError err;
+
+    err.abs.area = err.rel.area = nan;
+    err.abs.Mirr = err.rel.Mirr = nan;
+    err.abs.M = err.rel.M = nan;
+    err.abs.Jx = err.rel.Jx = nan;
+    err.abs.Jy = err.rel.Jy = nan;
+    err.abs.Jz = err.rel.Jz = nan;
+    err.abs.Jmag = err.rel.Jmag = nan;
+    err.abs.Q = err.rel.Q = nan;
+    err.abs.chi = err.rel.chi = nan;
+    err.abs.D = err.rel.D = nan;
+
+    return err;
+}
+
+int idx3_spherical_local(
+    const int ir, const int itheta, const int iphi,
+    const int ntheta, const int nr) {
+    return idx3_spherical(ir, itheta, iphi, ntheta, nr);
+}
+
+std::vector<double> build_one_level_coarsened_shell_data(
+    const double* fine_data, const int num_fields, const int nr,
+    const int ntheta, const int nphi) {
+    const int total_pts = nr * ntheta * nphi;
+    std::vector<double> coarse_data(num_fields * total_pts, 0.0);
+
+    if (!fine_data || nr < 2 || ntheta < 2 || nphi < 2) {
+        return coarse_data;
+    }
+
+    for (int field = 0; field < num_fields; ++field) {
+        for (int iphi_parent = 0; iphi_parent < nphi; iphi_parent += 2) {
+            const int iphi_end = std::min(iphi_parent + 2, nphi);
+            for (int itheta_parent = 0; itheta_parent < ntheta;
+                 itheta_parent += 2) {
+                const int itheta_end = std::min(itheta_parent + 2, ntheta);
+                for (int ir_parent = 0; ir_parent < nr; ir_parent += 2) {
+                    const int ir_end = std::min(ir_parent + 2, nr);
+
+                    double sum = 0.0;
+                    int count = 0;
+                    for (int iphi = iphi_parent; iphi < iphi_end; ++iphi) {
+                        for (int itheta = itheta_parent;
+                             itheta < itheta_end; ++itheta) {
+                            for (int ir = ir_parent; ir < ir_end; ++ir) {
+                                const int idx = idx3_spherical_local(
+                                    ir, itheta, iphi, ntheta, nr);
+                                sum += fine_data[field * total_pts + idx];
+                                ++count;
+                            }
+                        }
+                    }
+
+                    const double avg = (count > 0) ? sum / count : 0.0;
+                    for (int iphi = iphi_parent; iphi < iphi_end; ++iphi) {
+                        for (int itheta = itheta_parent;
+                             itheta < itheta_end; ++itheta) {
+                            for (int ir = ir_parent; ir < ir_end; ++ir) {
+                                const int idx = idx3_spherical_local(
+                                    ir, itheta, iphi, ntheta, nr);
+                                coarse_data[field * total_pts + idx] = avg;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    return coarse_data;
+}
+
+}  // namespace
+
 HorizonMassSpinCharge compute_mass_spin_charge(
     const int which_horizon,
     const bhahaha_params_and_data_struct& bha,
@@ -25,7 +148,8 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     const std::vector<double>& prev_horizon_m1,
     const double* emda_horizon_data,
     const int ntheta,
-    const int nphi
+    const int nphi,
+    const bool use_surface_integral_area = false
 ) {
     HorizonMassSpinCharge q;
 
@@ -112,7 +236,6 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     // Proper area and irreducible mass from BHaHAHA
     // ------------------------------------------------------------------
     q.area = bhahaha_diags.area;
-    q.Mirr = std::sqrt(q.area / (16.0 * M_PI));
 
     // ------------------------------------------------------------------
     // Approximate spin integral
@@ -401,6 +524,11 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     q.Jmag = std::sqrt(q.Jx * q.Jx + q.Jy * q.Jy + q.Jz * q.Jz);
     q.J = q.Jmag;
 
+    if (use_surface_integral_area) {
+        q.area = computed_area_from_dA;
+    }
+    q.Mirr = std::sqrt(q.area / (16.0 * M_PI));
+
     // Magnetic charge is intentionally left at zero for now.
 
     // ------------------------------------------------------------------
@@ -427,6 +555,44 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     }
 
     return q;
+}
+
+HorizonQuantityError compute_coarsened_resolution_error(
+    const int which_horizon,
+    const bhahaha_params_and_data_struct& fine_bha,
+    const bhahaha_diagnostics_struct& fine_diags,
+    const std::vector<double>& prev_horizon_m1,
+    const double* fine_emda_horizon_data,
+    const HorizonMassSpinCharge& fine_quantities,
+    const int ntheta,
+    const int nphi) {
+    const int nr = fine_bha.Nr_external_input;
+    if (!fine_bha.input_metric_data || nr < 2 || ntheta < 2 || nphi < 2) {
+        return make_nan_quantity_error();
+    }
+
+    std::vector<double> coarse_metric_data =
+        build_one_level_coarsened_shell_data(
+            fine_bha.input_metric_data, NUM_EXT_INPUT_CARTESIAN_GFS,
+            nr, ntheta, nphi);
+    std::vector<double> coarse_emda_data =
+        build_one_level_coarsened_shell_data(
+            fine_emda_horizon_data, NUM_EMDA_HORIZON_FIELDS,
+            nr, ntheta, nphi);
+
+    bhahaha_params_and_data_struct coarse_bha = fine_bha;
+    coarse_bha.input_metric_data = coarse_metric_data.data();
+
+    // This is a one-level resolution estimate from the available spherical
+    // interpolation shell. At this point the raw AMR parent-level data are not
+    // exposed by interpolateToCoords(), so this is not a full Richardson
+    // convergence estimate and should not be interpreted as one without
+    // additional assumptions.
+    HorizonMassSpinCharge coarse_quantities = compute_mass_spin_charge(
+        which_horizon, coarse_bha, fine_diags, prev_horizon_m1,
+        coarse_emda_data.data(), ntheta, nphi, true);
+
+    return compute_quantity_error(fine_quantities, coarse_quantities);
 }
 void AEH_BHaHAHA::find_horizons(
     const ot::Mesh* mesh, const double** var, const unsigned int current_step,
@@ -880,6 +1046,16 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
     max_nphi_
 );
 
+    HorizonQuantityError hq_err = compute_coarsened_resolution_error(
+        which_horizon,
+        bha_param_data_[which_horizon],
+        bhahaha_diags,
+        prev_horizon_m1_,
+        emda_horizon_data[which_horizon],
+        hq,
+        max_ntheta_,
+        max_nphi_);
+
     // Print to stdout for quick debugging/monitoring
     std::cout << "[AH QUANTS] H" << which_horizon
               << " area=" << hq.area
@@ -903,13 +1079,31 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
     std::ifstream existing(quasilocal_file, std::ios::ate);
     const bool write_header =
         !existing.good() || existing.tellg() == std::streampos(0);
+    bool write_extended_header = write_header;
+    if (!write_header) {
+        existing.seekg(0);
+        std::string first_line;
+        std::getline(existing, first_line);
+        write_extended_header =
+            (first_line.find("area_err_abs") == std::string::npos);
+    }
     existing.close();
 
     // Append horizon quantities to per-horizon file.
     std::ofstream fout(quasilocal_file, std::ios::app);
 
-    if (write_header) {
-        fout << "# step time horizon area Mirr M Jx Jy Jz Jmag Q chi D\n";
+    if (write_extended_header) {
+        fout << "# step time horizon area Mirr M Jx Jy Jz Jmag Q chi D "
+             << "area_err_abs area_err_rel "
+             << "Mirr_err_abs Mirr_err_rel "
+             << "M_err_abs M_err_rel "
+             << "Jx_err_abs Jx_err_rel "
+             << "Jy_err_abs Jy_err_rel "
+             << "Jz_err_abs Jz_err_rel "
+             << "Jmag_err_abs Jmag_err_rel "
+             << "Q_err_abs Q_err_rel "
+             << "chi_err_abs chi_err_rel "
+             << "D_err_abs D_err_rel\n";
     }
 
     fout << current_step << " "
@@ -924,7 +1118,27 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
          << hq.Jmag << " "
          << hq.Q << " "
          << hq.chi << " "
-         << hq.D << "\n";
+         << hq.D << " "
+         << hq_err.abs.area << " "
+         << hq_err.rel.area << " "
+         << hq_err.abs.Mirr << " "
+         << hq_err.rel.Mirr << " "
+         << hq_err.abs.M << " "
+         << hq_err.rel.M << " "
+         << hq_err.abs.Jx << " "
+         << hq_err.rel.Jx << " "
+         << hq_err.abs.Jy << " "
+         << hq_err.rel.Jy << " "
+         << hq_err.abs.Jz << " "
+         << hq_err.rel.Jz << " "
+         << hq_err.abs.Jmag << " "
+         << hq_err.rel.Jmag << " "
+         << hq_err.abs.Q << " "
+         << hq_err.rel.Q << " "
+         << hq_err.abs.chi << " "
+         << hq_err.rel.chi << " "
+         << hq_err.abs.D << " "
+         << hq_err.rel.D << "\n";
 
     fout.close();
 
