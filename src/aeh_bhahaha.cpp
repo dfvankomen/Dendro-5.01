@@ -6,23 +6,20 @@
 #include <limits>
 
 namespace dendro_aeh {
-struct HorizonMassSpinCharge {
+struct HorizonQuasilocalMeasures {
     double area = 0.0;
     double Mirr = 0.0;
-    double Q = 0.0;
     double Jx = 0.0;
     double Jy = 0.0;
     double Jz = 0.0;
     double Jmag = 0.0;
-    double J = 0.0;
     double M = 0.0;
     double chi = 0.0;
-    double D = 0.0;
 };
 
-struct HorizonQuantityError {
-    HorizonMassSpinCharge abs;
-    HorizonMassSpinCharge rel;
+struct HorizonQuasilocalError {
+    HorizonQuasilocalMeasures abs;
+    HorizonQuasilocalMeasures rel;
 };
 
 namespace {
@@ -33,10 +30,10 @@ double relative_error(const double fine, const double abs_error) {
     return abs_error / std::max(std::abs(fine), QUASILOCAL_ERROR_REL_FLOOR);
 }
 
-HorizonQuantityError compute_quantity_error(
-    const HorizonMassSpinCharge& fine,
-    const HorizonMassSpinCharge& coarse) {
-    HorizonQuantityError err;
+HorizonQuasilocalError compute_quasilocal_error(
+    const HorizonQuasilocalMeasures& fine,
+    const HorizonQuasilocalMeasures& coarse) {
+    HorizonQuasilocalError err;
 
     err.abs.area = std::abs(fine.area - coarse.area);
     err.abs.Mirr = std::abs(fine.Mirr - coarse.Mirr);
@@ -45,9 +42,7 @@ HorizonQuantityError compute_quantity_error(
     err.abs.Jy = std::abs(fine.Jy - coarse.Jy);
     err.abs.Jz = std::abs(fine.Jz - coarse.Jz);
     err.abs.Jmag = std::abs(fine.Jmag - coarse.Jmag);
-    err.abs.Q = std::abs(fine.Q - coarse.Q);
     err.abs.chi = std::abs(fine.chi - coarse.chi);
-    err.abs.D = std::abs(fine.D - coarse.D);
 
     err.rel.area = relative_error(fine.area, err.abs.area);
     err.rel.Mirr = relative_error(fine.Mirr, err.abs.Mirr);
@@ -56,16 +51,14 @@ HorizonQuantityError compute_quantity_error(
     err.rel.Jy = relative_error(fine.Jy, err.abs.Jy);
     err.rel.Jz = relative_error(fine.Jz, err.abs.Jz);
     err.rel.Jmag = relative_error(fine.Jmag, err.abs.Jmag);
-    err.rel.Q = relative_error(fine.Q, err.abs.Q);
     err.rel.chi = relative_error(fine.chi, err.abs.chi);
-    err.rel.D = relative_error(fine.D, err.abs.D);
 
     return err;
 }
 
-HorizonQuantityError make_nan_quantity_error() {
+HorizonQuasilocalError make_nan_quasilocal_error() {
     const double nan = std::numeric_limits<double>::quiet_NaN();
-    HorizonQuantityError err;
+    HorizonQuasilocalError err;
 
     err.abs.area = err.rel.area = nan;
     err.abs.Mirr = err.rel.Mirr = nan;
@@ -74,9 +67,7 @@ HorizonQuantityError make_nan_quantity_error() {
     err.abs.Jy = err.rel.Jy = nan;
     err.abs.Jz = err.rel.Jz = nan;
     err.abs.Jmag = err.rel.Jmag = nan;
-    err.abs.Q = err.rel.Q = nan;
     err.abs.chi = err.rel.chi = nan;
-    err.abs.D = err.rel.D = nan;
 
     return err;
 }
@@ -141,17 +132,16 @@ std::vector<double> build_one_level_coarsened_shell_data(
 
 }  // namespace
 
-HorizonMassSpinCharge compute_mass_spin_charge(
+HorizonQuasilocalMeasures compute_quasilocal_measures(
     const int which_horizon,
     const bhahaha_params_and_data_struct& bha,
     const bhahaha_diagnostics_struct& bhahaha_diags,
     const std::vector<double>& prev_horizon_m1,
-    const double* emda_horizon_data,
     const int ntheta,
     const int nphi,
     const bool use_surface_integral_area = false
 ) {
-    HorizonMassSpinCharge q;
+    HorizonQuasilocalMeasures q;
 
     const double dtheta = M_PI / static_cast<double>(ntheta);
     const double dphi   = 2.0 * M_PI / static_cast<double>(nphi);
@@ -199,39 +189,6 @@ HorizonMassSpinCharge compute_mass_spin_charge(
         return (1.0 - a) * f0 + a * f1;
     };
 
-    auto get_emda_data = [&](int field, int ir, int itheta, int iphi) {
-        if (!emda_horizon_data) return 0.0;
-        const int idx = idx3_spherical(ir, itheta, iphi, ntheta, nr);
-        return emda_horizon_data[field * total_pts + idx];
-    };
-
-    auto interp_emda_data = [&](int field, double r, int itheta, int iphi) {
-        if (!emda_horizon_data) return 0.0;
-
-        const double first_r =
-            (rmin_grid > 0.0) ? rmin_grid + (0.5 - BHAHAHA_NGHOSTS) * dr
-                              : rmin_grid + 0.5 * dr;
-        double x = (r - first_r) / dr;
-
-        int i0 = static_cast<int>(std::floor(x));
-        double a = x - static_cast<double>(i0);
-
-        if (i0 < 0) {
-            i0 = 0;
-            a = 0.0;
-        }
-
-        if (i0 >= nr - 1) {
-            i0 = nr - 2;
-            a = 1.0;
-        }
-
-        const double f0 = get_emda_data(field, i0,     itheta, iphi);
-        const double f1 = get_emda_data(field, i0 + 1, itheta, iphi);
-
-        return (1.0 - a) * f0 + a * f1;
-    };
-
     // ------------------------------------------------------------------
     // Proper area and irreducible mass from BHaHAHA
     // ------------------------------------------------------------------
@@ -256,11 +213,9 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     //
     // If transform_ uses a different order, fix the indices below.
     // ------------------------------------------------------------------
-    double Q_integral = 0.0;
     double Jx_integral = 0.0;
     double Jy_integral = 0.0;
     double Jz_integral = 0.0;
-    double D_integral = 0.0;
     double computed_area_from_dA = 0.0;
 
     const double weights_2nd_order[1] = {1.0};
@@ -386,10 +341,6 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             const double Kyz = interp_metric_data(10, r, itheta, iphi);
             const double Kzz = interp_metric_data(11, r, itheta, iphi);
 
-            const double Ex = interp_emda_data(0, r, itheta, iphi);
-            const double Ey = interp_emda_data(1, r, itheta, iphi);
-            const double Ez = interp_emda_data(2, r, itheta, iphi);
-
             // Approximate covariant normal s_i = gamma_ij s^j.
             // TODO: replace this radial normal and uniform dA with true
             // surface geometry from angular derivatives of r(theta,phi).
@@ -497,16 +448,6 @@ HorizonMassSpinCharge compute_mass_spin_charge(
             const double phiz_y = xrel;
             const double phiz_z = 0.0;
 
-            Q_integral += (Ex * ncovx + Ey * ncovy + Ez * ncovz) * dA;
-            {
-                const double phi_minus =
-                    interp_emda_data(6, r - dr, itheta, iphi);
-                const double phi_plus =
-                    interp_emda_data(6, r + dr, itheta, iphi);
-                const double dphi_dr =
-                    (phi_plus - phi_minus) / (2.0 * dr);
-                D_integral += dphi_dr * dA;
-            }
             Jx_integral +=
                 (phix_x * Psx + phix_y * Psy + phix_z * Psz) * dA;
             Jy_integral +=
@@ -516,25 +457,20 @@ HorizonMassSpinCharge compute_mass_spin_charge(
         }
     }
 
-    q.Q = (1.0 / (4.0 * M_PI)) * Q_integral;
-    q.D = -(1.0 / (4.0 * M_PI)) * D_integral;
     q.Jx = (1.0 / (8.0 * M_PI)) * Jx_integral;
     q.Jy = (1.0 / (8.0 * M_PI)) * Jy_integral;
     q.Jz = (1.0 / (8.0 * M_PI)) * Jz_integral;
     q.Jmag = std::sqrt(q.Jx * q.Jx + q.Jy * q.Jy + q.Jz * q.Jz);
-    q.J = q.Jmag;
 
     if (use_surface_integral_area) {
         q.area = computed_area_from_dA;
     }
     q.Mirr = std::sqrt(q.area / (16.0 * M_PI));
 
-    // Magnetic charge is intentionally left at zero for now.
-
     // ------------------------------------------------------------------
     // Mass and dimensionless spin
     //
-    // Temporary spinning, uncharged Christodoulou formula:
+    // Vacuum spinning Christodoulou formula:
     // M^2 = M_irr^2 + J^2 / (4 M_irr^2)
     // ------------------------------------------------------------------
     q.M = std::sqrt(
@@ -557,42 +493,36 @@ HorizonMassSpinCharge compute_mass_spin_charge(
     return q;
 }
 
-HorizonQuantityError compute_coarsened_resolution_error(
+HorizonQuasilocalError compute_coarsened_quasilocal_error(
     const int which_horizon,
     const bhahaha_params_and_data_struct& fine_bha,
     const bhahaha_diagnostics_struct& fine_diags,
     const std::vector<double>& prev_horizon_m1,
-    const double* fine_emda_horizon_data,
-    const HorizonMassSpinCharge& fine_quantities,
+    const HorizonQuasilocalMeasures& fine_quantities,
     const int ntheta,
     const int nphi) {
     const int nr = fine_bha.Nr_external_input;
     if (!fine_bha.input_metric_data || nr < 2 || ntheta < 2 || nphi < 2) {
-        return make_nan_quantity_error();
+        return make_nan_quasilocal_error();
     }
 
-    std::vector<double> coarse_metric_data =
+    std::vector<double> coarse_horizon_shell_data =
         build_one_level_coarsened_shell_data(
             fine_bha.input_metric_data, NUM_EXT_INPUT_CARTESIAN_GFS,
             nr, ntheta, nphi);
-    std::vector<double> coarse_emda_data =
-        build_one_level_coarsened_shell_data(
-            fine_emda_horizon_data, NUM_EMDA_HORIZON_FIELDS,
-            nr, ntheta, nphi);
 
     bhahaha_params_and_data_struct coarse_bha = fine_bha;
-    coarse_bha.input_metric_data = coarse_metric_data.data();
+    coarse_bha.input_metric_data = coarse_horizon_shell_data.data();
 
-    // This is a one-level resolution estimate from the available spherical
-    // interpolation shell. At this point the raw AMR parent-level data are not
-    // exposed by interpolateToCoords(), so this is not a full Richardson
-    // convergence estimate and should not be interpreted as one without
-    // additional assumptions.
-    HorizonMassSpinCharge coarse_quantities = compute_mass_spin_charge(
-        which_horizon, coarse_bha, fine_diags, prev_horizon_m1,
-        coarse_emda_data.data(), ntheta, nphi, true);
+    // This is a one-level coarsened-horizon-shell resolution estimate using
+    // only the already interpolated spherical-shell data. It is not a rigorous
+    // Richardson estimate or an AMR-parent-level truncation error estimate,
+    // because this code does not access parent-level AMR data here.
+    HorizonQuasilocalMeasures coarse_quantities = compute_quasilocal_measures(
+        which_horizon, coarse_bha, fine_diags, prev_horizon_m1, ntheta, nphi,
+        true);
 
-    return compute_quantity_error(fine_quantities, coarse_quantities);
+    return compute_quasilocal_error(fine_quantities, coarse_quantities);
 }
 void AEH_BHaHAHA::find_horizons(
     const ot::Mesh* mesh, const double** var, const unsigned int current_step,
@@ -921,7 +851,6 @@ void AEH_BHaHAHA::find_horizons(
     // 4: Metric interpolation
     // -- Allocate memory and interpolate metric data onto the BHaHAHA grid
     // using guesses
-    std::vector<double*> emda_horizon_data(num_horizons_, nullptr);
     for (int which_horizon = 0; which_horizon < num_horizons_;
          which_horizon++) {
         // if we're in inactive and in Binary Black HOle mode, skip
@@ -960,16 +889,6 @@ void AEH_BHaHAHA::find_horizons(
                 exit(EXIT_FAILURE);
             }
 
-            emda_horizon_data[which_horizon] =
-                (double*)malloc(NUM_EMDA_HORIZON_FIELDS *
-                                bah_params_and_data->Nr_external_input *
-                                max_ntheta_ * max_nphi_ * sizeof(double));
-
-            if (!emda_horizon_data[which_horizon]) {
-                std::cerr << "ERROR ALLOCATING MEMORY FOR EMDA HORIZON DATA!"
-                          << std::endl;
-                exit(EXIT_FAILURE);
-            }
         }
 
         // then interpolate the metric data!
@@ -978,8 +897,7 @@ void AEH_BHaHAHA::find_horizons(
             bah_params_and_data->Nr_external_input, max_ntheta_, max_nphi_,
             radii.data(), x_guess_[which_horizon], y_guess_[which_horizon],
             z_guess_[which_horizon],
-            bha_param_data_[which_horizon].input_metric_data,
-            emda_horizon_data[which_horizon]);
+            bha_param_data_[which_horizon].input_metric_data);
     }
 
     // 5: Horizon Finding and Diagnostics
@@ -1036,22 +954,19 @@ if (bah_return_code == BHAHAHA_SUCCESS) {
     // Compute horizon physical quantities (area, irreducible mass, etc.)
     // Uses the stored horizon surface prev_horizon_m1_
     // ------------------------------------------------------------------
-HorizonMassSpinCharge hq = compute_mass_spin_charge(
-    which_horizon,
-    bha_param_data_[which_horizon],
-    bhahaha_diags,
-    prev_horizon_m1_,
-    emda_horizon_data[which_horizon],
-    max_ntheta_,
-    max_nphi_
-);
-
-    HorizonQuantityError hq_err = compute_coarsened_resolution_error(
+    HorizonQuasilocalMeasures hq = compute_quasilocal_measures(
         which_horizon,
         bha_param_data_[which_horizon],
         bhahaha_diags,
         prev_horizon_m1_,
-        emda_horizon_data[which_horizon],
+        max_ntheta_,
+        max_nphi_);
+
+    HorizonQuasilocalError hq_err = compute_coarsened_quasilocal_error(
+        which_horizon,
+        bha_param_data_[which_horizon],
+        bhahaha_diags,
+        prev_horizon_m1_,
         hq,
         max_ntheta_,
         max_nphi_);
@@ -1064,17 +979,15 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
               << " Jy=" << hq.Jy
               << " Jz=" << hq.Jz
               << " Jmag=" << hq.Jmag
-              << " Q=" << hq.Q
               << " chi=" << hq.chi
-              << " D=" << hq.D
               << std::endl;
 
     // ------------------------------------------------------------------
     // Quasilocal file output: append once per successful horizon find.
     // ------------------------------------------------------------------
     const std::string quasilocal_file =
-        out_dir_ + "/emda_prof_HorizonMassSpinCharge_H" +
-        std::to_string(which_horizon) + ".dat";
+        out_dir_ + "/QuasilocalMeasuresH" + std::to_string(which_horizon) +
+        ".dat";
 
     std::ifstream existing(quasilocal_file, std::ios::ate);
     const bool write_header =
@@ -1093,7 +1006,7 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
     std::ofstream fout(quasilocal_file, std::ios::app);
 
     if (write_extended_header) {
-        fout << "# step time horizon area Mirr M Jx Jy Jz Jmag Q chi D "
+        fout << "# step time horizon area Mirr M Jx Jy Jz Jmag chi "
              << "area_err_abs area_err_rel "
              << "Mirr_err_abs Mirr_err_rel "
              << "M_err_abs M_err_rel "
@@ -1101,9 +1014,7 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
              << "Jy_err_abs Jy_err_rel "
              << "Jz_err_abs Jz_err_rel "
              << "Jmag_err_abs Jmag_err_rel "
-             << "Q_err_abs Q_err_rel "
-             << "chi_err_abs chi_err_rel "
-             << "D_err_abs D_err_rel\n";
+             << "chi_err_abs chi_err_rel\n";
     }
 
     fout << current_step << " "
@@ -1116,9 +1027,7 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
          << hq.Jy << " "
          << hq.Jz << " "
          << hq.Jmag << " "
-         << hq.Q << " "
          << hq.chi << " "
-         << hq.D << " "
          << hq_err.abs.area << " "
          << hq_err.rel.area << " "
          << hq_err.abs.Mirr << " "
@@ -1133,12 +1042,8 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
          << hq_err.rel.Jz << " "
          << hq_err.abs.Jmag << " "
          << hq_err.rel.Jmag << " "
-         << hq_err.abs.Q << " "
-         << hq_err.rel.Q << " "
          << hq_err.abs.chi << " "
-         << hq_err.rel.chi << " "
-         << hq_err.abs.D << " "
-         << hq_err.rel.D << "\n";
+         << hq_err.rel.chi << "\n";
 
     fout.close();
 
@@ -1197,7 +1102,6 @@ HorizonMassSpinCharge hq = compute_mass_spin_charge(
 
         // free metric data
         free(bha_param_data_[which_horizon].input_metric_data);
-        free(emda_horizon_data[which_horizon]);
     }
 
     // now that we're done we can delete the whole param_data
@@ -1362,8 +1266,7 @@ void AEH_BHaHAHA::interpolate_metric_data(
     const ot::Mesh* mesh, const double** varData, const int which_horizon,
     const int which_rank, const int n_r, const int n_theta, const int n_phi,
     const double* radii, const double x_center, const double y_center,
-    const double z_center, double* input_metric_data,
-    double* emda_horizon_data) {
+    const double z_center, double* input_metric_data) {
     // get the active comm and information about it
     unsigned int rankActive  = mesh->getMPIRank();
     unsigned int npesActive  = mesh->getMPICommSize();
@@ -1443,8 +1346,8 @@ void AEH_BHaHAHA::interpolate_metric_data(
                 "AEH transform_ returned fewer than 12 BHaHAHA fields");
         }
 
-        // The first 12 entries are the BHaHAHA-compatible gamma_ij/K_ij
-        // interface. Entries 12..18 are optional EMDA sidecar data.
+        // BHaHAHA and the BSSN quasi-local diagnostics consume only the
+        // 12 gamma_ij/K_ij fields. Any extra transform outputs are ignored.
         const size_t num_to_copy = std::min<size_t>(
             transformed_points.size(), NUM_HORIZON_INTERP_FIELDS);
         for (size_t i = 0; i < num_to_copy; i++) {
@@ -1528,15 +1431,7 @@ void AEH_BHaHAHA::interpolate_metric_data(
                     const double value =
                         receive_buffer[buffer_offset + vidx * recv_count + j];
 
-                    if (vidx < NUM_EXT_INPUT_CARTESIAN_GFS) {
-                        input_metric_data[vidx * total_elements + idx] =
-                            value;
-                    } else if (emda_horizon_data) {
-                        const int emda_vidx =
-                            vidx - NUM_EXT_INPUT_CARTESIAN_GFS;
-                        emda_horizon_data[emda_vidx * total_elements + idx] =
-                            value;
-                    }
+                    input_metric_data[vidx * total_elements + idx] = value;
                 }
             }
         }
