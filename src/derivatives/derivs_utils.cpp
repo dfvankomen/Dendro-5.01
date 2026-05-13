@@ -351,17 +351,10 @@ void matmul_z_dim_old(const double *const R, double *const Dzu,
 void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
                   const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, const unsigned int bflag,
-                  const unsigned int pw) {
+                  const unsigned int pw, bool is_last_op) {
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
     const unsigned int nz = sz[2];
-
-    // skip ghost zones in z if at a boundary
-    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
-    const int z_end =
-        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
-
-    const unsigned int n_active_cols = ny * (z_end - z_start);
 
     // pre-scale D by alpha so the GEMM writes the final answer directly
     double R_scaled[nx * nx];
@@ -369,12 +362,57 @@ void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
         R_scaled[ii] = R[ii] * alpha;
     }
 
-    // batch all active z-slices into one big GEMM:
-    // the 3D array is contiguous in memory, so treating the valid z-range
-    // as a 2D matrix (nx, ny*nz_active) lets us do one kernel call
-    // instead of nz separate ones
-    auto kernel = get_or_create_kernel_x(nx, n_active_cols, nx);
+    if (is_last_op) {
+        // Skip both y and z padding regions of the output. Safe only when
+        // no downstream operation reads Dxu's padding cells (i.e. this is
+        // a solo grad_x or the last op in its chain — see the header
+        // comment in derivs_utils.h). At eleorder=6 this drops the GEMM
+        // work from (nx, ny*nz, nx) to (nx, ny_active, nx) per active
+        // z-slice, a ~71% reduction.
+        const unsigned int y_start   = pw;
+        const unsigned int y_end     = ny - pw;
+        const unsigned int z_start   = pw;
+        const unsigned int z_end     = nz - pw;
+        const unsigned int ny_active = y_end - y_start;
+        const unsigned int slice_sz  = nx * ny;
+        const unsigned int y_off     = y_start * nx;
 
+        auto kernel = get_or_create_kernel_x(nx, ny_active, nx);
+        if (!kernel) {
+            std::cout << "FALLING BACK TO MATMUL X DIM (last-op path)\n";
+            return matmul_x_dim_old(R, Dxu, u, alpha, sz, bflag, pw);
+        }
+
+#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
+        libxsmm_gemmfunction raw_fn = kernel.kernel();
+        if (raw_fn) {
+            libxsmm_gemm_param args;
+            args.a.primary = (void *)R_scaled;
+            for (unsigned int k = z_start; k < z_end; k++) {
+                args.b.primary = (void *)(u   + k * slice_sz + y_off);
+                args.c.primary = (void *)(Dxu + k * slice_sz + y_off);
+                raw_fn(&args);
+            }
+            return;
+        }
+#endif
+        for (unsigned int k = z_start; k < z_end; k++) {
+            kernel(R_scaled, u   + k * slice_sz + y_off,
+                              Dxu + k * slice_sz + y_off);
+        }
+        return;
+    }
+
+    // Default safe path: write the full output (including y and z padding
+    // cells). Required when this grad_x is an intermediate step in a
+    // mixed 2nd-order chain (e.g. d^2u/dxdy = grad_y(grad_x(u))) because
+    // a subsequent grad_y reads x's output across the full y range.
+    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
+    const int z_end =
+        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
+    const unsigned int n_active_cols = ny * (z_end - z_start);
+
+    auto kernel = get_or_create_kernel_x(nx, n_active_cols, nx);
     if (!kernel) {
         std::cout << "FALLING BACK TO MATMUL X DIM" << std::endl;
         return matmul_x_dim_old(R, Dxu, u, alpha, sz, bflag, pw);
@@ -382,15 +420,14 @@ void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
 
     const double *u_start = u + z_start * nx * ny;
     double *du_start      = Dxu + z_start * nx * ny;
-
-    // one GEMM with pre-scaled D: no post-scaling needed
     kernel(R_scaled, u_start, du_start);
 }
 
 void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
                   const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, double *__restrict__ workspace,
-                  const unsigned int bflag, const unsigned int pw) {
+                  const unsigned int bflag, const unsigned int pw,
+                  bool is_last_op) {
     const unsigned int nx               = sz[0];
     const unsigned int ny               = sz[1];
     const unsigned int nz               = sz[2];
@@ -416,10 +453,19 @@ void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
 
     const unsigned int slice_size = nx * ny;
 
-    // skip ghost zones in z if we're at a z boundary
-    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
+    // When this is the last op in its chain (e.g. solo grad_y or the
+    // final step of d^2u/dxdy = grad_y(grad_x(u))), no downstream
+    // operation reads Dyu's z-padding cells and we can skip them. When
+    // this is an intermediate (e.g. d^2u/dydz = grad_z(grad_y(u))),
+    // grad_z later reads Dyu across the full z range so the z-padding
+    // output must be valid.
+    const int z_start = is_last_op
+                            ? (int)pw
+                            : ((bflag & (1u << OCT_DIR_BACK)) ? (int)pw : 0);
     const int z_end =
-        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
+        is_last_op
+            ? (int)(nz - pw)
+            : ((bflag & (1u << OCT_DIR_FRONT)) ? (int)(nz - pw) : (int)nz);
 
     // pre-scale the derivative matrix by alpha so the GEMM writes the
     // final result directly. R is ny*ny which is small (e.g. 81 doubles),

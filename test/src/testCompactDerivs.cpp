@@ -1250,7 +1250,8 @@ void profile_compact_stencils(double_t *const u_var, const uint32_t *sz,
     double_t *const derivy_cfd = deriv_workspace + 1 * totalSize;
     double_t *const derivz_cfd = deriv_workspace + 2 * totalSize;
 
-    uint32_t bflag             = 0b010101;
+    // matching profile_class_based_stencils so the comparison is interior-only
+    uint32_t bflag             = 0;
 
     const uint32_t n_warmups   = 0;
 
@@ -1452,7 +1453,8 @@ int main(int argc, char **argv) {
         filterType_test = "KO4";
     } else if (params::eleorder == 8) {
         derivType_test  = "E8";
-        filterType_test = "KO8";
+        // KO8 needs pad=5; eleorder=8 gives pad=4, so use KO6 instead.
+        filterType_test = "KO6";
     } else {
         // default
         derivType_test  = "E4";

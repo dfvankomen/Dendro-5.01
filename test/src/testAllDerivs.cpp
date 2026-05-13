@@ -109,6 +109,14 @@ int main() {
                 continue;
             }
 
+            // ===================================================
+            // NOTE: set_maximum_block_size MUST be called on every
+            // Derivs instance (and on each clone for OMP) before
+            // do_grad_y/z. Matrix-based subclasses size a 2*Nx*Ny*Nz
+            // workspace from this. Skipping it now lazy-grows on
+            // demand, but you'll pay heap reallocations in the hot
+            // loop — always size up front in real solvers.
+            // ===================================================
             deriv->set_maximum_block_size(total);
             deriv->do_grad_x(du_computed.data(), u.data(), dx, sz, 0);
 
@@ -274,6 +282,10 @@ int main() {
 
     for (auto &dtype : batch_test_types) {
         DendroDerivatives deriv_obj(dtype, dtype, eleorder);
+        // NOTE: DendroDerivatives.set_maximum_block_size forwards to BOTH
+        // the 1st- and 2nd-order Derivs it owns. This must be called once
+        // per object (and once per copy/clone) — see the Derivs class
+        // docstring "Workspace sizing" section for the full contract.
         deriv_obj.set_maximum_block_size(total);
 
         const unsigned int n_test_vars = 4;

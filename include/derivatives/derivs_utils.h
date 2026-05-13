@@ -357,15 +357,24 @@ inline void dgemm_cpp_safe(const char *TRANSA, const char *TRANSB, const int *m,
 // caller). it used to live in a mutable global DENDRO_DERIVS_PW; passing it
 // explicitly lets two derivs instances at different ele_orders coexist
 // safely in the same process
+// is_last_op = true tells the kernel that no downstream operation will
+// read the output's padding cells. Allows skipping work on those cells.
+// Default false (safe): writes the full output, suitable for use as an
+// intermediate step in mixed 2nd-order derivatives (e.g. v = grad_x(u)
+// followed by w = grad_y(v) — y reads v across full y range including
+// y-padding, so x must write those cells).
+// matmul_z_dim does NOT take this flag because by the project convention
+// "z is always called last in mixed chains" it unconditionally skips.
 void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
                   const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, const unsigned int bflag,
-                  const unsigned int pw);
+                  const unsigned int pw, bool is_last_op = false);
 
 void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
                   const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, double *__restrict__ workspace,
-                  const unsigned int bflag, const unsigned int pw);
+                  const unsigned int bflag, const unsigned int pw,
+                  bool is_last_op = false);
 
 void matmul_z_dim(const double *__restrict__ R, double *__restrict__ Dzu,
                   const double *__restrict__ u, const double alpha,

@@ -38,7 +38,7 @@ class JonathanTyler_JTT4_FirstOrder_Banded : public BandedCompactDerivs {
 #endif
 
         // build the matrices, allocate the data, etc
-        init(kVals, diagEntries);
+        init(kVals, diagEntries, -1.0);
 
 #ifdef DEBUG
         std::cout << "exiting JTT4 constructor" << std::endl;
@@ -85,7 +85,7 @@ class JonathanTyler_JTT4_SecondOrder_Banded : public BandedCompactDerivs {
 #endif
 
         // build the matrices, allocate the data, etc
-        init(kVals, diagEntries);
+        init(kVals, diagEntries, 1.0);
 
 #ifdef DEBUG
         std::cout << "exiting JTT4 constructor" << std::endl;
@@ -133,7 +133,7 @@ class JonathanTyler_JTT6_FirstOrder_Banded : public BandedCompactDerivs {
 #endif
 
         // build the matrices, allocate the data, etc
-        init(kVals, diagEntries);
+        init(kVals, diagEntries, -1.0);
 
 #ifdef DEBUG
         std::cout << "exiting JTT4 constructor" << std::endl;
@@ -181,7 +181,7 @@ class JonathanTyler_JTT6_SecondOrder_Banded : public BandedCompactDerivs {
 #endif
 
         // build the matrices, allocate the data, etc
-        init(kVals, diagEntries);
+        init(kVals, diagEntries, 1.0);
 
 #ifdef DEBUG
         std::cout << "exiting JTT4 constructor" << std::endl;
@@ -218,7 +218,7 @@ class JonathanTyler_JTP6_FirstOrder_Banded : public BandedCompactDerivs {
 
         diagEntries = createJTP6DiagonalsFirstOrder();
 
-        this->init(kVals, diagEntries);
+        this->init(kVals, diagEntries, -1.0);
     }
 
     ~JonathanTyler_JTP6_FirstOrder_Banded() {}
@@ -251,7 +251,7 @@ class JonathanTyler_JTP6_SecondOrder_Banded : public BandedCompactDerivs {
 
         diagEntries = createJTP6DiagonalsSecondOrder();
 
-        this->init(kVals, diagEntries);
+        this->init(kVals, diagEntries, 1.0);
     }
     ~JonathanTyler_JTP6_SecondOrder_Banded() {}
 

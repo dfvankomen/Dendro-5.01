@@ -160,6 +160,7 @@ set(DENDRO_SRC
     test/src/meshTestUtils.cpp src/aeh_bhahaha.cpp src/logger.cpp
     src/derivatives.cpp
     src/derivatives/derivs_explicit.cpp
+    src/derivatives/adv_derivs_explicit.cpp
     src/derivatives/derivs_compact.cpp
     src/derivatives/derivs_matrixonly.cpp
     src/derivatives/derivs_banded.cpp
@@ -390,6 +391,10 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(buildGlobalMat test/src/globalMatrixBuilding.cpp test/src/derivativeCtx.cpp)
   dendro_add_deriv_test(testLibXSMMvBLAS test/src/testLibXSMMvBLAS.cpp)
   dendro_add_deriv_test(testAllDerivs test/src/testAllDerivs.cpp)
+  dendro_add_deriv_test(testDerivConvergence test/src/testDerivConvergence.cpp)
+  dendro_add_deriv_test(testBandedVsXSMM test/src/testBandedVsXSMM.cpp)
+  dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)
+  dendro_add_deriv_test(testRhsWorkflow test/src/testRhsWorkflow.cpp)
 
   if(WITH_CUDA)
     # cuda GPU tests

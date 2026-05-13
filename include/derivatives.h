@@ -243,6 +243,30 @@ enum DerivFamily {
  * thread-safe (shared_mutex-protected). For best performance, call
  * `dendroderivs::prewarm_kernel_cache(...)` on the main thread after mesh
  * setup so the hot path only ever takes the shared read lock.
+ *
+ * ## Workspace sizing (matrix-based subclasses)
+ *
+ * `MatrixCompactDerivs<DerivOrder>` (the parent of every JTT/JTP/Kim/BORIS/
+ * BYUT/BYUP/etc. instantiation) keeps a per-instance scratch buffer used by
+ * `matmul_y_dim` / `matmul_z_dim` for the y/z direction transposes. The
+ * buffer must hold `2 * Nx * Ny * Nz` doubles for the largest block this
+ * instance will ever be called on.
+ *
+ * The recommended pattern is to call `set_maximum_block_size(max_cells)`
+ * once per instance (and once per clone) after mesh setup, with `max_cells`
+ * the largest `getAllocationSzX()*Y*Z` over all blocks on this rank. That
+ * gives one clean allocation up front and zero growth during timestepping.
+ *
+ * As a safety net, every `do_grad_y/z` (and the `_batch` variants) checks
+ * the workspace size and `resize()`s if a larger block ever arrives. The
+ * fast path is a single size_t compare; the slow path is a `std::vector`
+ * grow that happens at most a handful of times per run. Forgetting to call
+ * `set_maximum_block_size` no longer corrupts memory, but it does cost a
+ * heap reallocation on the first oversized block — prefer the explicit
+ * call where possible.
+ *
+ * Explicit/stencil-only Derivs subclasses don't use a workspace and
+ * implement `set_maximum_block_size` as a no-op.
  */
 class Derivs {
    protected:
@@ -300,6 +324,36 @@ class Derivs {
                            const unsigned int bflag) = 0;
 
     /**
+     * "_last" variants: the caller asserts that the output of this
+     * derivative will NOT be further differentiated (i.e. this is the
+     * last operation in its derivative chain — a solo grad_*, or the
+     * last step of a mixed 2nd-order chain like
+     * d^2u/dxdy = grad_y(grad_x(u)) where grad_y is last). When that
+     * holds, the implementation may skip writing the padding cells of
+     * the output, recovering a ~3.4x speedup on x and ~1.9x on y vs
+     * the default safe path. Implementations that don't take advantage
+     * of this hint fall back to the safe do_grad_* path.
+     *
+     * IMPORTANT: do NOT use the _last variants for intermediate
+     * derivatives in mixed-2nd-order chains. The next operator in the
+     * chain reads padding cells that the _last path leaves untouched.
+     *
+     * (grad_z does not have a _last variant: the project convention is
+     * "z is always last in mixed chains", so do_grad_z already
+     * unconditionally skips the y-padding output cells.)
+     */
+    virtual void do_grad_x_last(double *const du, const double *const u,
+                                const double dx, const unsigned int *sz,
+                                const unsigned int bflag) {
+        do_grad_x(du, u, dx, sz, bflag);
+    }
+    virtual void do_grad_y_last(double *const du, const double *const u,
+                                const double dx, const unsigned int *sz,
+                                const unsigned int bflag) {
+        do_grad_y(du, u, dx, sz, bflag);
+    }
+
+    /**
      * @brief Get the type of derivative.
      * @return The derivative type.
      */
@@ -336,6 +390,18 @@ class Derivs {
      */
     virtual std::string toString() const                   = 0;
 
+    /**
+     * @brief Pre-size the per-instance scratch workspace for the largest
+     * block this Derivs will see. See the "Workspace sizing" section of the
+     * `Derivs` class docstring for the full contract.
+     *
+     * **NOTE:** Call this once per instance (and once per `clone()`) right
+     * after construction, with the max `Nx*Ny*Nz` over all blocks on this
+     * rank. The matrix-based subclasses will lazily grow the workspace if
+     * you skip this — but you'll pay a heap reallocation on the first
+     * oversized block, and (for OMP parallel-for-over-blocks) those
+     * reallocations land in the hot loop. Always cleaner to size up front.
+     */
     virtual void set_maximum_block_size(size_t block_size) = 0;
 
     /**
@@ -534,6 +600,32 @@ class DendroDerivatives {
                  unsigned int bflag) {
         if (_raw_2nd_grad_z) _raw_2nd_grad_z(du, u, dx, sz, bflag);
         else _second_deriv->do_grad_z(du, u, dx, sz, bflag);
+    }
+
+    // "_last" variants: caller asserts the output will NOT be further
+    // differentiated. Use only for solo 1st-derivatives or for the last
+    // step of a mixed 2nd-order chain (e.g. grad_y_last when computing
+    // d^2u/dxdy = grad_y(grad_x(u))). Skips writing the output's
+    // padding cells, recovering a ~3.4x speedup on x and ~1.9x on y at
+    // eleorder=6. See Derivs::do_grad_x_last for the full contract.
+    //
+    // grad_z has no _last variant because do_grad_z already
+    // unconditionally skips by project convention.
+    void grad_x_last(double *du, const double *u, double dx,
+                     const unsigned int *sz, unsigned int bflag) {
+        _first_deriv->do_grad_x_last(du, u, dx, sz, bflag);
+    }
+    void grad_y_last(double *du, const double *u, double dx,
+                     const unsigned int *sz, unsigned int bflag) {
+        _first_deriv->do_grad_y_last(du, u, dx, sz, bflag);
+    }
+    void grad_xx_last(double *du, const double *u, double dx,
+                      const unsigned int *sz, unsigned int bflag) {
+        _second_deriv->do_grad_x_last(du, u, dx, sz, bflag);
+    }
+    void grad_yy_last(double *du, const double *u, double dx,
+                      const unsigned int *sz, unsigned int bflag) {
+        _second_deriv->do_grad_y_last(du, u, dx, sz, bflag);
     }
 
     // deriv renaming of grad naming
