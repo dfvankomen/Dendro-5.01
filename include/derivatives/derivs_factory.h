@@ -335,6 +335,28 @@ get_second_order_registry() {
         {"2A6_5", make_generic<2, create2A6_5_Diagonals, DerivType::D_2A6_5>},
         {"2A6_6", make_generic<2, create2A6_6_Diagonals, DerivType::D_2A6_6>},
         {"2A6_7", make_generic<2, create2A6_7_Diagonals, DerivType::D_2A6_7>},
+        // BYU A6 second-derivative generated operators (merged from
+        // origin/derivatives 4512413). 18 schemes parameterized by R-value
+        // (r060..r085) and operator variant (Op1..Op3). Each takes 1 free
+        // coefficient (perturbation from baseline alpha).
+        {"BYU_A6_2ND_R060_OP1", make_generic_coeffs<2, createBYU_A6_2ND_R060_OP1_Diagonals, DerivType::D_BYU_A6_2ND_R060_OP1, 1>},
+        {"BYU_A6_2ND_R060_OP2", make_generic_coeffs<2, createBYU_A6_2ND_R060_OP2_Diagonals, DerivType::D_BYU_A6_2ND_R060_OP2, 1>},
+        {"BYU_A6_2ND_R060_OP3", make_generic_coeffs<2, createBYU_A6_2ND_R060_OP3_Diagonals, DerivType::D_BYU_A6_2ND_R060_OP3, 1>},
+        {"BYU_A6_2ND_R065_OP1", make_generic_coeffs<2, createBYU_A6_2ND_R065_OP1_Diagonals, DerivType::D_BYU_A6_2ND_R065_OP1, 1>},
+        {"BYU_A6_2ND_R065_OP2", make_generic_coeffs<2, createBYU_A6_2ND_R065_OP2_Diagonals, DerivType::D_BYU_A6_2ND_R065_OP2, 1>},
+        {"BYU_A6_2ND_R065_OP3", make_generic_coeffs<2, createBYU_A6_2ND_R065_OP3_Diagonals, DerivType::D_BYU_A6_2ND_R065_OP3, 1>},
+        {"BYU_A6_2ND_R070_OP1", make_generic_coeffs<2, createBYU_A6_2ND_R070_OP1_Diagonals, DerivType::D_BYU_A6_2ND_R070_OP1, 1>},
+        {"BYU_A6_2ND_R070_OP2", make_generic_coeffs<2, createBYU_A6_2ND_R070_OP2_Diagonals, DerivType::D_BYU_A6_2ND_R070_OP2, 1>},
+        {"BYU_A6_2ND_R070_OP3", make_generic_coeffs<2, createBYU_A6_2ND_R070_OP3_Diagonals, DerivType::D_BYU_A6_2ND_R070_OP3, 1>},
+        {"BYU_A6_2ND_R075_OP1", make_generic_coeffs<2, createBYU_A6_2ND_R075_OP1_Diagonals, DerivType::D_BYU_A6_2ND_R075_OP1, 1>},
+        {"BYU_A6_2ND_R075_OP2", make_generic_coeffs<2, createBYU_A6_2ND_R075_OP2_Diagonals, DerivType::D_BYU_A6_2ND_R075_OP2, 1>},
+        {"BYU_A6_2ND_R075_OP3", make_generic_coeffs<2, createBYU_A6_2ND_R075_OP3_Diagonals, DerivType::D_BYU_A6_2ND_R075_OP3, 1>},
+        {"BYU_A6_2ND_R080_OP1", make_generic_coeffs<2, createBYU_A6_2ND_R080_OP1_Diagonals, DerivType::D_BYU_A6_2ND_R080_OP1, 1>},
+        {"BYU_A6_2ND_R080_OP2", make_generic_coeffs<2, createBYU_A6_2ND_R080_OP2_Diagonals, DerivType::D_BYU_A6_2ND_R080_OP2, 1>},
+        {"BYU_A6_2ND_R080_OP3", make_generic_coeffs<2, createBYU_A6_2ND_R080_OP3_Diagonals, DerivType::D_BYU_A6_2ND_R080_OP3, 1>},
+        {"BYU_A6_2ND_R085_OP1", make_generic_coeffs<2, createBYU_A6_2ND_R085_OP1_Diagonals, DerivType::D_BYU_A6_2ND_R085_OP1, 1>},
+        {"BYU_A6_2ND_R085_OP2", make_generic_coeffs<2, createBYU_A6_2ND_R085_OP2_Diagonals, DerivType::D_BYU_A6_2ND_R085_OP2, 1>},
+        {"BYU_A6_2ND_R085_OP3", make_generic_coeffs<2, createBYU_A6_2ND_R085_OP3_Diagonals, DerivType::D_BYU_A6_2ND_R085_OP3, 1>},
     };
     return reg;
 }

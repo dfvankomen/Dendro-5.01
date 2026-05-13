@@ -182,5 +182,42 @@ MatrixDiagonalEntries* create2A6_5_Diagonals();
 MatrixDiagonalEntries* create2A6_6_Diagonals();
 MatrixDiagonalEntries* create2A6_7_Diagonals();
 
+// ---- BYU A6 second-derivative generated operators ----
+MatrixDiagonalEntries* createBYU_A6_2ND_R060_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R060_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R060_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R065_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R065_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R065_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R070_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R070_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R070_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R075_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R075_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R075_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R080_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R080_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R080_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R085_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R085_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_A6_2ND_R085_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
 
 }  // namespace dendroderivs
