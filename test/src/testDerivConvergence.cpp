@@ -234,6 +234,15 @@ static const std::vector<double> &coeffs_for(const std::string &name,
     if (name == "BYUT6") {
         return (deriv_order == 1) ? BYUT6_FIRST_ZERO : BYUT6_SECOND_NLSM;
     }
+    // The 18 BYU_A6_2ND_R*_OP* schemes are Kim-style fully-optimized
+    // (no free parameters); the D_coeffs[0] argument is vestigial from
+    // the parameterized BYU infrastructure. Pass {0.0} so alpha resolves
+    // to the published baseline. Some R-value/Op-variant combinations
+    // are known to be unstable — empirically R060/OP2, R060/OP3,
+    // R065/OP2, R065/OP3, R070/OP3 do not converge at 6th order with
+    // these coefficients.
+    static const std::vector<double> ZERO_ONE = {0.0};
+    if (name.rfind("BYU_A6_2ND_R", 0) == 0) return ZERO_ONE;
     return PLACEHOLDER;
 }
 
