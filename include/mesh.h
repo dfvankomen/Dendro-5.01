@@ -44,6 +44,7 @@
 #include "skey.h"
 #include "stencil.h"
 #include "testUtils.h"
+#include "mesh_unzip_scatter_kernels.h"
 #include "treenode2vtk.h"
 #include "wavelet.h"
 

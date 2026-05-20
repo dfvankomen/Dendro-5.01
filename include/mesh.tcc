@@ -11078,6 +11078,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
 
             const unsigned int bLev =
                 pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+            assert(regLevel == bLev);
 
             const double hx   = (1u << (m_uiMaxDepth - bLev)) / (double)eOrder;
             const double xmin = blkNode.minX() - PW * hx;
@@ -11089,6 +11090,32 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
 
             // no interpolation needed just copy.
             if (pNodes[ele].getLevel() == bLev) {
+#if defined(DENDRO_UNZIP_SCATTER_FAST)
+                // Phase-1 fast path: integer-index reindex + contiguous row
+                // memcpy. Same-level scatter is a deterministic re-indexing —
+                // the original FP coord math + std::round/fabs/tolerance
+                // snapping is unnecessary work. See
+                // include/mesh_unzip_scatter_kernels.h.
+                const uint64_t sz_morton =
+                    ((uint64_t)1u << (m_uiMaxDepth - bLev));
+                const int64_t ddx =
+                    (int64_t)pNodes[ele].getX() - (int64_t)blkNode.getX();
+                const int64_t ddy =
+                    (int64_t)pNodes[ele].getY() - (int64_t)blkNode.getY();
+                const int64_t ddz =
+                    (int64_t)pNodes[ele].getZ() - (int64_t)blkNode.getZ();
+                // exact divisions at same level (verified)
+                const int ei = (int)(ddx / (int64_t)sz_morton);
+                const int ej = (int)(ddy / (int64_t)sz_morton);
+                const int ek = (int)(ddz / (int64_t)sz_morton);
+                const int i0 = ei * (int)eOrder + (int)PW;
+                const int j0 = ej * (int)eOrder + (int)PW;
+                const int k0 = ek * (int)eOrder + (int)PW;
+                dendro::unzip::scatter_same_level_dispatch<T>(
+                    dgWVec, uzWVec, eOrder, dof, (std::size_t)unSz,
+                    (std::size_t)dgSz, (std::size_t)offset, lx, ly, lz, i0, j0,
+                    k0);
+#else
                 const double hh =
                     (1u << (m_uiMaxDepth - pNodes[ele].getLevel())) /
                     (double)eOrder;
@@ -11113,8 +11140,6 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
 
                         if (yy < ymin || yy > ymax) continue;
                         const int jjy = std::round((yy - ymin) * invhh);
-                        // std::cout<<"yy: "<<yy<<" (ymin + hh*jjy): "<<(ymin +
-                        // hh*jjy)<<std::endl;
                         assert(std::fabs(yy - ymin - jjy * hh) < d_compar_tol);
                         assert(jjy >= 0 && jjy < ly);
 
@@ -11130,10 +11155,6 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
                                    d_compar_tol);
                             assert(iix >= 0 && iix < lx);
 
-                            // std::cout<<"blk: "<<blk<<" copy : (i,j,k):
-                            // ("<<kkz<<" , "<<jjy<<", "<<iix<<")"<<" of :
-                            // "<<lx<<std::endl;
-
                             for (unsigned int v = 0; v < dof; v++)
                                 uzWVec[v * unSz + offset + kkz * lx * ly +
                                        jjy * lx + iix] =
@@ -11143,6 +11164,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
                         }
                     }
                 }
+#endif
 
             } else if (pNodes[ele].getLevel() > bLev) {
                 assert((bLev + 1) == pNodes[ele].getLevel());

@@ -1,0 +1,51 @@
+Phase 1 — same-level scatter fast path (DENDRO_UNZIP_SCATTER_FAST)
+==================================================================
+
+Date: 2026-05-20
+Branch: master (jj checkpointing on top of unzip-speedup)
+Compiler: GCC 15.2.1 -O3 -march=native
+Build: build_avx2/  (single rank, single thread)
+Bench: test/src/benchUnzipSameLevel.cpp
+  - Gaussian-sum analytic field (same shape as benchUtils.cpp)
+  - 24 sequential dof=1 unzip_scatter calls per "step" (matches BSSN-RK pattern)
+  - 16-32 timed steps per run, single MPI rank
+
+
+Per-call mean (dof=1) — derived as (per-step mean / n_vars):
+
+  eOrder | depth | FAST=OFF   | FAST=ON    | speedup | bit-exact vs OFF
+  -------+-------+------------+------------+---------+------------------
+  2      | 7     | 4.57 ms    | 3.58 ms    | 1.28x   | yes
+  4      | 7     | 7.61 ms    | 4.50 ms    | 1.69x   | yes  <-- BSSN
+  4      | 8     | 8.86 ms    | 5.52 ms    | 1.60x   | yes  <-- BSSN
+  6      | 7     | 7.25 ms    | 5.02 ms    | 1.44x   | yes
+
+
+Bit-exact verification (cmp on raw double buffer written by bench):
+
+  cmp /tmp/unzip_baseline.bin /tmp/unzip_fast.bin       -> identical (depth=7, eO=4)
+  cmp /tmp/unzip_base_d8.bin  /tmp/unzip_fast_d8.bin    -> identical (depth=8, eO=4)
+  cmp /tmp/unzip_base_eo2.bin /tmp/unzip_fast_eo2.bin   -> identical (depth=7, eO=2)
+  cmp /tmp/unzip_base_eo6.bin /tmp/unzip_fast_eo6.bin   -> identical (depth=7, eO=6)
+
+
+Notes:
+  - isUnzipValid against the analytic field FAILS at eO=2 on this mesh for
+    BOTH FAST=OFF and FAST=ON (linear interp can't capture the Gaussian at
+    the 1e-3 tol the verifier uses). Pre-existing; not a regression.
+  - BSSN-relevant case is eOrder=4: ~40% wall-time reduction in
+    unzip_scatter per call. Multiply by 24 fields x 3-6 RK substages per
+    timestep for the gross effect on a real run.
+  - All measurements are sequential (no OpenMP). Phase 2 plan for the
+    other branch (hybrid MPI+OpenMP block-parallel) is unaffected.
+
+
+Build invocations:
+  cmake -S . -B build_avx2 -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_DENDRO_EXAMPLES=ON \
+        -DCMAKE_CXX_FLAGS="-march=native -O3" \
+        -DDENDRO_UNZIP_SCATTER_FAST=<OFF|ON>
+  cmake --build build_avx2 -j --target benchUnzipSameLevel
+
+Bench invocation:
+  mpirun -n 1 ./build_avx2/benchUnzipSameLevel <maxDepth> 1e-4 0.1 <eOrder> 32 24 /tmp/<out.bin>
