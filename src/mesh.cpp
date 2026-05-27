@@ -3729,11 +3729,14 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
     // independently route canonical writers and may put one outside
     // the cg-owner rank's local element set.
     m_uiPassACgsWithoutLocalCanonical.clear();
-    // env gate: DENDRO_DISABLE_PASS_A=1 skips Pass A entirely
-    // (for A/B testing without recompiling).
-    const char* _passA_env = std::getenv("DENDRO_DISABLE_PASS_A");
+    // Pass A default-OFF as of 2026-05-28: with the orphan-fill cg2dg-key
+    // fix + Fix B + post-axpy sync, Pass A is redundant for both EM4 and
+    // NLSM (bit-identical with it disabled — see
+    // project_nlsm_needs_full_machinery). Re-enable with
+    // DENDRO_ENABLE_PASS_A=1 for A/B without recompiling.
+    const char* _passA_env = std::getenv("DENDRO_ENABLE_PASS_A");
     const bool _passA_enabled =
-        !(_passA_env && _passA_env[0] == '1' && _passA_env[1] == '\0');
+        (_passA_env && _passA_env[0] == '1' && _passA_env[1] == '\0');
     if (_passA_enabled && m_uiIsActive) {
         const unsigned int npe = m_uiNpE;
         const unsigned int nLB = m_uiNodeLocalBegin;
@@ -3814,12 +3817,15 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
         }
     }
 
-    // env gate: DENDRO_DISABLE_PASS_DE=1 skips Pass D + Pass E
-    // (for A/B testing; NLSM regresses with current Pass D winner
-    // selection while EM4 benefits substantially).
-    const char* _passDE_env = std::getenv("DENDRO_DISABLE_PASS_DE");
+    // Pass D + Pass E default-OFF as of 2026-05-28: redundant for both
+    // EM4 and NLSM given the orphan-fill cg2dg-key fix + Fix B + post-axpy
+    // sync (bit-identical with them disabled; the old "NLSM regresses
+    // without Pass D" reason is subsumed by those fixes — see
+    // project_nlsm_needs_full_machinery). Re-enable with
+    // DENDRO_ENABLE_PASS_DE=1 for A/B without recompiling.
+    const char* _passDE_env = std::getenv("DENDRO_ENABLE_PASS_DE");
     const bool _passDE_enabled =
-        !(_passDE_env && _passDE_env[0] == '1' && _passDE_env[1] == '\0');
+        (_passDE_env && _passDE_env[0] == '1' && _passDE_env[1] == '\0');
 
     // Pass D: cross-rank cg-ownership consolidation.
     //
@@ -6903,10 +6909,14 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
                     // routing partition-invariant.
                     // see docs/findings_2026-05-14d.md follow-up.
                     local_hang++;
+                    // default-OFF as of 2026-05-28: redundant for both
+                    // EM4 and NLSM given orphan-fill fix + Fix B +
+                    // post-axpy sync. DENDRO_E2N_HANG_CANONICALIZE=1
+                    // re-enables for A/B.
                     static const char* hcEnv =
                         std::getenv("DENDRO_E2N_HANG_CANONICALIZE");
                     static const bool hcOn =
-                        !hcEnv || (hcEnv[0] == '1' && hcEnv[1] == '\0');
+                        hcEnv && hcEnv[0] == '1' && hcEnv[1] == '\0';
                     if (!hcOn) continue;
                     if (eLev == 0) continue;
                     const unsigned long long childSize =
@@ -7008,10 +7018,11 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
                     // the SAME indices but with PARENT spacing.
                     // see docs/findings_2026-05-14d.md follow-up.
                     local_finer++;
+                    // default-OFF as of 2026-05-28 (see hcOn above).
                     static const char* fnEnv =
                         std::getenv("DENDRO_E2N_HANG_CANONICALIZE");
                     static const bool fnOn =
-                        !fnEnv || (fnEnv[0] == '1' && fnEnv[1] == '\0');
+                        fnEnv && fnEnv[0] == '1' && fnEnv[1] == '\0';
                     if (!fnOn) continue;
                     if (eLev == 0) continue;  // no parent
                     const unsigned long long childSize =
