@@ -23,6 +23,7 @@ implementations are based on the previous implementation of dendro version 4.0
 #include "TreeNode.h"
 #include "dendro.h"
 #include "hcurvedata.h"
+#include "logger.h"
 
 // This will add boundary nodes and will also embed the octree one level higher
 // to enable the addition of the boundary nodes. The positive boundary nodes
@@ -387,6 +388,9 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
                     unsigned int elementOrder, MPI_Comm comm) {
     int size, rank;
 
+    dendro::logger::debug(dendro::logger::Scope{"OCTUTILS"},
+                          "Constructing nodes with function2Octree");
+
     MPI_Comm_size(comm, &size);
     MPI_Comm_rank(comm, &rank);
 
@@ -631,6 +635,9 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
     delete[] dist_child_ip;
     delete[] dist_parent;
     delete[] varVal;
+
+    dendro::logger::debug(dendro::logger::Scope{"OCTUTILS"},
+                          "Finished constructing nodes with function2Octree");
 
     return 0;
 }

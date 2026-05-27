@@ -198,12 +198,14 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
         m_data_ptr = GPUDevice::host_malloc<T>(m_size);
 #else
 
-#ifdef DVEC_ZERO_ALLOC
+        // Always zero-initialize. If we leave the memory
+        // uninitialized (plain malloc), any vec slot that isn't
+        // written by init_grid / ghost exchange / etc. before first
+        // use can contain random bytes (possibly NaN). This manifests
+        // as NaN in NLSM evolution on graph-partitioned meshes where
+        // some orphan local cg slots aren't written by init_grid and
+        // then propagate NaN via ghost exchange to other ranks.
         m_data_ptr = (T*)calloc(m_size, sizeof(T));
-#else
-        m_data_ptr = (T*)malloc(sizeof(T) * m_size);
-#endif
-// end DVEC_ZERO_ALLOC
 #endif
         // end __CUDACC__ if
 

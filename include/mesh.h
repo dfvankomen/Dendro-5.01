@@ -39,6 +39,7 @@
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "TreeNode.h"
@@ -47,6 +48,7 @@
 #include "dendro.h"
 #include "dendroProfileParams.h"  // only need to profile unzip_asyn for bssn. remove this header file later.
 #include "key.h"
+#include "logger.h"
 #include "mpi.h"
 #include "node.h"
 #include "octUtils.h"
@@ -114,6 +116,25 @@ struct oct_data {
 
     T edgeNeighbors[12];
     T vertexNeighbors[8];
+
+    // 27-bit ownership mask in the eOrd=2 representative layout. Bit r
+    // ∈ [0, 27) is set iff this element OWNS the sub-node at
+    // representative r = nk*9 + nj*3 + ni for ni,nj,nk ∈ {0,1,2}.
+    // Computed pre-partition from a working cascade and travels with
+    // the element through any partition exchange.
+    uint32_t ownerMask = 0u;
+
+    // canonical SFC block membership. populated pre-partition from the
+    // source mesh's m_uiLocalBlockList and travels with the element
+    // through partition exchange. on the receiver, elements that share
+    // the same (blkAnchorX,Y,Z,Level) are grouped into a partial block
+    // matching the source rank's canonical decomposition. blkMeta packs
+    // bits 0-7 = regGridLev, 8-15 = rotID, 31 = valid.
+    uint32_t blkAnchorX     = 0u;
+    uint32_t blkAnchorY     = 0u;
+    uint32_t blkAnchorZ     = 0u;
+    uint32_t blkAnchorLevel = 0u;
+    uint32_t blkMeta        = 0u;
 
     oct_data() {
         e2e[0] = LOOK_UP_TABLE_DEFAULT;
@@ -293,9 +314,10 @@ MPI_Datatype get_mpi_type() {
 template <typename T>
 MPI_Datatype create_octdata_mpi_type() {
     MPI_Datatype octdata_mpi_datatype;
-    int blocklengths[] = {1, 1, 1, 1, 3, 6, 1, 1, NUM_PTS_ELE, 1, 12, 8};
-    MPI_Aint offsets[12];
-    MPI_Datatype types[12];
+    int blocklengths[] = {1, 1, 1, 1, 3, 6, 1, 1, NUM_PTS_ELE, 1, 12, 8,
+                          1, 1, 1, 1, 1, 1};
+    MPI_Aint offsets[18];
+    MPI_Datatype types[18];
 
     types[0] = MPI_UINT32_T;  // 'rank' is always uint32_t
     types[1] = MPI_UINT32_T;  // 'target_rank' is always uint32_t
@@ -305,6 +327,12 @@ MPI_Datatype create_octdata_mpi_type() {
     types[9]                                             = MPI_CXX_BOOL;
     types[10]                                            = get_mpi_type<T>();
     types[11]                                            = get_mpi_type<T>();
+    types[12]                                            = MPI_UINT32_T;  // ownerMask
+    types[13]                                            = MPI_UINT32_T;  // blkAnchorX
+    types[14]                                            = MPI_UINT32_T;  // blkAnchorY
+    types[15]                                            = MPI_UINT32_T;  // blkAnchorZ
+    types[16]                                            = MPI_UINT32_T;  // blkAnchorLevel
+    types[17]                                            = MPI_UINT32_T;  // blkMeta
 
     // get the offsets for each member of the struct
     offsets[0]  = offsetof(oct_data<T>, rank);
@@ -319,8 +347,14 @@ MPI_Datatype create_octdata_mpi_type() {
     offsets[9]  = offsetof(oct_data<T>, isGhostTwo);
     offsets[10] = offsetof(oct_data<T>, edgeNeighbors);
     offsets[11] = offsetof(oct_data<T>, vertexNeighbors);
+    offsets[12] = offsetof(oct_data<T>, ownerMask);
+    offsets[13] = offsetof(oct_data<T>, blkAnchorX);
+    offsets[14] = offsetof(oct_data<T>, blkAnchorY);
+    offsets[15] = offsetof(oct_data<T>, blkAnchorZ);
+    offsets[16] = offsetof(oct_data<T>, blkAnchorLevel);
+    offsets[17] = offsetof(oct_data<T>, blkMeta);
 
-    MPI_Type_create_struct(12, blocklengths, offsets, types,
+    MPI_Type_create_struct(18, blocklengths, offsets, types,
                            &octdata_mpi_datatype);
     MPI_Type_commit(&octdata_mpi_datatype);
 
@@ -475,6 +509,154 @@ class Mesh {
     std::vector<unsigned int> m_uiCG2DG;
     /** dg to cg mapping*/
     std::vector<unsigned int> m_uiDG2CG;
+    /** Local CG slots (sorted) where Pass A (in
+     *  buildE2NWithSMRepartitioned) found no local element with
+     *  E2N_DG self-owned and E2N_CG = cg. These are
+     *  duplicate-local-ownership candidates for cross-rank
+     *  reconciliation in reconcileCrossRankDuplicateCGs. */
+    std::vector<unsigned int> m_uiPassACgsWithoutLocalCanonical;
+
+    /** Local CG indices that Pass D (cross-rank consolidation in
+     *  buildE2NWithSMRepartitioned) demoted on this rank because
+     *  another (winning) rank claimed the same phys_pos. Pass E
+     *  must NOT promote these back to local writers — leaving them
+     *  unwritten is the correct outcome (their value flows from
+     *  the winner via standard ghost exchange to a ghost cg that
+     *  this rank's elements have been redirected to). */
+    std::unordered_set<unsigned int> m_uiPassDDemotedLocalCgs;
+
+    /** Map: demoted local cg → its corresponding ghost cg at the
+     *  same phys_pos (sourced from the winner rank). After ghost
+     *  exchange, performGhostExchange/syncDemotedLocalCgs uses
+     *  this to mirror chi[ghost_cg] → chi[demoted_cg] so the
+     *  demoted slot reflects the correct value (otherwise it would
+     *  hold whatever stale data was last written, leading to
+     *  partition-dependent VTU output and analytical-diff
+     *  artifacts even though the actual evolution is correct). */
+    std::unordered_map<unsigned int, unsigned int>
+        m_uiPassDDemotedToGhostCg;
+
+    /** Explicit zip plan: list of (target_cg, unzip_idx) pairs telling
+     *  zip exactly which slot in the unzipped block buffer to read
+     *  and which local cg to write. Replaces the implicit
+     *  "E2N_DG self-owned scan" inside zip with an O(N) data-driven
+     *  loop. Built by buildZipPlan() after the cascade and
+     *  E2BlkMap are finalized; rebuilt on every remesh. */
+    std::vector<unsigned int> m_uiZipPlanCg;
+    std::vector<unsigned int> m_uiZipPlanUnzipIdx;
+
+    /** Per-element 27-bit ownership mask (eOrd=2 representative
+     *  layout). Bit r ∈ [0, 27) is set iff this element owns the
+     *  sub-node at representative r = nk*9 + nj*3 + ni for ni,nj,nk
+     *  in {0,1,2}. Computed once after buildE2NMap on the SFC mesh
+     *  (where the cascade is canonically correct), then travels
+     *  with the element through partition exchanges via oct_data.
+     *
+     *  At eOrd=2 this maps directly to all 27 sub-nodes. At higher
+     *  eOrd, an actual sub n at (ni, nj, nk) maps to representative
+     *  r where each axis is collapsed: 0 → 0 (boundary low), eOrd
+     *  → 2 (boundary high), interior → 1. All higher-order
+     *  sub-nodes in the same sharing category as a representative
+     *  inherit ownership from that representative.
+     *
+     *  Sized to match m_uiAllElements (local + ghost). Indexed by
+     *  the element's local index in m_uiAllElements. */
+    std::vector<uint32_t> m_uiOwnerMask;
+
+    /** Per-element canonical SFC block info. populated pre-partition
+     *  from m_uiLocalBlockList (which is correct on the SFC mesh) and
+     *  travels through partition exchange via oct_data. on the
+     *  receiver, elements with the same anchor are grouped into a
+     *  partial-block matching the source rank's canonical SFC
+     *  decomposition — this is what makes block boundaries (and
+     *  therefore one-sided FD stencils) partition-invariant.
+     *
+     *  meta packs: bits 0-7 regGridLev, 8-15 rotID, bit 31 valid.
+     *
+     *  Sized to match m_uiAllElements (local + ghost). */
+   public:
+    struct CanonicalBlockInfo {
+        uint32_t anchorX     = 0u;
+        uint32_t anchorY     = 0u;
+        uint32_t anchorZ     = 0u;
+        uint32_t anchorLevel = 0u;
+        uint32_t meta        = 0u;
+        bool isValid() const { return (meta & (1u << 31)) != 0u; }
+        unsigned int regGridLev() const { return meta & 0xFFu; }
+        unsigned int rotID() const { return (meta >> 8) & 0xFFu; }
+    };
+   private:
+    std::vector<CanonicalBlockInfo> m_uiBlockInfo;
+
+    /** Map: non-primary local cg → ghost cg on this rank whose
+     *  scatter source is the primary's local cg on the primary's
+     *  rank. Built by buildZipPlan() via an inverse-scatter-map
+     *  lookup. Useful when the standard scatter map happens to have
+     *  the right path; otherwise the m_uiZipSync* side-channel below
+     *  delivers primary values directly. */
+    std::unordered_map<unsigned int, unsigned int>
+        m_uiZipNonPrimaryToGhostCg;
+
+    /** Forward-direction post-sync fixup: ghost cgs at consensus
+     *  phys_pos → a local cg holding the primary's value (on this
+     *  rank). Built by buildZipPlan(): for each ghost cg whose
+     *  cg2dg maps to a phys_pos that has a winner in `winners`, find
+     *  a local cg at the same phys_pos and store ghost_cg → local_cg.
+     *  After the standard ghost exchange + syncZipNonPrimary, the
+     *  local cg holds the primary's post-axpy value (or got it via
+     *  Alltoallv). Copying from local_cg into ghost_cg makes the
+     *  ghost reflect the consensus value. Without this, ghost cgs at
+     *  level-transition corners stay at the IC values (the standard
+     *  scatter map's source for some ghost cgs doesn't reach the
+     *  primary's local through the post-fastpart consolidation). */
+    std::unordered_map<unsigned int, unsigned int>
+        m_uiZipGhostToLocalAtConsensus;
+
+    /** Side-channel non-primary sync via direct MPI_Alltoallv.
+     *
+     *  The standard ghost-exchange scatter maps were built before
+     *  Pass A/D/E rewrote E2N_CG (rescue path adds new
+     *  primary_local_cg references that weren't in the original
+     *  scatter map). To deliver primary cg values to non-primary
+     *  local cgs on other ranks, we maintain a separate "sync
+     *  scatter map" that runs an Alltoallv after each standard
+     *  ghost exchange.
+     *
+     *  Layout (analogous to m_uiSendNodeCount/Offset etc):
+     *    Send: this rank's primary cgs that need to go to others.
+     *      m_uiZipSyncSendCg[k] = local cg index to pack into
+     *        send buffer at flat position k (for recipient rank
+     *        determined by m_uiZipSyncSendOffsets).
+     *    Recv: this rank's non-primary cgs that receive primary
+     *      values.
+     *      m_uiZipSyncRecvCg[k] = local cg index to write recv
+     *        buffer value into.
+     *
+     *  Built each remesh by buildZipPlan() from the global primary
+     *  picks. Each rank computes its own lists deterministically
+     *  from the allgathered (phys_pos, rank, cg) claims. No
+     *  additional handshake exchange needed. */
+    std::vector<int> m_uiZipSyncSendCounts;
+    std::vector<int> m_uiZipSyncSendOffsets;
+    std::vector<int> m_uiZipSyncRecvCounts;
+    std::vector<int> m_uiZipSyncRecvOffsets;
+    std::vector<unsigned int> m_uiZipSyncSendCg;
+    std::vector<unsigned int> m_uiZipSyncRecvCg;
+
+    /** Intra-rank duplicate sync: for phys_pos with multiple LOCAL cgs
+     *  on this rank, after the cross-rank Alltoallv copies the primary
+     *  value into our recv targets, we still have duplicate LOCAL cgs
+     *  on the SAME rank (e.g., two writer slots at one phys due to
+     *  hanging-face neighborhood). The cross-rank sync skips entries
+     *  where (r == p_rank), so the secondary local cg is never reached.
+     *  m_uiZipLocalDupSrc[k] -> m_uiZipLocalDupDst[k]: copy src into
+     *  dst on this rank after every cross-rank sync. */
+    std::vector<unsigned int> m_uiZipLocalDupSrc;
+    std::vector<unsigned int> m_uiZipLocalDupDst;
+
+    // m_uiCanonicalOverride was an old experiment in routing zip
+    // writes; superseded by the explicit zip plan
+    // (m_uiZipPlanCg / m_uiZipPlanUnzipIdx) and removed.
 
     /** splitter element for each processor. */
     std::vector<ot::TreeNode>
@@ -518,11 +700,12 @@ class Mesh {
 
     /** stores all the pre + local + post ELEMENTS. */
     std::vector<ot::TreeNode> m_uiAllElements;
-    /** Global element IDs for tie-breaking in E2N construction.
-     *  Empty for SFC-ordered meshes (local index IS the tie-break).
-     *  Populated after repartitioning to ensure globally consistent
-     *  CG ownership across ranks. */
-    std::vector<unsigned int> m_uiElementGlobalIDs;
+    /** Spatial hash (x,y,z,level) -> local idx into m_uiAllElements,
+     *  used by findContainingElementInAllNodes to avoid O(N) linear
+     *  scans during block-neighbor discovery on repartitioned meshes.
+     *  Built lazily when needed and cleared whenever m_uiAllElements
+     *  changes. */
+    std::unordered_map<uint64_t, unsigned int> m_uiAllElementsSpatialHash;
     /** stores the local nodes */
     std::vector<ot::TreeNode> m_uiAllLocalNode;
 
@@ -547,6 +730,12 @@ class Mesh {
     unsigned int m_uiElementPostGhostBegin;
     /** end location for the post ghost octants*/
     unsigned int m_uiElementPostGhostEnd;
+    /** explicit list of LOCAL element indices into m_uiAllElements. when
+     * empty, the iterator falls back to enumerating [LocalBegin, LocalEnd)
+     * in order (the historical layout assumption). when populated (by
+     * Phase 2's SFC-sort experiment), the iterator follows this list,
+     * which may interleave with ghost positions in m_uiAllElements. */
+    std::vector<unsigned int> m_uiLocalElementIds;
     /**begin of the pre ghost elements of  fake elements*/
     unsigned int m_uiFElementPreGhostBegin;
     /**end of the pre ghost elements of fake elements. */
@@ -738,6 +927,64 @@ class Mesh {
     /** Scatter map for the actual nodes, recieving from other processors. */
     std::vector<unsigned int> m_uiScatterMapActualNodeRecv;
 
+    /** Repartitioned meshes only: for R2 ghost boundary nodes, the owner
+     * candidate set is incomplete on the receiver (R2's 26-neighborhood
+     * isn't ghost-fetched), so the receiver can't agree with the home rank
+     * on the canonical CG index. We instead deliver the value by routing
+     * (R2_gid, sub) to R2's home rank and reading from a per-local-element
+     * nodal buffer populated directly by createVector(vec, func). The
+     * tag below marks the send-side scatter-map entries that read from
+     * m_uiLocalNodalDG instead of vec. */
+    std::vector<unsigned char> m_uiScatterMapSendIsDG;
+
+    /** Per-local-element nodal values at each element's own sub physical
+     * position. Size = numLocalElements * m_uiNpE. Populated by
+     * createVector(vec, func); used by performGhostExchange to deliver
+     * correct values to R2 ghost boundary slots. Not maintained for
+     * vectors produced by arithmetic — only freshly created via func.
+     * mutable so it can be populated by const createVector overloads. */
+    mutable std::vector<double> m_uiLocalNodalDG;
+
+   public:
+    /** Mutable accessor to the per-local-element DG buffer. External
+     * code (e.g., partition redistribution helpers) needs to refresh
+     * this when a vec is moved across partitions outside of
+     * createVector(vec, func). */
+    inline std::vector<double>& getLocalNodalDGRef() {
+        return m_uiLocalNodalDG;
+    }
+
+    /** Populate m_uiLocalNodalDG from a CG vector, for use after external
+     * code writes CG values directly (e.g., initial-condition loops that
+     * iterate local elements and write into vec via E2N_CG) without
+     * going through createVector(vec, func). Required before
+     * performGhostExchange on graph-partitioned meshes where some R2
+     * boundary sends route through the DG path and read from
+     * m_uiLocalNodalDG. Idempotent. */
+    template <typename T>
+    void syncLocalNodalDGFromCG(const T* vec);
+
+    /** Fix "orphan" local CG slots — slots in the local CG range that
+     * are NOT referenced by any LOCAL element's E2N_CG on this rank,
+     * so the normal zip / RK update path never writes to them. Such
+     * slots can arise in graph-partitioned meshes where
+     * buildE2NMap/buildE2NWithSMRepartitioned allocates local-range
+     * CGs at positions only referenced by ghost elements.
+     *
+     * This pulls the current value from a rank that DOES have a
+     * LOCAL element at the same physical position (where RK DID
+     * update that rank's ghost-cg slot). Call BEFORE
+     * performGhostExchange so the gathered values are then broadcast
+     * correctly; or after an RK step to sync orphan slots with RK
+     * progress made elsewhere.
+     *
+     * No-op if the mesh has zero orphans (expected for SFC
+     * partitions). */
+    template <typename T>
+    void orphanPreGather(T* vec);
+
+   protected:
+
     // variables to manage loop access over elements.
     /**counter for the current element*/
     unsigned int m_uiEL_i;
@@ -860,6 +1107,18 @@ class Mesh {
      * will be zero. */
     std::vector<unsigned int> m_e2b_unzip_counts;
 
+    /**@brief Canonical writer table for unzip multi-writer block-padding
+     * slots. Indexed by absolute unzipped-buffer offset (block.getOffset() +
+     * kkz*lx*ly + jjy*lx + iix). Value = element index of canonical writer
+     * (in m_uiAllElements). LOOK_UP_TABLE_DEFAULT means "no override"; every
+     * writer is allowed to write (single-writer slots, or no contention).
+     * Built once per mesh by buildUnzipCanonicalWriterTable. Used to make
+     * unzip output partition-invariant by enforcing the same canonical
+     * writer's value at every multi-writer slot regardless of which rank
+     * (or which partition) is doing the unzip. */
+    std::vector<unsigned int> m_uiUnzipCanonWriter;
+    bool m_uiUnzipCanonWriterBuilt = false;
+
     PartitioningOptions m_partitionOption = PartitioningOptions::fastpart;
 
    private:
@@ -948,6 +1207,147 @@ class Mesh {
      *    block b has some unzip nodes coming from elemental nodes of e.
      */
     void buildE2BlockMap();
+
+    /**@brief Build the per-slot canonical writer table for unzip multi-writer
+     * block-padding positions. Replays the unzip_scatter scatter logic in a
+     * dry mode (no writes) to enumerate all (block, slot) → list-of-writers
+     * triples. For each multi-writer slot, picks ONE canonical writer using a
+     * partition-invariant rule: prefer the writer that the global canonical
+     * iteration order (canon_mode=2: level desc, x asc, y asc, z asc) would
+     * iterate LAST. Stores per-slot canonical winner in m_uiUnzipCanonWriter.
+     *
+     * Must run AFTER buildE2BlockMap (which populates m_e2b_unzip_map) and
+     * AFTER m_uiLocalBlockList is finalized.
+     *
+     * Cost: one full unzip-scatter dry pass + O(slots) selection. Modest
+     * one-time setup. */
+    void buildUnzipCanonicalWriterTable();
+
+    /**@brief Build the explicit zip plan (m_uiZipPlanCg /
+     * m_uiZipPlanUnzipIdx). Replaces the implicit "E2N_DG self-owned
+     * scan" inside zip with an O(N) data-driven loop over the plan.
+     * Must be called after buildE2NWithSM and buildE2BlockMap (the
+     * cascade and E2BlkMap must be finalized). Rebuilt on every
+     * mesh change. */
+    void buildZipPlan();
+
+    /**@brief Derive the per-element 27-bit ownership mask
+     * (m_uiOwnerMask) from the current cascade output. For each
+     * element e, walk the 27 representative sub-nodes (eOrd=2
+     * layout) and set bit r iff E2N_DG[e*npe+sub_for_r]/npe == e.
+     *
+     * Must be called AFTER buildE2NMap completes the cascade
+     * (i.e., after the SFC mesh is built where the cascade is
+     * canonically correct). The result is a compact, transportable
+     * representation of "this element owns these sub-nodes" that
+     * can ride along oct_data through partition exchanges.
+     *
+     * Cost: O(27) per element. Cheap. */
+    void deriveOwnerMasksFromCascade();
+
+    /**@brief Compare m_uiOwnerMask (transported from pre-partition
+     * cascade) with what the current cascade output says, per
+     * element + per representative. Logs disagreements and returns
+     * the count. Useful for diagnosing where post-partition cascade
+     * disagrees with the canonical pre-partition decision.
+     *
+     * @return number of (elem, representative) disagreements on this rank. */
+    size_t validateOwnerMasksAgainstCurrentCascade() const;
+
+    /**@brief Patch the post-partition cascade output using
+     * authoritative ownership info from m_uiOwnerMask. For each
+     * local (elem, sub) where cascade marks elem self-owned but the
+     * mask disagrees ("over-claim"), find the true owner via E2EMap
+     * neighbor walk and mask check. Redirect E2N_CG / E2N_DG to
+     * point at the true owner's slot, and stash the now-orphan local
+     * cg into m_uiPassDDemotedToGhostCg so the existing sync helper
+     * mirrors values correctly post-exchange.
+     *
+     * Must run AFTER buildE2NWithSMRepartitioned and AFTER masks are
+     * populated (either from cascade derivation on initial SFC build
+     * or from oct_data transport on repartition).
+     *
+     * @return number of slots patched. */
+    size_t patchE2NCgFromMasks();
+
+    /**@brief Audit E2N_CG entries and repair wrong-cascade routings using
+     *  phys_pos comparison. For each local element (e, sub), checks whether
+     *  E2N_CG[e*npe+sub]'s actual phys_pos matches the expected phys_pos for
+     *  that sub. Distinguishes legitimate hanging-face/edge p2c interpolation
+     *  (cg's owner element is at COARSER level) from same-level cascade bugs.
+     *  Repairs same-level mismatches by routing to the local cg at the
+     *  expected phys_pos (which is guaranteed present given the R3 ghost
+     *  layer).
+     *
+     *  Must run AFTER buildE2NWithSMRepartitioned + Pass A/D/E + mask-patch,
+     *  and BEFORE REBUILD NODAL SCATTER MAPS / buildZipPlan so the corrected
+     *  E2N_CG is reflected in scatter maps and zip-plan.
+     *
+     *  Honors PassD's intentional demotions (skips cgs in
+     *  m_uiPassDDemotedLocalCgs and m_uiPassDDemotedToGhostCg).
+     *
+     *  @return number of E2N_CG entries patched. */
+    size_t auditAndRepairE2NCgPhysPos();
+
+    /**@brief structural canonicalization of hanging-face/edge/corner
+     *  routing in E2N_CG/DG. For any (e, n) where the order=eOrder
+     *  routing decodes to an owner whose level != e's level (hanging
+     *  case), redirect to the Morton-tree parent's slot at the SAME
+     *  sub-index n. Uses a TN→local_idx hash map over m_uiAllElements
+     *  for fast lookup — no per-cg phys-pos hash needed.
+     *
+     *  When the Morton-tree parent is on this rank (local or ghost),
+     *  the override is direct and partition-invariant. When the
+     *  parent is not on this rank, the slot is left untouched and
+     *  the slower phys-pos audit acts as a fallback.
+     *
+     *  Should be called BEFORE auditAndRepairE2NCgPhysPos to reduce
+     *  the audit's work to a fast verification pass.
+     *
+     *  @return number of E2N_CG/DG entries canonicalized. */
+    size_t canonicalizeHangingFaceRoutingTN();
+
+    /**@brief derive m_uiBlockInfo from the current m_uiLocalBlockList
+     *  on the SFC mesh. for each block, walks its (contiguous)
+     *  element range and stamps each element with the block's
+     *  anchor TreeNode + regGridLev + rotID. ghost elements get
+     *  zero-valued (invalid) entries. must run after performBlocksSetup
+     *  on the SFC mesh — this is where the block decomposition is
+     *  canonically correct. */
+    void deriveBlockInfoFromBlocks();
+
+    /**@brief reconstruct m_uiLocalBlockList from per-element
+     *  m_uiBlockInfo (transported from pre-partition SFC mesh).
+     *  buckets local elements by (anchor, anchorLevel) and emits
+     *  one ot::Block per bucket using the non-SFC constructor.
+     *  blocks may be partial (fewer elements than the source-rank
+     *  block had) — this is fine because each rank only computes
+     *  stencils on its local elements; padding comes from ghost
+     *  exchange.
+     *
+     *  @return number of blocks produced; 0 if no valid block info
+     *  was transported (caller can fall back to legacy path). */
+    size_t buildBlocksFromCanonicalInfo();
+
+    /**@brief Side-channel non-primary sync. Runs an Alltoallv that
+     * delivers primary cg values to non-primary local cg slots on
+     * other ranks, using the lists built by buildZipPlan(). Called
+     * after each ghost exchange. */
+    template <typename T>
+    void syncZipNonPrimary(T* vec, unsigned int dof);
+
+    /**@brief Position-keyed cross-rank broadcast for vec values.
+     * For every phys position with cgs on multiple ranks (incl ghost-only
+     * positions), picks ONE canonical value via global allgather and
+     * broadcasts it to every cg at that position globally. Stronger than
+     * syncZipNonPrimary because it does not rely on the cascade winner pick
+     * (which can leave dangling/forgotten ghosts un-synced when no rank has
+     * a LOCAL writer at a phys position). Canonical rule: lowest rank
+     * with a LOCAL cg wins; among lowest-rank locals, lowest cg index.
+     * If no rank has a LOCAL cg, lowest rank with any (ghost) cg wins. */
+    template <typename T>
+    void broadcastCgValuesByPhysPos(T* vec, unsigned int dof);
+
 
     /**
      * @author Milinda Fernando
@@ -1464,6 +1864,56 @@ class Mesh {
     // --- 3rd point exchange function end.
 
    public:
+    /**@brief Public access to per-element owner-rank computation.
+     * Returns elementOwner[e] = active-rank that owns element e in
+     * m_uiAllElements (LOCAL on this rank → m_uiActiveRank; GHOST on
+     * other rank → that rank). Used by diagnostic probes. */
+    inline void computeElementOwnerRanksPublic(
+        std::vector<unsigned int>& elementOwner) {
+        computeElementOwnerRanks(elementOwner);
+    }
+
+    /**@brief Public access to the side-channel non-primary sync. Used
+     * by ETS callers that need to harden the post-zip CG state before
+     * stage-vector axpy reads it (axpy is local-only and doesn't sync).
+     * Mirrors primary cg values into non-primary local cg slots at
+     * multi-claim phys_pos. */
+    template <typename T>
+    inline void syncZipNonPrimaryPublic(T* vec, unsigned int dof) {
+        this->syncZipNonPrimary(vec, dof);
+    }
+
+    /**@brief Public wrapper for broadcastCgValuesByPhysPos. */
+    template <typename T>
+    inline void broadcastCgValuesByPhysPosPublic(T* vec, unsigned int dof) {
+        this->broadcastCgValuesByPhysPos(vec, dof);
+    }
+
+    /**@brief Read-only accessor for the per-element ownership masks. */
+    inline const std::vector<uint32_t>& getOwnerMask() const {
+        return m_uiOwnerMask;
+    }
+
+    /**@brief Assign external ownership masks (by move). Used to inject
+     * pre-computed masks from a source mesh (where cascade is correct)
+     * into a fresh repartition target before its cascade runs.
+     * Caller is responsible for matching the size to m_uiAllElements. */
+    inline void setOwnerMask(std::vector<uint32_t>&& mask) {
+        m_uiOwnerMask = std::move(mask);
+    }
+
+    /**@brief Read-only accessor for canonical block info. */
+    inline const std::vector<CanonicalBlockInfo>& getBlockInfo() const {
+        return m_uiBlockInfo;
+    }
+
+    /**@brief Inject canonical block info (by move). Used to seed a
+     * fresh repartition target with the source SFC mesh's block
+     * decomposition before its post-partition block setup runs. */
+    inline void setBlockInfo(std::vector<CanonicalBlockInfo>&& info) {
+        m_uiBlockInfo = std::move(info);
+    }
+
     /**@brief parallel mesh constructor
      * @param[in] in: complete sorted 2:1 balanced octree to generate mesh
      * @param[in] k_s: how many neighbours to check on each direction (used =1)
@@ -1533,6 +1983,15 @@ class Mesh {
 
     /**@brief: returns if the scatter map typed set*/
     inline SM_TYPE getScatterMapType() { return m_uiScatterMapType; }
+    inline void setScatterMapType(SM_TYPE t) { m_uiScatterMapType = t; }
+
+    /** Mutable access to the local-element TreeNode at internal index `ele`.
+     * Needed by repartition helpers that carry refinement flags across
+     * a partition change (flags live on the TreeNode itself). Safer
+     * alternative to exposing m_uiAllElements wholesale. */
+    inline ot::TreeNode& getMutableElement(unsigned int ele) {
+        return m_uiAllElements[ele];
+    }
 
     // Setters and getters.
     /** @breif Returns the number of local elements in the grid. (local to the
@@ -1588,6 +2047,47 @@ class Mesh {
     /**@brief return the end location of element post ghost*/
     inline unsigned int getElementPostGhostEnd() const {
         return m_uiElementPostGhostEnd;
+    }
+
+    /**@brief opaque iterator-yielding range over LOCAL element indices.
+     *
+     * usage: `for (unsigned int e : mesh->localElements()) { ... }`
+     *
+     * default backing: indices [getElementLocalBegin(), getElementLocalEnd())
+     * in order. once m_uiLocalElementIds is populated (Phase 2; gated by
+     * DENDRO_SFC_SORT_ALL_ELEMENTS=1 after repartition) the range iterates
+     * those IDs instead — which may interleave with ghost positions in
+     * m_uiAllElements. consumers using this API don't need to know which
+     * backing applies; consumers using the raw [LB, LE) range bake in the
+     * contiguity assumption.
+     */
+    class LocalElementRange {
+        const Mesh* m_mesh_;
+    public:
+        class iterator {
+            const Mesh*  m_;
+            std::size_t  pos_;
+        public:
+            iterator(const Mesh* m, std::size_t p) : m_(m), pos_(p) {}
+            unsigned int operator*() const;
+            iterator& operator++() {
+                ++pos_;
+                return *this;
+            }
+            bool operator!=(const iterator& o) const {
+                return pos_ != o.pos_;
+            }
+            bool operator==(const iterator& o) const {
+                return pos_ == o.pos_;
+            }
+        };
+        explicit LocalElementRange(const Mesh* m) : m_mesh_(m) {}
+        iterator begin() const;
+        iterator end() const;
+        std::size_t size() const;
+    };
+    inline LocalElementRange localElements() const {
+        return LocalElementRange(this);
     }
 
     /**@brief return the begin location of pre ghost nodes*/
@@ -1677,6 +2177,12 @@ class Mesh {
      * consdering mesh. */
     inline const std::vector<ot::Block> &getLocalBlockList() const {
         return m_uiLocalBlockList;
+    }
+
+    /**@brief element-to-block map: for local element e, returns the block
+     * id this element belongs to. indexed by (e - elementLocalBegin). */
+    inline const std::vector<unsigned int> &getE2BlkMap() const {
+        return m_uiE2BlkMap;
     }
 
     /**@biref get element to block unzip map. */
@@ -1819,6 +2325,11 @@ class Mesh {
     void setDomainBounds(Point dmin, Point dmax) {
         m_uiDMinPt = Point(dmin.x(), dmin.y(), dmin.z());
         m_uiDMaxPt = Point(dmax.x(), dmax.y(), dmax.z());
+
+        dendro::logger::debug(dendro::logger::Scope{"MESH"},
+                              "Domain bounds set to ({}, {}, {})->({}, {}, {})",
+                              m_uiDMinPt.x(), m_uiDMinPt.y(), m_uiDMinPt.z(),
+                              m_uiDMaxPt.x(), m_uiDMaxPt.y(), m_uiDMaxPt.z());
     }
 
     /**@brief: get the domain min point. */
@@ -2870,6 +3381,33 @@ class Mesh {
         INTERGRID_TRANSFER_MODE mode = INTERGRID_TRANSFER_MODE::CELLVEC_CPY);
 
     /**
+     * @brief Redistribute a CG vector across a partition change.
+     *
+     * Assumes `this` (source mesh) and `dstMesh` contain the same global
+     * element set, only distributed differently across ranks (e.g. this
+     * mesh is SFC-partitioned and dstMesh is graph-partitioned from a
+     * subsequent `repartitionMeshGlobal`). Works only for the NO_CHANGE
+     * refinement case — if elements differ (SPLIT/COARSE), use
+     * `interGridTransfer` first to a same-partition mesh, then this
+     * to the graph-partitioned twin.
+     *
+     * Uses a TreeNode-keyed Allgatherv (to build a global TreeNode→rank
+     * map for dstMesh) + Alltoallv of per-element DG values. Writes into
+     * `vecOut` via dstMesh's E2N_CG, and refreshes dstMesh's internal
+     * m_uiLocalNodalDG buffer (used by the graph-partition DG ghost path).
+     *
+     * Caller responsibilities:
+     *   - vecIn sized as this->createVector<T>()
+     *   - vecOut sized as dstMesh->createVector<T>()
+     *   - vecIn ghosts should be synchronized (performGhostExchange) before
+     *     calling, otherwise DG values read from ghost elements' CG slots
+     *     will be stale.
+     */
+    template <typename T>
+    void redistributeVec(ot::Mesh *dstMesh, const T *vecIn,
+                         T *vecOut) const;
+
+    /**
      *@brief : Returns the nodal values of a given element for a given variable
      *vector.
      *@param[in] vec: variable vector that we want to get the nodal values.
@@ -3401,6 +3939,33 @@ class Mesh {
             oct_connectivity_map[lid_ele].rank     = rank;
             oct_connectivity_map[lid_ele].level    = pNodes[ele].getLevel();
             oct_connectivity_map[lid_ele].flag     = pNodes[ele].getFlag();
+            // 27-bit ownership mask in eOrd=2 representative layout.
+            // Pre-partition value (cascade-correct on SFC mesh). Empty
+            // (0u) before deriveOwnerMasksFromCascade has run; that's
+            // ok because the post-partition mask path detects this and
+            // falls back to cascade.
+            oct_connectivity_map[lid_ele].ownerMask =
+                (ele < m_uiOwnerMask.size()) ? m_uiOwnerMask[ele] : 0u;
+
+            // canonical SFC block membership. populated pre-partition
+            // from the source mesh's m_uiLocalBlockList. zero (invalid
+            // bit unset) when source didn't carry block info — the
+            // post-partition path detects this and falls back to the
+            // legacy octree2BlockDecompositionRepartitioned algorithm.
+            if (ele < m_uiBlockInfo.size()) {
+                const auto& bi                                 = m_uiBlockInfo[ele];
+                oct_connectivity_map[lid_ele].blkAnchorX       = bi.anchorX;
+                oct_connectivity_map[lid_ele].blkAnchorY       = bi.anchorY;
+                oct_connectivity_map[lid_ele].blkAnchorZ       = bi.anchorZ;
+                oct_connectivity_map[lid_ele].blkAnchorLevel   = bi.anchorLevel;
+                oct_connectivity_map[lid_ele].blkMeta          = bi.meta;
+            } else {
+                oct_connectivity_map[lid_ele].blkAnchorX       = 0u;
+                oct_connectivity_map[lid_ele].blkAnchorY       = 0u;
+                oct_connectivity_map[lid_ele].blkAnchorZ       = 0u;
+                oct_connectivity_map[lid_ele].blkAnchorLevel   = 0u;
+                oct_connectivity_map[lid_ele].blkMeta          = 0u;
+            }
 
             // then local-to-global map updates
             // local_to_global[ele]                   = gid_ele;
@@ -3462,206 +4027,6 @@ class Mesh {
                                ele_offsets, ele_counts);
     }
 
-    template <typename T>
-    void createLocalToGlobalE2N(std::vector<oct_data<T>> &oct_connectivity_map,
-                                std::vector<T> &ele_local_to_global) {
-        int rank            = this->getMPIRank();
-        int npes            = this->getMPICommSize();
-        MPI_Comm commActive = this->getMPICommunicator();
-        // m_uiEL_i is just a counter to manage loop access over elements
-
-        // the function currentElementNeighbourIndexList iterates from 0 to
-        // m_uiNumDirections accessed by m_uiEL_i * m_uiNumDirections + k
-
-        // the m_uiE2NMapping_CG vector has an indexing pattern of m_uiEL_i *
-        // m_uiNpE + k (where k is 0-m_uiNpE from currentLementNodeList() ) the
-        // m_uiE2NMapping_DG vector does the same!
-
-        // size of m_uiE2NMapping_CG is m_uiAllNodes.size() * m_uiNpE
-
-        // -----------------
-        // CONTINOUS GALERKIN
-
-        // cg_local_to_global
-        std::map<T, T> cg_local_to_global;
-
-        // calculate how many there will be for this particular array
-        T localSzCG =
-            m_uiNpE * m_uiElementLocalEnd - m_uiNpE * m_uiElementLocalBegin;
-
-        // store element counts and offsets for global case, NOTE: these will be
-        // the same for DG and CG
-        std::vector<T> node_counts_CG;
-        std::vector<T> node_offsets_CG;
-        node_counts_CG.resize(npes);
-        node_offsets_CG.resize(npes);
-
-        // gather counts from all processes to build global map
-        par::Mpi_Allgather(&localSzCG, node_counts_CG.data(), 1, commActive);
-        node_offsets_CG[0] = 0;
-        for (unsigned int i = 1; i < npes; i++) {
-            node_offsets_CG[i] = node_offsets_CG[i - 1] + node_counts_CG[i - 1];
-        }
-
-        T num_node_CG_global =
-            node_offsets_CG[npes - 1] + node_counts_CG[npes - 1];
-        T *nodeid_vec_CG = this->createCGVector<T>((T)(0), 1);
-
-        for (unsigned int node_i = m_uiNodeLocalBegin;
-             node_i < m_uiNodeLocalEnd; node_i++) {
-            unsigned int lid_node = node_i - m_uiNodeLocalBegin;
-            // calculate a global value
-            nodeid_vec_CG[node_i] = lid_node + node_offsets_CG[rank];
-        }
-
-        // create a vector the same way as OCT_SHARED_NODES on
-        // DVec.create_vector, this will allow us to determine global IDs based
-        // on values requested
-        size_t vec_size = 1 * this->getDegOfFreedom();
-        std::vector<T> nodeid_vec_CG_use(vec_size, LOOK_UP_TABLE_DEFAULT);
-
-        // okay, determine unique local nodes
-        unsigned int nodeLookUp_CG;
-        unsigned int nodeLookUp_DG;
-        double x, y, z, len;
-        unsigned int ownerID, ii_x, jj_y, kk_z;
-        unsigned int extract_id;
-        for (unsigned int ele = m_uiElementLocalBegin;
-             ele < m_uiElementLocalEnd; ++ele) {
-            for (unsigned int k = 0; k < (m_uiElementOrder + 1); ++k) {
-                for (unsigned int j = 0; j < (m_uiElementOrder + 1); ++j) {
-                    for (unsigned int i = 0; (i < m_uiElementOrder + 1); ++i) {
-                        extract_id = ele * m_uiNpE +
-                                     k * (m_uiElementOrder + 1) *
-                                         (m_uiElementOrder + 1) +
-                                     j * (m_uiElementOrder + 1) + i;
-                        nodeLookUp_CG = m_uiE2NMapping_CG[extract_id];
-
-                        if (nodeLookUp_CG >= m_uiNodeLocalBegin &&
-                            nodeLookUp_CG < m_uiNodeLocalEnd) {
-                            nodeLookUp_DG = m_uiE2NMapping_DG[extract_id];
-
-                            // we can also calculate the X, Y, Z position here
-                            // too!
-                            dg2eijk(nodeLookUp_DG, ownerID, ii_x, jj_y, kk_z);
-
-                            len = 1u << (m_uiMaxDepth -
-                                         m_uiAllElements[ele].getLevel());
-
-                            x   = m_uiAllElements[ele].getX() +
-                                ii_x * (len / m_uiElementOrder);
-                            y = m_uiAllElements[ele].getY() +
-                                jj_y * (len / m_uiElementOrder);
-                            z = m_uiAllElements[ele].getZ() +
-                                kk_z * (len / m_uiElementOrder);
-
-                            nodeid_vec_CG_use[nodeLookUp_CG] =
-                                extract_id - (m_uiElementLocalBegin * m_uiNpE) +
-                                node_offsets_CG[rank];
-
-                            if (nodeLookUp_DG < m_uiNodeLocalBegin &&
-                                nodeLookUp_DG >= m_uiNodeLocalEnd) {
-                                std::cout
-                                    << rank
-                                    << ": NODE_LOOKUP_DG value out of bounds??"
-                                    << std::endl;
-                            }
-#if 0
-                            if (nodeLookUp_DG > vec_size) {
-                                std::cout << rank
-                                          << ": NODE_LOOKUP_DG value TOO BIG"
-                                          << std::endl;
-                            }
-#endif
-                        }
-                    }
-                }
-            }
-        }
-
-        this->readFromGhostBegin(nodeid_vec_CG_use.data(), 1);
-        this->readFromGhostEnd(nodeid_vec_CG_use.data(), 1);
-
-        // so now we should be able to create a new E2N CG:
-        std::vector<T> e2n_cg_new(m_uiE2NMapping_CG.size(),
-                                  LOOK_UP_TABLE_DEFAULT);
-
-        for (unsigned int ele = m_uiElementLocalBegin;
-             ele < m_uiElementLocalEnd; ++ele) {
-            for (unsigned int k = 0; k < (m_uiElementOrder + 1); ++k) {
-                for (unsigned int j = 0; j < (m_uiElementOrder + 1); ++j) {
-                    for (unsigned int i = 0; (i < m_uiElementOrder + 1); ++i) {
-                        extract_id = ele * m_uiNpE +
-                                     k * (m_uiElementOrder + 1) *
-                                         (m_uiElementOrder + 1) +
-                                     j * (m_uiElementOrder + 1) + i;
-                        e2n_cg_new[extract_id] =
-                            nodeid_vec_CG_use[m_uiE2NMapping_CG[extract_id]];
-
-                        if (e2n_cg_new[extract_id] == LOOK_UP_TABLE_DEFAULT) {
-                            std::cout << rank << ": ERROR: INVALID VALUE FOUND!"
-                                      << std::endl;
-                        }
-                    }
-                }
-            }
-        }
-
-        // now get the global values for e2n_dg, for our m_uiElementLocal values
-        std::vector<T> e2n_dg_new(m_uiE2NMapping_DG.size(),
-                                  LOOK_UP_TABLE_DEFAULT);
-
-        // NOW THE E2N_CG MAP IS UPDATED WITH GLOBAL IDS
-        unsigned int new_dg_val;
-        for (unsigned int ele = m_uiElementLocalBegin;
-             ele < m_uiElementLocalEnd; ++ele) {
-            long int id_for_global = ele - m_uiElementLocalBegin;
-            for (unsigned int k = 0; k < (m_uiElementOrder + 1); ++k) {
-                for (unsigned int j = 0; j < (m_uiElementOrder + 1); ++j) {
-                    for (unsigned int i = 0; (i < m_uiElementOrder + 1); ++i) {
-                        extract_id = ele * m_uiNpE +
-                                     k * (m_uiElementOrder + 1) *
-                                         (m_uiElementOrder + 1) +
-                                     j * (m_uiElementOrder + 1) + i;
-
-                        nodeLookUp_DG = m_uiE2NMapping_DG[extract_id];
-                        dg2eijk(nodeLookUp_DG, ownerID, ii_x, jj_y, kk_z);
-
-                        // convert the ownerID to its global ID
-                        if (ele_local_to_global[ownerID] !=
-                            LOOK_UP_TABLE_DEFAULT) {
-                            id_for_global = ele_local_to_global[ownerID];
-                        } else {
-#if 0
-                            std::cout << rank << ": COULDN'T FIND LOCAL ID "
-                                      << ownerID << " in map!" << std::endl;
-#endif
-                            continue;
-                        }
-
-                        new_dg_val = eijk2dg(id_for_global, ii_x, jj_y, kk_z);
-
-                        e2n_dg_new[extract_id] = new_dg_val;
-                    }
-                }
-            }
-        }
-
-        // with all of this information now, we can build up a vector of data
-        for (unsigned int ele = m_uiElementLocalBegin;
-             ele < m_uiElementLocalEnd; ++ele) {
-            // update the data in oct_connectivity_map's e2n_cg and e2n_dg
-
-            for (unsigned int i = 0; i < m_uiNpE; ++i) {
-                // oct_connectivity_map[ele - m_uiElementLocalBegin].e2n_cg[i] =
-                //     e2n_cg_new[ele * m_uiNpE + i];
-                oct_connectivity_map[ele - m_uiElementLocalBegin].e2n_dg[i] =
-                    e2n_dg_new[ele * m_uiNpE + i];
-            }
-        }
-
-        // return node_data_by_ele;
-    }
 
     template <typename T>
     inline oct_data<T> *findOctDataByGlobalID(
@@ -3965,317 +4330,7 @@ class Mesh {
         return global_e2e;
     }
 
-    void getNeighborsAndBuildElementList(
-        std::vector<oct_data<unsigned int>> &my_new_oct_connectivity_map,
-        std::vector<oct_data<unsigned int>> &my_old_oct_connectivity_map,
-        std::vector<unsigned int> &my_partition,
-        const std::vector<unsigned int> &ele_offsets,
-        const std::vector<unsigned int> &ele_counts) {
-        int rank            = this->getMPIRank();
-        int npes            = this->getMPICommSize();
-        MPI_Comm commActive = this->getMPICommunicator();
 
-        auto global_e2e     = createGlobalE2EMap(my_old_oct_connectivity_map,
-                                                 ele_offsets, ele_counts);
-
-        // create an unordered map for quick queries of all indicies, to make it
-        // easy to find things related to our new partition
-        std::unordered_map<unsigned int, std::vector<unsigned int>>
-            e2e_index_map;
-        for (int i = 0; i < global_e2e.size(); ++i) {
-            e2e_index_map[global_e2e[i]].push_back(i);
-        }
-
-        // compute the "owners"
-        unsigned int total_number =
-            std::accumulate(ele_counts.begin(), ele_counts.end(), 0);
-        std::vector<unsigned int> ele_owner_temp(total_number, 0);
-        // iterate through my_new_oct_connectivity_map and mark my proc ID
-        for (const auto &oct_ele : my_new_oct_connectivity_map) {
-            ele_owner_temp[oct_ele.eid] = rank;
-        }
-        // then full sum
-        std::vector<unsigned int> ele_owner(total_number, 0);
-        par::Mpi_Allreduce(ele_owner_temp.data(), ele_owner.data(),
-                           ele_owner.size(), MPI_SUM, commActive);
-
-        // ensure my_partition is sorted by gid
-        std::sort(my_partition.begin(), my_partition.end());
-
-        // ok, so we need to iterate over the new oct_connectivity map, looking
-        // at the E2E and identifying the full list
-
-        // note: initially in generateSearchKeys, we actually "probe" the
-        // information by creating searchKeys that are looking at "myX + 1 *
-        // mySz" and at "myX - 1" (so probing both directions for all three
-        // dimensions)
-
-        // but now we already have the E2E map, so we can just probe the
-        // my_new_oct_connectivity_map to figure out what all of the ghosts are,
-        // since we also note the edge and vertex neighbors of our local
-        // assignment
-
-        std::set<unsigned int> keys_need;
-
-        // round one exchange - all values that
-        for (const auto &oct_ele : my_new_oct_connectivity_map) {
-            // find every index and convert it back down to a global index
-            const auto &indices_referenced = e2e_index_map[oct_ele.eid];
-
-            for (const auto &idx : indices_referenced) {
-                unsigned int global_id = idx / 6;
-                keys_need.insert(global_id);
-            }
-
-            // iterate through the E2E map in the oct_ele, this finds all of the
-            // edges that we *know* we need
-            for (unsigned int i = 0; i < 6; ++i) {
-                if (oct_ele.e2e[i] != LOOK_UP_TABLE_DEFAULT) {
-                    keys_need.insert(oct_ele.e2e[i]);
-                }
-            }
-#if 0
-
-            // then iterate through the shared edges
-            for (unsigned int i = 0; i < 12; ++i) {
-                if (oct_ele.edgeNeighbors[i] != LOOK_UP_TABLE_DEFAULT) {
-                    keys_need.insert(oct_ele.edgeNeighbors[i]);
-                }
-            }
-
-            // and then the shared vertices
-            for (unsigned int i = 0; i < 8; ++i) {
-                if (oct_ele.vertexNeighbors[i] != LOOK_UP_TABLE_DEFAULT) {
-                    keys_need.insert(oct_ele.vertexNeighbors[i]);
-                }
-            }
-#endif
-        }
-
-#if 0
-        auto keys_need_prev = keys_need;
-        // check the global map for all of the gathered keys 4 times
-        // (iteratively, i think?)
-        for (int iter = 0; iter < 1; iter++) {
-            for (const auto &key : keys_need_prev) {
-                const auto &indices_referenced = e2e_index_map[key];
-                for (const auto &idx : indices_referenced) {
-                    unsigned int global_id = idx / 6;
-                    keys_need.insert(global_id);
-                }
-            }
-
-            // make sure to copy over...
-            keys_need_prev = keys_need;
-        }
-#endif
-
-        // remove any that may be in our set...
-        std::vector<unsigned int> data_to_remove_from_set;
-        data_to_remove_from_set.reserve(my_new_oct_connectivity_map.size());
-        for (const auto &oct_ele : my_new_oct_connectivity_map) {
-            data_to_remove_from_set.emplace_back(oct_ele.eid);
-        }
-
-        // clean up keys_need and remove anything we have that's already in
-        // my_new_oct_connectivity_map
-        for (const auto &val : data_to_remove_from_set) {
-            keys_need.erase(val);
-        }
-
-        //
-        std::vector<unsigned int> round1_ghosts(keys_need.begin(),
-                                                keys_need.end());
-
-        // std::cout << this->m_uiGlobalRank << " ROUND1 GHOSTS: ";
-        // for (auto &val : round1_ghosts) {
-        //     std::cout << val << " ";
-        // }
-        // std::cout << std::endl;
-        std::cout << this->m_uiGlobalRank << ": TOTAL KEYS + LOCAL SIZE: "
-                  << round1_ghosts.size() + my_new_oct_connectivity_map.size()
-                  << "  - TOTAL NUMBER OF ORIGINAL PARTITION: "
-                  << this->m_uiNumTotalElements << std::endl;
-
-        keys_need.clear();
-
-        // fetch the data, I guess
-        auto fetched_ghost_oct_connectivity_map =
-            getOctDataFromOtherProcesses<unsigned int>(
-                my_old_oct_connectivity_map, ele_offsets, ele_counts,
-                round1_ghosts, false);
-
-        // then do the same thing...
-        for (const auto &oct_ele : fetched_ghost_oct_connectivity_map) {
-            // iterate through the E2E map in the oct_ele
-            for (unsigned int i = 0; i < 6; ++i) {
-                if (oct_ele.e2e[i] != LOOK_UP_TABLE_DEFAULT) {
-                    keys_need.insert(oct_ele.e2e[i]);
-                }
-            }
-
-            // then iterate through the shared edges
-            for (unsigned int i = 0; i < 12; ++i) {
-                if (oct_ele.edgeNeighbors[i] != LOOK_UP_TABLE_DEFAULT) {
-                    keys_need.insert(oct_ele.edgeNeighbors[i]);
-                }
-            }
-
-            // and then the shared vertices
-            for (unsigned int i = 0; i < 8; ++i) {
-                if (oct_ele.vertexNeighbors[i] != LOOK_UP_TABLE_DEFAULT) {
-                    keys_need.insert(oct_ele.vertexNeighbors[i]);
-                }
-            }
-        }
-
-        data_to_remove_from_set.reserve(
-            data_to_remove_from_set.size() +
-            fetched_ghost_oct_connectivity_map.size());
-        for (const auto &oct_ele : fetched_ghost_oct_connectivity_map) {
-            data_to_remove_from_set.emplace_back(oct_ele.eid);
-        }
-        for (const auto &val : data_to_remove_from_set) {
-            keys_need.erase(val);
-        }
-        std::vector<unsigned int> round2_ghosts(keys_need.begin(),
-                                                keys_need.end());
-
-        // that should be pretty much everything?
-        // std::cout << this->m_uiGlobalRank << " ROUND2 GHOSTS: ";
-        // for (auto &val : round2_ghosts) {
-        //     std::cout << val << " ";
-        // }
-        // std::cout << std::endl;
-        std::cout << this->m_uiGlobalRank
-                  << ": ROUND2 GHOSTS + ROUND1 GHOSTS + LOCAL SIZE: "
-                  << round1_ghosts.size() + round2_ghosts.size() +
-                         my_new_oct_connectivity_map.size()
-                  << "  - TOTAL NUMBER OF ORIGINAL PARTITION: "
-                  << this->m_uiNumTotalElements << std::endl;
-
-        keys_need.clear();
-    }
-
-    void discoverNeighbors(
-        const std::vector<oct_data<unsigned int>> &elements_to_search,
-        std::set<unsigned int> &global_ids_needed,
-        const std::vector<unsigned int> &ele_offsets,
-        std::vector<oct_data<unsigned int>> &oct_connectivity_map,
-        std::vector<oct_data<unsigned int>> &new_oct_connectivity_map,
-        int current_round) {
-        int rank            = this->getMPIRank();
-        int npes            = this->getMPICommSize();
-        MPI_Comm commActive = this->getMPICommunicator();
-
-        // check if an element should be requested from another rank or not
-        auto needs_ghost    = [&](unsigned int id) {
-            if (id == LOOK_UP_TABLE_DEFAULT) return false;
-
-            int owner = -1;
-            for (int r = 0; r < npes; ++r) {
-                if (id >= ele_offsets[r] && id < ele_offsets[r + 1]) {
-                    owner = r;
-                    break;
-                }
-            }
-            // we only need the ghost if it's owned by another rank!
-            return (owner != -1) && (owner != rank);
-        };
-
-        switch (current_round % 3) {
-            case 0:
-                // find face neighbors
-                for (const auto &elem : elements_to_search) {
-                    unsigned int face_neighbors[2];
-                    for (const unsigned int dir :
-                         {OCT_DIR_LEFT, OCT_DIR_RIGHT, OCT_DIR_DOWN, OCT_DIR_UP,
-                          OCT_DIR_BACK, OCT_DIR_FRONT}) {
-                        getElementFaceNeighborsNewPartition(
-                            oct_connectivity_map, elem.eid, dir,
-                            face_neighbors);
-
-                        if (needs_ghost(face_neighbors[1])) {
-                            global_ids_needed.insert(face_neighbors[1]);
-                        }
-                    }
-                }
-            case 1:
-                // find edge neighbors
-                for (const auto &elem : elements_to_search) {
-                    unsigned int edge_neighbors[4];
-
-                    for (const unsigned int dir :
-                         {OCT_DIR_LEFT_DOWN, OCT_DIR_LEFT_UP, OCT_DIR_LEFT_BACK,
-                          OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN,
-                          OCT_DIR_RIGHT_UP, OCT_DIR_RIGHT_BACK,
-                          OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
-                          OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK,
-                          OCT_DIR_UP_FRONT}) {
-                        getElementEdgeNeighborsNewPartition(
-                            oct_connectivity_map, elem.eid, dir,
-                            edge_neighbors);
-                        for (unsigned int lookup_id = 1; lookup_id < 4;
-                             ++lookup_id) {
-                            if (needs_ghost(edge_neighbors[lookup_id])) {
-                                global_ids_needed.insert(
-                                    edge_neighbors[lookup_id]);
-                            }
-                        }
-                    }
-                }
-            case 2:
-                // find vertex neighbors
-                for (const auto &elem : elements_to_search) {
-                    unsigned int vertex_neighbors[NUM_CHILDREN];
-
-                    for (const unsigned int dir :
-                         {OCT_DIR_LEFT_DOWN_BACK, OCT_DIR_RIGHT_DOWN_BACK,
-                          OCT_DIR_LEFT_UP_BACK, OCT_DIR_RIGHT_UP_BACK,
-                          OCT_DIR_LEFT_DOWN_FRONT, OCT_DIR_RIGHT_DOWN_FRONT,
-                          OCT_DIR_LEFT_UP_FRONT, OCT_DIR_RIGHT_UP_FRONT}) {
-                        getElementVertexNeighborsNewPartition(
-                            oct_connectivity_map, elem.eid, dir,
-                            vertex_neighbors);
-                        for (unsigned int lookup_id = 1;
-                             lookup_id < NUM_CHILDREN; ++lookup_id) {
-                            if (needs_ghost(vertex_neighbors[lookup_id])) {
-                                global_ids_needed.insert(
-                                    vertex_neighbors[lookup_id]);
-                            }
-                        }
-                    }
-                }
-        }
-
-        // now we look at e2n_mapping
-        if (current_round == 6) {
-            unsigned int ownerID, ii_x, jj_y, kk_z;
-
-            for (const auto &od : oct_connectivity_map) {
-                if (od.isGhostTwo) {
-                    continue;
-                }
-                for (unsigned int i = 0; i < m_uiNpE; ++i) {
-                    dg2eijk(od.e2n_dg[i], ownerID, ii_x, jj_y, kk_z);
-                    global_ids_needed.insert(ownerID);
-                }
-            }
-        }
-
-        // clear out the elements already owned by our actual map (not ghosted)
-        std::vector<unsigned int> to_remove;
-        for (unsigned int id : global_ids_needed) {
-            bool exists = std::any_of(
-                new_oct_connectivity_map.begin(),
-                new_oct_connectivity_map.end(),
-                [id](const oct_data<unsigned int> &x) { return x.eid == id; });
-            if (exists) to_remove.push_back(id);
-        }
-        for (unsigned int id : to_remove) {
-            global_ids_needed.erase(id);
-        }
-    }
 
     void repartitionMeshGlobal(bool do_block_creation    = true,
                                bool do_fastpart_filesave = false,
@@ -4527,6 +4582,31 @@ class Mesh {
         return 0;
     }
 };
+
+// LocalElementRange iterator definitions. dereferences via the explicit
+// ID list when populated, otherwise reads the [LB, LE) range identity.
+inline unsigned int Mesh::LocalElementRange::iterator::operator*() const {
+    const auto& ids = m_->m_uiLocalElementIds;
+    if (!ids.empty()) {
+        return ids[pos_];
+    }
+    return m_->m_uiElementLocalBegin + (unsigned int)pos_;
+}
+inline Mesh::LocalElementRange::iterator
+Mesh::LocalElementRange::begin() const {
+    return iterator(m_mesh_, 0);
+}
+inline Mesh::LocalElementRange::iterator
+Mesh::LocalElementRange::end() const {
+    return iterator(m_mesh_, size());
+}
+inline std::size_t Mesh::LocalElementRange::size() const {
+    const auto& ids = m_mesh_->m_uiLocalElementIds;
+    if (!ids.empty()) return ids.size();
+    if (m_mesh_->m_uiElementLocalEnd < m_mesh_->m_uiElementLocalBegin) return 0;
+    return (std::size_t)(m_mesh_->m_uiElementLocalEnd
+                         - m_mesh_->m_uiElementLocalBegin);
+}
 
 template <>
 inline void Mesh::init<WaveletDA::LoopType ::ALL>() {

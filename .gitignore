@@ -54,3 +54,19 @@ kde
 .python-version
 
 .cache/
+
+# diagnostic / mesh output artifacts (kept out of source history)
+*.vtk
+*.vtu
+*.pvtu
+balOct_*.vtk
+blockNodes_*.vtk
+solverCtx_*.txt
+em4_*prof*.csv
+em4_*prof*.prof
+
+# claude code workspace + agent transcripts
+.claude/
+
+# personal recovery cheat sheet (intentionally untracked)
+RECOVERY.md

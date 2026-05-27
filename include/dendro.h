@@ -19,6 +19,25 @@
 #include <iostream>
 
 /**
+ * ==== Debug probe gating ====
+ *
+ * env-gated bisection probes (recv/send dumps, remesh tag dumps,
+ * cg traces, etc.) are compiled in only when the CMake option
+ * DENDRO_ENABLE_DEBUG_PROBES=ON. without it, DENDRO_PROBE_GETENV(name)
+ * returns a compile-time nullptr — every `if (probe_dir) { dump... }`
+ * branch becomes dead code and is eliminated by the optimizer.
+ *
+ * Probe call sites use DENDRO_PROBE_GETENV instead of std::getenv. The
+ * macro is a drop-in: same signature, same return type. The compiler
+ * handles the rest.
+ */
+#ifdef DENDRO_ENABLE_DEBUG_PROBES
+#define DENDRO_PROBE_GETENV(name) std::getenv(name)
+#else
+#define DENDRO_PROBE_GETENV(name) ((const char*)nullptr)
+#endif
+
+/**
  * ==== C++ Standard-Based Definitions ====
  *
  * Any sort of definitions that need to be made based on used C++ standard

@@ -14,10 +14,265 @@
 #include "ctx.h"
 #include "dendro.h"
 #include "dvec.h"
+#include "logger.h"
 #include "mesh.h"
 #include "ts.h"
 
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <cstdint>
+#include <vector>
+#include <tuple>
+
 namespace ts {
+
+// cg-state tracer: dumps cg values at target phys positions at each
+// checkpoint in evolve(). gate by EM4_CG_TRACE_DIR + (EM4_CG_TRACE_PHYS
+// or EM4_CG_TRACE_BBOX). phys list format: "x1,y1,z1;x2,y2,z2;..."
+// (eOrder-scaled tree coords). bbox format: "xlo,xhi,ylo,yhi,zlo,zhi".
+// Optionally restrict to a specific step via EM4_CG_TRACE_STEP=N.
+// dumps to <dir>/<tag>_step<S>_sub<I>_r<R>.txt.
+template <typename T>
+static void em4_cg_trace(const ot::Mesh* pMesh, const T* vec,
+                         unsigned int dof, const char* tag, int step,
+                         int substage) {
+    static const char* trace_dir   = DENDRO_PROBE_GETENV("EM4_CG_TRACE_DIR");
+    static const char* trace_phys  = DENDRO_PROBE_GETENV("EM4_CG_TRACE_PHYS");
+    static const char* trace_bbox  = DENDRO_PROBE_GETENV("EM4_CG_TRACE_BBOX");
+    static const char* trace_step_env = DENDRO_PROBE_GETENV("EM4_CG_TRACE_STEP");
+    static const int trace_step_only =
+        trace_step_env ? std::atoi(trace_step_env) : -1;
+    // step-range support: EM4_CG_TRACE_STEP_MIN / _MAX (inclusive).
+    // Overrides EM4_CG_TRACE_STEP if both set. -1 disables.
+    static const char* trace_step_min_env =
+        DENDRO_PROBE_GETENV("EM4_CG_TRACE_STEP_MIN");
+    static const char* trace_step_max_env =
+        DENDRO_PROBE_GETENV("EM4_CG_TRACE_STEP_MAX");
+    static const int trace_step_min =
+        trace_step_min_env ? std::atoi(trace_step_min_env) : -1;
+    static const int trace_step_max =
+        trace_step_max_env ? std::atoi(trace_step_max_env) : -1;
+    // optional: only dump when tag starts with this prefix (e.g. "50" for postBcast)
+    static const char* trace_tag_prefix = DENDRO_PROBE_GETENV("EM4_CG_TRACE_TAG_PREFIX");
+    if (trace_tag_prefix && trace_tag_prefix[0] != '\0') {
+        const size_t plen = std::strlen(trace_tag_prefix);
+        if (std::strncmp(tag, trace_tag_prefix, plen) != 0) return;
+    }
+    static bool parsed             = false;
+    static std::vector<std::tuple<unsigned long long, unsigned long long,
+                                  unsigned long long>>
+        targets;
+    static unsigned long long bb_xlo = 0, bb_xhi = 0, bb_ylo = 0,
+                              bb_yhi = 0, bb_zlo = 0, bb_zhi = 0;
+    static bool bb_on = false;
+    if (!trace_dir) return;
+    if (!trace_phys && !trace_bbox) return;
+    if (!pMesh || !pMesh->isActive()) return;
+    if (trace_step_only >= 0 && step != trace_step_only) return;
+    if (trace_step_min >= 0 && step < trace_step_min) return;
+    if (trace_step_max >= 0 && step > trace_step_max) return;
+    if (!parsed) {
+        if (trace_phys) {
+            std::string s(trace_phys);
+            size_t pos = 0;
+            while (pos < s.size()) {
+                unsigned long long x, y, z;
+                if (std::sscanf(s.c_str() + pos, "%llu,%llu,%llu", &x, &y, &z)
+                    == 3) {
+                    targets.emplace_back(x, y, z);
+                }
+                size_t next = s.find(';', pos);
+                if (next == std::string::npos) break;
+                pos = next + 1;
+            }
+        }
+        if (trace_bbox) {
+            std::sscanf(trace_bbox,
+                "%llu,%llu,%llu,%llu,%llu,%llu",
+                &bb_xlo, &bb_xhi, &bb_ylo, &bb_yhi, &bb_zlo, &bb_zhi);
+            bb_on = true;
+        }
+        parsed = true;
+    }
+    if (targets.empty() && !bb_on) return;
+
+    const unsigned int npe         = pMesh->getNumNodesPerElement();
+    const unsigned int eOrd        = pMesh->getElementOrder();
+    const unsigned int maxD        = m_uiMaxDepth;
+    const unsigned int nLB         = pMesh->getNodeLocalBegin();
+    const unsigned int nLE         = pMesh->getNodeLocalEnd();
+    const unsigned int nTotal      = pMesh->getDegOfFreedom();
+    const auto& cg2dg              = pMesh->getCG2DGMap();
+    const auto& allElements        = pMesh->getAllElements();
+
+    char fn[1024];
+    std::snprintf(fn, sizeof(fn), "%s/%s_step%d_sub%d_r%d.txt", trace_dir,
+                  tag, step, substage, (int)pMesh->getMPIRank());
+    FILE* fp = std::fopen(fn, "w");
+    if (!fp) return;
+    std::fprintf(fp,
+                 "# tag=%s step=%d substage=%d rank=%d dof=%u\n"
+                 "# loc cg phys_x phys_y phys_z v hex "
+                 "owner_ele owner_lev owner_x owner_y owner_z owner_sub_n "
+                 "owner_sub_i owner_sub_j owner_sub_k\n",
+                 tag, step, substage, (int)pMesh->getMPIRank(), dof);
+
+    for (unsigned int cg = 0; cg < nTotal; cg++) {
+        if (cg >= cg2dg.size()) continue;
+        const unsigned int dg = cg2dg[cg];
+        if (dg == LOOK_UP_TABLE_DEFAULT) continue;
+        const unsigned int e = dg / npe;
+        const unsigned int n = dg % npe;
+        if (e >= allElements.size()) continue;
+        const ot::TreeNode& tn = allElements[e];
+        const unsigned int lev = tn.getLevel();
+        if (lev > maxD) continue;
+        const unsigned long long len = 1ull << (maxD - lev);
+        const unsigned int ni        = n % (eOrd + 1);
+        const unsigned int nj        = (n / (eOrd + 1)) % (eOrd + 1);
+        const unsigned int nk        = n / ((eOrd + 1) * (eOrd + 1));
+        const unsigned long long px =
+            (unsigned long long)tn.getX() * eOrd + (unsigned long long)ni * len;
+        const unsigned long long py =
+            (unsigned long long)tn.getY() * eOrd + (unsigned long long)nj * len;
+        const unsigned long long pz =
+            (unsigned long long)tn.getZ() * eOrd + (unsigned long long)nk * len;
+
+        bool match = false;
+        if (bb_on) {
+            if (px >= bb_xlo && px <= bb_xhi && py >= bb_ylo
+                && py <= bb_yhi && pz >= bb_zlo && pz <= bb_zhi)
+                match = true;
+        }
+        if (!match) {
+            for (auto& t : targets) {
+                if (px == std::get<0>(t) && py == std::get<1>(t)
+                    && pz == std::get<2>(t)) {
+                    match = true;
+                    break;
+                }
+            }
+        }
+        if (!match) continue;
+
+        const char loc = (cg >= nLB && cg < nLE) ? 'L' : 'G';
+        for (unsigned int v = 0; v < dof; v++) {
+            const T val = vec[v * nTotal + cg];
+            uint64_t hb = 0;
+            std::memcpy(&hb, &val, sizeof(hb));
+            std::fprintf(fp,
+                         "%c %u %llu %llu %llu %u %lx %u %u %u %u %u %u %u %u %u\n",
+                         loc, cg, px, py, pz, v, (unsigned long)hb,
+                         e, lev,
+                         (unsigned)tn.getX(), (unsigned)tn.getY(),
+                         (unsigned)tn.getZ(),
+                         n, ni, nj, nk);
+        }
+    }
+    std::fclose(fp);
+}
+
+// hanging-node E2N_CG resolution dumper. for every LOCAL elem on this rank
+// and every sub_n that's hanging, dumps a row with: elem TN, sub indices,
+// geometric phys, resolved cg index, resolved cg's phys, is_local. format
+// is partition-independent (keyed by elem TN + sub_n + geom phys) so two
+// runs (graph and SFC) can be diffed at the (TN, sub_n) level to find
+// hanging-node routing differences.
+//
+// gate: EM4_HANG_DUMP_DIR + EM4_HANG_DUMP_STEP=N. dumps once per step
+// matching N. file: <dir>/hang_step<N>_r<R>.txt.
+static inline void em4_hang_dump(const ot::Mesh* pMesh, int step) {
+    static const char* dir   = DENDRO_PROBE_GETENV("EM4_HANG_DUMP_DIR");
+    static const char* s_env = DENDRO_PROBE_GETENV("EM4_HANG_DUMP_STEP");
+    static const int s_only  = s_env ? std::atoi(s_env) : -1;
+    if (!dir) return;
+    if (s_only >= 0 && step != s_only) return;
+    if (!pMesh || !pMesh->isActive()) return;
+
+    const unsigned int npe  = pMesh->getNumNodesPerElement();
+    const unsigned int eOrd = pMesh->getElementOrder();
+    const unsigned int maxD = m_uiMaxDepth;
+    const unsigned int nLB  = pMesh->getNodeLocalBegin();
+    const unsigned int nLE  = pMesh->getNodeLocalEnd();
+    const auto& cg2dg       = pMesh->getCG2DGMap();
+    const auto& e2n         = pMesh->getE2NMapping();
+    const auto& allEle      = pMesh->getAllElements();
+    const unsigned int LB   = pMesh->getElementLocalBegin();
+    const unsigned int LE   = pMesh->getElementLocalEnd();
+
+    char fn[1024];
+    std::snprintf(fn, sizeof(fn), "%s/hang_step%d_r%d.txt", dir, step,
+                  (int)pMesh->getMPIRank());
+    FILE* fp = std::fopen(fn, "w");
+    if (!fp) return;
+    std::fprintf(fp,
+        "# step=%d rank=%d eOrd=%u\n"
+        "# elem_lev elem_x elem_y elem_z sub_n sub_i sub_j sub_k "
+        "geom_px geom_py geom_pz cg cg_px cg_py cg_pz is_local\n",
+        step, (int)pMesh->getMPIRank(), eOrd);
+
+    for (unsigned int e = LB; e < LE; e++) {
+        const ot::TreeNode& tn = allEle[e];
+        const unsigned int elev = tn.getLevel();
+        if (elev == 0) continue;
+        const unsigned long long elen = 1ull << (maxD - elev);
+        for (unsigned int n = 0; n < npe; n++) {
+            const unsigned int ni = n % (eOrd + 1);
+            const unsigned int nj = (n / (eOrd + 1)) % (eOrd + 1);
+            const unsigned int nk = n / ((eOrd + 1) * (eOrd + 1));
+            // pMesh is const; isNodeHanging is a const method
+            if (!pMesh->isNodeHanging(e, ni, nj, nk)) continue;
+            const unsigned long long gpx =
+                (unsigned long long)tn.getX() * eOrd
+                + (unsigned long long)ni * elen;
+            const unsigned long long gpy =
+                (unsigned long long)tn.getY() * eOrd
+                + (unsigned long long)nj * elen;
+            const unsigned long long gpz =
+                (unsigned long long)tn.getZ() * eOrd
+                + (unsigned long long)nk * elen;
+            const unsigned int cg = e2n[e * npe + n];
+            // resolve cg -> phys via cg2dg
+            unsigned long long cpx = 0, cpy = 0, cpz = 0;
+            if (cg < cg2dg.size()) {
+                const unsigned int dg = cg2dg[cg];
+                if (dg != LOOK_UP_TABLE_DEFAULT) {
+                    const unsigned int oe = dg / npe;
+                    const unsigned int on = dg % npe;
+                    if (oe < allEle.size()) {
+                        const ot::TreeNode& oTN = allEle[oe];
+                        const unsigned int olev = oTN.getLevel();
+                        if (olev <= maxD) {
+                            const unsigned long long olen = 1ull
+                                << (maxD - olev);
+                            const unsigned int oni = on % (eOrd + 1);
+                            const unsigned int onj =
+                                (on / (eOrd + 1)) % (eOrd + 1);
+                            const unsigned int onk =
+                                on / ((eOrd + 1) * (eOrd + 1));
+                            cpx = (unsigned long long)oTN.getX() * eOrd
+                                + (unsigned long long)oni * olen;
+                            cpy = (unsigned long long)oTN.getY() * eOrd
+                                + (unsigned long long)onj * olen;
+                            cpz = (unsigned long long)oTN.getZ() * eOrd
+                                + (unsigned long long)onk * olen;
+                        }
+                    }
+                }
+            }
+            const int is_local = (cg >= nLB && cg < nLE) ? 1 : 0;
+            std::fprintf(fp,
+                "%u %u %u %u %u %u %u %u "
+                "%llu %llu %llu %u %llu %llu %llu %d\n",
+                elev, (unsigned)tn.getX(), (unsigned)tn.getY(),
+                (unsigned)tn.getZ(), n, ni, nj, nk,
+                gpx, gpy, gpz, cg, cpx, cpy, cpz, is_local);
+        }
+    }
+    std::fclose(fp);
+}
+
 /**time stepper type
  * UTS uniform time stepper.
  * UTS_ADAP: uniform over the grid but time step size changes over time.
@@ -330,6 +585,9 @@ ETS<T, Ctx>::ETS(Ctx* appCtx) {
     m_uiTimeInfo  = appCtx->get_ts_info();
 
     m_uiEVar      = m_uiAppCtx->get_evolution_vars();
+
+    dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                          "Explicit time stepper (ETS) created!");
 }
 
 template <typename T, typename Ctx>
@@ -402,6 +660,9 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
         m_uiBi  = (DendroScalar*)ETS_C;
         m_uiAij = (DendroScalar*)ETS_U;
 
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK3");
+
     } else if (type == ETSType::RK4) {
         m_uiNumStages                     = 4;
 
@@ -415,6 +676,9 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
         m_uiCi  = (DendroScalar*)ETS_T;
         m_uiBi  = (DendroScalar*)ETS_C;
         m_uiAij = (DendroScalar*)ETS_U;
+
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK4");
 
     } else if (type == ETSType::RK5) {
         return -1;
@@ -436,14 +700,24 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
         m_uiBi  = (DendroScalar*)ETS_C;
         m_uiAij = (DendroScalar*)ETS_U;
 
-    } else
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK5");
+
+    } else {
+        dendro::logger::error(dendro::logger::Scope{"ETS"},
+                              "UNKNOWN ETS TYPE (supports RK3, RK4, and RK5)");
         return -1;
+    }
 
     return 0;
 }
 
 template <typename T, typename Ctx>
 void ETS<T, Ctx>::init() {
+    dendro::logger::info(
+        dendro::logger::Scope{"ETS"},
+        "Now initializing the ETS (initializing app context, allocating "
+        "internal vars, and synchronizing with mesh");
     m_uiAppCtx->initialize();
     m_uiTimeInfo = m_uiAppCtx->get_ts_info();
     allocate_internal_vars();
@@ -465,16 +739,110 @@ void ETS<T, Ctx>::evolve() {
     m_uiCtxpt[ETSPROFILE::EVOLVE].start();
 #endif
 
+    // env-gated breadcrumb tracer. set DENDRO_EVOLVE_TRACE=1 to enable.
+    // prints per-rank stderr line at each named checkpoint inside evolve().
+    // used to bisect a stall between "Current Step: N" and "Current Step: N+1".
+    static const bool _ev_trace = []() {
+        const char* v = DENDRO_PROBE_GETENV("DENDRO_EVOLVE_TRACE");
+        return v && v[0] == '1' && v[1] == '\0';
+    }();
+#define _EV_TRACE(tag) do { \
+    if (_ev_trace) { \
+        int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r); \
+        std::fprintf(stderr, "[ETV r%d step=%lu] %s\n", \
+                     _r, (unsigned long)m_uiTimeInfo._m_uiStep, tag); \
+        std::fflush(stderr); \
+    } \
+} while (0)
+    _EV_TRACE("00_enter");
+
+    dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                          "Beginning ETS evolve (overall time step: {})",
+                          m_uiTimeInfo._m_uiStep);
+
     const ot::Mesh* pMesh  = m_uiAppCtx->get_mesh();
+
+    // EARLIEST evolve() trace point — fires before pre_timestep, before
+    // sync_with_mesh effects propagate, before any other state-touching
+    // code. used to bisect divergence between end-of-remesh and step start.
+    em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                 "98_evolve_entry", (int)m_uiTimeInfo._m_uiStep, -1);
     m_uiTimeInfo           = m_uiAppCtx->get_ts_info();
     const double current_t = m_uiTimeInfo._m_uiT;
     double current_t_adv   = current_t;
     const double dt        = m_uiTimeInfo._m_uiTh;
 
+    _EV_TRACE("01_pre_timestep_start");
     m_uiAppCtx->pre_timestep(m_uiEVar);
+    _EV_TRACE("02_pre_timestep_done");
 
     const unsigned int DOF    = m_uiEVar.get_dof();
     const unsigned int szPDof = pMesh->getDegOfFreedom();
+
+    const int trace_step = (int)m_uiTimeInfo._m_uiStep;
+    em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                 "00_step_start", trace_step, -1);
+    em4_hang_dump(pMesh, trace_step);
+
+    // env-gated element-set dump at start of step. used to detect AMR
+    // refinement decision drift between graph and skip partitioning.
+    // gate: EM4_ELEMSET_DUMP_DIR=/path + EM4_ELEMSET_DUMP_STEPS="N1,N2,...".
+    // for each matching step, every rank dumps its sorted LOCAL element
+    // list (TN coords + level) to <dir>/elemset_step<N>_r<R>.txt.
+    {
+        static const char* esd_dir = DENDRO_PROBE_GETENV("EM4_ELEMSET_DUMP_DIR");
+        static const char* esd_steps_env =
+            DENDRO_PROBE_GETENV("EM4_ELEMSET_DUMP_STEPS");
+        if (esd_dir && esd_steps_env && pMesh->isActive()) {
+            static std::set<int> esd_steps;
+            static bool esd_parsed = false;
+            if (!esd_parsed) {
+                std::string s(esd_steps_env);
+                size_t p = 0;
+                while (p < s.size()) {
+                    size_t n = s.find(',', p);
+                    if (n == std::string::npos) n = s.size();
+                    if (n > p)
+                        esd_steps.insert(std::atoi(
+                            s.substr(p, n - p).c_str()));
+                    p = n + 1;
+                }
+                esd_parsed = true;
+            }
+            if (esd_steps.count(trace_step)) {
+                const auto& allEle = pMesh->getAllElements();
+                const unsigned int LB = pMesh->getElementLocalBegin();
+                const unsigned int LE = pMesh->getElementLocalEnd();
+                const int rank = pMesh->getMPIRank();
+                std::vector<std::tuple<unsigned int, unsigned int,
+                                       unsigned int, unsigned int>> locals;
+                for (unsigned int e = LB; e < LE; e++) {
+                    const auto& t = allEle[e];
+                    locals.emplace_back(t.getLevel(), t.getX(), t.getY(),
+                                        t.getZ());
+                }
+                std::sort(locals.begin(), locals.end());
+                char fn[1024];
+                std::snprintf(fn, sizeof(fn),
+                              "%s/elemset_step%d_r%d.txt",
+                              esd_dir, trace_step, rank);
+                FILE* fp = std::fopen(fn, "w");
+                if (fp) {
+                    std::fprintf(fp,
+                        "# step=%d rank=%d numLocal=%u\n"
+                        "# lev x y z\n",
+                        trace_step, rank, LE - LB);
+                    for (const auto& t : locals) {
+                        std::fprintf(fp, "%u %u %u %u\n",
+                                     std::get<0>(t), std::get<1>(t),
+                                     std::get<2>(t), std::get<3>(t));
+                    }
+                    std::fclose(fp);
+                }
+            }
+        }
+    }
+    _EV_TRACE("03_pre_stages_loop");
 
     if (pMesh->isActive()) {
         int rank                              = pMesh->getMPIRank();
@@ -490,35 +858,241 @@ void ETS<T, Ctx>::evolve() {
         double dx, dy, dz;
 
         for (int stage = 0; stage < m_uiNumStages; stage++) {
+            dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                                  "Now executing ETS Evolve stage {}/{}",
+                                  stage + 1, m_uiNumStages);
+            if (_ev_trace) {
+                int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
+                std::fprintf(stderr,
+                    "[ETV r%d step=%lu stage=%d] 10_stage_enter\n", _r,
+                    (unsigned long)m_uiTimeInfo._m_uiStep, stage);
+                std::fflush(stderr);
+            }
+
             m_uiEVecTmp[0].copy_data(m_uiEVar);
 
             for (int p = 0; p < stage; p++)
                 DVec::axpy(m_uiAppCtx->get_mesh(),
                            m_uiAij[(stage)*m_uiNumStages + p] * dt,
                            m_uiStVec[p], m_uiEVecTmp[0]);
+            if (_ev_trace) {
+                int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
+                std::fprintf(stderr,
+                    "[ETV r%d step=%lu stage=%d] 11_pre_post_timestep\n", _r,
+                    (unsigned long)m_uiTimeInfo._m_uiStep, stage);
+                std::fflush(stderr);
+            }
             m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
+            if (_ev_trace) {
+                int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
+                std::fprintf(stderr,
+                    "[ETV r%d step=%lu stage=%d] 12_post_post_timestep\n", _r,
+                    (unsigned long)m_uiTimeInfo._m_uiStep, stage);
+                std::fflush(stderr);
+            }
 
+            // per-substage sync: force m_uiEVecTmp[0] to be partition-
+            // invariant before the RHS unzip reads it. without this, axpy
+            // accumulates substage-internal drift from RHS+zip at non-
+            // consensus cgs, producing 1-ULP off in the post-step state.
             current_t_adv = current_t + m_uiCi[stage] * dt;
+            em4_cg_trace(pMesh, m_uiEVecTmp[0].get_vec_ptr(),
+                         m_uiEVecTmp[0].get_dof(), "10_preRHS",
+                         trace_step, stage);
+            if (_ev_trace) {
+                int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
+                std::fprintf(stderr,
+                    "[ETV r%d step=%lu stage=%d] 13_pre_pre_stage\n", _r,
+                    (unsigned long)m_uiTimeInfo._m_uiStep, stage);
+                std::fflush(stderr);
+            }
             m_uiAppCtx->pre_stage(m_uiStVec[stage]);
+            if (_ev_trace) {
+                int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
+                std::fprintf(stderr,
+                    "[ETV r%d step=%lu stage=%d] 14_pre_rhs\n", _r,
+                    (unsigned long)m_uiTimeInfo._m_uiStep, stage);
+                std::fflush(stderr);
+            }
             m_uiAppCtx->rhs(&m_uiEVecTmp[0], &m_uiStVec[stage], 1,
                             current_t_adv);
+            if (_ev_trace) {
+                int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
+                std::fprintf(stderr,
+                    "[ETV r%d step=%lu stage=%d] 15_post_rhs\n", _r,
+                    (unsigned long)m_uiTimeInfo._m_uiStep, stage);
+                std::fflush(stderr);
+            }
             m_uiAppCtx->post_stage(m_uiStVec[stage]);
+            em4_cg_trace(pMesh, m_uiStVec[stage].get_vec_ptr(),
+                         m_uiStVec[stage].get_dof(), "20_postRHS",
+                         trace_step, stage);
+
+            if (_ev_trace) {
+                int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
+                std::fprintf(stderr,
+                    "[ETV r%d step=%lu stage=%d] 16_stage_exit\n", _r,
+                    (unsigned long)m_uiTimeInfo._m_uiStep, stage);
+                std::fflush(stderr);
+            }
         }
 
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "Calculating next step after stages");
+        _EV_TRACE("20_pre_final_axpy");
         for (unsigned int k = 0; k < m_uiNumStages; k++)
             DVec::axpy(m_uiAppCtx->get_mesh(), m_uiBi[k] * dt, m_uiStVec[k],
                        m_uiEVar);
+        _EV_TRACE("21_post_final_axpy");
+        em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                     "30_postFinalAxpy", trace_step, -1);
+    }
+    _EV_TRACE("22_pre_post_axpy_sync");
+
+    // post-axpy sync: the final axpy `m_uiEVar += dt*B*stVec` accumulates
+    // RHS into local cgs, but plan-zip only fills RHS at PRIMARY cgs
+    // (per phys position). Non-primary local cgs (duplicates created by
+    // graph repartitioning) get RHS=0, so the axpy leaves them at last-
+    // step values while primaries advance. The drift compounds per step
+    // → 50× U_E2 residual at step 230. Force non-primary cgs to match
+    // primary's post-axpy value via the side-channel Alltoallv. Gated
+    // OFF by default to allow A/B testing — see project_corner_drift_*.
+    // env DENDRO_DISABLE_POST_AXPY_SYNC=1 disables.
+    {
+        static const char* nps_env =
+            std::getenv("DENDRO_DISABLE_POST_AXPY_SYNC");
+        const bool skip_post_axpy_sync =
+            nps_env && nps_env[0] == '1' && nps_env[1] == '\0';
+        if (!skip_post_axpy_sync && pMesh->isActive()) {
+            T* dvec_ptr = m_uiEVar.get_vec_ptr();
+            const unsigned int DOFV = m_uiEVar.get_dof();
+            ot::Mesh* pMeshMut = const_cast<ot::Mesh*>(pMesh);
+            pMeshMut->syncZipNonPrimaryPublic(dvec_ptr, DOFV);
+            em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                         "40_postSync", trace_step, -1);
+            // additional pass: position-keyed broadcast (gated by
+            // DENDRO_FORCE_POS_BCAST=1). brings every cg at consensus
+            // phys_pos into bit-identity across ranks, plus zeros out
+            // cgs at phys positions with no canonical writer anywhere
+            // (matches SFC's far-field hanging-position IC).
+            pMeshMut->broadcastCgValuesByPhysPosPublic(dvec_ptr, DOFV);
+            em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                         "50_postBcast", trace_step, -1);
+        }
     }
 
+    _EV_TRACE("30_pre_final_post_timestep");
     m_uiAppCtx->post_timestep(m_uiEVar);
+    _EV_TRACE("31_post_final_post_timestep");
 
     m_uiAppCtx->increment_ts_info();
     m_uiTimeInfo = m_uiAppCtx->get_ts_info();
+    _EV_TRACE("32_pre_waitAll");
     pMesh->waitAll();
+    _EV_TRACE("33_post_waitAll");
+
+    // probe: dump cg values at specific step boundaries to bisect the
+    // 1-ULP partition-dependent seed. set EM4_STEP_DUMP_DIR=/path AND
+    // EM4_STEP_DUMP_STEPS="8,9,10". dumps non-hanging local cgs keyed
+    // by (phys_x, phys_y, phys_z). m_uiEVar at this point holds the
+    // just-completed step's state.
+    {
+        const char* dump_dir = DENDRO_PROBE_GETENV("EM4_STEP_DUMP_DIR");
+        const char* dump_steps_env = DENDRO_PROBE_GETENV("EM4_STEP_DUMP_STEPS");
+        if (dump_dir && dump_steps_env && pMesh->isActive()) {
+            std::set<long> dump_steps;
+            std::string s_in(dump_steps_env);
+            size_t spos = 0;
+            while (spos < s_in.size()) {
+                size_t nx = s_in.find(',', spos);
+                if (nx == std::string::npos) nx = s_in.size();
+                if (nx > spos)
+                    dump_steps.insert(std::atol(
+                        s_in.substr(spos, nx - spos).c_str()));
+                spos = nx + 1;
+            }
+            // increment_ts_info bumped the step; we dump the value of
+            // the just-completed step (the new step minus 1).
+            const long cur_step = (long)m_uiTimeInfo._m_uiStep - 1;
+            if (dump_steps.count(cur_step)) {
+                T* dvec_ptr = m_uiEVar.get_vec_ptr();
+                const unsigned int DOFV = m_uiEVar.get_dof();
+                const unsigned int szPDofL = pMesh->getDegOfFreedom();
+                const unsigned int* e2n =
+                    &(*(pMesh->getE2NMapping().begin()));
+                const unsigned int* e2n_dg_ =
+                    &(*(pMesh->getE2NMapping_DG().begin()));
+                const auto& pNodes = pMesh->getAllElements();
+                const unsigned int NLB = pMesh->getNodeLocalBegin();
+                const unsigned int NLE = pMesh->getNodeLocalEnd();
+                const unsigned int ELB = pMesh->getElementLocalBegin();
+                const unsigned int ELE = pMesh->getElementLocalEnd();
+                const unsigned int eOrd = pMesh->getElementOrder();
+                const unsigned int nPe = pMesh->getNumNodesPerElement();
+                const unsigned int maxD = m_uiMaxDepth;
+                // dump by CG INDEX (all local cgs), using m_uiCG2DG
+                // to find canonical (oe, on) for phys position.
+                const auto& cg2dg = pMesh->getCG2DGMap();
+                for (unsigned int v = 0; v < DOFV; v++) {
+                    T* vec_v = dvec_ptr + v * szPDofL;
+                    char fn[1024];
+                    std::snprintf(fn, sizeof(fn),
+                        "%s/step%ld_v%u_r%d.txt",
+                        dump_dir, cur_step, v,
+                        (int)pMesh->getMPIRank());
+                    FILE* fp = std::fopen(fn, "w");
+                    if (!fp) continue;
+                    std::fprintf(fp,
+                        "# step=%ld v=%u rank=%d NLB=%u NLE=%u\n"
+                        "# cg phys_x phys_y phys_z hex\n",
+                        cur_step, v, (int)pMesh->getMPIRank(),
+                        NLB, NLE);
+                    for (unsigned int cg = NLB; cg < NLE; cg++) {
+                        if (cg >= cg2dg.size()) continue;
+                        const unsigned int dg = cg2dg[cg];
+                        const unsigned int oe = dg / nPe;
+                        const unsigned int on = dg % nPe;
+                        if (oe >= pNodes.size()) continue;
+                        const unsigned int oni = on % (eOrd+1);
+                        const unsigned int onj =
+                            (on/(eOrd+1)) % (eOrd+1);
+                        const unsigned int onk =
+                            on / ((eOrd+1)*(eOrd+1));
+                        const ot::TreeNode& oTN = pNodes[oe];
+                        const unsigned int olen =
+                            (unsigned int)1u
+                            << (maxD - oTN.getLevel());
+                        const unsigned long long px =
+                            (unsigned long long)oTN.getX() * eOrd
+                            + (unsigned long long)oni * olen;
+                        const unsigned long long py =
+                            (unsigned long long)oTN.getY() * eOrd
+                            + (unsigned long long)onj * olen;
+                        const unsigned long long pz =
+                            (unsigned long long)oTN.getZ() * eOrd
+                            + (unsigned long long)onk * olen;
+                        uint64_t hb = 0;
+                        T val = vec_v[cg];
+                        std::memcpy(&hb, &val, sizeof(hb));
+                        std::fprintf(fp,
+                            "%u %llu %llu %llu %lx\n",
+                            cg, px, py, pz, (unsigned long)hb);
+                    }
+                    std::fclose(fp);
+                }
+            }
+        }
+    }
+
+    _EV_TRACE("99_evolve_exit");
+#undef _EV_TRACE
 
 #ifdef __PROFILE_ETS__
     m_uiCtxpt[ETSPROFILE::EVOLVE].stop();
 #endif
+
+    dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                          "ETS evolve step finished!");
 }
 
 template <typename T, typename Ctx>
@@ -564,10 +1138,17 @@ template <typename T, typename Ctx>
 int ETS<T, Ctx>::sync_with_mesh() {
     if (m_uiAppCtx->is_ets_synced()) return 0;
 
+    dendro::logger::debug(
+        dendro::logger::Scope{"ETS"},
+        "Now syncing ETS with mesh (reallocating internal ets variables)");
+
     m_uiEVar = m_uiAppCtx->get_evolution_vars();
     deallocate_internal_vars();
     allocate_internal_vars();
     m_uiAppCtx->set_ets_synced(true);
+
+    dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                          "Finished syncing ETS with mesh!");
 
     return 0;
 }

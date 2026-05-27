@@ -25,7 +25,7 @@ inline void Mesh::OCT_DIR_LEFT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -37,7 +37,7 @@ inline void Mesh::OCT_DIR_LEFT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -100,7 +100,7 @@ inline void Mesh::OCT_DIR_LEFT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -112,7 +112,7 @@ inline void Mesh::OCT_DIR_LEFT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -177,7 +177,7 @@ inline void Mesh::OCT_DIR_LEFT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -189,7 +189,7 @@ inline void Mesh::OCT_DIR_LEFT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -254,7 +254,7 @@ inline void Mesh::OCT_DIR_LEFT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -266,7 +266,7 @@ inline void Mesh::OCT_DIR_LEFT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -339,7 +339,7 @@ inline void Mesh::OCT_DIR_RIGHT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -351,7 +351,7 @@ inline void Mesh::OCT_DIR_RIGHT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -414,7 +414,7 @@ inline void Mesh::OCT_DIR_RIGHT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -426,7 +426,7 @@ inline void Mesh::OCT_DIR_RIGHT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -488,7 +488,7 @@ inline void Mesh::OCT_DIR_RIGHT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -500,7 +500,7 @@ inline void Mesh::OCT_DIR_RIGHT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -565,7 +565,7 @@ inline void Mesh::OCT_DIR_RIGHT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -577,7 +577,7 @@ inline void Mesh::OCT_DIR_RIGHT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -649,7 +649,7 @@ inline void Mesh::OCT_DIR_DOWN_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -661,7 +661,7 @@ inline void Mesh::OCT_DIR_DOWN_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -724,7 +724,7 @@ inline void Mesh::OCT_DIR_DOWN_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -736,7 +736,7 @@ inline void Mesh::OCT_DIR_DOWN_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -799,7 +799,7 @@ inline void Mesh::OCT_DIR_DOWN_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -811,7 +811,7 @@ inline void Mesh::OCT_DIR_DOWN_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -874,7 +874,7 @@ inline void Mesh::OCT_DIR_DOWN_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -886,7 +886,7 @@ inline void Mesh::OCT_DIR_DOWN_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     // }
@@ -958,7 +958,7 @@ inline void Mesh::OCT_DIR_UP_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -970,7 +970,7 @@ inline void Mesh::OCT_DIR_UP_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1033,7 +1033,7 @@ inline void Mesh::OCT_DIR_UP_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1045,7 +1045,7 @@ inline void Mesh::OCT_DIR_UP_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1108,7 +1108,7 @@ inline void Mesh::OCT_DIR_UP_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1120,7 +1120,7 @@ inline void Mesh::OCT_DIR_UP_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1184,7 +1184,7 @@ inline void Mesh::OCT_DIR_UP_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1196,7 +1196,7 @@ inline void Mesh::OCT_DIR_UP_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1267,7 +1267,7 @@ inline void Mesh::OCT_DIR_BACK_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1279,7 +1279,7 @@ inline void Mesh::OCT_DIR_BACK_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1345,7 +1345,7 @@ inline void Mesh::OCT_DIR_BACK_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1357,7 +1357,7 @@ inline void Mesh::OCT_DIR_BACK_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1423,7 +1423,7 @@ inline void Mesh::OCT_DIR_BACK_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1435,7 +1435,7 @@ inline void Mesh::OCT_DIR_BACK_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1500,7 +1500,7 @@ inline void Mesh::OCT_DIR_BACK_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1512,7 +1512,7 @@ inline void Mesh::OCT_DIR_BACK_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1584,7 +1584,7 @@ inline void Mesh::OCT_DIR_FRONT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1596,7 +1596,7 @@ inline void Mesh::OCT_DIR_FRONT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1660,7 +1660,7 @@ inline void Mesh::OCT_DIR_FRONT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1672,7 +1672,7 @@ inline void Mesh::OCT_DIR_FRONT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1738,7 +1738,7 @@ inline void Mesh::OCT_DIR_FRONT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1750,7 +1750,7 @@ inline void Mesh::OCT_DIR_FRONT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1813,7 +1813,7 @@ inline void Mesh::OCT_DIR_FRONT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp1].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp1 < edgeOwner)))
+             (m_uiAllElements[lookUp1] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp1;
     }
 
@@ -1825,7 +1825,7 @@ inline void Mesh::OCT_DIR_FRONT_INTERNAL_EDGE_MAP(
              m_uiAllElements[edgeOwner].getLevel()) ||
             ((m_uiAllElements[lookUp2].getLevel() ==
               m_uiAllElements[edgeOwner].getLevel()) &&
-             (lookUp2 < edgeOwner)))
+             (m_uiAllElements[lookUp2] < m_uiAllElements[edgeOwner])))
             edgeOwner = lookUp2;
     }
     //}
@@ -1922,7 +1922,7 @@ inline void Mesh::CORNER_NODE_MAP(unsigned int child) {
               m_uiAllElements[cornerOwner].getLevel()) ||
              ((m_uiAllElements[lookUp[w]].getLevel() ==
                m_uiAllElements[cornerOwner].getLevel()) &&
-              (lookUp[w] < cornerOwner))))
+              (m_uiAllElements[lookUp[w]] < m_uiAllElements[cornerOwner]))))
             cornerOwner = lookUp[w];
     }
 
@@ -1969,7 +1969,7 @@ inline void Mesh::CORNER_NODE_MAP(unsigned int child) {
               m_uiAllElements[cornerOwner].getLevel()) ||
              ((m_uiAllElements[lookUp[w]].getLevel() ==
                m_uiAllElements[cornerOwner].getLevel()) &&
-              (lookUp[w] < cornerOwner))))
+              (m_uiAllElements[lookUp[w]] < m_uiAllElements[cornerOwner]))))
             cornerOwner = lookUp[w];
     }
 
@@ -2014,7 +2014,7 @@ inline void Mesh::CORNER_NODE_MAP(unsigned int child) {
               m_uiAllElements[cornerOwner].getLevel()) ||
              ((m_uiAllElements[lookUp[w]].getLevel() ==
                m_uiAllElements[cornerOwner].getLevel()) &&
-              (lookUp[w] < cornerOwner))))
+              (m_uiAllElements[lookUp[w]] < m_uiAllElements[cornerOwner]))))
             cornerOwner = lookUp[w];
     }
 
@@ -2059,7 +2059,7 @@ inline void Mesh::CORNER_NODE_MAP(unsigned int child) {
               m_uiAllElements[cornerOwner].getLevel()) ||
              ((m_uiAllElements[lookUp[w]].getLevel() ==
                m_uiAllElements[cornerOwner].getLevel()) &&
-              (lookUp[w] < cornerOwner))))
+              (m_uiAllElements[lookUp[w]] < m_uiAllElements[cornerOwner]))))
             cornerOwner = lookUp[w];
     }
 
@@ -2104,7 +2104,7 @@ inline void Mesh::CORNER_NODE_MAP(unsigned int child) {
               m_uiAllElements[cornerOwner].getLevel()) ||
              ((m_uiAllElements[lookUp[w]].getLevel() ==
                m_uiAllElements[cornerOwner].getLevel()) &&
-              (lookUp[w] < cornerOwner))))
+              (m_uiAllElements[lookUp[w]] < m_uiAllElements[cornerOwner]))))
             cornerOwner = lookUp[w];
     }
 
@@ -2149,7 +2149,7 @@ inline void Mesh::CORNER_NODE_MAP(unsigned int child) {
               m_uiAllElements[cornerOwner].getLevel()) ||
              ((m_uiAllElements[lookUp[w]].getLevel() ==
                m_uiAllElements[cornerOwner].getLevel()) &&
-              (lookUp[w] < cornerOwner))))
+              (m_uiAllElements[lookUp[w]] < m_uiAllElements[cornerOwner]))))
             cornerOwner = lookUp[w];
     }
 
@@ -2194,7 +2194,7 @@ inline void Mesh::CORNER_NODE_MAP(unsigned int child) {
               m_uiAllElements[cornerOwner].getLevel()) ||
              ((m_uiAllElements[lookUp[w]].getLevel() ==
                m_uiAllElements[cornerOwner].getLevel()) &&
-              (lookUp[w] < cornerOwner))))
+              (m_uiAllElements[lookUp[w]] < m_uiAllElements[cornerOwner]))))
             cornerOwner = lookUp[w];
     }
 
@@ -2239,7 +2239,7 @@ inline void Mesh::CORNER_NODE_MAP(unsigned int child) {
               m_uiAllElements[cornerOwner].getLevel()) ||
              ((m_uiAllElements[lookUp[w]].getLevel() ==
                m_uiAllElements[cornerOwner].getLevel()) &&
-              (lookUp[w] < cornerOwner))))
+              (m_uiAllElements[lookUp[w]] < m_uiAllElements[cornerOwner]))))
             cornerOwner = lookUp[w];
     }
 

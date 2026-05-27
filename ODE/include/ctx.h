@@ -440,6 +440,8 @@ class Ctx {
      * @brief performs intergrid transfer for a given appCtx
      */
     inline int grid_transfer(const ot::Mesh* m_new) {
+        dendro::logger::debug(dendro::logger::Scope{"CTX"},
+                              "Now calling user-defined grid transfer");
         return asLeaf().grid_transfer(m_new);
     }
 
@@ -706,7 +708,6 @@ void Ctx<DerivedCtx, T, I>::zip(ot::DVector<T, I>& in, ot::DVector<T, I>& out) {
         for (unsigned int j = 0; j < dof; j++)
             m_uiMesh->zip(in_ptr + j * sz_per_dof_uzip,
                           out_ptr + j * sz_per_dof_zip);
-
     } else if (in.get_loc() == ot::DVEC_LOC::DEVICE) {
 #ifdef __CUDACC__
         device::MeshGPU* dptr_mesh = this->get_meshgpu_device_ptr();
@@ -802,6 +803,79 @@ template <typename DerivedCtx, typename T, typename I>
 int Ctx<DerivedCtx, T, I>::remesh_and_gridtransfer(unsigned int grain_sz,
                                                    double ld_tol,
                                                    unsigned int sf_k) {
+    dendro::logger::debug(dendro::logger::Scope{"CTX"},
+                          "Now doing full remesh and grid transfer!");
+
+    // probe (off by default): dump EV at base-class boundaries to align
+    // with graph-mode sandwich bisection. tags: a = pre-remesh (matches
+    // graph-mode a-pre-g2s); d = post-IGT (matches graph-mode d-post-s2g).
+    // gate: EM4_REMESH_DUMP_DIR. one call_id per remesh.
+    static int s_remesh_call_id = 0;
+    const char* remesh_dump_dir = DENDRO_PROBE_GETENV("EM4_REMESH_DUMP_DIR");
+    auto dumpEV = [&](const ot::Mesh* pMesh, const char tag) {
+        if (!remesh_dump_dir) return;
+        if (!pMesh || !pMesh->isActive()) return;
+        T* dvec_ptr = static_cast<DerivedCtx*>(this)->
+                        get_evolution_vars().get_vec_ptr();
+        const unsigned int DOFV =
+            static_cast<DerivedCtx*>(this)->get_evolution_vars().get_dof();
+        if (!dvec_ptr) return;
+        const unsigned int szPDof = pMesh->getDegOfFreedom();
+        const auto& pNodes = pMesh->getAllElements();
+        const unsigned int NLB = pMesh->getNodeLocalBegin();
+        const unsigned int NLE = pMesh->getNodeLocalEnd();
+        const unsigned int eOrd = pMesh->getElementOrder();
+        const unsigned int nPe = pMesh->getNumNodesPerElement();
+        const unsigned int maxD = m_uiMaxDepth;
+        const auto& cg2dg = pMesh->getCG2DGMap();
+        const int mpiRank = pMesh->getMPIRank();
+        for (unsigned int v = 0; v < DOFV; v++) {
+            T* vec_v = dvec_ptr + v * szPDof;
+            char fn[1024];
+            std::snprintf(fn, sizeof(fn),
+                          "%s/remesh%d_%c_v%u_r%d.txt",
+                          remesh_dump_dir, s_remesh_call_id, tag,
+                          v, mpiRank);
+            FILE* fp = std::fopen(fn, "w");
+            if (!fp) continue;
+            const unsigned int NACT = pMesh->getDegOfFreedom();
+            std::fprintf(fp,
+                "# remesh=%d tag=%c v=%u rank=%d NLB=%u NLE=%u NACT=%u\n"
+                "# loc cg phys_x phys_y phys_z hex\n",
+                s_remesh_call_id, tag, v, mpiRank, NLB, NLE, NACT);
+            for (unsigned int cg = 0; cg < NACT; cg++) {
+                if (cg >= cg2dg.size()) continue;
+                const unsigned int dg = cg2dg[cg];
+                const unsigned int oe = dg / nPe;
+                const unsigned int on = dg % nPe;
+                if (oe >= pNodes.size()) continue;
+                const unsigned int oni = on % (eOrd+1);
+                const unsigned int onj = (on/(eOrd+1)) % (eOrd+1);
+                const unsigned int onk = on / ((eOrd+1)*(eOrd+1));
+                const ot::TreeNode& oTN = pNodes[oe];
+                const unsigned int olen =
+                    (unsigned int)1u << (maxD - oTN.getLevel());
+                const unsigned long long px =
+                    (unsigned long long)oTN.getX() * eOrd
+                    + (unsigned long long)oni * olen;
+                const unsigned long long py =
+                    (unsigned long long)oTN.getY() * eOrd
+                    + (unsigned long long)onj * olen;
+                const unsigned long long pz =
+                    (unsigned long long)oTN.getZ() * eOrd
+                    + (unsigned long long)onk * olen;
+                uint64_t hb = 0;
+                T val = vec_v[cg];
+                std::memcpy(&hb, &val, sizeof(hb));
+                const char loc = (cg >= NLB && cg < NLE) ? 'L' : 'G';
+                std::fprintf(fp, "%c %u %llu %llu %llu %lx\n",
+                             loc, cg, px, py, pz, (unsigned long)hb);
+            }
+            std::fclose(fp);
+        }
+    };
+
+    dumpEV(m_uiMesh, 'a');
     ot::Mesh* newMesh      = remesh(grain_sz, ld_tol, sf_k);
 
     DendroIntL oldElements = m_uiMesh->getNumLocalMeshElements();
@@ -814,13 +888,14 @@ int Ctx<DerivedCtx, T, I>::remesh_and_gridtransfer(unsigned int grain_sz,
     par::Mpi_Reduce(&newElements, &newElements_g, 1, MPI_SUM, 0,
                     newMesh->getMPIGlobalCommunicator());
 
-    if (!(m_uiMesh->getMPIRankGlobal()))
-        std::cout << "[Ctx]: step : " << m_uiTinfo._m_uiStep
-                  << "\ttime : " << m_uiTinfo._m_uiT
-                  << "\told mesh: " << oldElements_g
-                  << "\tnew mesh:" << newElements_g << std::endl;
+    dendro::logger::info(
+        dendro::logger::Scope{"CTX"},
+        "step : {} | time : {} | old mesh size : {} | new mesh size : {}",
+        m_uiTinfo._m_uiStep, m_uiTinfo._m_uiT, oldElements_g, newElements_g);
 
     this->grid_transfer(newMesh);
+    dumpEV(newMesh, 'd');
+    if (remesh_dump_dir) s_remesh_call_id++;
 
     std::swap(newMesh, m_uiMesh);
     delete newMesh;
@@ -834,7 +909,8 @@ int Ctx<DerivedCtx, T, I>::remesh_and_gridtransfer(unsigned int grain_sz,
 #endif
 
     m_uiIsETSSynced = false;
-
+    dendro::logger::info(dendro::logger::Scope{"CTX"},
+                         "Finished performing full remesh and grid transfer!");
     return 0;
 }
 
