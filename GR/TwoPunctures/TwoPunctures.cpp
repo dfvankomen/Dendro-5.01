@@ -91,7 +91,11 @@ void TwoPunctures(const double xx1, const double yy1, const double zz1,
     static derivs u, v, cf_v;
     CCTK_REAL admMass;
 
-    if (!F) TPRestore(F, u, v, cf_v, TPID::FILE_PREFIX.c_str());
+    // lazy load fires from rank 0 inside function2Octree's serial phase --
+    // no collectives, or we deadlock against the other ranks' MPI_Bcast.
+    if (!F)
+        TPRestore(F, u, v, cf_v, TPID::FILE_PREFIX.c_str(),
+                  /*mpi_bcast=*/false);
 
     if (TPID::grid_setup_method == TAYLOR_EXPANSION) {
         gsm = GSM_Taylor_expansion;
@@ -680,8 +684,8 @@ void TPRestore(CCTK_REAL *&F, derivs &u, derivs &v, derivs &cf_v,
         return;
     }
 
-    MPI_Barrier(TP_MPI_COMM);
-    if (!rank) std::cout << "TPID data read begin: " << std::endl;
+    if (mpi_bcast) MPI_Barrier(TP_MPI_COMM);
+    if (!rank && mpi_bcast) std::cout << "TPID data read begin: " << std::endl;
 
     fr_st = fread(&ntotal, sizeof(int), 1, read_ptr);
 
@@ -724,8 +728,9 @@ void TPRestore(CCTK_REAL *&F, derivs &u, derivs &v, derivs &cf_v,
     fr_st = fread(cf_v.d23, sizeof(double), ntotal, read_ptr);
     fr_st = fread(cf_v.d33, sizeof(double), ntotal, read_ptr);
 
-    MPI_Barrier(TP_MPI_COMM);
-    if (!rank) std::cout << "TPID solver successfully restored: " << std::endl;
+    if (mpi_bcast) MPI_Barrier(TP_MPI_COMM);
+    if (!rank && mpi_bcast)
+        std::cout << "TPID solver successfully restored: " << std::endl;
 
     return;
 }
