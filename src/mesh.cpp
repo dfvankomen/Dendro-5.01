@@ -7620,6 +7620,7 @@ void Mesh::buildZipPlan() {
         myInterior.push_back(interior);
     }
 
+
     int myCount = (int)myX.size();
     std::vector<int> counts(m_uiActiveNpes), offs(m_uiActiveNpes, 0);
     MPI_Allgather(&myCount, 1, MPI_INT, counts.data(), 1, MPI_INT,
@@ -7694,6 +7695,7 @@ void Mesh::buildZipPlan() {
         unsigned int tnX, tnY, tnZ, tnLev;
         unsigned int interior;
     };
+
     std::unordered_map<PhysKey3, Winner, PhysKey3Hash> winners;
     winners.reserve(total);
     for (int p = 0; p < m_uiActiveNpes; p++) {
@@ -7748,6 +7750,7 @@ void Mesh::buildZipPlan() {
     // Fix: walk winners[] and erase any (rank == me, cg == winner_cg)
     // entry from m_uiPassDDemotedToGhostCg. Cascade primaries are NOT
     // demoted; they're the source of truth.
+
     size_t passDCleanupErased = 0;
     bool dbgWinnerCleanup =
         (DENDRO_PROBE_GETENV("DENDRO_PASSD_CLEANUP_DBG") != nullptr);
@@ -7800,49 +7803,86 @@ void Mesh::buildZipPlan() {
         // produce the same sorted order, so when rank A says "send
         // cg X to rank B at position k" and rank B says "receive at
         // local cg L from rank A at position k", positions match.
-        struct PhysClaim {
-            unsigned long long x, y, z;
-            int rank;
-            unsigned int cg;
-            unsigned int tnX, tnY, tnZ, tnLev;
-        };
-        std::vector<PhysClaim> sortedClaims;
-        sortedClaims.reserve(total);
-        for (int p = 0; p < m_uiActiveNpes; p++) {
+        // Sort claim INDICES (4-byte) instead of copying 40-byte
+        // PhysClaim structs: avoids a ~total*40-byte allocation+copy and
+        // cuts the sort's memory traffic ~10x. The tn* fields the old
+        // struct carried are unused in this section (the winner pick
+        // already happened above). Determinism is preserved: all* arrays
+        // are byte-identical across ranks (allgathered) and the
+        // comparator is identical, so std::sort yields the same
+        // permutation on every rank. rankOf[i] = which rank advertised
+        // global claim i (claims are contiguous per rank in the all*
+        // arrays).
+        std::vector<unsigned int> rankOf(total);
+        for (int p = 0; p < m_uiActiveNpes; p++)
             for (int i = offs[p]; i < offs[p] + counts[p]; i++)
-                sortedClaims.push_back(PhysClaim{
-                    allX[i], allY[i], allZ[i], p, allCg[i],
-                    allTNX[i], allTNY[i], allTNZ[i], allTNLev[i]});
+                rankOf[i] = (unsigned int)p;
+        std::vector<unsigned int> sidx(total);
+
+        // Fast path: pack (x, y, z, rank) into one uint64 sort key when
+        // the phys coords fit. Phys coord max ≈ 2*eOrd*2^maxDepth, so
+        // 19 bits/coord covers maxDepth≲15; rank in 7 bits covers ≤128
+        // ranks. Sorting uint64 keys (single integer compare,
+        // cache-local) is ~5x faster than the 3-way indirect comparator
+        // on allX/Y/Z. Falls back to the comparator sort if anything
+        // doesn't fit. Both produce the identical (x,y,z,rank)-lex order.
+        const unsigned long long COORD_BITS = 19;
+        const unsigned long long COORD_MAX = (1ULL << COORD_BITS) - 1;
+        bool canPack = (m_uiActiveNpes <= 127);
+        if (canPack) {
+            for (int t = 0; t < total; t++) {
+                if (allX[t] > COORD_MAX || allY[t] > COORD_MAX
+                    || allZ[t] > COORD_MAX) { canPack = false; break; }
+            }
         }
-        std::sort(sortedClaims.begin(), sortedClaims.end(),
-                  [](const PhysClaim& a, const PhysClaim& b) {
-                      if (a.x != b.x) return a.x < b.x;
-                      if (a.y != b.y) return a.y < b.y;
-                      if (a.z != b.z) return a.z < b.z;
-                      return a.rank < b.rank;
-                  });
+        if (canPack) {
+            std::vector<std::pair<unsigned long long, unsigned int>> keyed(
+                total);
+            for (int t = 0; t < total; t++) {
+                unsigned long long key =
+                    (allX[t] << (COORD_BITS * 2 + 7))
+                    | (allY[t] << (COORD_BITS + 7))
+                    | (allZ[t] << 7)
+                    | (unsigned long long)rankOf[t];
+                keyed[t] = {key, (unsigned int)t};
+            }
+            std::sort(keyed.begin(), keyed.end(),
+                      [](const std::pair<unsigned long long, unsigned int>& a,
+                         const std::pair<unsigned long long, unsigned int>& b) {
+                          return a.first < b.first;
+                      });
+            for (int t = 0; t < total; t++) sidx[t] = keyed[t].second;
+        } else {
+            std::iota(sidx.begin(), sidx.end(), 0u);
+            std::sort(sidx.begin(), sidx.end(),
+                      [&](unsigned int a, unsigned int b) {
+                          if (allX[a] != allX[b]) return allX[a] < allX[b];
+                          if (allY[a] != allY[b]) return allY[a] < allY[b];
+                          if (allZ[a] != allZ[b]) return allZ[a] < allZ[b];
+                          return rankOf[a] < rankOf[b];
+                      });
+        }
 
         // First pass: count send/recv per rank.
         // Walk consecutive entries with same (x, y, z) to identify
-        // claim groups per phys_pos.
+        // claim groups per phys_pos. (sidx[k] indexes the all* arrays.)
         size_t i = 0;
-        while (i < sortedClaims.size()) {
+        while (i < sidx.size()) {
             size_t j = i;
-            while (j < sortedClaims.size()
-                   && sortedClaims[j].x == sortedClaims[i].x
-                   && sortedClaims[j].y == sortedClaims[i].y
-                   && sortedClaims[j].z == sortedClaims[i].z)
+            while (j < sidx.size()
+                   && allX[sidx[j]] == allX[sidx[i]]
+                   && allY[sidx[j]] == allY[sidx[i]]
+                   && allZ[sidx[j]] == allZ[sidx[i]])
                 ++j;
             // [i, j) is the claim group for one phys_pos.
             if (j - i > 1) {
                 // Multi-claim phys_pos: find primary, count sync.
                 auto wit = winners.find(PhysKey3{
-                    sortedClaims[i].x, sortedClaims[i].y,
-                    sortedClaims[i].z});
+                    allX[sidx[i]], allY[sidx[i]], allZ[sidx[i]]});
                 if (wit != winners.end()) {
                     const int p_rank = wit->second.rank;
                     for (size_t k = i; k < j; k++) {
-                        const int r = sortedClaims[k].rank;
+                        const int r = (int)rankOf[sidx[k]];
                         if (r == p_rank) continue;  // skip primary itself
                         if (m_uiActiveRank == p_rank)
                             m_uiZipSyncSendCounts[r]++;
@@ -7873,22 +7913,22 @@ void Mesh::buildZipPlan() {
             recvPos[p] = m_uiZipSyncRecvOffsets[p];
         }
         i = 0;
-        while (i < sortedClaims.size()) {
+        while (i < sidx.size()) {
             size_t j = i;
-            while (j < sortedClaims.size()
-                   && sortedClaims[j].x == sortedClaims[i].x
-                   && sortedClaims[j].y == sortedClaims[i].y
-                   && sortedClaims[j].z == sortedClaims[i].z)
+            while (j < sidx.size()
+                   && allX[sidx[j]] == allX[sidx[i]]
+                   && allY[sidx[j]] == allY[sidx[i]]
+                   && allZ[sidx[j]] == allZ[sidx[i]])
                 ++j;
             if (j - i > 1) {
                 auto wit = winners.find(PhysKey3{
-                    sortedClaims[i].x, sortedClaims[i].y,
-                    sortedClaims[i].z});
+                    allX[sidx[i]], allY[sidx[i]], allZ[sidx[i]]});
                 if (wit != winners.end()) {
                     const int p_rank      = wit->second.rank;
                     const unsigned int p_cg = wit->second.cg;
                     for (size_t k = i; k < j; k++) {
-                        const int r = sortedClaims[k].rank;
+                        const int r = (int)rankOf[sidx[k]];
+                        const unsigned int kcg = allCg[sidx[k]];
                         if (r == p_rank) {
                             // intra-rank duplicate: same rank has the
                             // primary AND another cg at the same phys.
@@ -7896,19 +7936,16 @@ void Mesh::buildZipPlan() {
                             // entries only; for intra-rank we record a
                             // direct (src=winner_cg, dst=this_cg) pair
                             // and copy locally after every sync.
-                            if (m_uiActiveRank == r
-                                && sortedClaims[k].cg != p_cg) {
+                            if (m_uiActiveRank == r && kcg != p_cg) {
                                 m_uiZipLocalDupSrc.push_back(p_cg);
-                                m_uiZipLocalDupDst.push_back(
-                                    sortedClaims[k].cg);
+                                m_uiZipLocalDupDst.push_back(kcg);
                             }
                             continue;
                         }
                         if (m_uiActiveRank == p_rank)
                             m_uiZipSyncSendCg[sendPos[r]++] = p_cg;
                         if (m_uiActiveRank == r)
-                            m_uiZipSyncRecvCg[recvPos[p_rank]++] =
-                                sortedClaims[k].cg;
+                            m_uiZipSyncRecvCg[recvPos[p_rank]++] = kcg;
                     }
                 }
             }
@@ -7959,22 +7996,21 @@ void Mesh::buildZipPlan() {
                     "winner_cg winner_tnLev winner_interior claims...\n",
                     (int)m_uiActiveRank, s_dup_probe_call_id);
                 size_t ii = 0;
-                while (ii < sortedClaims.size()) {
+                while (ii < sidx.size()) {
                     size_t jj = ii;
-                    while (jj < sortedClaims.size()
-                           && sortedClaims[jj].x == sortedClaims[ii].x
-                           && sortedClaims[jj].y == sortedClaims[ii].y
-                           && sortedClaims[jj].z == sortedClaims[ii].z)
+                    while (jj < sidx.size()
+                           && allX[sidx[jj]] == allX[sidx[ii]]
+                           && allY[sidx[jj]] == allY[sidx[ii]]
+                           && allZ[sidx[jj]] == allZ[sidx[ii]])
                         ++jj;
                     if (jj - ii > 1) {
                         auto wit2 = winners.find(PhysKey3{
-                            sortedClaims[ii].x, sortedClaims[ii].y,
-                            sortedClaims[ii].z});
+                            allX[sidx[ii]], allY[sidx[ii]], allZ[sidx[ii]]});
                         std::fprintf(fp,
                             "%llu %llu %llu %zu",
-                            (unsigned long long)sortedClaims[ii].x,
-                            (unsigned long long)sortedClaims[ii].y,
-                            (unsigned long long)sortedClaims[ii].z,
+                            (unsigned long long)allX[sidx[ii]],
+                            (unsigned long long)allY[sidx[ii]],
+                            (unsigned long long)allZ[sidx[ii]],
                             jj - ii);
                         if (wit2 != winners.end()) {
                             std::fprintf(fp, " %d %u %u %u",
@@ -7987,9 +8023,9 @@ void Mesh::buildZipPlan() {
                         }
                         for (size_t k = ii; k < jj; k++) {
                             std::fprintf(fp, " | r=%d cg=%u tnLev=%u",
-                                sortedClaims[k].rank,
-                                sortedClaims[k].cg,
-                                sortedClaims[k].tnLev);
+                                (int)rankOf[sidx[k]],
+                                allCg[sidx[k]],
+                                allTNLev[sidx[k]]);
                         }
                         std::fprintf(fp, "\n");
                     }

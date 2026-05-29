@@ -799,31 +799,35 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
     const size_t recvN = m_uiZipSyncRecvCg.size();
     std::vector<T> sendBuf(sendN * dof);
     std::vector<T> recvBuf(recvN * dof);
-    // Pack: send buffer has [var0_send..., var1_send..., ...] per
-    // dof; for each dof slice the rank order matches sCounts/sOffs.
-    for (unsigned int v = 0; v < dof; v++) {
-        const T* vp = vec + v * m_uiNumActualNodes;
-        T* sb       = sendBuf.data() + v * sendN;
-        for (size_t k = 0; k < sendN; k++)
-            sb[k] = vp[m_uiZipSyncSendCg[k]];
+
+    // Single batched Alltoallv over all dof (was dof separate calls).
+    // m_uiZipSyncSendCg is already ordered by destination rank, so cg
+    // entry k belongs to a contiguous per-rank block. Interleave the
+    // dof values at each k: sendBuf[k*dof + v]. Counts/offsets scale by
+    // dof. One latency-bound collective instead of dof of them — the
+    // post-axpy sync runs every RK substage, so this matters.
+    for (size_t k = 0; k < sendN; k++) {
+        const unsigned int cg = m_uiZipSyncSendCg[k];
+        T* dst = sendBuf.data() + k * dof;
+        for (unsigned int v = 0; v < dof; v++)
+            dst[v] = vec[v * m_uiNumActualNodes + cg];
     }
-    // We Alltoallv each dof independently so counts/offsets stay in
-    // CG-index units (not multiplied by dof). Simpler than packing
-    // multi-var per-rank.
-    for (unsigned int v = 0; v < dof; v++) {
-        par::Mpi_Alltoallv(
-            sendBuf.data() + v * sendN,
-            (int*)m_uiZipSyncSendCounts.data(),
-            (int*)m_uiZipSyncSendOffsets.data(),
-            recvBuf.data() + v * recvN,
-            (int*)m_uiZipSyncRecvCounts.data(),
-            (int*)m_uiZipSyncRecvOffsets.data(), m_uiCommActive);
+    std::vector<int> sCnt(m_uiActiveNpes), sOff(m_uiActiveNpes),
+        rCnt(m_uiActiveNpes), rOff(m_uiActiveNpes);
+    for (int p = 0; p < m_uiActiveNpes; p++) {
+        sCnt[p] = (int)(m_uiZipSyncSendCounts[p] * dof);
+        sOff[p] = (int)(m_uiZipSyncSendOffsets[p] * dof);
+        rCnt[p] = (int)(m_uiZipSyncRecvCounts[p] * dof);
+        rOff[p] = (int)(m_uiZipSyncRecvOffsets[p] * dof);
     }
-    for (unsigned int v = 0; v < dof; v++) {
-        T* vp     = vec + v * m_uiNumActualNodes;
-        const T* rb = recvBuf.data() + v * recvN;
-        for (size_t k = 0; k < recvN; k++)
-            vp[m_uiZipSyncRecvCg[k]] = rb[k];
+    par::Mpi_Alltoallv(sendBuf.data(), sCnt.data(), sOff.data(),
+                       recvBuf.data(), rCnt.data(), rOff.data(),
+                       m_uiCommActive);
+    for (size_t k = 0; k < recvN; k++) {
+        const unsigned int cg = m_uiZipSyncRecvCg[k];
+        const T* src = recvBuf.data() + k * dof;
+        for (unsigned int v = 0; v < dof; v++)
+            vec[v * m_uiNumActualNodes + cg] = src[v];
     }
 }
 
