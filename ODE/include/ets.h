@@ -470,9 +470,148 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
             dendro::logger::Scope{"ETS"},
             "ETS Coefficients set for RK5 (Butcher, 6 stages)");
 
+    } else if (type == ETSType::RK4_RALSTON) {
+        // Ralston's fourth-order method (4 stages), minimal truncation error
+        // relative to classic RK4. Ported from the `derivatives` experiment.
+        m_uiNumStages                     = 4;
+
+        static const DendroScalar ETS_C[] = {
+            // (263.0 + 24.0 * sqrt(5.0)) / 1812.0,
+            0.17476028226269036,
+            // (125.0 - 1000.0 * sqrt(5.0)) / 3828.0,
+            -0.551480662878733,
+            // (3426304.0 - 1661952.0 * sqrt(5.0)) / 5924787.0,
+            -0.04893570812617069,
+            // (30.0 - 4.0 * sqrt(5.0)) / 123.0,
+            0.17118478121951902};
+        static const DendroScalar ETS_T[] = {0.0,
+                                             // 2.0 / 5.0,
+                                             0.4,
+                                             // (14.0 - 3.0 * sqrt(5.0)) / 16.0,
+                                             0.4557372542187894, 1.0};
+        // clang-format off
+        static const DendroScalar ETS_U[] = {
+            // stage 1
+            0.0, 0.0, 0.0, 0.0,
+            // stage 2
+            0.4, 0.0, 0.0, 0.0,
+            // stage 3
+            0.2969776092477536, 0.15875964497103584, 0.0, 0.0,
+            // stage 4
+            0.21810038822592046, -3.050965148692931, 3.8328647604670105, 0.0};
+        // clang-format on
+
+        m_uiCi  = (DendroScalar*)ETS_T;
+        m_uiBi  = (DendroScalar*)ETS_C;
+        m_uiAij = (DendroScalar*)ETS_U;
+
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK4_RALSTON");
+
+    } else if (type == ETSType::RK5_NYSTROM) {
+        // Nystrom's fifth-order method (6 stages) — an alternative correction
+        // to Kutta's RK5. Distinct experiment from the canonical Butcher RK5
+        // above; ported from the `derivatives` branch.
+        m_uiNumStages                     = 6;
+        static const DendroScalar ETS_C[] = {
+            23.0 / 192.0, 0.0, 125.0 / 192.0, 0.0, -27.0 / 64.0, 125.0 / 192.0};
+        static const DendroScalar ETS_T[] = {0.0, 1.0 / 3.0, 2.0 / 5.0,
+                                             1.0, 2.0 / 3.0, 4.0 / 5.0};
+        // clang-format off
+        static const DendroScalar ETS_U[] = {
+            // stage 1
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 2
+            1.0 / 3.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 3
+            4.0 / 25.0, 6.0 / 25.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 4
+            1.0 / 4.0, -3.0, 15.0 / 4.0, 0.0, 0.0, 0.0,
+            // stage 5
+            2.0 / 27.0, 10.0 / 9.0, -50.0 / 81.0, 8.0 / 81.0, 0.0, 0.0,
+            // stage 6
+            2.0 / 25.0, 12.0 / 25.0, 2.0 / 15.0, 8.0 / 75.0, 0.0, 0.0};
+        // clang-format on
+
+        m_uiCi  = (DendroScalar*)ETS_T;
+        m_uiBi  = (DendroScalar*)ETS_C;
+        m_uiAij = (DendroScalar*)ETS_U;
+
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK5_NYSTROM");
+
+    } else if (type == ETSType::RK45_CASH_KARP) {
+        // Cash-Karp embedded 4(5) pair (6 stages); the 5th-order weights are
+        // used here. Enables adaptive step sizing. From the `derivatives`
+        // experiment.
+        m_uiNumStages                     = 6;
+        static const DendroScalar ETS_C[] = {37.0 / 378.0,  0.0,
+                                             250.0 / 621.0, 125.0 / 594.0,
+                                             0.0,           512.0 / 1771.0};
+        static const DendroScalar ETS_T[] = {0.0,       1.0 / 5.0, 3.0 / 10.0,
+                                             3.0 / 5.0, 1.0,       7.0 / 8.0};
+        // clang-format off
+        static const DendroScalar ETS_U[] = {
+            // stage 1
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 2
+            1.0 / 5.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 3
+            3.0 / 40.0, 9.0 / 40.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 4
+            3.0 / 10.0, -9.0 / 10.0, 6.0 / 5.0, 0.0, 0.0, 0.0,
+            // stage 5
+            -11.0 / 54.0, 5.0 / 2.0, -70.0 / 27.0, 35.0 / 27.0, 0.0, 0.0,
+            // stage 6
+            1631.0 / 55296.0, 175.0 / 512.0, 575.0 / 13824.0,
+            44275.0 / 110592.0, 253.0 / 4096.0, 0.0};
+        // clang-format on
+
+        m_uiCi  = (DendroScalar*)ETS_T;
+        m_uiBi  = (DendroScalar*)ETS_C;
+        m_uiAij = (DendroScalar*)ETS_U;
+
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK45_CASH_KARP");
+
+    } else if (type == ETSType::RKF45) {
+        // Runge-Kutta-Fehlberg 4(5) (6 stages); 5th-order weights used here.
+        // From the `derivatives` experiment.
+        m_uiNumStages                     = 6;
+        static const DendroScalar ETS_C[] = {
+            16.0 / 135.0,      0.0,         6656.0 / 12825.0,
+            28561.0 / 56430.0, -9.0 / 50.0, 2.0 / 55.0};
+        static const DendroScalar ETS_T[] = {0.0,         1.0 / 4.0, 3.0 / 8.0,
+                                             12.0 / 13.0, 1.0,       1.0 / 2.0};
+        // clang-format off
+        static const DendroScalar ETS_U[] = {
+            // stage 1
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 2
+            1.0 / 4.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 3
+            3.0 / 32.0, 9.0 / 32.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 4
+            1932.0 / 2197.0, -7200.0 / 2197.0, 7296.0 / 2197.0, 0.0, 0.0, 0.0,
+            // stage 5
+            439.0 / 216.0, -8.0, 3680.0 / 513.0, -845.0 / 4104.0, 0.0, 0.0,
+            // stage 6
+            -8.0 / 27.0, 2.0, -3544.0 / 2565.0, 1859.0 / 4104.0, -11.0 / 40.0,
+            0.0};
+        // clang-format on
+
+        m_uiCi  = (DendroScalar*)ETS_T;
+        m_uiBi  = (DendroScalar*)ETS_C;
+        m_uiAij = (DendroScalar*)ETS_U;
+
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RKF45");
+
     } else {
-        dendro::logger::error(dendro::logger::Scope{"ETS"},
-                              "UNKNOWN ETS TYPE (supports RK3, RK4, and RK5)");
+        dendro::logger::error(
+            dendro::logger::Scope{"ETS"},
+            "UNKNOWN ETS TYPE (supports RK3, RK4, RK5, RK4_RALSTON, "
+            "RK5_NYSTROM, RK45_CASH_KARP, RKF45)");
         return -1;
     }
 

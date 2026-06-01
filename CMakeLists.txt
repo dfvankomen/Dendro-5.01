@@ -17,6 +17,34 @@ project(Dendro-5.0-Library C CXX Fortran)
 
 
 # ==========================
+# CPU ARCHITECTURE
+# ==========================
+# when built standalone, set a default arch target so the compiler can
+# actually vectorize. when included as a subdirectory, the parent project
+# is expected to set arch flags itself (e.g. via add_compile_options).
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(DENDRO_CPU_ARCH "native" CACHE STRING "Target CPU architecture (native, x86-64-v3, znver3, etc.)")
+  set(DENDRO_CPU_ARCH_STRINGS
+      "native"
+      "znver1" "znver2" "znver3" "znver4"
+      "haswell" "broadwell" "skylake-avx512" "cascadelake" "icelake-server"
+      "generic_avx2" "x86-64-v3"
+  )
+  set_property(CACHE DENDRO_CPU_ARCH PROPERTY STRINGS ${DENDRO_CPU_ARCH_STRINGS})
+
+  if(DENDRO_CPU_ARCH STREQUAL "generic_avx2")
+    add_compile_options(-mavx2 -mfma)
+  elseif(DENDRO_CPU_ARCH IN_LIST DENDRO_CPU_ARCH_STRINGS)
+    add_compile_options(-march=${DENDRO_CPU_ARCH})
+  else()
+    message(FATAL_ERROR "Unknown DENDRO_CPU_ARCH: ${DENDRO_CPU_ARCH}")
+  endif()
+
+  message(STATUS "Dendro standalone build — target arch: ${DENDRO_CPU_ARCH}")
+endif()
+
+
+# ==========================
 # DENDRO LIBRARY OPTIONS
 # ==========================
 option(USE_64BIT_INDICES "Use 64-Bit indices (Reverts to 32-bit if OFF)" ON)
@@ -63,6 +91,14 @@ option(DENDRO_UNZIP_OMP
 option(DENDRO_TENSOR_SIMD
        "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=7 for eO=6)"
        OFF)
+# Project-wide switch for the hybrid OpenMP/MPI path brought in from the
+# derivatives workstream. Default OFF keeps the MPI-first behavior. When ON it
+# enables the OpenMP threading the hybrid path relies on (e.g. TwoPunctures
+# initial-data solve via TP_OMP_THREADS). Propagated through dendro_config so
+# downstream solvers that compile the hybrid sources pick it up too.
+option(DENDRO_HYBRID_OMP
+       "Enable the hybrid OpenMP/MPI path (OpenMP threading on top of MPI; default OFF = MPI-first)"
+       OFF)
 
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
@@ -93,11 +129,56 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdlog)
 
+# libxsmm for optimized small matrix multiplications
+option(USE_LOCAL_XSMM "Use a local copy of libxsmm's source instead of fetching at build" OFF)
+
+if (USE_LOCAL_XSMM)
+  set(LOCAL_XSMM_PATH "" CACHE PATH "Path to local libxsmm repository")
+  if(NOT EXISTS "${LOCAL_XSMM_PATH}/CMakeLists.txt")
+    message(FATAL_ERROR "LOCAL_XSMM_PATH is either not set or is pointing to an invalid libxsmm source")
+  endif()
+endif()
+
+if (USE_LOCAL_XSMM)
+  FetchContent_Declare(
+    xsmm
+    SOURCE_DIR ${LOCAL_XSMM_PATH}
+  )
+else()
+  FetchContent_Declare(
+    xsmm
+    GIT_REPOSITORY https://github.com/libxsmm/libxsmm.git
+    GIT_TAG main
+    GIT_SHALLOW TRUE
+  )
+endif()
+
+FetchContent_GetProperties(xsmm)
+if(NOT xsmm_POPULATED)
+  FetchContent_Populate(xsmm)
+endif()
+set(LIBXSMMROOT ${xsmm_SOURCE_DIR})
+file(GLOB _GLOB_XSMM_SRCS LIST_DIRECTORIES false CONFIGURE_DEPENDS ${LIBXSMMROOT}/src/*.c)
+list(REMOVE_ITEM _GLOB_XSMM_SRCS ${LIBXSMMROOT}/src/libxsmm_generator_gemm_driver.c)
+set(XSMM_INCLUDE_DIRS ${LIBXSMMROOT}/include)
+add_library(xsmm STATIC ${_GLOB_XSMM_SRCS})
+target_include_directories(xsmm PUBLIC ${XSMM_INCLUDE_DIRS})
+target_compile_definitions(xsmm PUBLIC LIBXSMM_DEFAULT_CONFIG)
+target_compile_definitions(xsmm PRIVATE __BLAS=0)
+target_compile_definitions(xsmm PRIVATE _GNU_SOURCE)
+target_compile_definitions(xsmm PRIVATE STATIC=0)
+target_compile_options(xsmm PRIVATE "-fPIC")
+
 # make sure we have BhaHAHA included
 if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib/BHaHAHA")
   add_subdirectory(lib/BHaHAHA)
 endif()
 
+
+# GR utilities (BH struct, TwoPunctures, etc.)
+if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/GR")
+  add_subdirectory(GR)
+endif()
 
 # ==========================
 # SOURCE FILES
@@ -112,7 +193,27 @@ set(DENDRO_SRC
     src/odaUtils.cpp src/sub_oda.cpp src/meshUtils.cpp src/waveletRefEl.cpp
     test/src/meshTestUtils.cpp src/aeh_bhahaha.cpp src/bh_history.cpp
     src/logger.cpp
+    src/derivatives.cpp
+    src/derivatives/derivs_explicit.cpp
+    src/derivatives/adv_derivs_explicit.cpp
+    src/derivatives/derivs_compact.cpp
+    src/derivatives/derivs_matrixonly.cpp
+    src/derivatives/derivs_banded.cpp
+    src/derivatives/derivs_utils.cpp
+    src/derivatives/impl_explicitmatrix.cpp
+    src/derivatives/impl_byuderivs.cpp
+    src/derivatives/impl_kimderivs.cpp
+    src/derivatives/impl_jonathantyler.cpp
+    src/derivatives/impl_bradylivescu.cpp
+    src/derivatives/impl_boris.cpp
+    src/derivatives/impl_hybrid_approaches.cpp
+    src/derivatives/filt_kodiss_explicit.cpp
+    src/derivatives/nova_derivs.cpp
 )
+
+# NOTE: generated derivative scheme files (src/derivatives/generated/*.cpp) are
+# NOT standalone compilation units -- they're #include'd into impl_*.cpp files.
+# Do NOT glob them as source files.
 
 set(FEM_SRC
     FEM/examples/src/laplace.cpp FEM/src/basis.cpp FEM/src/refel.cpp
@@ -176,10 +277,12 @@ message(STATUS
         "Dendro unzip/zip speedups: master=${DENDRO_UNZIP_SPEEDUP} "
         "scatter_fast=${DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE} "
         "tensor_simd=${DENDRO_TENSOR_SIMD_EFFECTIVE} omp=${DENDRO_UNZIP_OMP}")
+message(STATUS "Dendro hybrid OpenMP/MPI path: ${DENDRO_HYBRID_OMP}")
 
 dendro_add_def(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE DENDRO_UNZIP_SCATTER_FAST)
 dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
+dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})
@@ -216,7 +319,7 @@ target_include_directories(dendro_config INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc
 )
 
-target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA m)
+target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m)
 
 if(WITH_BLAS_LAPACK)
   target_compile_definitions(dendro5 PUBLIC WITH_BLAS_LAPACK)
@@ -321,6 +424,36 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(heatEq FEM/examples/src/heatMat.cpp FEM/examples/src/heatVec.cpp FEM/examples/src/heatEq.cpp)
   dendro_add_example(subDAExample FEM/examples/src/subdaExample.cpp)
   dendro_add_example(sfcLaplaceEq FEM/examples/src/sfcLaplace.cpp)
+
+  # --- Derivative tests (require toml11 for config) ---
+  # fetch toml11 if the parent project hasn't already provided it
+  if(NOT TARGET toml11::toml11)
+    FetchContent_Declare(
+        toml11
+        GIT_REPOSITORY https://github.com/ToruNiina/toml11.git
+        GIT_TAG        v4.4.0
+    )
+    FetchContent_MakeAvailable(toml11)
+  endif()
+  function(dendro_add_deriv_test TARGET_NAME)
+    add_executable(${TARGET_NAME} ${ARGN})
+    target_link_libraries(${TARGET_NAME} PRIVATE dendro5 MPI::MPI_CXX toml11::toml11 m)
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/derivatives)
+  endfunction()
+
+  dendro_add_deriv_test(testCompactDerivs test/src/testCompactDerivs.cpp)
+  dendro_add_deriv_test(testMatrixMul test/src/testMatMul.cpp)
+  dendro_add_deriv_test(testNOVA test/src/testNova.cpp)
+  dendro_add_deriv_test(testKODiss test/src/testKODiss.cpp)
+  dendro_add_deriv_test(testDerivOnGrid test/src/derivativeConvergence.cpp test/src/derivativeCtx.cpp)
+  dendro_add_deriv_test(buildGlobalMat test/src/globalMatrixBuilding.cpp test/src/derivativeCtx.cpp)
+  dendro_add_deriv_test(testLibXSMMvBLAS test/src/testLibXSMMvBLAS.cpp)
+  dendro_add_deriv_test(testAllDerivs test/src/testAllDerivs.cpp)
+  dendro_add_deriv_test(testDerivConvergence test/src/testDerivConvergence.cpp)
+  dendro_add_deriv_test(testBandedVsXSMM test/src/testBandedVsXSMM.cpp)
+  dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)
+  dendro_add_deriv_test(testRhsWorkflow test/src/testRhsWorkflow.cpp)
 
   if(WITH_CUDA)
     # cuda GPU tests
