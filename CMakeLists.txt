@@ -91,6 +91,14 @@ option(DENDRO_UNZIP_OMP
 option(DENDRO_TENSOR_SIMD
        "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=7 for eO=6)"
        OFF)
+# Project-wide switch for the hybrid OpenMP/MPI path brought in from the
+# derivatives workstream. Default OFF keeps the MPI-first behavior. When ON it
+# enables the OpenMP threading the hybrid path relies on (e.g. TwoPunctures
+# initial-data solve via TP_OMP_THREADS). Propagated through dendro_config so
+# downstream solvers that compile the hybrid sources pick it up too.
+option(DENDRO_HYBRID_OMP
+       "Enable the hybrid OpenMP/MPI path (OpenMP threading on top of MPI; default OFF = MPI-first)"
+       OFF)
 
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
@@ -268,10 +276,12 @@ message(STATUS
         "Dendro unzip/zip speedups: master=${DENDRO_UNZIP_SPEEDUP} "
         "scatter_fast=${DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE} "
         "tensor_simd=${DENDRO_TENSOR_SIMD_EFFECTIVE} omp=${DENDRO_UNZIP_OMP}")
+message(STATUS "Dendro hybrid OpenMP/MPI path: ${DENDRO_HYBRID_OMP}")
 
 dendro_add_def(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE DENDRO_UNZIP_SCATTER_FAST)
 dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
+dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})

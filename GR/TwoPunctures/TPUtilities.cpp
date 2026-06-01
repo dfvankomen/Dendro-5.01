@@ -9,7 +9,14 @@
 #include <assert.h>
 #include <quadmath.h>
 
+// Hybrid OpenMP/MPI path is gated behind DENDRO_HYBRID_OMP (MPI-first by
+// default). With the flag off, default to a single thread so the
+// num_threads(TP_OMP_THREADS) regions in the TwoPunctures solve run serially.
+#if defined(DENDRO_HYBRID_OMP)
 unsigned int TP_OMP_THREADS = 16;
+#else
+unsigned int TP_OMP_THREADS = 1;
+#endif
 MPI_Comm TP_MPI_COMM = MPI_COMM_WORLD;
 unsigned int TP_SOLVE_VALID = 0;
 

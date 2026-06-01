@@ -35,7 +35,14 @@ int main(int argc, char **argv)
     }
 
     const unsigned int nthreads = atoi(argv[2]);
+#if defined(DENDRO_HYBRID_OMP)
     TP_OMP_THREADS              = nthreads;
+#else
+    // Hybrid OpenMP/MPI path gated off at build time: ignore the requested
+    // thread count and run the TwoPunctures solve serially (MPI-first).
+    TP_OMP_THREADS              = 1;
+    (void)nthreads;
+#endif
     
     std::cout<<" reading parameter file :"<<argv[1]<<std::endl;
     emda::readParamFile(argv[1],comm);
