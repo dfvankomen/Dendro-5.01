@@ -11,8 +11,6 @@
  */
 
 #pragma once
-#include <cmath>
-
 #include "ctx.h"
 #include "dendro.h"
 #include "dvec.h"
@@ -41,7 +39,18 @@ enum ETSFlags { FROM_T0 = 0, CHECKPT, CURR_STEP, CURR_TIME };
  */
 
 #ifdef __PROFILE_ETS__
-enum ETSPROFILE { EVOLVE = 0, ETS_LAST };
+// Capped at 6 stages (RK3..RK45). EVOLVE stays index 0 for dump_pt() back-compat.
+enum ETSPROFILE {
+    EVOLVE = 0,
+    STAGE_0,
+    STAGE_1,
+    STAGE_2,
+    STAGE_3,
+    STAGE_4,
+    STAGE_5,
+    ETS_LAST
+};
+#define ETS_MAX_PROFILED_STAGES 6
 #endif
 
 template <typename T, typename Ctx>
@@ -51,7 +60,8 @@ class ETS {
     std::vector<profiler_t> m_uiCtxpt =
         std::vector<profiler_t>(static_cast<int>(ETSPROFILE::ETS_LAST));
     const char* ETSPROFILE_NAMES[static_cast<int>(ETSPROFILE::ETS_LAST)] = {
-        "evolve"};
+        "evolve", "stage_0", "stage_1", "stage_2",
+        "stage_3", "stage_4", "stage_5"};
 
     void init_pt() {
         for (unsigned int i = 0; i < m_uiCtxpt.size(); i++)
@@ -220,7 +230,7 @@ class ETS {
     /**@brief: state true if the internal variables are allocated. */
     bool m_uiIsInternalAlloc = false;
 
-   private:
+   protected:
     /**
      * @brief Allocates internal variables for the time stepper.
      * @return int
@@ -240,7 +250,7 @@ class ETS {
     /**
      * @brief Destroy the ETS object
      */
-    ~ETS();
+    virtual ~ETS();
 
     /**
      * @brief Set the ets coefficients
@@ -271,7 +281,7 @@ class ETS {
     int set_evolve_vars(DVec eVar);
 
     /**@brief: initialize the ETS solver*/
-    void init();
+    virtual void init();
 
     /**@brief: returns the current time step*/
     inline DendroIntL curr_step() { return m_uiTimeInfo._m_uiStep; };
@@ -314,10 +324,10 @@ class ETS {
 
     /**@brief: perform synchronizations with correct variable allocations for
      * the new mesh: should be called after remeshing.  */
-    int sync_with_mesh();
+    virtual int sync_with_mesh();
 
     /**@brief: advance to next time step*/
-    void evolve();
+    virtual void evolve();
 
     /**@brief: dump load statistics*/
     void dump_load_statistics(std::ostream& sout);
@@ -401,16 +411,12 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
 
         static const DendroScalar ETS_C[] = {1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0};
         static const DendroScalar ETS_T[] = {0.0, 1.0, 1.0 / 2.0};
-        static const DendroScalar ETS_U[] = {// stage 1
-                                             0.0, 0.0, 0.0,
-                                             // stage 2
-                                             1.0, 0.0, 0.0,
-                                             // stage 3
-                                             1.0 / 4.0, 1.0 / 4.0, 0.0};
+        static const DendroScalar ETS_U[] = {
+            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0 / 4.0, 1.0 / 4.0, 0.0};
 
-        m_uiCi                            = (DendroScalar*)ETS_T;
-        m_uiBi                            = (DendroScalar*)ETS_C;
-        m_uiAij                           = (DendroScalar*)ETS_U;
+        m_uiCi  = (DendroScalar*)ETS_T;
+        m_uiBi  = (DendroScalar*)ETS_C;
+        m_uiAij = (DendroScalar*)ETS_U;
 
         dendro::logger::debug(dendro::logger::Scope{"ETS"},
                               "ETS Coefficients set for RK3");
@@ -421,23 +427,52 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
         static const DendroScalar ETS_C[] = {1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0,
                                              1.0 / 6.0};
         static const DendroScalar ETS_T[] = {0, 1.0 / 2.0, 1.0 / 2.0, 1.0};
-        static const DendroScalar ETS_U[] = {// stage 1
-                                             0.0, 0.0, 0.0, 0.0,
-                                             // stage 2
-                                             1.0 / 2.0, 0.0, 0.0, 0.0,
-                                             // stage 3
-                                             0.0, 1.0 / 2.0, 0.0, 0.0,
-                                             // stage 4
-                                             0.0, 0.0, 1.0, 0.0};
+        static const DendroScalar ETS_U[] = {
+            0.0, 0.0,       0.0, 0.0, 1.0 / 2.0, 0.0, 0.0, 0.0,
+            0.0, 1.0 / 2.0, 0.0, 0.0, 0.0,       0.0, 1.0, 0.0};
+
+        m_uiCi  = (DendroScalar*)ETS_T;
+        m_uiBi  = (DendroScalar*)ETS_C;
+        m_uiAij = (DendroScalar*)ETS_U;
+
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK4");
+
+    } else if (type == ETSType::RK5) {
+        // Butcher's 5th-order method (6 stages).
+        // Original implementation had m_uiNumStages=5 and a 5x5 Aij
+        // matrix, which was incorrect — the method requires 6 stages.
+        // The first row of Aij (all zeros) and the a21=1/4 entry were
+        // missing.  Fixed to use the full 6x6 tableau.
+        m_uiNumStages                     = 6;
+
+        static const DendroScalar ETS_C[] = {
+            7.0 / 90.0, 0.0, 32.0 / 90.0, 12.0 / 90.0, 32.0 / 90.0, 7.0 / 90.0};
+
+        static const DendroScalar ETS_T[] = {0.0,       1.0 / 4.0, 1.0 / 4.0,
+                                             1.0 / 2.0, 3.0 / 4.0, 1.0};
+
+        // clang-format off
+        static const DendroScalar ETS_U[] = {
+            0.0,        0.0,        0.0,        0.0,         0.0,        0.0,
+            1.0 / 4.0,  0.0,        0.0,        0.0,         0.0,        0.0,
+            1.0 / 8.0,  1.0 / 8.0,  0.0,        0.0,         0.0,        0.0,
+            0.0,       -1.0 / 2.0,  1.0,        0.0,         0.0,        0.0,
+            3.0 / 16.0, 0.0,        0.0,        9.0 / 16.0,  0.0,        0.0,
+           -3.0 / 7.0,  2.0 / 7.0, 12.0 / 7.0,-12.0 / 7.0,  8.0 / 7.0,  0.0};
+        // clang-format on
 
         m_uiCi                            = (DendroScalar*)ETS_T;
         m_uiBi                            = (DendroScalar*)ETS_C;
         m_uiAij                           = (DendroScalar*)ETS_U;
 
+        dendro::logger::debug(
+            dendro::logger::Scope{"ETS"},
+            "ETS Coefficients set for RK5 (Butcher, 6 stages)");
+
     } else if (type == ETSType::RK4_RALSTON) {
-        // this is based on Ralston's fourth-order method, which should have
-        // minimal truncation error compared to the classic fourth order by
-        // Runge-Kutta
+        // Ralston's fourth-order method (4 stages), minimal truncation error
+        // relative to classic RK4. Ported from the `derivatives` experiment.
         m_uiNumStages                     = 4;
 
         static const DendroScalar ETS_C[] = {
@@ -449,47 +484,40 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
             -0.04893570812617069,
             // (30.0 - 4.0 * sqrt(5.0)) / 123.0,
             0.17118478121951902};
-        static const DendroScalar ETS_T[] = {0,  // 2.0 / 5.0,
+        static const DendroScalar ETS_T[] = {0.0,
+                                             // 2.0 / 5.0,
                                              0.4,
                                              // (14.0 - 3.0 * sqrt(5.0)) / 16.0,
                                              0.4557372542187894, 1.0};
+        // clang-format off
         static const DendroScalar ETS_U[] = {
             // stage 1
             0.0, 0.0, 0.0, 0.0,
             // stage 2
-            // 2.0 / 5.0,
             0.4, 0.0, 0.0, 0.0,
             // stage 3
-            // (-2889.0 + 1428.0 * sqrt(5.0)) / 1024.0,
-            0.2969776092477536,
-            // (3785.0 - 1620.0 * sqrt(5.0)) / 1024.0,
-            0.15875964497103584, 0.0, 0.0,
+            0.2969776092477536, 0.15875964497103584, 0.0, 0.0,
             // stage 4
-            // (-3365.0 + 2094.0 * sqrt(5.0)) / 6040.0,
-            0.21810038822592046,
-            // (-975.0 - 3046.0 * sqrt(5.0)) / 2552.0,
-            -3.050965148692931,
-            // (467040.0 + 203968.0 * sqrt(5.0)) / 240845.0,
-            3.8328647604670105, 0.0};
+            0.21810038822592046, -3.050965148692931, 3.8328647604670105, 0.0};
+        // clang-format on
 
         m_uiCi  = (DendroScalar*)ETS_T;
         m_uiBi  = (DendroScalar*)ETS_C;
         m_uiAij = (DendroScalar*)ETS_U;
 
         dendro::logger::debug(dendro::logger::Scope{"ETS"},
-                              "ETS Coefficients set for RK4");
+                              "ETS Coefficients set for RK4_RALSTON");
 
-    } else if (type == ETSType::RK5) {
-        // this is the fifth-order method as given by Nystrom, as a correction
-        // to Kutta
+    } else if (type == ETSType::RK5_NYSTROM) {
+        // Nystrom's fifth-order method (6 stages) — an alternative correction
+        // to Kutta's RK5. Distinct experiment from the canonical Butcher RK5
+        // above; ported from the `derivatives` branch.
         m_uiNumStages                     = 6;
-        // this is his "b" vector (weights)
         static const DendroScalar ETS_C[] = {
             23.0 / 192.0, 0.0, 125.0 / 192.0, 0.0, -27.0 / 64.0, 125.0 / 192.0};
-        // this is his 'c' vector (time nodes)
         static const DendroScalar ETS_T[] = {0.0, 1.0 / 3.0, 2.0 / 5.0,
                                              1.0, 2.0 / 3.0, 4.0 / 5.0};
-        // and this is his A matrix (flattened to row-major)
+        // clang-format off
         static const DendroScalar ETS_U[] = {
             // stage 1
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -503,25 +531,26 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
             2.0 / 27.0, 10.0 / 9.0, -50.0 / 81.0, 8.0 / 81.0, 0.0, 0.0,
             // stage 6
             2.0 / 25.0, 12.0 / 25.0, 2.0 / 15.0, 8.0 / 75.0, 0.0, 0.0};
+        // clang-format on
 
         m_uiCi  = (DendroScalar*)ETS_T;
         m_uiBi  = (DendroScalar*)ETS_C;
         m_uiAij = (DendroScalar*)ETS_U;
 
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK5_NYSTROM");
+
     } else if (type == ETSType::RK45_CASH_KARP) {
-        // this is the Cash Karp which does both 4th and 5th order, we can also
-        // implement "smart" step sizing updates as well with this
-        // TODO: this is typically done to see if the step size is large or
-        // small enough
+        // Cash-Karp embedded 4(5) pair (6 stages); the 5th-order weights are
+        // used here. Enables adaptive step sizing. From the `derivatives`
+        // experiment.
         m_uiNumStages                     = 6;
-        // this is his "b" vector (weights)
         static const DendroScalar ETS_C[] = {37.0 / 378.0,  0.0,
                                              250.0 / 621.0, 125.0 / 594.0,
                                              0.0,           512.0 / 1771.0};
-        // this is his 'c' vector (time nodes)
         static const DendroScalar ETS_T[] = {0.0,       1.0 / 5.0, 3.0 / 10.0,
                                              3.0 / 5.0, 1.0,       7.0 / 8.0};
-        // and this is his A matrix (flattened to row-major)
+        // clang-format off
         static const DendroScalar ETS_U[] = {
             // stage 1
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -536,24 +565,25 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
             // stage 6
             1631.0 / 55296.0, 175.0 / 512.0, 575.0 / 13824.0,
             44275.0 / 110592.0, 253.0 / 4096.0, 0.0};
+        // clang-format on
 
         m_uiCi  = (DendroScalar*)ETS_T;
         m_uiBi  = (DendroScalar*)ETS_C;
         m_uiAij = (DendroScalar*)ETS_U;
 
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK45_CASH_KARP");
+
     } else if (type == ETSType::RKF45) {
-        // this is the Runge-Kutta-Fehlberg method
-        // TODO: this is typically done to see if the step size is large or
-        // small enough
+        // Runge-Kutta-Fehlberg 4(5) (6 stages); 5th-order weights used here.
+        // From the `derivatives` experiment.
         m_uiNumStages                     = 6;
-        // this is the "b" vector (weights)
         static const DendroScalar ETS_C[] = {
             16.0 / 135.0,      0.0,         6656.0 / 12825.0,
             28561.0 / 56430.0, -9.0 / 50.0, 2.0 / 55.0};
-        // this is the 'c' vector (time nodes)
         static const DendroScalar ETS_T[] = {0.0,         1.0 / 4.0, 3.0 / 8.0,
                                              12.0 / 13.0, 1.0,       1.0 / 2.0};
-        // and this the A matrix (flattened to row-major)
+        // clang-format off
         static const DendroScalar ETS_U[] = {
             // stage 1
             0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -568,17 +598,20 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
             // stage 6
             -8.0 / 27.0, 2.0, -3544.0 / 2565.0, 1859.0 / 4104.0, -11.0 / 40.0,
             0.0};
+        // clang-format on
 
         m_uiCi  = (DendroScalar*)ETS_T;
         m_uiBi  = (DendroScalar*)ETS_C;
         m_uiAij = (DendroScalar*)ETS_U;
 
         dendro::logger::debug(dendro::logger::Scope{"ETS"},
-                              "ETS Coefficients set for RK5");
+                              "ETS Coefficients set for RKF45");
 
     } else {
-        dendro::logger::error(dendro::logger::Scope{"ETS"},
-                              "UNKNOWN ETS TYPE (supports RK3, RK4, and RK5)");
+        dendro::logger::error(
+            dendro::logger::Scope{"ETS"},
+            "UNKNOWN ETS TYPE (supports RK3, RK4, RK5, RK4_RALSTON, "
+            "RK5_NYSTROM, RK45_CASH_KARP, RKF45)");
         return -1;
     }
 
@@ -624,33 +657,25 @@ void ETS<T, Ctx>::evolve() {
 
     m_uiAppCtx->pre_timestep(m_uiEVar);
 
-    const unsigned int DOF    = m_uiEVar.get_dof();
-    const unsigned int szPDof = pMesh->getDegOfFreedom();
-
     if (pMesh->isActive()) {
-        int rank                              = pMesh->getMPIRank();
-
-        const unsigned int nodeLocalBegin     = pMesh->getNodeLocalBegin();
-        const unsigned int nodeLocalEnd       = pMesh->getNodeLocalEnd();
-
-        const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
-        unsigned int offset;
-        double ptmin[3], ptmax[3];
-        unsigned int sz[3];
-        unsigned int bflag;
-        double dx, dy, dz;
-
-        for (int stage = 0; stage < m_uiNumStages; stage++) {
+        for (unsigned int stage = 0; stage < m_uiNumStages; stage++) {
             dendro::logger::debug(dendro::logger::Scope{"ETS"},
                                   "Now executing ETS Evolve stage {}/{}",
                                   stage + 1, m_uiNumStages);
 
+#ifdef __PROFILE_ETS__
+            if (stage < ETS_MAX_PROFILED_STAGES)
+                m_uiCtxpt[ETSPROFILE::STAGE_0 + stage].start();
+#endif
+
             m_uiEVecTmp[0].copy_data(m_uiEVar);
 
-            for (int p = 0; p < stage; p++)
-                DVec::axpy(m_uiAppCtx->get_mesh(),
-                           m_uiAij[(stage)*m_uiNumStages + p] * dt,
-                           m_uiStVec[p], m_uiEVecTmp[0]);
+            for (unsigned int p = 0; p < stage; p++) {
+                const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
+                if (aip != 0.0)
+                    DVec::axpy(pMesh, aip * dt, m_uiStVec[p], m_uiEVecTmp[0]);
+            }
+
             m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
 
             current_t_adv = current_t + m_uiCi[stage] * dt;
@@ -658,13 +683,15 @@ void ETS<T, Ctx>::evolve() {
             m_uiAppCtx->rhs(&m_uiEVecTmp[0], &m_uiStVec[stage], 1,
                             current_t_adv);
             m_uiAppCtx->post_stage(m_uiStVec[stage]);
+
+#ifdef __PROFILE_ETS__
+            if (stage < ETS_MAX_PROFILED_STAGES)
+                m_uiCtxpt[ETSPROFILE::STAGE_0 + stage].stop();
+#endif
         }
 
-        dendro::logger::debug(dendro::logger::Scope{"ETS"},
-                              "Calculating next step after stages");
         for (unsigned int k = 0; k < m_uiNumStages; k++)
-            DVec::axpy(m_uiAppCtx->get_mesh(), m_uiBi[k] * dt, m_uiStVec[k],
-                       m_uiEVar);
+            DVec::axpy(pMesh, m_uiBi[k] * dt, m_uiStVec[k], m_uiEVar);
     }
 
     m_uiAppCtx->post_timestep(m_uiEVar);
