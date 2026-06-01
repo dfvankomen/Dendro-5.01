@@ -37,14 +37,31 @@ option(BUILD_WITH_PETSC "Build dendro with PETSc" OFF)
 option(USE_FD_INTERP_FOR_UNZIP "Use FD style interpolation for unzip" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "Allow MPI to be aware of CUDA support" OFF)
 option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" OFF)
+# ---------------------------------------------------------------------------
+# Unzip/zip speedup toggles
+#
+# DENDRO_UNZIP_SPEEDUP is the single master switch for the MPI-safe unzip/zip
+# speedups: the integer-index same-level scatter fast path and the SIMD
+# wavelet tensor kernels. Flip it to swap between the baseline and the
+# optimized path in one place (e.g. -DDENDRO_UNZIP_SPEEDUP=ON for benchmark
+# builds).
+#
+# The two sub-flags below stay individually overridable so each speedup can be
+# exercised on its own during experiments (e.g. scatter fast path ON, SIMD
+# OFF). DENDRO_UNZIP_OMP (the reserved OpenMP / hybrid hook) forces BOTH
+# speedups on, since the hybrid block-parallel path relies on them to run fast.
+# ---------------------------------------------------------------------------
+option(DENDRO_UNZIP_SPEEDUP
+       "Master toggle for the MPI-safe unzip/zip speedups (integer-index scatter fast path + SIMD wavelet tensor kernels)"
+       OFF)
 option(DENDRO_UNZIP_SCATTER_FAST
        "Use the integer-index same-level scatter fast path in Mesh::unzip_scatter (Phase 1 optimization)"
        OFF)
 option(DENDRO_UNZIP_OMP
-       "Enable OpenMP block-parallel unzip path (reserved hook; implementation lives on a separate hybrid branch)"
+       "Enable OpenMP block-parallel unzip path (reserved hook; implementation lives on a separate hybrid branch). Implies the unzip/zip speedups."
        OFF)
 option(DENDRO_TENSOR_SIMD
-       "Enable AVX2 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=7 for eO=6)"
+       "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=7 for eO=6)"
        OFF)
 
 # Configuration Variables
@@ -144,9 +161,24 @@ dendro_add_def(ALLTOALL_SPARSE ALLTOALL_SPARSE)
 dendro_add_def(RK_SOLVER_OVERLAP_COMM_AND_COMP RK_SOLVER_OVERLAP_COMM_AND_COMP)
 dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
-dendro_add_def(DENDRO_UNZIP_SCATTER_FAST DENDRO_UNZIP_SCATTER_FAST)
+
+# Resolve the effective unzip/zip speedup flags. The master switch and the
+# OpenMP hybrid hook both force the scatter fast path and SIMD tensor kernels
+# on; otherwise each sub-flag is honored as set.
+set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ${DENDRO_UNZIP_SCATTER_FAST})
+set(DENDRO_TENSOR_SIMD_EFFECTIVE ${DENDRO_TENSOR_SIMD})
+if(DENDRO_UNZIP_SPEEDUP OR DENDRO_UNZIP_OMP)
+  set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ON)
+  set(DENDRO_TENSOR_SIMD_EFFECTIVE ON)
+endif()
+message(STATUS
+        "Dendro unzip/zip speedups: master=${DENDRO_UNZIP_SPEEDUP} "
+        "scatter_fast=${DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE} "
+        "tensor_simd=${DENDRO_TENSOR_SIMD_EFFECTIVE} omp=${DENDRO_UNZIP_OMP}")
+
+dendro_add_def(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE DENDRO_UNZIP_SCATTER_FAST)
 dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
-dendro_add_def(DENDRO_TENSOR_SIMD DENDRO_TENSOR_SIMD)
+dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})
