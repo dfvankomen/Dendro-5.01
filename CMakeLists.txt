@@ -110,7 +110,8 @@ set(DENDRO_SRC
     src/mesh.cpp src/octUtils.cpp src/dendroIO.cpp src/block.cpp
     src/sc_flops.cpp src/profiler.cpp src/dendroProfileParams.cpp src/oda.cpp
     src/odaUtils.cpp src/sub_oda.cpp src/meshUtils.cpp src/waveletRefEl.cpp
-    test/src/meshTestUtils.cpp src/aeh_bhahaha.cpp src/logger.cpp
+    test/src/meshTestUtils.cpp src/aeh_bhahaha.cpp src/bh_history.cpp
+    src/logger.cpp
 )
 
 set(FEM_SRC

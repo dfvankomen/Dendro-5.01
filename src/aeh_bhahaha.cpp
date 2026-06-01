@@ -577,6 +577,23 @@ void AEH_BHaHAHA::find_horizons(
                 transfer_to_persistent_from_bhahaha(
                     &bha_param_data_[which_horizon]);
 
+                // capture the QoI snapshot every successful solve (independent
+                // of file output)
+                HorizonQoI q;
+                q.r_min      = bhahaha_diags.min_coord_radius_wrt_centroid;
+                q.r_mean     = bhahaha_diags.mean_coord_radius_wrt_centroid;
+                q.r_max      = bhahaha_diags.max_coord_radius_wrt_centroid;
+                q.area       = bhahaha_diags.area;
+                q.x_centroid = bhahaha_diags.x_centroid_wrt_coord_origin;
+                q.y_centroid = bhahaha_diags.y_centroid_wrt_coord_origin;
+                q.z_centroid = bhahaha_diags.z_centroid_wrt_coord_origin;
+                q.spin_x = bhahaha_diags.spin_a_x_from_xz_over_yz_prop_circumfs;
+                q.spin_y = bhahaha_diags.spin_a_y_from_yz_over_xz_prop_circumfs;
+                q.spin_z = bhahaha_diags.spin_a_z_from_xz_over_xy_prop_circumfs;
+                q.t      = current_time;
+                q.valid  = true;
+                qoi_[which_horizon] = q;
+
                 // output horizon diagnostics to file
                 if (current_step % file_output_freq_ == 0) {
                     bah_diagnostics_file_output(
@@ -640,10 +657,60 @@ void AEH_BHaHAHA::find_horizons(
     // now that we're done we can delete the whole param_data
     bha_param_data_.clear();
 
+    // make the latest QoI snapshots coherent across all active ranks so any
+    // rank (e.g. the AMR refinement loop) can query them.
+    broadcast_qois_to_all(mesh);
+
     bhahaha_profiler_.stop();
     // TODO: print info
 
     MPI_Barrier(commActive);
+}
+
+void AEH_BHaHAHA::broadcast_qois_to_all(const ot::Mesh* mesh) {
+    if (!mesh->isActive()) return;
+
+    const unsigned int rankActive = mesh->getMPIRank();
+    const unsigned int npesActive = mesh->getMPICommSize();
+    MPI_Comm commActive           = mesh->getMPICommunicator();
+
+    // each owned horizon is packed as {horizon_idx, HorizonQoI::NUM_PACKED}
+    constexpr int stride          = 1 + HorizonQoI::NUM_PACKED;
+
+    // count + pack the horizons this rank owns (same round-robin as the solve)
+    size_t local_horizons         = 0;
+    for (unsigned int h = 0; h < num_horizons_; ++h)
+        if (h % npesActive == rankActive) local_horizons++;
+
+    std::vector<double> sendBuffer(local_horizons * stride);
+    size_t off = 0;
+    for (unsigned int h = 0; h < num_horizons_; ++h) {
+        if (h % npesActive != rankActive) continue;
+        sendBuffer[off] = static_cast<double>(h);
+        qoi_[h].pack(&sendBuffer[off + 1]);
+        off += stride;
+    }
+
+    // gather variable counts, then Allgatherv so every rank sees every horizon
+    const int send_count = static_cast<int>(sendBuffer.size());
+    std::vector<int> recv_counts(npesActive), displs(npesActive);
+    MPI_Allgather(&send_count, 1, MPI_INT, recv_counts.data(), 1, MPI_INT,
+                  commActive);
+
+    displs[0] = 0;
+    for (unsigned int i = 1; i < npesActive; ++i)
+        displs[i] = displs[i - 1] + recv_counts[i - 1];
+
+    std::vector<double> recv_buffer(displs.back() + recv_counts.back());
+    MPI_Allgatherv(sendBuffer.data(), send_count, MPI_DOUBLE,
+                   recv_buffer.data(), recv_counts.data(), displs.data(),
+                   MPI_DOUBLE, commActive);
+
+    // unpack everyone's contributions into qoi_
+    for (size_t read = 0; read + stride <= recv_buffer.size(); read += stride) {
+        const unsigned int h = static_cast<unsigned int>(recv_buffer[read]);
+        if (h < num_horizons_) qoi_[h].unpack(&recv_buffer[read + 1]);
+    }
 }
 
 void AEH_BHaHAHA::bah_sum_shared_arrays(const ot::Mesh* mesh) {
@@ -1178,6 +1245,13 @@ void AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
         checkPoint["USE_FIXED_RADIUS_GUESS"] =
             bah_use_fixed_radius_guess_on_full_sphere_;
 
+        // latest QoI per horizon, flattened (qoi_ is coherent on every rank
+        // after the find_horizons broadcast)
+        std::vector<double> qoi_flat(num_horizons_ * HorizonQoI::NUM_PACKED);
+        for (unsigned int h = 0; h < num_horizons_; ++h)
+            qoi_[h].pack(&qoi_flat[h * HorizonQoI::NUM_PACKED]);
+        checkPoint["QOI_M1"] = b91_encode(qoi_flat);
+
         std::ofstream outfile(checkpoint_output);
         if (!outfile) {
             std::cout << checkpoint_output
@@ -1310,6 +1384,19 @@ void AEH_BHaHAHA::restore_checkpoint(const ot::Mesh* mesh,
             checkPoint["USE_FIXED_RADIUS_GUESS"];
         restore_vector(bah_use_fixed_radius_guess_on_full_sphere_,
                        temp_fixed_guess, num_horizons_);
+    }
+
+    // optional: pre-QoI checkpoints leave qoi_ default (repopulates next solve)
+    if (checkPoint.contains("QOI_M1")) {
+        temp                  = checkPoint["QOI_M1"];
+        temp_vec              = b91_decode<double>(temp);
+        const size_t expected = num_horizons_ * HorizonQoI::NUM_PACKED;
+        if (temp_vec.size() != expected) {
+            throw std::runtime_error(
+                "ERROR restoring AEH QoI: unexpected QOI_M1 size!");
+        }
+        for (unsigned int h = 0; h < num_horizons_; ++h)
+            qoi_[h].unpack(&temp_vec[h * HorizonQoI::NUM_PACKED]);
     }
 
     // unpack back into the bah struct to ensure we're all on the same page

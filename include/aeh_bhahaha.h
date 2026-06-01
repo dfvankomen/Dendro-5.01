@@ -8,9 +8,11 @@
 #include <vector>
 
 #include "BHaHAHA.h"
+#include "b91_util.h"
 #include "base.h"
 #include "daUtils.h"
 #include "dendro.h"
+#include "horizon_qoi.h"
 #include "json.hpp"
 #include "mesh.h"
 #include "mpi.h"
@@ -26,23 +28,6 @@ inline void print_vec(const std::vector<T>& vec, const std::string& prefix) {
         std::cout << val << " ";
     }
     std::cout << std::endl;
-}
-
-template <typename T>
-inline std::string b91_encode(const std::vector<T>& vec) {
-    return base<91>::encode(std::string(
-        reinterpret_cast<const char*>(vec.data()), vec.size() * sizeof(T)));
-}
-
-template <typename T>
-inline std::vector<T> b91_decode(const std::string& input) {
-    std::string temp         = base<91>::decode(input);
-    const size_t num_entries = temp.size() / sizeof(T);
-    std::vector<T> output(num_entries);
-
-    std::memcpy(output.data(), temp.data(), sizeof(T) * num_entries);
-
-    return output;
 }
 
 #define PRINT_BAH_VAR(var) \
@@ -75,23 +60,6 @@ inline void print_bha_param_data(bhahaha_params_and_data_struct* bha_param_data,
     PRINT_BAH_VAR(
         bha_param_data->enable_eta_varying_alg_for_precision_common_horizon);
     // TODO: t_m1, t_m2, and rmin, rmax, x, y, and z
-}
-
-template <typename T>
-inline void restore_vector(std::vector<T>& original,
-                           const std::vector<T>& restored,
-                           const size_t expected_size) {
-    if (restored.size() != expected_size) {
-        throw std::runtime_error(
-            "ERROR when restoring a vector for the AEH solver! The size is "
-            "different from the expected size!");
-    }
-
-    // otherwise just copy straight in
-    // NOTE: it MUST copy, due to pointer information for prev_horizon
-    for (size_t i = 0; i < expected_size; ++i) {
-        original[i] = restored[i];
-    }
 }
 
 static inline double square(double x) { return x * x; }
@@ -149,6 +117,10 @@ class AEH_BHaHAHA {
     std::vector<double> r_max_m1_, r_max_m2_, r_max_m3_;
     std::vector<double> prev_horizon_m1_, prev_horizon_m2_, prev_horizon_m3_;
     std::vector<int> bah_horizon_active_;
+
+    // latest QoI snapshot per horizon; written by the owning rank in
+    // find_horizons, then shared to all ranks by broadcast_qois_to_all()
+    std::vector<HorizonQoI> qoi_;
 
     unsigned int num_resolutions_multigrid_;
     std::vector<int> ntheta_array_multigrid_;
@@ -337,6 +309,9 @@ class AEH_BHaHAHA {
             std::vector<double>(num_horizons_ * max_ntheta_ * max_nphi_);
         prev_horizon_m3_ =
             std::vector<double>(num_horizons_ * max_ntheta_ * max_nphi_);
+
+        // default-constructed QoI (valid==false) until the first solve
+        qoi_                = std::vector<HorizonQoI>(num_horizons_);
 
         // turn on all horizons to start, bbh and shared will be deactivated
         // later
@@ -553,6 +528,40 @@ class AEH_BHaHAHA {
                        const std::vector<Point> tracked_location_data = {});
 
     void synchronize_to_root(const ot::Mesh* mesh, const int targetProc = 0);
+
+    // Allgatherv the per-horizon QoI over the active comm so every rank holds
+    // the latest qoi_. Called at the end of find_horizons.
+    void broadcast_qois_to_all(const ot::Mesh* mesh);
+
+    // ---- consumer-facing QoI accessors -------------------------------------
+    // Horizon indices: BBH inspiral horizons are 0 and 1, common horizon is 2.
+    unsigned int get_num_horizons() const { return num_horizons_; }
+    bool is_bbh() const { return is_bbh_; }
+
+    const HorizonQoI& get_horizon_qoi(unsigned int h) const { return qoi_[h]; }
+    bool horizon_found(unsigned int h) const {
+        return h < num_horizons_ && qoi_[h].valid;
+    }
+    double get_mean_radius(unsigned int h) const {
+        return horizon_found(h) ? qoi_[h].r_mean : -1.0;
+    }
+    double get_min_radius(unsigned int h) const {
+        return horizon_found(h) ? qoi_[h].r_min : -1.0;
+    }
+    double get_max_radius(unsigned int h) const {
+        return horizon_found(h) ? qoi_[h].r_max : -1.0;
+    }
+    double get_area(unsigned int h) const {
+        return horizon_found(h) ? qoi_[h].area : -1.0;
+    }
+
+    // BBH common-horizon (index 2) convenience wrappers.
+    bool common_horizon_found() const {
+        return is_bbh_ && num_horizons_ > 2 && horizon_found(2);
+    }
+    double get_common_horizon_mean_radius() const {
+        return common_horizon_found() ? qoi_[2].r_mean : -1.0;
+    }
 
     void create_checkpoint(
         const ot::Mesh* mesh,
