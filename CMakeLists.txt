@@ -269,16 +269,23 @@ dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 # on; otherwise each sub-flag is honored as set.
 set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ${DENDRO_UNZIP_SCATTER_FAST})
 set(DENDRO_TENSOR_SIMD_EFFECTIVE ${DENDRO_TENSOR_SIMD})
+set(DENDRO_UNZIP_SPEEDUP_EFFECTIVE ${DENDRO_UNZIP_SPEEDUP})
 if(DENDRO_UNZIP_SPEEDUP OR DENDRO_UNZIP_OMP)
   set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ON)
   set(DENDRO_TENSOR_SIMD_EFFECTIVE ON)
+  set(DENDRO_UNZIP_SPEEDUP_EFFECTIVE ON)
 endif()
 message(STATUS
-        "Dendro unzip/zip speedups: master=${DENDRO_UNZIP_SPEEDUP} "
+        "Dendro unzip/zip speedups: master=${DENDRO_UNZIP_SPEEDUP_EFFECTIVE} "
         "scatter_fast=${DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE} "
         "tensor_simd=${DENDRO_TENSOR_SIMD_EFFECTIVE} omp=${DENDRO_UNZIP_OMP}")
 message(STATUS "Dendro hybrid OpenMP/MPI path: ${DENDRO_HYBRID_OMP}")
 
+# DENDRO_UNZIP_SPEEDUP is also emitted as a single umbrella compile def so
+# downstream code can `#ifdef DENDRO_UNZIP_SPEEDUP` instead of testing both
+# sub-macros. It is defined whenever the bundled speedups are active (master
+# switch on, or forced on by the OpenMP hybrid hook).
+dendro_add_def(DENDRO_UNZIP_SPEEDUP_EFFECTIVE DENDRO_UNZIP_SPEEDUP)
 dendro_add_def(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE DENDRO_UNZIP_SCATTER_FAST)
 dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
