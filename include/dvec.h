@@ -337,23 +337,34 @@ void DVector<T, I>::axpy(const ot::Mesh* const pMesh, T a,
 
     if (x.m_vec_loc == DVEC_LOC::HOST) {
         if (!local_only) {
-            for (unsigned int i = 0; i < x.m_size; i++)
-                y_ptr[i] += a * x_ptr[i];
+            const unsigned int n = x.m_size;
+            // node-independent stream op; threaded under the hybrid-OMP umbrella
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for
+#endif
+            for (unsigned int i = 0; i < n; i++) y_ptr[i] += a * x_ptr[i];
 
         } else {
             const unsigned int sz_dof = x.m_size / x.m_dof;
             const unsigned int npe    = pMesh->getNumNodesPerElement();
             if (x.m_vec_type == DVEC_TYPE::OCT_SHARED_NODES) {
+                const unsigned int nb = pMesh->getNodeLocalBegin();
+                const unsigned int ne = pMesh->getNodeLocalEnd();
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
                 for (unsigned int v = 0; v < x.m_dof; v++)
-                    for (unsigned int node = pMesh->getNodeLocalBegin();
-                         node < pMesh->getNodeLocalEnd(); node++)
+                    for (unsigned int node = nb; node < ne; node++)
                         y_ptr[v * sz_dof + node] +=
                             a * x_ptr[v * sz_dof + node];
             } else if (x.m_vec_type == DVEC_TYPE::OCT_LOCAL_NODES) {
+                const unsigned int nb = pMesh->getElementLocalBegin() * npe;
+                const unsigned int ne = pMesh->getElementLocalEnd() * npe;
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
                 for (unsigned int v = 0; v < x.m_dof; v++)
-                    for (unsigned int node =
-                             pMesh->getElementLocalBegin() * npe;
-                         node < pMesh->getElementLocalEnd() * npe; node++)
+                    for (unsigned int node = nb; node < ne; node++)
                         y_ptr[v * sz_dof + node] +=
                             a * x_ptr[v * sz_dof + node];
             }
@@ -387,22 +398,34 @@ void DVector<T, I>::axpby(const ot::Mesh* const pMesh, T a,
     T* __restrict__ y_ptr       = y.m_data_ptr;
 
     if (!local_only) {
-        for (unsigned int i = 0; i < x.m_size; i++)
+        const unsigned int n = x.m_size;
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for
+#endif
+        for (unsigned int i = 0; i < n; i++)
             y_ptr[i] = a * x_ptr[i] + b * y_ptr[i];
 
     } else {
         const unsigned int sz_dof = x.m_size / x.m_dof;
         const unsigned int npe    = pMesh->getNumNodesPerElement();
         if (x.m_vec_type == DVEC_TYPE::OCT_SHARED_NODES) {
+            const unsigned int nb = pMesh->getNodeLocalBegin();
+            const unsigned int ne = pMesh->getNodeLocalEnd();
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
             for (unsigned int v = 0; v < x.m_dof; v++)
-                for (unsigned int node = pMesh->getNodeLocalBegin();
-                     node < pMesh->getNodeLocalEnd(); node++)
+                for (unsigned int node = nb; node < ne; node++)
                     y_ptr[v * sz_dof + node] = a * x_ptr[v * sz_dof + node] +
                                                b * y_ptr[v * sz_dof + node];
         } else if (x.m_vec_type == DVEC_TYPE::OCT_LOCAL_NODES) {
+            const unsigned int nb = pMesh->getElementLocalBegin() * npe;
+            const unsigned int ne = pMesh->getElementLocalEnd() * npe;
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
             for (unsigned int v = 0; v < x.m_dof; v++)
-                for (unsigned int node = pMesh->getElementLocalBegin() * npe;
-                     node < pMesh->getElementLocalEnd() * npe; node++)
+                for (unsigned int node = nb; node < ne; node++)
                     y_ptr[v * sz_dof + node] = a * x_ptr[v * sz_dof + node] +
                                                b * y_ptr[v * sz_dof + node];
         }

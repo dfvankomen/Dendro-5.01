@@ -264,13 +264,19 @@ dendro_add_def(RK_SOLVER_OVERLAP_COMM_AND_COMP RK_SOLVER_OVERLAP_COMM_AND_COMP)
 dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 
-# Resolve the effective unzip/zip speedup flags. The master switch and the
-# OpenMP hybrid hook both force the scatter fast path and SIMD tensor kernels
-# on; otherwise each sub-flag is honored as set.
+# Resolve the effective unzip/zip + threading flags. DENDRO_HYBRID_OMP is the
+# umbrella for all intra-rank OpenMP threading: it implies the block-parallel
+# unzip path (DENDRO_UNZIP_OMP). The master switch and the (effective) unzip-OMP
+# hook both force the scatter fast path + SIMD tensor kernels on; otherwise each
+# sub-flag is honored as set.
 set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ${DENDRO_UNZIP_SCATTER_FAST})
 set(DENDRO_TENSOR_SIMD_EFFECTIVE ${DENDRO_TENSOR_SIMD})
 set(DENDRO_UNZIP_SPEEDUP_EFFECTIVE ${DENDRO_UNZIP_SPEEDUP})
-if(DENDRO_UNZIP_SPEEDUP OR DENDRO_UNZIP_OMP)
+set(DENDRO_UNZIP_OMP_EFFECTIVE ${DENDRO_UNZIP_OMP})
+if(DENDRO_HYBRID_OMP)
+  set(DENDRO_UNZIP_OMP_EFFECTIVE ON)
+endif()
+if(DENDRO_UNZIP_SPEEDUP OR DENDRO_UNZIP_OMP_EFFECTIVE)
   set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ON)
   set(DENDRO_TENSOR_SIMD_EFFECTIVE ON)
   set(DENDRO_UNZIP_SPEEDUP_EFFECTIVE ON)
@@ -278,16 +284,16 @@ endif()
 message(STATUS
         "Dendro unzip/zip speedups: master=${DENDRO_UNZIP_SPEEDUP_EFFECTIVE} "
         "scatter_fast=${DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE} "
-        "tensor_simd=${DENDRO_TENSOR_SIMD_EFFECTIVE} omp=${DENDRO_UNZIP_OMP}")
-message(STATUS "Dendro hybrid OpenMP/MPI path: ${DENDRO_HYBRID_OMP}")
+        "tensor_simd=${DENDRO_TENSOR_SIMD_EFFECTIVE} omp=${DENDRO_UNZIP_OMP_EFFECTIVE}")
+message(STATUS "Dendro hybrid OpenMP/MPI path: ${DENDRO_HYBRID_OMP} (implies unzip OMP)")
 
 # DENDRO_UNZIP_SPEEDUP is also emitted as a single umbrella compile def so
 # downstream code can `#ifdef DENDRO_UNZIP_SPEEDUP` instead of testing both
 # sub-macros. It is defined whenever the bundled speedups are active (master
-# switch on, or forced on by the OpenMP hybrid hook).
+# switch on, or forced on by the OpenMP hooks).
 dendro_add_def(DENDRO_UNZIP_SPEEDUP_EFFECTIVE DENDRO_UNZIP_SPEEDUP)
 dendro_add_def(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE DENDRO_UNZIP_SCATTER_FAST)
-dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
+dendro_add_def(DENDRO_UNZIP_OMP_EFFECTIVE DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
 
