@@ -80,6 +80,51 @@ void inline do_ko_single(const double *const calc_dx,
     }
 }
 
+/**
+ * @brief CAKO variant of do_ko_single: accumulates a per-point dissipation
+ * coefficient field (coeff_field) times the summed KO derivatives into output.
+ */
+void inline do_ko_single_field(const double *const calc_dx,
+                               const double *const calc_dy,
+                               const double *const calc_dz,
+                               double *const output,
+                               const double *const coeff_field,
+                               const unsigned int *sz, const unsigned int bflag,
+                               const unsigned int PW) {
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
+
+    for (unsigned int k = PW; k < nz - PW; k++) {
+        for (unsigned int j = PW; j < ny - PW; j++) {
+            for (unsigned int i = PW; i < nx - PW; i++) {
+                const unsigned int pp = i + nx * (j + ny * k);
+                output[pp] +=
+                    coeff_field[pp] * (calc_dx[pp] + calc_dy[pp] + calc_dz[pp]);
+            }
+        }
+    }
+}
+
+/**
+ * @brief Shared body for the CAKO (per-point field) overrides: computes the
+ * per-direction KO derivatives into the workspaces, then accumulates
+ * coeff_field * (Dx + Dy + Dz) into output. Used by every ExplicitKODiss*
+ * subclass's do_full_filter_field override.
+ */
+void inline do_full_filter_field_impl(
+    KOStencilFn kox, KOStencilFn koy, KOStencilFn koz,
+    const double *const input, double *const output, double *const workspace_x,
+    double *const workspace_y, double *const workspace_z, const double dx,
+    const double dy, const double dz, const double *const coeff_field,
+    const unsigned int *sz, const unsigned int bflag, const unsigned int PW) {
+    kox(workspace_x, input, dx, sz, bflag);
+    koy(workspace_y, input, dy, sz, bflag);
+    koz(workspace_z, input, dz, sz, bflag);
+    do_ko_single_field(workspace_x, workspace_y, workspace_z, output,
+                       coeff_field, sz, bflag, PW);
+}
+
 class ExplicitKODissO2 : public Filters {
    private:
     KOStencilFn kox_func;
@@ -133,6 +178,17 @@ class ExplicitKODissO2 : public Filters {
         do_ko_single(workspace_x, workspace_y, workspace_z, output, coeff, sz,
                      bflag, p_pw);
         // done
+    }
+
+    void do_full_filter_field(
+        const double *const input, double *const output,
+        double *const workspace_x, double *const workspace_y,
+        double *const workspace_z, const double dx, const double dy,
+        const double dz, const double *const coeff_field,
+        const unsigned int *sz, const unsigned int bflag) override {
+        do_full_filter_field_impl(kox_func, koy_func, koz_func, input, output,
+                                  workspace_x, workspace_y, workspace_z, dx, dy,
+                                  dz, coeff_field, sz, bflag, p_pw);
     }
 
     std::string toString() const override { return "ExplicitKODissO2"; };
@@ -196,6 +252,17 @@ class ExplicitKODissO4 : public Filters {
         // done
     }
 
+    void do_full_filter_field(
+        const double *const input, double *const output,
+        double *const workspace_x, double *const workspace_y,
+        double *const workspace_z, const double dx, const double dy,
+        const double dz, const double *const coeff_field,
+        const unsigned int *sz, const unsigned int bflag) override {
+        do_full_filter_field_impl(kox_func, koy_func, koz_func, input, output,
+                                  workspace_x, workspace_y, workspace_z, dx, dy,
+                                  dz, coeff_field, sz, bflag, p_pw);
+    }
+
     std::string toString() const override { return "ExplicitKODissO4"; };
 
     bool do_filter_before() const override { return false; }
@@ -254,6 +321,17 @@ class ExplicitKODissO6 : public Filters {
         // done
     }
 
+    void do_full_filter_field(
+        const double *const input, double *const output,
+        double *const workspace_x, double *const workspace_y,
+        double *const workspace_z, const double dx, const double dy,
+        const double dz, const double *const coeff_field,
+        const unsigned int *sz, const unsigned int bflag) override {
+        do_full_filter_field_impl(kox_func, koy_func, koz_func, input, output,
+                                  workspace_x, workspace_y, workspace_z, dx, dy,
+                                  dz, coeff_field, sz, bflag, p_pw);
+    }
+
     std::string toString() const override { return "ExplicitKODissO6"; };
 
     bool do_filter_before() const override { return false; }
@@ -306,6 +384,17 @@ class ExplicitKODissO8 : public Filters {
       // Combine into output (same helper you already use)
       do_ko_single(workspace_x, workspace_y, workspace_z, output, coeff, sz,
                    bflag, p_pw);
+    }
+
+    void do_full_filter_field(
+        const double *const input, double *const output,
+        double *const workspace_x, double *const workspace_y,
+        double *const workspace_z, const double dx, const double dy,
+        const double dz, const double *const coeff_field,
+        const unsigned int *sz, const unsigned int bflag) override {
+        do_full_filter_field_impl(kox_func, koy_func, koz_func, input, output,
+                                  workspace_x, workspace_y, workspace_z, dx, dy,
+                                  dz, coeff_field, sz, bflag, p_pw);
     }
 
     std::string toString() const override { return "ExplicitKODissO8"; }
@@ -362,6 +451,17 @@ class ExplicitKODissO8 : public Filters {
         do_ko_single(workspace_x, workspace_y, workspace_z, output, coeff, sz,
                      bflag, p_pw);
         // done
+    }
+
+    void do_full_filter_field(
+        const double *const input, double *const output,
+        double *const workspace_x, double *const workspace_y,
+        double *const workspace_z, const double dx, const double dy,
+        const double dz, const double *const coeff_field,
+        const unsigned int *sz, const unsigned int bflag) override {
+        do_full_filter_field_impl(kox_func, koy_func, koz_func, input, output,
+                                  workspace_x, workspace_y, workspace_z, dx, dy,
+                                  dz, coeff_field, sz, bflag, p_pw);
     }
 
     std::string toString() const override { return "ExplicitKODissO6"; };

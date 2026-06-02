@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <stdexcept>
 #include <string>
 
 namespace dendroderivs {
@@ -34,6 +35,25 @@ class Filters {
                                 const double dy, const double dz,
                                 const double coeff, const unsigned int *sz,
                                 const unsigned int bflag)  = 0;
+
+    /**
+     * @brief CAKO variant of do_full_filter: the dissipation strength is a
+     * per-point field (coeff_field, block-sized) rather than a scalar, allowing
+     * spatially-varying dissipation (e.g. BSSN's sqrt(chi)*epsilon).
+     *
+     * The default implementation throws; filter families that support it (the
+     * KO families) override it.
+     */
+    virtual void do_full_filter_field(
+        const double *const input, double *const output,
+        double *const workspace_x, double *const workspace_y,
+        double *const workspace_z, const double dx, const double dy,
+        const double dz, const double *const coeff_field,
+        const unsigned int *sz, const unsigned int bflag) {
+        throw std::runtime_error(
+            "do_full_filter_field (per-point CAKO) is not implemented for this "
+            "filter family");
+    }
 
     virtual std::string toString() const                   = 0;
 

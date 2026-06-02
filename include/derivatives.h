@@ -681,6 +681,22 @@ class DendroDerivatives {
                                 workspace_z, dx, dy, dz, coeff, sz, bflag);
     }
 
+    /**
+     * @brief CAKO variant of filter(): the dissipation strength is a per-point
+     * field (coeff_field, block-sized) rather than a scalar, so callers can
+     * apply spatially-varying dissipation (e.g. BSSN conformal-adaptive KO,
+     * sqrt(chi)*epsilon).
+     */
+    void filter_cako(const double *const input, double *const output,
+                     double *const workspace_x, double *const workspace_y,
+                     double *const workspace_z, const double dx, const double dy,
+                     const double dz, const double *const coeff_field,
+                     const unsigned int *sz, const unsigned int bflag) {
+        _filter->do_full_filter_field(input, output, workspace_x, workspace_y,
+                                      workspace_z, dx, dy, dz, coeff_field, sz,
+                                      bflag);
+    }
+
     bool inline do_filter_before() { return _filter->do_filter_before(); }
 
     void set_maximum_block_size(size_t block_size) {
