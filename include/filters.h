@@ -21,7 +21,8 @@ class Filters {
         p_pw = p_ele_order / 2;
     }
 
-    Filters(const Filters &obj) {};
+    Filters(const Filters &obj)
+        : p_n{obj.p_n}, p_pw{obj.p_pw}, p_ele_order{obj.p_ele_order} {};
 
    public:
     virtual ~Filters() {};

@@ -528,6 +528,7 @@ class DendroDerivatives {
                                           : nullptr),
           _second_deriv(other._second_deriv ? other._second_deriv->clone()
                                             : nullptr),
+          _filter(other._filter ? other._filter->clone() : nullptr),
           _n_points_deriv_space(other._n_points_deriv_space),
           _n_vars_deriv_space(other._n_vars_deriv_space) {
         // if the incoming copy has data in derivative space, we need to copy it
@@ -551,6 +552,7 @@ class DendroDerivatives {
                 other._first_deriv ? other._first_deriv->clone() : nullptr;
             _second_deriv =
                 other._second_deriv ? other._second_deriv->clone() : nullptr;
+            _filter = other._filter ? other._filter->clone() : nullptr;
 
             _n_points_deriv_space = other._n_points_deriv_space;
             _n_vars_deriv_space   = other._n_vars_deriv_space;
@@ -702,6 +704,7 @@ class DendroDerivatives {
     void set_maximum_block_size(size_t block_size) {
         _first_deriv->set_maximum_block_size(block_size);
         _second_deriv->set_maximum_block_size(block_size);
+        if (_filter) _filter->set_maximum_block_size(block_size);
     }
 
     /// Pre-create derivative matrices for a specific grid dimension size.
