@@ -19,6 +19,28 @@
 
 namespace dendroderivs {
 
+/**
+ * @brief Best-effort order of accuracy (4/6/8) for a scheme name (a family
+ * letter followed by the order digit, e.g. A6_2, 2C6_1, KIM4, JTP6). Returns
+ * the first such letter->{4,6,8} pair; unrecognized names fall back to the
+ * value implied by ele_order_fallback.
+ */
+inline unsigned int scheme_order_of_accuracy(const std::string &name,
+                                             unsigned int ele_order_fallback) {
+    for (std::size_t i = 0; i + 1 < name.size(); ++i) {
+        const char c        = name[i];
+        const bool is_alpha = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+        if (is_alpha) {
+            const char d = name[i + 1];
+            if (d == '4' || d == '6' || d == '8')
+                return static_cast<unsigned int>(d - '0');
+        }
+    }
+    if (ele_order_fallback >= 8) return 8u;
+    if (ele_order_fallback >= 6) return 6u;
+    return 4u;
+}
+
 // all factory creators take the full parameter set — classes that don't
 // need certain args just ignore them
 using DerivCreatorFn = std::unique_ptr<Derivs> (*)(

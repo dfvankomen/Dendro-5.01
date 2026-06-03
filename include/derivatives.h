@@ -490,6 +490,17 @@ class DendroDerivatives {
     Derivs::RawStencilFn _raw_2nd_grad_y = nullptr;
     Derivs::RawStencilFn _raw_2nd_grad_z = nullptr;
 
+    // Explicit-derivative fallback ops for puncture blocks, order-matched to
+    // the configured scheme at construction. Lightweight; raw stencils only.
+    std::unique_ptr<Derivs> _first_deriv_explicit;
+    std::unique_ptr<Derivs> _second_deriv_explicit;
+    Derivs::RawStencilFn _raw_exp_1st_grad_x = nullptr;
+    Derivs::RawStencilFn _raw_exp_1st_grad_y = nullptr;
+    Derivs::RawStencilFn _raw_exp_1st_grad_z = nullptr;
+    Derivs::RawStencilFn _raw_exp_2nd_grad_x = nullptr;
+    Derivs::RawStencilFn _raw_exp_2nd_grad_y = nullptr;
+    Derivs::RawStencilFn _raw_exp_2nd_grad_z = nullptr;
+
     // pull raw pointers from a Derivs object into the cache slots
     void _cache_raw_stencils() {
         if (_first_deriv) {
@@ -501,6 +512,16 @@ class DendroDerivatives {
             _raw_2nd_grad_x = _second_deriv->get_raw_grad_x();
             _raw_2nd_grad_y = _second_deriv->get_raw_grad_y();
             _raw_2nd_grad_z = _second_deriv->get_raw_grad_z();
+        }
+        if (_first_deriv_explicit) {
+            _raw_exp_1st_grad_x = _first_deriv_explicit->get_raw_grad_x();
+            _raw_exp_1st_grad_y = _first_deriv_explicit->get_raw_grad_y();
+            _raw_exp_1st_grad_z = _first_deriv_explicit->get_raw_grad_z();
+        }
+        if (_second_deriv_explicit) {
+            _raw_exp_2nd_grad_x = _second_deriv_explicit->get_raw_grad_x();
+            _raw_exp_2nd_grad_y = _second_deriv_explicit->get_raw_grad_y();
+            _raw_exp_2nd_grad_z = _second_deriv_explicit->get_raw_grad_z();
         }
     }
 
@@ -518,7 +539,10 @@ class DendroDerivatives {
             std::vector<double>(),
         const std::vector<double> &in_matrix_coeffs_in_2 =
             std::vector<double>(),
-        const std::string postRHSFilterType = "default");
+        const std::string postRHSFilterType = "default",
+        // puncture explicit-fallback schemes; "auto" = match configured order
+        const std::string fallback_1st      = "auto",
+        const std::string fallback_2nd      = "auto");
 
     ~DendroDerivatives() = default;
 
@@ -530,7 +554,13 @@ class DendroDerivatives {
                                             : nullptr),
           _filter(other._filter ? other._filter->clone() : nullptr),
           _n_points_deriv_space(other._n_points_deriv_space),
-          _n_vars_deriv_space(other._n_vars_deriv_space) {
+          _n_vars_deriv_space(other._n_vars_deriv_space),
+          _first_deriv_explicit(other._first_deriv_explicit
+                                    ? other._first_deriv_explicit->clone()
+                                    : nullptr),
+          _second_deriv_explicit(other._second_deriv_explicit
+                                     ? other._second_deriv_explicit->clone()
+                                     : nullptr) {
         // if the incoming copy has data in derivative space, we need to copy it
         if (other._derivative_space) {
             _derivative_space = std::make_unique<double[]>(
@@ -553,6 +583,12 @@ class DendroDerivatives {
             _second_deriv =
                 other._second_deriv ? other._second_deriv->clone() : nullptr;
             _filter = other._filter ? other._filter->clone() : nullptr;
+            _first_deriv_explicit = other._first_deriv_explicit
+                                        ? other._first_deriv_explicit->clone()
+                                        : nullptr;
+            _second_deriv_explicit = other._second_deriv_explicit
+                                         ? other._second_deriv_explicit->clone()
+                                         : nullptr;
 
             _n_points_deriv_space = other._n_points_deriv_space;
             _n_vars_deriv_space   = other._n_vars_deriv_space;
@@ -620,6 +656,51 @@ class DendroDerivatives {
                  unsigned int bflag) {
         if (_raw_2nd_grad_z) _raw_2nd_grad_z(du, u, dx, sz, bflag);
         else _second_deriv->do_grad_z(du, u, dx, sz, bflag);
+    }
+
+    // Explicit-fallback API for puncture blocks (selected per block, not per
+    // call, so the common grad_* path stays branch-free).
+    void grad_x_explicit(double *du, const double *u, double dx,
+                         const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_1st_grad_x)
+            _raw_exp_1st_grad_x(du, u, dx, sz, bflag);
+        else
+            _first_deriv_explicit->do_grad_x(du, u, dx, sz, bflag);
+    }
+    void grad_y_explicit(double *du, const double *u, double dx,
+                         const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_1st_grad_y)
+            _raw_exp_1st_grad_y(du, u, dx, sz, bflag);
+        else
+            _first_deriv_explicit->do_grad_y(du, u, dx, sz, bflag);
+    }
+    void grad_z_explicit(double *du, const double *u, double dx,
+                         const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_1st_grad_z)
+            _raw_exp_1st_grad_z(du, u, dx, sz, bflag);
+        else
+            _first_deriv_explicit->do_grad_z(du, u, dx, sz, bflag);
+    }
+    void grad_xx_explicit(double *du, const double *u, double dx,
+                          const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_2nd_grad_x)
+            _raw_exp_2nd_grad_x(du, u, dx, sz, bflag);
+        else
+            _second_deriv_explicit->do_grad_x(du, u, dx, sz, bflag);
+    }
+    void grad_yy_explicit(double *du, const double *u, double dx,
+                          const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_2nd_grad_y)
+            _raw_exp_2nd_grad_y(du, u, dx, sz, bflag);
+        else
+            _second_deriv_explicit->do_grad_y(du, u, dx, sz, bflag);
+    }
+    void grad_zz_explicit(double *du, const double *u, double dx,
+                          const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_2nd_grad_z)
+            _raw_exp_2nd_grad_z(du, u, dx, sz, bflag);
+        else
+            _second_deriv_explicit->do_grad_z(du, u, dx, sz, bflag);
     }
 
     // "_last" variants: caller asserts the output will NOT be further
