@@ -251,10 +251,10 @@ void matmul_x_dim_old(const double *const R, double *const Dxu,
     const int K              = nx;
     const double beta        = 0.0;
 
-    // skip ghost zones in z at a boundary
-    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
-    const int z_end =
-        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
+    // Full z range: this fallback also serves chain intermediates read by a
+    // downstream grad_z (trimming would leave padding uninitialized -> NaN).
+    const int z_start        = 0;
+    const int z_end          = (int)nz;
 
     for (unsigned int k = z_start; k < z_end; k++) {
         const double *u_slice  = u + k * nx * ny;
@@ -283,9 +283,10 @@ void matmul_y_dim_old(const double *const R, double *const Dyu,
 
     const unsigned int slice_size = nx * ny;
 
-    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
-    const int z_end =
-        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
+    // Full z range: this fallback also serves chain intermediates read by a
+    // downstream grad_z (trimming would leave padding uninitialized -> NaN).
+    const int z_start             = 0;
+    const int z_end               = (int)nz;
 
     for (unsigned int k = z_start; k < z_end; k++) {
         const double *u_slice = u + k * slice_size;
@@ -403,13 +404,11 @@ void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
         return;
     }
 
-    // Default safe path: write the full output (including y and z padding
-    // cells). Required when this grad_x is an intermediate step in a
-    // mixed 2nd-order chain (e.g. d^2u/dxdy = grad_y(grad_x(u))) because
-    // a subsequent grad_y reads x's output across the full y range.
-    const int z_start = (bflag & (1u << OCT_DIR_BACK)) ? pw : 0;
-    const int z_end =
-        (bflag & (1u << OCT_DIR_FRONT)) ? nz - pw : (int)nz;
+    // Chain-intermediate path: a downstream grad_z reads this across the full z
+    // range, so write all z-slices. (bflag-trimming z here left boundary-block
+    // padding uninitialized -> NaN into the chained grad_z.)
+    const int z_start                = 0;
+    const int z_end                  = (int)nz;
     const unsigned int n_active_cols = ny * (z_end - z_start);
 
     auto kernel = get_or_create_kernel_x(nx, n_active_cols, nx);
@@ -453,19 +452,11 @@ void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
 
     const unsigned int slice_size = nx * ny;
 
-    // When this is the last op in its chain (e.g. solo grad_y or the
-    // final step of d^2u/dxdy = grad_y(grad_x(u))), no downstream
-    // operation reads Dyu's z-padding cells and we can skip them. When
-    // this is an intermediate (e.g. d^2u/dydz = grad_z(grad_y(u))),
-    // grad_z later reads Dyu across the full z range so the z-padding
-    // output must be valid.
-    const int z_start = is_last_op
-                            ? (int)pw
-                            : ((bflag & (1u << OCT_DIR_BACK)) ? (int)pw : 0);
-    const int z_end =
-        is_last_op
-            ? (int)(nz - pw)
-            : ((bflag & (1u << OCT_DIR_FRONT)) ? (int)(nz - pw) : (int)nz);
+    // Last op: trim z-padding (nothing reads it). Intermediate (grad_z(grad_y))
+    // reads the full z range downstream, so write it all. (Trimming left that
+    // padding uninitialized -> NaN.)
+    const int z_start             = is_last_op ? (int)pw : 0;
+    const int z_end               = is_last_op ? (int)(nz - pw) : (int)nz;
 
     // pre-scale the derivative matrix by alpha so the GEMM writes the
     // final result directly. R is ny*ny which is small (e.g. 81 doubles),
