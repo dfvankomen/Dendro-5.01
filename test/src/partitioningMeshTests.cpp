@@ -3680,6 +3680,209 @@ int main(int argc, char** argv) {
         delete remeshed;
     }
 
+    // ---- TEST 10: AMR-cycle value preservation over N remesh cycles ----
+    // Carry a smooth low-degree polynomial through N graph-mode AMR cycles
+    // and verify the transferred values still match the analytical f(phys)
+    // at every local cg. orphan-fill / canonical-cg regressions show up as
+    // analytical-divergence that accumulates across cycles — single-cycle
+    // tests (8be / 8 / 9c) miss this because the bug only manifests when
+    // stale values get carried forward.
+    //
+    // IMPORTANT: the standard interGridTransfer builds its recv plan from
+    // the destination mesh's SFC splitter keys, so it CANNOT target a
+    // graph-partitioned mesh directly (it aborts on a recv-count mismatch).
+    // ReMeshRepartitioned returns a graph mesh, so pairing it with
+    // interGridTransfer is invalid. Instead we mirror the solver's grid-
+    // transfer "sandwich": move the graph values to an SFC twin, remesh +
+    // interGridTransfer entirely in SFC space (both valid there), then
+    // redistribute the result back onto a fresh graph mesh of the new
+    // octree. redistributeVec moves values between two meshes that share an
+    // octree but differ in partition (validated by TEST 2b).
+    //
+    // refinement flags are derived from each element's TN (not its local
+    // index), so the decision is partition-invariant on every rank.
+    // a degree-1 polynomial is preserved exactly by intergrid p2c+c2p, so
+    // any error > ~1e-10 is a real bug.
+    if (partitionOption != PartitioningOptions::NoPartition &&
+        partitionOption != PartitioningOptions::OriginalPartition) {
+        std::function<double(double, double, double)> fAmr =
+            [d_min, d_max](double x, double y, double z) {
+                double xx = (x / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+                double yy = (y / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+                double zz = (z / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+                return 1.0 + 0.5 * xx + 0.25 * yy + 0.125 * zz;
+            };
+
+        // helper: gather a mesh's LOCAL octree into a flat vector.
+        auto localOct = [](ot::Mesh* m) {
+            std::vector<ot::TreeNode> oct;
+            if (m->isActive()) {
+                const auto* pN = m->getAllElements().data();
+                for (unsigned int e = m->getElementLocalBegin();
+                     e < m->getElementLocalEnd(); e++)
+                    oct.push_back(pN[e]);
+            }
+            return oct;
+        };
+        // helper: build a graph-partitioned mesh from an octree.
+        auto makeGraphMesh = [&](std::vector<ot::TreeNode>& oct) {
+            ot::Mesh* g = ot::createMesh(oct.data(), oct.size(), eOrder, comm, 1,
+                                         ot::SM_TYPE::FDM, DENDRO_GRAIN_SZ,
+                                         LOAD_IMB_TOL, SPLIT_FIX);
+            g->setDomainBounds(pt_min, pt_max);
+            g->setPartitioningMethod(partitionOption);
+            g->repartitionMeshGlobal();
+            return g;
+        };
+        // helper: TN-based refinement flags for a mesh (partition-invariant).
+        auto refineFlags = [&](ot::Mesh* m, unsigned int k) {
+            std::vector<unsigned int> flags;
+            if (m->isActive()) {
+                const unsigned int numLocal = m->getNumLocalMeshElements();
+                flags.assign(numLocal, OCT_NO_CHANGE);
+                const auto* pNR        = m->getAllElements().data();
+                const unsigned int lbR = m->getElementLocalBegin();
+                const unsigned int domMax = 1u << m_uiMaxDepth;
+                const unsigned int xCut =
+                    (k & 1u) ? (domMax * 3u) / 4u : (domMax) / 4u;
+                for (unsigned int e = 0; e < numLocal; e++) {
+                    const auto& tn = pNR[lbR + e];
+                    if (tn.getLevel() >= m_uiMaxDepth) continue;
+                    if ((k & 1u) ? tn.getX() >= xCut : tn.getX() < xCut)
+                        flags[e] = OCT_SPLIT;
+                }
+            }
+            return flags;
+        };
+
+        std::vector<ot::TreeNode> octCyc = localOct(mesh);
+        ot::Mesh* mCyc = makeGraphMesh(octCyc);  // graph mesh
+
+        std::vector<double> vCyc;
+        mCyc->createVector(vCyc, fAmr);
+        mCyc->performGhostExchange(vCyc);
+
+        const unsigned int N_CYCLES   = 4;
+        const double cycTol           = 1e-10;
+        int anyFailGlobal             = 0;
+        double maxErrGlobalOverCycles = 0;
+
+        for (unsigned int k = 0; k < N_CYCLES; k++) {
+            // --- sandwich step 1: graph mCyc -> SFC twin (same octree) ---
+            std::vector<ot::TreeNode> octCur = localOct(mCyc);
+            ot::Mesh* sfcCur = ot::createMesh(
+                octCur.data(), octCur.size(), eOrder, comm, 1,
+                ot::SM_TYPE::FDM, DENDRO_GRAIN_SZ, LOAD_IMB_TOL, SPLIT_FIX);
+            sfcCur->setDomainBounds(pt_min, pt_max);
+            std::vector<double> vSfc;
+            sfcCur->createVector(vSfc, (double)0);
+            mCyc->redistributeVec(sfcCur, vCyc.data(), vSfc.data());
+            sfcCur->performGhostExchange(vSfc);
+
+            // --- step 2: remesh + intergrid transfer entirely in SFC ---
+            std::vector<unsigned int> flags = refineFlags(sfcCur, k);
+            sfcCur->setMeshRefinementFlags(flags);
+            ot::Mesh* sfcNext =
+                sfcCur->ReMesh(DENDRO_GRAIN_SZ, LOAD_IMB_TOL, SPLIT_FIX);
+            if (sfcNext == nullptr) {
+                if (!rank)
+                    std::cout << YLW << "TEST 10 cycle " << k
+                              << ": ReMesh returned nullptr (no change), "
+                                 "skipping"
+                              << NRM << std::endl;
+                delete sfcCur;
+                continue;
+            }
+            sfcCur->interGridTransfer(vSfc, sfcNext);  // valid: SFC -> SFC
+            sfcNext->performGhostExchange(vSfc);
+
+            // --- step 3: SFC result -> fresh graph mesh of the new octree ---
+            std::vector<ot::TreeNode> octNext = localOct(sfcNext);
+            ot::Mesh* mNext = makeGraphMesh(octNext);
+            std::vector<double> vNext;
+            mNext->createVector(vNext, (double)0);
+            sfcNext->redistributeVec(mNext, vSfc.data(), vNext.data());
+            mNext->performGhostExchange(vNext);
+
+            // --- verify against the analytical field on the graph mesh ---
+            int localFail = 0;
+            int localChk  = 0;
+            double localMaxErr = 0;
+            if (mNext->isActive()) {
+                const unsigned int npe   = mNext->getNumNodesPerElement();
+                const unsigned int eOrdN = mNext->getElementOrder();
+                const auto* pNN = mNext->getAllElements().data();
+                const auto& cg2dgN = mNext->getCG2DGMap();
+                for (unsigned int cg = mNext->getNodeLocalBegin();
+                     cg < mNext->getNodeLocalEnd(); cg++) {
+                    if (cg >= cg2dgN.size()) continue;
+                    unsigned int dg = cg2dgN[cg];
+                    if (dg == LOOK_UP_TABLE_DEFAULT) continue;
+                    unsigned int e = dg / npe;
+                    unsigned int n = dg % npe;
+                    if (e >= mNext->getAllElements().size()) continue;
+                    const auto& tn = pNN[e];
+                    const unsigned int ni = n % (eOrdN + 1);
+                    const unsigned int nj = (n / (eOrdN + 1)) % (eOrdN + 1);
+                    const unsigned int nk = n / ((eOrdN + 1) * (eOrdN + 1));
+                    const unsigned long long len =
+                        (unsigned long long)1u
+                        << (m_uiMaxDepth - tn.getLevel());
+                    const double gx = (double)tn.getX()
+                                      + (double)ni * len / (double)eOrdN;
+                    const double gy = (double)tn.getY()
+                                      + (double)nj * len / (double)eOrdN;
+                    const double gz = (double)tn.getZ()
+                                      + (double)nk * len / (double)eOrdN;
+                    const double exp = fAmr(gx, gy, gz);
+                    const double err = std::abs(vNext[cg] - exp);
+                    if (err > cycTol) localFail++;
+                    if (err > localMaxErr) localMaxErr = err;
+                    localChk++;
+                }
+            }
+            int gFail = 0, gChk = 0;
+            double gMaxErr = 0;
+            MPI_Allreduce(&localFail, &gFail, 1, MPI_INT, MPI_SUM, comm);
+            MPI_Allreduce(&localChk, &gChk, 1, MPI_INT, MPI_SUM, comm);
+            MPI_Allreduce(&localMaxErr, &gMaxErr, 1, MPI_DOUBLE, MPI_MAX, comm);
+            if (gMaxErr > maxErrGlobalOverCycles)
+                maxErrGlobalOverCycles = gMaxErr;
+            if (gFail > 0) anyFailGlobal++;
+            if (!rank) {
+                std::cout << (gFail > 0 ? RED : GRN) << "TEST 10 cycle " << k
+                          << ": cg=" << gChk << " fail=" << gFail
+                          << " maxErr=" << std::scientific << gMaxErr
+                          << std::defaultfloat << NRM << std::endl;
+            }
+
+            delete sfcCur;
+            delete sfcNext;
+            delete mCyc;
+            mCyc = mNext;
+            vCyc = std::move(vNext);
+        }
+
+        if (!rank) {
+            std::cout << (anyFailGlobal > 0 ? RED : GRN)
+                      << "TEST 10 (AMR-cycle bit-identity, "
+                      << N_CYCLES << " cycles)";
+            if (anyFailGlobal > 0)
+                std::cout << " FAILED in " << anyFailGlobal << " cycle(s)";
+            else
+                std::cout << " PASSED";
+            std::cout << " worst maxErr=" << std::scientific
+                      << maxErrGlobalOverCycles << std::defaultfloat
+                      << NRM << std::endl;
+        }
+
+        delete mCyc;
+    } else if (!rank) {
+        std::cout << YLW
+                  << "TEST 10 (AMR-cycle): SKIPPED for non-graph partition"
+                  << NRM << std::endl;
+    }
+
     // END CLEANUP
     delete mesh;
     delete mesh_repartitioned;

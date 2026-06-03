@@ -38,6 +38,7 @@ option(USE_FD_INTERP_FOR_UNZIP "Use FD style interpolation for unzip" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "Allow MPI to be aware of CUDA support" OFF)
 option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" OFF)
 option(DENDRO_ENABLE_DEBUG_PROBES "Compile in env-gated debug probes (recv/send probes, remesh dump, cg trace, etc.) — only needed when actively bisecting" OFF)
+option(DENDRO_ENABLE_OPENMP_PARTITIONING "Use OpenMP threading in graph-partitioning hot paths (audit hash, audit phase-2 element loop, zip-plan myMin). Off by default — dendro is MPI-only by default." OFF)
 
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
@@ -154,6 +155,11 @@ endif()
 # Debug probes (env-gated bisection infrastructure; off by default)
 if(DENDRO_ENABLE_DEBUG_PROBES)
   target_compile_definitions(dendro_config INTERFACE DENDRO_ENABLE_DEBUG_PROBES)
+endif()
+
+# OpenMP threading in graph-partitioning hot paths (off by default; opt-in)
+if(DENDRO_ENABLE_OPENMP_PARTITIONING)
+  target_compile_definitions(dendro_config INTERFACE DENDRO_OMP_PART)
 endif()
 
 # VTK Logic

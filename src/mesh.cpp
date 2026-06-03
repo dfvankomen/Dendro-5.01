@@ -28,6 +28,21 @@
 #include "dendro.h"
 #include "logger.h"
 #include "octUtils.h"
+
+// OpenMP threading in graph-partitioning hot paths is opt-in via the
+// CMake flag DENDRO_ENABLE_OPENMP_PARTITIONING (which sets
+// DENDRO_OMP_PART). DENDRO_OMP_PRAGMA(x) expands to `_Pragma(#x)` only
+// when both DENDRO_OMP_PART and _OPENMP are defined; otherwise it
+// expands to nothing, so the default build is byte-identical to a
+// codebase with no OMP annotations at all.
+#if defined(DENDRO_OMP_PART) && defined(_OPENMP)
+  #include <omp.h>
+  #define DENDRO_OMP_PRAGMA(x) _Pragma(#x)
+  #define DENDRO_OMP_ACTIVE 1
+#else
+  #define DENDRO_OMP_PRAGMA(x)
+  #define DENDRO_OMP_ACTIVE 0
+#endif
 double t_e2e;  // e2e map generation time
 double t_e2n;  // e2n map generation time
 double t_sm;   // sm map generation time
@@ -42,6 +57,27 @@ double t_blk_g[3];
 // #define DEBUG_MESH_GENERATION
 
 namespace ot {
+
+namespace {
+// scaled-int (x, y, z) phys-position key used by audit, buildZipPlan,
+// and getElementNodalValues for unordered_map<phys, ...> lookups.
+struct PhysKey3 {
+    unsigned long long x, y, z;
+    bool operator==(const PhysKey3& o) const {
+        return x == o.x && y == o.y && z == o.z;
+    }
+};
+struct PhysKey3Hash {
+    size_t operator()(const PhysKey3& k) const {
+        size_t h = std::hash<unsigned long long>()(k.x);
+        h ^= std::hash<unsigned long long>()(k.y)
+            + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        h ^= std::hash<unsigned long long>()(k.z)
+            + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+        return h;
+    }
+};
+}  // anonymous namespace
 
 Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
            unsigned int activeNpes, MPI_Comm comm, bool pBlockSetup,
@@ -3915,22 +3951,6 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
         // Build a phys_pos-indexed local map of "smallest TreeNode
         // of any local elem at this phys_pos" — used to advertise.
         const unsigned long long PACK_INF = ~0ULL;
-        struct PhysKey3 {
-            unsigned long long x, y, z;
-            bool operator==(const PhysKey3& o) const {
-                return x == o.x && y == o.y && z == o.z;
-            }
-        };
-        struct PhysKey3Hash {
-            size_t operator()(const PhysKey3& k) const {
-                size_t h = std::hash<unsigned long long>()(k.x);
-                h ^= std::hash<unsigned long long>()(k.y)
-                    + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-                h ^= std::hash<unsigned long long>()(k.z)
-                    + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-                return h;
-            }
-        };
         // Two TN advertisements per phys_pos:
         //  - myMinTN: smallest packTN of any local elem at phys_pos.
         //  - myMinTN_self: smallest packTN with self-owned filter
@@ -6617,25 +6637,6 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
     const ot::TreeNode* pNodes    = m_uiAllElements.data();
     const size_t allElemSize      = m_uiAllElements.size();
 
-    // Local PhysKey3 (mirrors the one inside buildZipPlan; kept local
-    // because that one is a function-scope struct).
-    struct PhysKey3 {
-        unsigned long long x, y, z;
-        bool operator==(const PhysKey3& o) const {
-            return x == o.x && y == o.y && z == o.z;
-        }
-    };
-    struct PhysKey3Hash {
-        size_t operator()(const PhysKey3& k) const {
-            size_t h = std::hash<unsigned long long>()(k.x);
-            h ^= std::hash<unsigned long long>()(k.y)
-                + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            h ^= std::hash<unsigned long long>()(k.z)
-                + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            return h;
-        }
-    };
-
     auto computePos = [&](unsigned int e, unsigned int n,
                           PhysKey3& k) -> bool {
         if (e >= allElemSize) return false;
@@ -6728,25 +6729,77 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         return (n_dg % npe) < (c_dg % npe);
     };
 
+    // build localCgByPos / canonCgByPos by folding every cg with
+    // better_canon (a strict total order: LOCAL>GHOST, with-canon>without,
+    // tn-tiebreak). result is independent of cg iteration order.
+    //
+    // when DENDRO_OMP_PART + _OPENMP are both defined, each thread folds
+    // its slice into a thread-local map, then a serial merge folds those
+    // into the canonical maps. determinism comes from better_canon being
+    // a strict total order — the max-of-set is well-defined regardless
+    // of insertion order.
+#if DENDRO_OMP_ACTIVE
+    const int nThr = omp_get_max_threads();
+#else
+    const int nThr = 1;
+#endif
+    std::vector<std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash>>
+        tlLocal(nThr);
+    std::vector<std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash>>
+        tlCanon(nThr);
+    {
+        const size_t guess = (size_t)((nTotal_cg - nLB) / nThr + 1);
+        for (int t = 0; t < nThr; t++) {
+            tlLocal[t].reserve(guess);
+            tlCanon[t].reserve(guess);
+        }
+    }
+    DENDRO_OMP_PRAGMA(omp parallel for schedule(static))
     for (unsigned int cg = nLB; cg < nTotal_cg; cg++) {
+#if DENDRO_OMP_ACTIVE
+        const int tid = omp_get_thread_num();
+#else
+        const int tid = 0;
+#endif
         const unsigned int dg = m_uiCG2DG[cg];
         const unsigned int e  = dg / npe;
         const unsigned int n  = dg % npe;
         PhysKey3 k;
         if (!computePos(e, n, k)) continue;
         const bool newIsCanon = hasCanonicalWriter[cg];
-        auto it = localCgByPos.find(k);
-        if (it == localCgByPos.end()) {
-            localCgByPos.emplace(k, cg);
-        } else {
-            if (better_canon(cg, it->second)) it->second = cg;
+        auto& mLocal = tlLocal[tid];
+        auto itL = mLocal.find(k);
+        if (itL == mLocal.end()) {
+            mLocal.emplace(k, cg);
+        } else if (better_canon(cg, itL->second)) {
+            itL->second = cg;
         }
         if (newIsCanon) {
-            auto it2 = canonCgByPos.find(k);
-            if (it2 == canonCgByPos.end()) {
-                canonCgByPos.emplace(k, cg);
-            } else {
-                if (better_canon(cg, it2->second)) it2->second = cg;
+            auto& mCanon = tlCanon[tid];
+            auto itC = mCanon.find(k);
+            if (itC == mCanon.end()) {
+                mCanon.emplace(k, cg);
+            } else if (better_canon(cg, itC->second)) {
+                itC->second = cg;
+            }
+        }
+    }
+    // serial merge — deterministic by t order + better_canon tiebreak.
+    for (int t = 0; t < nThr; t++) {
+        for (auto& kv : tlLocal[t]) {
+            auto it = localCgByPos.find(kv.first);
+            if (it == localCgByPos.end()) {
+                localCgByPos.emplace(kv.first, kv.second);
+            } else if (better_canon(kv.second, it->second)) {
+                it->second = kv.second;
+            }
+        }
+        for (auto& kv : tlCanon[t]) {
+            auto it = canonCgByPos.find(kv.first);
+            if (it == canonCgByPos.end()) {
+                canonCgByPos.emplace(kv.first, kv.second);
+            } else if (better_canon(kv.second, it->second)) {
+                it->second = kv.second;
             }
         }
     }
@@ -6778,6 +6831,13 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         size_t local_dangling_class   = 0;
         size_t local_dangling_patched = 0;
         size_t local_dangling_unres   = 0;
+        // race-safe under OMP: each (e, n) slot is written by exactly one
+        // thread (the one owning that e), localCgByPos / canonCgByPos /
+        // m_uiCG2DG are read-only in this phase, counters are reductions.
+        DENDRO_OMP_PRAGMA(omp parallel for schedule(dynamic, 64)
+            reduction(+ : local_patched, local_bug, local_hang, local_finer,
+                          local_unres, local_passd, local_dangling_class,
+                          local_dangling_patched, local_dangling_unres))
         for (unsigned int e = 0; e < eAllEnd; e++) {
             const unsigned int eLev = pNodes[e].getLevel();
             for (unsigned int n = 0; n < npe; n++) {
@@ -7208,68 +7268,6 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
                   << std::endl;
     }
 
-    // final-state probe: after all audit passes, dump E2N_CG resolution
-    // for every LOCAL slot whose elem TN matches the target (env-gated).
-    // used to verify whether the audit's redirects actually survive to
-    // the end of mesh rebuild (or get overwritten by later phases).
-    // gate: DENDRO_E2N_AUDIT_FINAL_TN="lev,x,y,z" + optional
-    // DENDRO_E2N_AUDIT_FINAL_SUB="n1,n2,...". prints one stdout line per
-    // matching slot. silent if not gated.
-    {
-        const char* ftn_env = std::getenv("DENDRO_E2N_AUDIT_FINAL_TN");
-        const char* fsub_env = std::getenv("DENDRO_E2N_AUDIT_FINAL_SUB");
-        if (ftn_env) {
-            unsigned int tlev = 0, tx = 0, ty = 0, tz = 0;
-            std::sscanf(ftn_env, "%u,%u,%u,%u", &tlev, &tx, &ty, &tz);
-            std::vector<unsigned int> tsubs;
-            if (fsub_env) {
-                std::string ss(fsub_env);
-                size_t pp = 0;
-                while (pp < ss.size()) {
-                    unsigned int sn;
-                    if (std::sscanf(ss.c_str() + pp, "%u", &sn) == 1)
-                        tsubs.push_back(sn);
-                    size_t nn = ss.find(',', pp);
-                    if (nn == std::string::npos) break;
-                    pp = nn + 1;
-                }
-            }
-            for (unsigned int e = 0; e < eAllEnd; e++) {
-                if (pNodes[e].getLevel() != tlev) continue;
-                if (pNodes[e].getX() != tx) continue;
-                if (pNodes[e].getY() != ty) continue;
-                if (pNodes[e].getZ() != tz) continue;
-                for (unsigned int n = 0; n < npe; n++) {
-                    if (!tsubs.empty()) {
-                        bool match = false;
-                        for (auto s : tsubs) if (s == n) { match = true; break; }
-                        if (!match) continue;
-                    }
-                    const unsigned int slot = e * npe + n;
-                    const unsigned int cg = m_uiE2NMapping_CG[slot];
-                    PhysKey3 res{0, 0, 0};
-                    if (cg < m_uiCG2DG.size()) {
-                        const unsigned int dg = m_uiCG2DG[cg];
-                        const unsigned int oe = dg / npe;
-                        const unsigned int on = dg % npe;
-                        computePos(oe, on, res);
-                    }
-                    PhysKey3 exp{0, 0, 0};
-                    computePos(e, n, exp);
-                    std::cout << "[E2N audit FINAL r" << m_uiActiveRank
-                              << "] elem=" << e
-                              << " TN=(lev" << tlev << "," << tx << "," << ty
-                              << "," << tz << ") sub=" << n
-                              << " expected=(" << exp.x << "," << exp.y
-                              << "," << exp.z << ") cg=" << cg
-                              << " resolved=(" << res.x << "," << res.y
-                              << "," << res.z << ")"
-                              << std::endl;
-                }
-            }
-        }
-    }
-
     return patched + dangling_patched;
 }
 
@@ -7406,23 +7404,6 @@ void Mesh::buildZipPlan() {
             + (unsigned long long)nk * len;
     };
 
-    struct PhysKey3 {
-        unsigned long long x, y, z;
-        bool operator==(const PhysKey3& o) const {
-            return x == o.x && y == o.y && z == o.z;
-        }
-    };
-    struct PhysKey3Hash {
-        size_t operator()(const PhysKey3& k) const {
-            size_t h = std::hash<unsigned long long>()(k.x);
-            h ^= std::hash<unsigned long long>()(k.y)
-                + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            h ^= std::hash<unsigned long long>()(k.z)
-                + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-            return h;
-        }
-    };
-
     // Cascade-rule TreeNode comparator. Returns true iff a < b
     // under (level, ot::TreeNode::operator<). With use_packtn,
     // falls back to the lexicographic packTN ordering.
@@ -7514,8 +7495,58 @@ void Mesh::buildZipPlan() {
         && legacy_pick_env[1] == '\0';
 
     std::unordered_map<PhysKey3, LocalWriter, PhysKey3Hash> myMin;
+    // single-source preference rule: interior > padding, cascade-owner >
+    // non-owner, smaller TN < larger TN. strict total order in practice,
+    // so max-of-set is well-defined regardless of insertion order — safe
+    // to parallelize via thread-local maps + serial merge under OMP.
+    auto tryReplaceMyMin = [&](
+        std::unordered_map<PhysKey3, LocalWriter, PhysKey3Hash>& m,
+        const PhysKey3& k, unsigned int e, unsigned int n,
+        bool interior, bool is_owner) {
+        auto it = m.find(k);
+        if (it == m.end()) {
+            m[k] = LocalWriter{e, n};
+            return;
+        }
+        const bool cur_interior =
+            isInteriorWriter(it->second.elem, it->second.sub);
+        const bool cur_is_owner =
+            !legacy_pick
+            && isCascadeOwner(it->second.elem, it->second.sub);
+        if (interior && !cur_interior) {
+            m[k] = LocalWriter{e, n};
+        } else if (interior == cur_interior) {
+            if (is_owner && !cur_is_owner) {
+                m[k] = LocalWriter{e, n};
+            } else if (is_owner == cur_is_owner) {
+                if (tnLT(e, it->second.elem))
+                    m[k] = LocalWriter{e, n};
+            }
+        }
+    };
+
+#if DENDRO_OMP_ACTIVE
+    const int nThr_mm = omp_get_max_threads();
+#else
+    const int nThr_mm = 1;
+#endif
+    std::vector<std::unordered_map<PhysKey3, LocalWriter, PhysKey3Hash>>
+        tlMyMin(nThr_mm);
+    {
+        const size_t numElem =
+            (size_t)(m_uiElementLocalEnd - m_uiElementLocalBegin);
+        const size_t guess = (numElem * npe) / nThr_mm + 1;
+        for (int t = 0; t < nThr_mm; t++) tlMyMin[t].reserve(guess);
+    }
+    DENDRO_OMP_PRAGMA(omp parallel for schedule(static))
     for (unsigned int e = m_uiElementLocalBegin;
          e < m_uiElementLocalEnd; e++) {
+#if DENDRO_OMP_ACTIVE
+        const int tid = omp_get_thread_num();
+#else
+        const int tid = 0;
+#endif
+        auto& m = tlMyMin[tid];
         for (unsigned int n = 0; n < npe; n++) {
             unsigned long long x, y, z;
             encodeKey(e, n, x, y, z);
@@ -7523,29 +7554,20 @@ void Mesh::buildZipPlan() {
             const bool interior = isInteriorWriter(e, n);
             const bool is_owner =
                 !legacy_pick && isCascadeOwner(e, n);
-            // Preference order: interior > padding,
-            // then cascade-owner > non-owner,
-            // then smallest TN.
-            auto it = myMin.find(k);
-            if (it == myMin.end()) {
-                myMin[k] = LocalWriter{e, n};
-                continue;
-            }
-            const bool cur_interior = isInteriorWriter(it->second.elem,
-                                                       it->second.sub);
-            const bool cur_is_owner =
+            tryReplaceMyMin(m, k, e, n, interior, is_owner);
+        }
+    }
+    // serial merge: deterministic by t order + preference rule.
+    for (int t = 0; t < nThr_mm; t++) {
+        for (auto& kv : tlMyMin[t]) {
+            const bool interior =
+                isInteriorWriter(kv.second.elem, kv.second.sub);
+            const bool is_owner =
                 !legacy_pick
-                && isCascadeOwner(it->second.elem, it->second.sub);
-            if (interior && !cur_interior) {
-                myMin[k] = LocalWriter{e, n};
-            } else if (interior == cur_interior) {
-                if (is_owner && !cur_is_owner) {
-                    myMin[k] = LocalWriter{e, n};
-                } else if (is_owner == cur_is_owner) {
-                    if (tnLT(e, it->second.elem))
-                        myMin[k] = LocalWriter{e, n};
-                }
-            }
+                && isCascadeOwner(kv.second.elem, kv.second.sub);
+            tryReplaceMyMin(myMin, kv.first,
+                            kv.second.elem, kv.second.sub,
+                            interior, is_owner);
         }
     }
 
@@ -7758,12 +7780,6 @@ void Mesh::buildZipPlan() {
         if (kv.second.rank != m_uiActiveRank) continue;
         if (m_uiPassDDemotedToGhostCg.erase(kv.second.cg)) passDCleanupErased++;
         m_uiPassDDemotedLocalCgs.erase(kv.second.cg);
-        if (dbgWinnerCleanup && kv.second.cg == 243788) {
-            std::cout << "[passd-cleanup r" << m_uiActiveRank
-                      << "] winner cg=" << kv.second.cg
-                      << " removed from demoted (was present? "
-                      << passDCleanupErased << ")" << std::endl;
-        }
     }
     if (dbgWinnerCleanup) {
         std::cout << "[passd-cleanup r" << m_uiActiveRank
@@ -7866,6 +7882,16 @@ void Mesh::buildZipPlan() {
         // First pass: count send/recv per rank.
         // Walk consecutive entries with same (x, y, z) to identify
         // claim groups per phys_pos. (sidx[k] indexes the all* arrays.)
+        // cache multi-claim group (begin, end, winner_rank, winner_cg)
+        // so pass 2 doesn't have to redo the group-finding while-loop
+        // or the winners.find() lookup.
+        struct McGroup {
+            size_t b;
+            size_t e;
+            int p_rank;
+            unsigned int p_cg;
+        };
+        std::vector<McGroup> mcGroups;
         size_t i = 0;
         while (i < sidx.size()) {
             size_t j = i;
@@ -7881,6 +7907,7 @@ void Mesh::buildZipPlan() {
                     allX[sidx[i]], allY[sidx[i]], allZ[sidx[i]]});
                 if (wit != winners.end()) {
                     const int p_rank = wit->second.rank;
+                    mcGroups.push_back({i, j, p_rank, wit->second.cg});
                     for (size_t k = i; k < j; k++) {
                         const int r = (int)rankOf[sidx[k]];
                         if (r == p_rank) continue;  // skip primary itself
@@ -7907,49 +7934,38 @@ void Mesh::buildZipPlan() {
         m_uiZipSyncRecvCg.resize(totalRecv);
 
         // Second pass: fill send/recv cg lists.
+        // reuses mcGroups from pass 1 — no re-walking sidx, no winners
+        // re-lookup. saves one O(total_claims) scan + as many hash
+        // lookups as multi-claim phys positions.
         std::vector<int> sendPos(m_uiActiveNpes), recvPos(m_uiActiveNpes);
         for (int p = 0; p < m_uiActiveNpes; p++) {
             sendPos[p] = m_uiZipSyncSendOffsets[p];
             recvPos[p] = m_uiZipSyncRecvOffsets[p];
         }
-        i = 0;
-        while (i < sidx.size()) {
-            size_t j = i;
-            while (j < sidx.size()
-                   && allX[sidx[j]] == allX[sidx[i]]
-                   && allY[sidx[j]] == allY[sidx[i]]
-                   && allZ[sidx[j]] == allZ[sidx[i]])
-                ++j;
-            if (j - i > 1) {
-                auto wit = winners.find(PhysKey3{
-                    allX[sidx[i]], allY[sidx[i]], allZ[sidx[i]]});
-                if (wit != winners.end()) {
-                    const int p_rank      = wit->second.rank;
-                    const unsigned int p_cg = wit->second.cg;
-                    for (size_t k = i; k < j; k++) {
-                        const int r = (int)rankOf[sidx[k]];
-                        const unsigned int kcg = allCg[sidx[k]];
-                        if (r == p_rank) {
-                            // intra-rank duplicate: same rank has the
-                            // primary AND another cg at the same phys.
-                            // sync's Alltoallv handles cross-rank
-                            // entries only; for intra-rank we record a
-                            // direct (src=winner_cg, dst=this_cg) pair
-                            // and copy locally after every sync.
-                            if (m_uiActiveRank == r && kcg != p_cg) {
-                                m_uiZipLocalDupSrc.push_back(p_cg);
-                                m_uiZipLocalDupDst.push_back(kcg);
-                            }
-                            continue;
-                        }
-                        if (m_uiActiveRank == p_rank)
-                            m_uiZipSyncSendCg[sendPos[r]++] = p_cg;
-                        if (m_uiActiveRank == r)
-                            m_uiZipSyncRecvCg[recvPos[p_rank]++] = kcg;
+        for (const auto& g : mcGroups) {
+            const int p_rank        = g.p_rank;
+            const unsigned int p_cg = g.p_cg;
+            for (size_t k = g.b; k < g.e; k++) {
+                const int r = (int)rankOf[sidx[k]];
+                const unsigned int kcg = allCg[sidx[k]];
+                if (r == p_rank) {
+                    // intra-rank duplicate: same rank has the
+                    // primary AND another cg at the same phys.
+                    // sync's Alltoallv handles cross-rank
+                    // entries only; for intra-rank we record a
+                    // direct (src=winner_cg, dst=this_cg) pair
+                    // and copy locally after every sync.
+                    if (m_uiActiveRank == r && kcg != p_cg) {
+                        m_uiZipLocalDupSrc.push_back(p_cg);
+                        m_uiZipLocalDupDst.push_back(kcg);
                     }
+                    continue;
                 }
+                if (m_uiActiveRank == p_rank)
+                    m_uiZipSyncSendCg[sendPos[r]++] = p_cg;
+                if (m_uiActiveRank == r)
+                    m_uiZipSyncRecvCg[recvPos[p_rank]++] = kcg;
             }
-            i = j;
         }
         // probe: dump multi-claim phys positions to file. one file per
         // rank per remesh. set DENDRO_DUP_PROBE_DIR=/path to enable.
@@ -18351,7 +18367,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
     std::vector<D_INT_L> my_partition;
 
-    // auto my_partition = randomPartitioningSimple(oct_connectivity_map);
     if (m_partitionOption == PartitioningOptions::OriginalPartition) {
         my_partition = noPartitionChange(oct_connectivity_map);
     } else if (m_partitionOption == PartitioningOptions::RandomPartition) {
@@ -19000,198 +19015,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             }
         }
 
-        // Pass B (TODO: not currently effective). The original
-        // intent was to do a phys_pos-keyed reconciliation across
-        // ranks, finding a winner where Pass A had succeeded. In
-        // the NLSM mesh's failing case at (304,224,272), no rank
-        // has Pass A success at all — the canonical writer per
-        // E2N_DG points to a ghost element on rank 0 that isn't
-        // local on any rank. Pass B as-designed therefore can't
-        // pick a winner. The structural fix needed is a global
-        // canonical-determination across ranks, not a per-rank
-        // recompute. Block disabled for now.
-        if (false && (!m_uiPassACgsWithoutLocalCanonical.empty()
-            || npes > 1)) {
-            const unsigned int npe_pb  = m_uiNpE;
-            const unsigned int eOrd_pb = m_uiElementOrder;
-            const auto* pN_pb = m_uiAllElements.data();
-
-            // Each rank advertises (phys_pos_x, phys_pos_y, phys_pos_z,
-            // hasLocalCanonical, cg_on_my_rank, my_rank) for every
-            // local CG. Use scaled-int phys_pos: x = pN.getX()*eOrd +
-            // sub_i*len.
-            auto encodePos = [&](unsigned int e, unsigned int n,
-                                 uint64_t& x, uint64_t& y,
-                                 uint64_t& z) {
-                uint64_t len = (uint64_t)1
-                    << (m_uiMaxDepth - pN_pb[e].getLevel());
-                unsigned int ni = n % (eOrd_pb + 1);
-                unsigned int nj = (n / (eOrd_pb + 1)) % (eOrd_pb + 1);
-                unsigned int nk =
-                    n / ((eOrd_pb + 1) * (eOrd_pb + 1));
-                x = (uint64_t)pN_pb[e].getX() * eOrd_pb
-                    + (uint64_t)ni * len;
-                y = (uint64_t)pN_pb[e].getY() * eOrd_pb
-                    + (uint64_t)nj * len;
-                z = (uint64_t)pN_pb[e].getZ() * eOrd_pb
-                    + (uint64_t)nk * len;
-            };
-
-            // hasLocalCanonical[cg - nLB] = 1 iff cg is NOT in
-            // m_uiPassACgsWithoutLocalCanonical (Pass A succeeded).
-            const unsigned int nLB_pb = m_uiNodeLocalBegin;
-            const unsigned int nLE_pb = m_uiNodeLocalEnd;
-            const size_t nLocal = nLE_pb - nLB_pb;
-            std::vector<unsigned char> hasLocalCanonical(nLocal, 1);
-            for (unsigned int cg : m_uiPassACgsWithoutLocalCanonical) {
-                if (cg >= nLB_pb && cg < nLE_pb)
-                    hasLocalCanonical[cg - nLB_pb] = 0;
-            }
-
-            // Build my advertisement list. For each local cg, decode
-            // (e, n) from m_uiCG2DG (already updated by Pass A to a
-            // self-owned canonical when one exists), compute phys_pos.
-            // Also include the global element id (via
-            // new_oct_connectivity_map) and sub so winning senders
-            // can be located on losing ranks.
-            //
-            // Pack into one record per cg; one MPI_Allgatherv (over
-            // MPI_BYTE) replaces the prior 1 Allgather + 7 Allgatherv
-            // calls. ~7× fewer collective latencies for this phase.
-            struct PassDRecord {
-                uint64_t x, y, z;
-                unsigned int cg, gid, sub;
-                unsigned char ok;
-                unsigned char _pad[3];  // explicit padding so the
-                                        // struct is a clean 40 bytes
-                                        // and there are no
-                                        // uninitialized bytes that
-                                        // would otherwise be sent.
-            };
-            static_assert(sizeof(PassDRecord) == 40,
-                          "PassDRecord must be exactly 40 bytes");
-            std::vector<PassDRecord> myRecs;
-            myRecs.reserve(nLocal);
-            for (unsigned int cg = nLB_pb; cg < nLE_pb; cg++) {
-                unsigned int dg = m_uiCG2DG[cg];
-                unsigned int e  = dg / npe_pb;
-                unsigned int n  = dg % npe_pb;
-                if (e >= m_uiAllElements.size()) continue;
-                PassDRecord r{};  // zero-init (including _pad).
-                encodePos(e, n, r.x, r.y, r.z);
-                r.cg  = cg;
-                r.sub = n;
-                r.ok  = hasLocalCanonical[cg - nLB_pb];
-                // Global element id is meaningful only when (e, n)
-                // is local on this rank (which is the only case
-                // where this rank could be a winner).
-                if (e >= m_uiElementLocalBegin
-                    && e < m_uiElementLocalEnd) {
-                    r.gid = new_oct_connectivity_map[e].eid;
-                } else {
-                    r.gid = (unsigned int)-1;
-                }
-                myRecs.push_back(r);
-            }
-            int myCount = (int)myRecs.size();
-            std::vector<int> pbCounts(npes), pbOffs(npes, 0);
-            MPI_Allgather(&myCount, 1, MPI_INT, pbCounts.data(), 1,
-                          MPI_INT, commActive);
-            int pbTotal = 0;
-            for (int p = 0; p < npes; p++) {
-                pbOffs[p] = pbTotal;
-                pbTotal += pbCounts[p];
-            }
-            // Byte-count counts/offsets for the consolidated allgatherv.
-            const int recBytes = (int)sizeof(PassDRecord);
-            std::vector<int> pbCountsB(npes), pbOffsB(npes);
-            for (int p = 0; p < npes; p++) {
-                pbCountsB[p] = pbCounts[p] * recBytes;
-                pbOffsB[p]   = pbOffs[p]   * recBytes;
-            }
-            std::vector<PassDRecord> allRecs(pbTotal);
-            MPI_Allgatherv(myRecs.data(),
-                           myCount * recBytes, MPI_BYTE,
-                           allRecs.data(),
-                           pbCountsB.data(), pbOffsB.data(), MPI_BYTE,
-                           commActive);
-
-            // Per phys_pos: pick the winner. Prefer ok=1 over ok=0;
-            // among same-ok, smallest rank wins.
-            std::map<std::tuple<uint64_t, uint64_t, uint64_t>, int>
-                winnerIdx;
-            for (int t = 0; t < pbTotal; t++) {
-                auto key = std::make_tuple(allRecs[t].x,
-                                           allRecs[t].y,
-                                           allRecs[t].z);
-                auto it = winnerIdx.find(key);
-                if (it == winnerIdx.end()) {
-                    winnerIdx.emplace(key, t);
-                    continue;
-                }
-                int prev = it->second;
-                bool prevOk = allRecs[prev].ok, curOk = allRecs[t].ok;
-                int prevRank = 0, curRank = 0;
-                for (int p = 0; p < npes; p++) {
-                    if (prev >= pbOffs[p]
-                        && prev < pbOffs[p] + pbCounts[p])
-                        prevRank = p;
-                    if (t >= pbOffs[p]
-                        && t < pbOffs[p] + pbCounts[p])
-                        curRank = p;
-                }
-                bool replace = false;
-                if (curOk && !prevOk) replace = true;
-                else if (curOk == prevOk && curRank < prevRank)
-                    replace = true;
-                if (replace) it->second = t;
-            }
-
-            // For each of MY advertisements where I'm not the winner
-            // AND I'm a Pass-A-failed slot, emit a recv-SM entry.
-            // The winner's rank is the source.
-            int passBAdds = 0;
-            for (int t = pbOffs[rank];
-                 t < pbOffs[rank] + pbCounts[rank]; t++) {
-                if (allRecs[t].ok) continue;  // I have local canonical
-                auto key = std::make_tuple(allRecs[t].x,
-                                           allRecs[t].y,
-                                           allRecs[t].z);
-                int w = winnerIdx[key];
-                int wRank = 0;
-                for (int p = 0; p < npes; p++) {
-                    if (w >= pbOffs[p]
-                        && w < pbOffs[p] + pbCounts[p]) {
-                        wRank = p;
-                        break;
-                    }
-                }
-                if (wRank == rank) continue;  // shouldn't happen
-                if (!allRecs[w].ok) continue;  // no winner found
-                if (allRecs[w].gid == (unsigned int)-1) continue;
-                // Add recv from wRank: target=allRecs[t].cg (my local
-                // cg). DG payload encodes (winner_global_eid,
-                // winner_sub) so the sender-side decode at
-                // lines ~15226-15273 resolves
-                // localEle = globaltoNewLocal[winner_eid] and reads
-                // vec[m_uiE2NMapping_CG[localEle*NpE+sub]], which is
-                // the winning rank's correctly-zip'd cg value at this
-                // phys_pos.
-                recvNodeSM_r[wRank].push_back(allRecs[t].cg);
-                recvNodeDGG[wRank].push_back(
-                    (long unsigned int)allRecs[w].gid * m_uiNpE
-                    + allRecs[w].sub);
-                recvNodeIsDG[wRank].push_back(0);
-                passBAdds++;
-            }
-            if (passBAdds > 0) {
-                std::cout << "[passB r" << rank
-                          << "] added " << passBAdds
-                          << " recv-SM entries via phys_pos"
-                          << std::endl;
-            }
-        }
-
         // Dedup per-rank: prefer CG entry over DG entry for the same
         // cgIdx. CG path goes via the canonical owner (which is the
         // physical "source of truth" for the CG slot under master's
@@ -19538,9 +19361,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // m_uiNpE, m_uiElementOrder, m_uiStensilSz, m_uiNumDirections, m_uiRefEl
     // m_uiF2EMap, m_ui[Send/Recv][Count/Offset]RePt, intergrid transfer
     // unzip map, unzip offset, unzip counts
-
-    // TODO: BLOCKS, includes m_uiUnzippedVecSz
-    // TODO: BLOCKS ARE VERY BROKEN
 
     if (do_block_creation) {
         m_uiIsBlockSetup = false;

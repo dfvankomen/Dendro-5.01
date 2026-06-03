@@ -660,10 +660,6 @@ void Mesh::performGhostExchange(std::vector<T>& vec) {
     for (unsigned int p = 0; p < m_uiActiveNpes; p++) {
         for (unsigned int k = m_uiRecvNodeOffset[p];
              k < (m_uiRecvNodeOffset[p] + m_uiRecvNodeCount[p]); k++) {
-            // if(fabs(vec[m_uiScatterMapActualNodeRecv[k]]-m_uiRecvBufferNodes[k])>1e-15)
-            // std::cout<<"rank: "<<m_uiActiveRank<<" computed:
-            // "<<vec[m_uiScatterMapActualNodeRecv[k]]<<" revieved:
-            // "<<m_uiRecvBufferNodes[k]<<" recv: from : "<<p<<std::endl;
             vec[m_uiScatterMapActualNodeRecv[k]] = (T)m_uiRecvBufferNodes[k];
         }
     }
@@ -6231,28 +6227,46 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
     const auto& e2n = dstMesh->getE2NMapping();
     const unsigned int dstNodeLocalBegin = dstMesh->getNodeLocalBegin();
     const unsigned int dstNodeLocalEnd   = dstMesh->getNodeLocalEnd();
+    const unsigned int dstEleBegin = dstMesh->getElementLocalBegin();
+    const unsigned int numLocalEle = dstMesh->getElementLocalEnd() - dstEleBegin;
     std::vector<unsigned char> cgWrittenAuth(
         dstNodeLocalEnd - dstNodeLocalBegin, 0);
+    // resolve tnToLocal once per recvTN entry (was 3x: pass 1, pass 2,
+    // and the separate localDG-fill pass).
+    std::vector<int> eAbs(recvTN.size(), -1);
     for (size_t i = 0; i < recvTN.size(); i++) {
         auto it = tnToLocal.find(recvTN[i]);
-        if (it == tnToLocal.end()) continue;
-        unsigned int e = it->second;
+        if (it != tnToLocal.end()) eAbs[i] = (int)it->second;
+    }
+
+    // fused authoritative-write + localDG refresh (was two separate
+    // O(recvTN * npe) passes).
+    std::vector<double>& localDG = dstMesh->getLocalNodalDGRef();
+    localDG.assign(numLocalEle * npe, (double)0);
+    for (size_t i = 0; i < recvTN.size(); i++) {
+        if (eAbs[i] < 0) continue;
+        const unsigned int e      = (unsigned int)eAbs[i];
+        const unsigned int eLocal = e - dstEleBegin;
         for (unsigned int n = 0; n < npe; n++) {
+            const T val = recvDG[i * npe + n];
+            localDG[eLocal * npe + n] = (double)val;
             if (recvFlag[i * npe + n]) {
-                unsigned int cg = e2n[e * npe + n];
-                vecOut[cg] = recvDG[i * npe + n];
+                const unsigned int cg = e2n[e * npe + n];
+                vecOut[cg] = val;
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd)
                     cgWrittenAuth[cg - dstNodeLocalBegin] = 1;
             }
         }
     }
+
+    // non-authoritative fill: stays separate because it depends on
+    // cgWrittenAuth set by the auth pass for the same cg.
     for (size_t i = 0; i < recvTN.size(); i++) {
-        auto it = tnToLocal.find(recvTN[i]);
-        if (it == tnToLocal.end()) continue;
-        unsigned int e = it->second;
+        if (eAbs[i] < 0) continue;
+        const unsigned int e = (unsigned int)eAbs[i];
         for (unsigned int n = 0; n < npe; n++) {
             if (!recvFlag[i * npe + n]) {
-                unsigned int cg = e2n[e * npe + n];
+                const unsigned int cg = e2n[e * npe + n];
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd) {
                     if (!cgWrittenAuth[cg - dstNodeLocalBegin])
                         vecOut[cg] = recvDG[i * npe + n];
@@ -6263,23 +6277,9 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
         }
     }
 
-    {
-        std::vector<double>& localDG = dstMesh->getLocalNodalDGRef();
-        const unsigned int numLocal =
-            dstMesh->getElementLocalEnd() - dstMesh->getElementLocalBegin();
-        localDG.assign(numLocal * npe, (double)0);
-        for (size_t i = 0; i < recvTN.size(); i++) {
-            auto it = tnToLocal.find(recvTN[i]);
-            if (it == tnToLocal.end()) continue;
-            unsigned int eLocal =
-                it->second - dstMesh->getElementLocalBegin();
-            for (unsigned int n = 0; n < npe; n++)
-                localDG[eLocal * npe + n] = (double)recvDG[i * npe + n];
-        }
-    }
-
     // recv-side probe: log every dst cg at target phys with the value
     // we just wrote, plus all recvTN entries that target that phys.
+#ifdef DENDRO_ENABLE_DEBUG_PROBES
     if (rvp_dir && rvp_phys_on && rvp_in_range && dstMesh->isActive()) {
         char fn[1024];
         std::snprintf(fn, sizeof(fn), "%s/redist_recv_call%d_r%d.txt",
@@ -6655,6 +6655,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
             std::fclose(fp);
         }
     }
+#endif
 
     // ---- Step 5: orphan fill. Dst local CGs NOT referenced by any dst
     //              local element ("orphans") don't get written by the
