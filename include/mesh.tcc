@@ -11050,7 +11050,8 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
 }
 
 template <typename T>
-void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
+void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
+                         int blk_filter) {
     if (!m_uiIsActive) return;
 
     const ot::TreeNode* pNodes = m_uiAllElements.data();
@@ -11109,12 +11110,34 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
     // RefElement's shared im_vec1/im_vec2 scratch buffers. Parallel
     // precompute would race on those buffers.
     std::vector<T> all_dg((std::size_t)m_uiNumTotalElements * dof * dgSz);
-    for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
-        if (m_e2b_unzip_counts[ele] == 0) continue;
-        T* base = all_dg.data() + (std::size_t)ele * dof * dgSz;
-        for (unsigned int v = 0; v < dof; v++)
-            this->getElementNodalValues(in + v * cgSz, base + v * dgSz, ele,
-                                        false);
+    if (blk_filter < 0) {
+        // Default (and DENDRO_UNZIP_OVERLAP off): precompute every element.
+        for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+            if (m_e2b_unzip_counts[ele] == 0) continue;
+            T* base = all_dg.data() + (std::size_t)ele * dof * dgSz;
+            for (unsigned int v = 0; v < dof; v++)
+                this->getElementNodalValues(in + v * cgSz, base + v * dgSz, ele,
+                                            false);
+        }
+    } else {
+        // Overlap path: precompute DG only for the elements that feed
+        // filter-matching blocks (interior or boundary), deduped. Interior
+        // blocks read only local elements, so their DG values are valid even
+        // before the ghost exchange completes.
+        std::vector<char> dg_done(m_uiNumTotalElements, 0);
+        for (size_t b = 0; b < n_blocks; b++) {
+            if ((int)blkList[b].getBlockType() != blk_filter) continue;
+            for (unsigned int idx = b2e_offset[b]; idx < b2e_offset[b + 1];
+                 idx++) {
+                const unsigned int ele = b2e_map[idx];
+                if (dg_done[ele]) continue;
+                dg_done[ele] = 1;
+                T* base = all_dg.data() + (std::size_t)ele * dof * dgSz;
+                for (unsigned int v = 0; v < dof; v++)
+                    this->getElementNodalValues(in + v * cgSz, base + v * dgSz,
+                                                ele, false);
+            }
+        }
     }
 
 #pragma omp parallel
@@ -11132,7 +11155,11 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
 
 #pragma omp for schedule(dynamic, 1)
         for (size_t blk_idx = 0; blk_idx < n_blocks; blk_idx++) {
-            const unsigned int blk     = (unsigned int)blk_idx;
+            const unsigned int blk = (unsigned int)blk_idx;
+            // Overlap path: process only interior or only boundary blocks.
+            if (blk_filter >= 0 &&
+                (int)blkList[blk].getBlockType() != blk_filter)
+                continue;
             const ot::TreeNode blkNode = blkList[blk].getBlockNode();
             const unsigned int PW      = blkList[blk].get1DPadWidth();
             const unsigned int lx      = blkList[blk].getAllocationSzX();
@@ -11299,6 +11326,10 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
             const unsigned int blk        = m_e2b_unzip_map[e2b_offset + i];
             assert(blk != LOOK_UP_TABLE_DEFAULT &&
                    blk < m_uiLocalBlockList.size());
+            // Overlap path: scatter only into filter-matching blocks.
+            if (blk_filter >= 0 &&
+                (int)blkList[blk].getBlockType() != blk_filter)
+                continue;
 
             const unsigned int regLevel = blkList[blk].getRegularGridLev();
             const ot::TreeNode blkNode  = blkList[blk].getBlockNode();
@@ -11828,9 +11859,9 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
 }
 
 template <typename T>
-void Mesh::unzip(const T* in, T* out, unsigned int dof) {
+void Mesh::unzip(const T* in, T* out, unsigned int dof, int blk_filter) {
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
-    this->unzip_scatter(in, out, dof);
+    this->unzip_scatter(in, out, dof, blk_filter);
 }
 
 #if 0

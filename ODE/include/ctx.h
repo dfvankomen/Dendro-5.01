@@ -545,6 +545,52 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
     assert(sz_per_dof_zip == m_uiMesh->getDegOfFreedom());
 
     if (in.get_loc() == ot::DVEC_LOC::HOST) {
+#ifdef DENDRO_UNZIP_OVERLAP
+        // Comm/compute overlap: post all ghost exchanges, unzip the interior
+        // (ghost-independent) blocks while the messages are in flight, then
+        // wait for ghosts and unzip the boundary (ghost-dependent) blocks.
+        // Interior blocks read only local data, so unzipping them before
+        // readFromGhostEnd is correct (see flagBlockGhostDependancies).
+        for (unsigned int i = 0; i < async_k; i++) {
+            const unsigned int v_begin  = ((i * dof) / async_k);
+            const unsigned int v_end    = (((i + 1) * dof) / async_k);
+            const unsigned int batch_sz = (v_end - v_begin);
+            m_uiMesh->readFromGhostBegin(
+                m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+        }
+
+#ifdef __PROFILE_CTX__
+        m_uiCtxpt[CTXPROFILE::UNZIP].start();
+#endif
+        for (unsigned int i = 0; i < async_k; i++) {
+            const unsigned int v_begin  = ((i * dof) / async_k);
+            const unsigned int v_end    = (((i + 1) * dof) / async_k);
+            const unsigned int batch_sz = (v_end - v_begin);
+            m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
+                            out_ptr + v_begin * sz_per_dof_uzip, batch_sz,
+                            (int)ot::UNZIP_INDEPENDENT);
+        }
+#ifdef __PROFILE_CTX__
+        m_uiCtxpt[CTXPROFILE::UNZIP].stop();
+#endif
+
+        for (unsigned int i = 0; i < async_k; i++) {
+            const unsigned int v_begin  = ((i * dof) / async_k);
+            const unsigned int v_end    = (((i + 1) * dof) / async_k);
+            const unsigned int batch_sz = (v_end - v_begin);
+            m_uiMesh->readFromGhostEnd(
+                m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+#ifdef __PROFILE_CTX__
+            m_uiCtxpt[CTXPROFILE::UNZIP].start();
+#endif
+            m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
+                            out_ptr + v_begin * sz_per_dof_uzip, batch_sz,
+                            (int)ot::UNZIP_DEPENDENT);
+#ifdef __PROFILE_CTX__
+            m_uiCtxpt[CTXPROFILE::UNZIP].stop();
+#endif
+        }
+#else
         // unzip on the host.
         for (unsigned int i = 0; i < async_k; i++) {
             const unsigned int v_begin  = ((i * dof) / async_k);
@@ -574,6 +620,7 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
             m_uiCtxpt[CTXPROFILE::UNZIP].stop();
 #endif
         }
+#endif
 
     } else if (in.get_loc() == ot::DVEC_LOC::DEVICE) {
 #ifdef __CUDACC__

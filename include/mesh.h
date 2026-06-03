@@ -2097,8 +2097,15 @@ class Mesh {
      * @note this routine assumes that for both arrays memory has been
      * allocated. Routine is responsible only to fill up the unzipped entries.
      * */
+    /**
+     * @param blk_filter : if >= 0, restrict the unzip to blocks whose
+     * getBlockType() equals this value (ot::BlockType::UNZIP_INDEPENDENT or
+     * UNZIP_DEPENDENT). Default -1 = all blocks (unchanged behavior). Used by
+     * the DENDRO_UNZIP_OVERLAP comm/compute-overlap path to unzip interior
+     * (ghost-independent) blocks while the ghost exchange is in flight.
+     */
     template <typename T>
-    void unzip(const T *in, T *out, unsigned int dof = 1);
+    void unzip(const T *in, T *out, unsigned int dof = 1, int blk_filter = -1);
 
     /**
      * @brief performs unzip operation for a given block id.
@@ -2125,7 +2132,8 @@ class Mesh {
      * @param numblks: number of block ids specified.
      */
     template <typename T>
-    void unzip_scatter(const T *in, T *out, unsigned int dof = 1);
+    void unzip_scatter(const T *in, T *out, unsigned int dof = 1,
+                       int blk_filter = -1);
 
     /**
      * @brief Batched unzip — process n_vars dof=1 unzips inside ONE OpenMP

@@ -91,6 +91,13 @@ option(DENDRO_UNZIP_OMP
 option(DENDRO_TENSOR_SIMD
        "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=7 for eO=6)"
        OFF)
+# Opt-in MPI comm/compute overlap in the unzip: post the ghost exchange, unzip
+# the interior (ghost-independent) blocks while messages are in flight, then
+# wait and unzip the boundary blocks. Default OFF = unchanged behavior. Implies
+# the OpenMP unzip path. Payoff is multi-node (intra-node MPI is shared-memory).
+option(DENDRO_UNZIP_OVERLAP
+       "Overlap ghost-exchange comm with interior-block unzip in Ctx::unzip (implies DENDRO_UNZIP_OMP; default OFF = unchanged)"
+       OFF)
 # Project-wide switch for the hybrid OpenMP/MPI path brought in from the
 # derivatives workstream. Default OFF keeps the MPI-first behavior. When ON it
 # enables the OpenMP threading the hybrid path relies on (e.g. TwoPunctures
@@ -276,6 +283,10 @@ set(DENDRO_UNZIP_OMP_EFFECTIVE ${DENDRO_UNZIP_OMP})
 if(DENDRO_HYBRID_OMP)
   set(DENDRO_UNZIP_OMP_EFFECTIVE ON)
 endif()
+# The comm/compute overlap needs the block-parallel (OMP) unzip path.
+if(DENDRO_UNZIP_OVERLAP)
+  set(DENDRO_UNZIP_OMP_EFFECTIVE ON)
+endif()
 if(DENDRO_UNZIP_SPEEDUP OR DENDRO_UNZIP_OMP_EFFECTIVE)
   set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ON)
   set(DENDRO_TENSOR_SIMD_EFFECTIVE ON)
@@ -296,6 +307,7 @@ dendro_add_def(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE DENDRO_UNZIP_SCATTER_FAST)
 dendro_add_def(DENDRO_UNZIP_OMP_EFFECTIVE DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
+dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})
