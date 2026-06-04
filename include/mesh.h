@@ -1978,6 +1978,18 @@ class Mesh {
      * ghost nodes.  */
     void flagBlockGhostDependancies();
 
+    /**
+     * @brief ground-truth audit of the UNZIP_INDEPENDENT/DEPENDENT block
+     * classification. poisons every ghost CG node with NaN, unzips once, and
+     * checks which blocks catch a NaN in their unzip output (i.e. genuinely
+     * read ghost data). any UNZIP_INDEPENDENT block that does is a
+     * misclassification (unsafe for compute/comm overlap). returns the global
+     * count of misclassified independent blocks (0 == correct). exercised by
+     * TEST 11 in testPartitioning. requires a fully-built mesh with working
+     * unzip (do NOT call mid-construction — it does not perform ghost
+     * exchange, only poisons ghost slots to detect reads). */
+    DendroIntL auditBlockTypeIndependence(const char *site = "");
+
     /**@brief: returns if the block setup has performed or not*/
     inline bool isBlockSetep() { return m_uiIsBlockSetup; }
 

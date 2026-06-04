@@ -978,6 +978,29 @@ int main(int argc, char** argv) {
         testUnzip(remeshed, "TEST 8  (after remesh)");
     }
 
+    // ---- TEST 11: UNZIP_INDEPENDENT/DEPENDENT classification correctness ----
+    // Ground-truth check that every block flagged UNZIP_INDEPENDENT genuinely
+    // reads no ghost data (safe for compute/comm overlap). auditBlockType-
+    // Independence poisons all ghost cgs with NaN, unzips, and counts any
+    // independent block whose output catches a NaN. Must be 0 on SFC and graph.
+    auto testBlockType = [&](ot::Mesh* testMesh, const char* label) {
+        if (!testMesh || !testMesh->isActive()) return;
+        DendroIntL bad = testMesh->auditBlockTypeIndependence(label);
+        if (!rank) {
+            if (bad == 0)
+                std::cout << GRN << label
+                          << " PASSED: no UNZIP_INDEPENDENT block reads ghost"
+                          << NRM << std::endl;
+            else
+                std::cout << RED << label << " FAILED: " << bad
+                          << " UNZIP_INDEPENDENT blocks read ghost data" << NRM
+                          << std::endl;
+        }
+    };
+    testBlockType(mesh, "TEST 11a (SFC blocktype)     ");
+    testBlockType(mesh_repartitioned, "TEST 11b (graph blocktype)   ");
+    if (remeshed) testBlockType(remeshed, "TEST 11c (remesh blocktype)  ");
+
     // ---- TEST 8b: zip roundtrip (createVector → unzip → zip) ----
     // vecA = createVector(func). ghost exchange + unzip → uz. zip(uz) →
     // vecB. Compare vecA[cg] vs vecB[cg] at every local cg.
