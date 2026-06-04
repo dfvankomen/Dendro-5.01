@@ -13,7 +13,10 @@
 #include "grUtils.h"
 #include "parameters.h"
 
-using namespace emda;
+namespace TPID {
+PunctureVarsWriter g_vars_writer = nullptr;
+void registerPunctureVarsWriter(PunctureVarsWriter w) { g_vars_writer = w; }
+}  // namespace TPID
 
 static
 void write_coefficient_file(FILE* file, derivs w, int num_tot){
@@ -223,8 +226,7 @@ void TwoPunctures(const double xx1, const double yy1, const double zz1,
     CCTK_REAL Aij[3][3];
     TCP_BY_Aijofxyz(xx, yy, zz, Aij);
 
-    CCTK_REAL old_alp = 1.0;
-    if (TPID::multiply_old_lapse) old_alp = vars[VAR::U_ALPHA];
+    double alpha = 1.0;
 
     if ((conformal_state > 0) || (pmn_lapse) || (brownsville_lapse)) {
         CCTK_REAL xp, yp, zp, rp, ir;
@@ -307,30 +309,27 @@ void TwoPunctures(const double xx1, const double yy1, const double zz1,
         }
 
         if (pmn_lapse)
-            vars[VAR::U_ALPHA] = pow(p, TPID::initial_lapse_psi_exponent);
+            alpha = pow(p, TPID::initial_lapse_psi_exponent);
         if (brownsville_lapse)
-            vars[VAR::U_ALPHA] =
-                2.0 / (1.0 + pow(p, TPID::initial_lapse_psi_exponent));
+            alpha = 2.0 / (1.0 + pow(p, TPID::initial_lapse_psi_exponent));
 
     } /* if conformal-state > 0 */
 
     if (antisymmetric_lapse || averaged_lapse) {
-        vars[VAR::U_ALPHA] = ((1.0 - 0.5 * *mp / r_plus - 0.5 * *mm / r_minus) /
-                              (1.0 + 0.5 * *mp / r_plus + 0.5 * *mm / r_minus));
+        alpha = ((1.0 - 0.5 * *mp / r_plus - 0.5 * *mm / r_minus) /
+                 (1.0 + 0.5 * *mp / r_plus + 0.5 * *mm / r_minus));
 
         if (r_plus < TPID::TCP_Extend_Radius) {
-            vars[VAR::U_ALPHA] =
-                ((1.0 - 0.5 * EXTEND(*mp, r_plus) - 0.5 * *mm / r_minus) /
-                 (1.0 + 0.5 * EXTEND(*mp, r_plus) + 0.5 * *mm / r_minus));
+            alpha = ((1.0 - 0.5 * EXTEND(*mp, r_plus) - 0.5 * *mm / r_minus) /
+                     (1.0 + 0.5 * EXTEND(*mp, r_plus) + 0.5 * *mm / r_minus));
         }
         if (r_minus < TPID::TCP_Extend_Radius) {
-            vars[VAR::U_ALPHA] =
-                ((1.0 - 0.5 * EXTEND(*mm, r_minus) - 0.5 * *mp / r_plus) /
-                 (1.0 + 0.5 * EXTEND(*mp, r_minus) + 0.5 * *mp / r_plus));
+            alpha = ((1.0 - 0.5 * EXTEND(*mm, r_minus) - 0.5 * *mp / r_plus) /
+                     (1.0 + 0.5 * EXTEND(*mp, r_minus) + 0.5 * *mp / r_plus));
         }
 
         if (averaged_lapse) {
-            vars[VAR::U_ALPHA] = 0.5 * (1.0 + vars[VAR::U_ALPHA]);
+            alpha = 0.5 * (1.0 + alpha);
         }
     }
 
@@ -363,49 +362,16 @@ void TwoPunctures(const double xx1, const double yy1, const double zz1,
 
 #include "adm2emda.h"
 
-    vars[VAR::U_GT00] = gtd[0][0];
-    vars[VAR::U_GT01] = gtd[0][1];
-    vars[VAR::U_GT02] = gtd[0][2];
-    vars[VAR::U_GT11] = gtd[1][1];
-    vars[VAR::U_GT12] = gtd[1][2];
-    vars[VAR::U_GT22] = gtd[2][2];
+    if (TPID::replace_lapse_with_sqrt_chi) alpha = pow(chi, 0.5);
 
-    vars[VAR::U_AT00] = Atd[0][0];
-    vars[VAR::U_AT01] = Atd[0][1];
-    vars[VAR::U_AT02] = Atd[0][2];
-    vars[VAR::U_AT11] = Atd[1][1];
-    vars[VAR::U_AT12] = Atd[1][2];
-    vars[VAR::U_AT22] = Atd[2][2];
-
-    vars[VAR::U_TRK] = trK;
-    vars[VAR::U_CHI] = chi;
-
-    vars[VAR::U_BETA0] = 0.0;
-    vars[VAR::U_BETA1] = 0.0;
-    vars[VAR::U_BETA2] = 0.0;
-
-    vars[VAR::U_GAUGEB0] = 0.0;
-    vars[VAR::U_GAUGEB1] = 0.0;
-    vars[VAR::U_GAUGEB2] = 0.0;
-    vars[VAR::U_DILATONPHI] = 0.0;
-    vars[VAR::U_KAPPA] = 0.0;
-    vars[VAR::U_CAPITALPI] = 0.0;
-    vars[VAR::U_CAPITALXI] = 0.0;
-    vars[VAR::U_PERPE0] = 0.0;
-    vars[VAR::U_PERPE1] = 0.0;
-    vars[VAR::U_PERPE2] = 0.0;
-    vars[VAR::U_PERPB0] = 0.0;
-    vars[VAR::U_PERPB1] = 0.0;
-    vars[VAR::U_PERPB2] = 0.0;
-    vars[VAR::U_DAMPINGPSI] = 0.0;
-    vars[VAR::U_DAMPINGPHI] = 0.0;
-    vars[VAR::U_CAP_GT0] = 0.0;
-    vars[VAR::U_CAP_GT1] = 0.0;
-    vars[VAR::U_CAP_GT2] = 0.0;
-
-    if (TPID::multiply_old_lapse) vars[VAR::U_ALPHA] *= old_alp;
-
-    if (TPID::replace_lapse_with_sqrt_chi) vars[VAR::U_ALPHA] = pow(chi, 0.5);
+    if (TPID::g_vars_writer == nullptr) {
+        fprintf(stderr,
+                "TPID: no PunctureVarsWriter registered. Call "
+                "TPID::registerPunctureVarsWriter(...) in main() before "
+                "TwoPunctures() runs.\n");
+        abort();
+    }
+    TPID::g_vars_writer(vars, gtd, Atd, chi, trK, alpha);
 
     if (0) {
         /* Keep the result around for the next time */

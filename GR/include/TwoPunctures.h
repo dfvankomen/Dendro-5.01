@@ -44,6 +44,17 @@ void TwoPunctures(const double xx1, const double yy1, const double zz1,
                   double *mm_adm, double *E, double *J1, double *J2,
                   double *J3);
 
+// Per-project ADM->evolution-variable mapping. Must be registered by the
+// consumer before TwoPunctures() runs; otherwise TwoPunctures() aborts.
+namespace TPID {
+typedef void (*PunctureVarsWriter)(double *vars,
+                                   const double gtd[3][3],
+                                   const double Atd[3][3],
+                                   double chi, double trK, double alpha);
+extern PunctureVarsWriter g_vars_writer;
+void registerPunctureVarsWriter(PunctureVarsWriter w);
+}  // namespace TPID
+
 /* Routines in  "TwoPunctures.c"*/
 CCTK_REAL TCP_TestSolution(CCTK_REAL A, CCTK_REAL B, CCTK_REAL X, CCTK_REAL R,
                        CCTK_REAL phi);
