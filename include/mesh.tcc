@@ -11105,38 +11105,44 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     // getElementNodalValues per (ele, blk) pair (which would be ~8x more
     // calls for typical meshes). Memory: m_uiNumTotalElements * dof * dgSz.
     //
-    // NOTE: this MUST be serial — getElementNodalValues internally calls
-    // parent2ChildInterpolation at hanging-face elements, which uses
-    // RefElement's shared im_vec1/im_vec2 scratch buffers. Parallel
-    // precompute would race on those buffers.
+    // Threaded: each element writes only its own disjoint all_dg slice, and we
+    // use the thread-safe getElementNodalValues overload with per-thread scratch
+    // (im1_pre/im2_pre) so the hanging-face parent2ChildInterpolation no longer
+    // races on RefElement's shared im_vec1/im_vec2. This precompute used to be
+    // pinned serial -- an Amdahl bottleneck that dominated the threaded unzip on
+    // large meshes (its cost scales with element count, not block count, so it
+    // capped unzip thread-scaling). Element work is uneven (only hanging-face
+    // elements interpolate), hence the dynamic schedule.
     std::vector<T> all_dg((std::size_t)m_uiNumTotalElements * dof * dgSz);
-    if (blk_filter < 0) {
-        // Default (and DENDRO_UNZIP_OVERLAP off): precompute every element.
+#pragma omp parallel
+    {
+        std::vector<double> im1_pre(nPe), im2_pre(nPe);
+        double* const im1_p = im1_pre.data();
+        double* const im2_p = im2_pre.data();
+#pragma omp for schedule(dynamic, 16)
         for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
             if (m_e2b_unzip_counts[ele] == 0) continue;
+            if (blk_filter >= 0) {
+                // Overlap path: precompute DG only for elements that feed a
+                // filter-matching block (interior or boundary). Equivalent to
+                // the old block-iterating dedup, but expressed per-element so it
+                // parallelizes without a shared dg_done array. Interior blocks
+                // read only local elements, so their DG values are valid even
+                // before the ghost exchange completes.
+                bool feeds            = false;
+                const unsigned int eo = m_e2b_unzip_offset[ele];
+                for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++)
+                    if ((int)blkList[m_e2b_unzip_map[eo + i]].getBlockType() ==
+                        blk_filter) {
+                        feeds = true;
+                        break;
+                    }
+                if (!feeds) continue;
+            }
             T* base = all_dg.data() + (std::size_t)ele * dof * dgSz;
             for (unsigned int v = 0; v < dof; v++)
                 this->getElementNodalValues(in + v * cgSz, base + v * dgSz, ele,
-                                            false);
-        }
-    } else {
-        // Overlap path: precompute DG only for the elements that feed
-        // filter-matching blocks (interior or boundary), deduped. Interior
-        // blocks read only local elements, so their DG values are valid even
-        // before the ghost exchange completes.
-        std::vector<char> dg_done(m_uiNumTotalElements, 0);
-        for (size_t b = 0; b < n_blocks; b++) {
-            if ((int)blkList[b].getBlockType() != blk_filter) continue;
-            for (unsigned int idx = b2e_offset[b]; idx < b2e_offset[b + 1];
-                 idx++) {
-                const unsigned int ele = b2e_map[idx];
-                if (dg_done[ele]) continue;
-                dg_done[ele] = 1;
-                T* base = all_dg.data() + (std::size_t)ele * dof * dgSz;
-                for (unsigned int v = 0; v < dof; v++)
-                    this->getElementNodalValues(in + v * cgSz, base + v * dgSz,
-                                                ele, false);
-            }
+                                            false, im1_p, im2_p);
         }
     }
 
