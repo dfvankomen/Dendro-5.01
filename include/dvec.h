@@ -308,9 +308,22 @@ void DVector<T, I>::copy_data(const DVector<T, I>& v) {
 
     T* dptr           = v.m_data_ptr;
 
-    if (v.m_vec_loc == DVEC_LOC::HOST)
+    if (v.m_vec_loc == DVEC_LOC::HOST) {
+#ifdef DENDRO_HYBRID_OMP
+        // RK hot path: copy_data runs once per stage on the full evolution
+        // vector. The serial std::memcpy here was the unthreaded part of the
+        // RK-update ("untimed") term. Thread it so it uses parallel memory
+        // bandwidth and first-touches each thread's chunk (NUMA-friendly),
+        // mirroring the threaded axpy below. Bit-identical (plain copy).
+        const size_t n            = m_size;
+        T* __restrict__ dst       = m_data_ptr;
+        const T* __restrict__ src = dptr;
+#pragma omp parallel for
+        for (size_t i = 0; i < n; i++) dst[i] = src[i];
+#else
         std::memcpy(m_data_ptr, dptr, sizeof(T) * m_size);
-    else if (v.m_vec_loc == DVEC_LOC::DEVICE) {
+#endif
+    } else if (v.m_vec_loc == DVEC_LOC::DEVICE) {
 #ifdef __CUDACC__
         GPUDevice::check_error(cudaMemcpy(m_data_ptr, v.m_data_ptr,
                                           sizeof(T) * m_size,
