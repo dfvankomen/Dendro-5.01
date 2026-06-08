@@ -552,10 +552,23 @@ void ETS_MSRK<T, Ctx>::evolve_bootstrap() {
 
             m_uiEVecTmp[0].copy_data(m_uiEVar);
 
-            for (unsigned int p = 0; p < stage; p++) {
-                const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
-                if (aip != 0.0)
-                    DVec::axpy(pMesh, aip * dt, m_uiStVec[p], m_uiEVecTmp[0]);
+            // Fused stage build: tmp += sum_p (aip*dt) * StVec[p] in one
+            // parallel region instead of one axpy per nonzero term (cuts
+            // fork/join count). Bit-identical to the sequential axpy loop.
+            {
+                DendroScalar a_cf[ETS_MAX_PROFILED_STAGES];
+                const DVec* a_sp[ETS_MAX_PROFILED_STAGES];
+                unsigned int a_n = 0;
+                for (unsigned int p = 0; p < stage; p++) {
+                    const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
+                    if (aip != 0.0) {
+                        a_cf[a_n] = aip * dt;
+                        a_sp[a_n] = &m_uiStVec[p];
+                        a_n++;
+                    }
+                }
+                if (a_n)
+                    DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
             }
 
             m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
@@ -568,8 +581,17 @@ void ETS_MSRK<T, Ctx>::evolve_bootstrap() {
         }
 
         // Final update: y_{n+1} = y_n + sum(b_i * k_i * dt).
-        for (unsigned int k = 0; k < m_uiNumStages; k++)
-            DVec::axpy(pMesh, m_uiBi[k] * dt, m_uiStVec[k], m_uiEVar);
+        // Fused final update: EVar += sum_k (bi*dt) * StVec[k] in one parallel
+        // region. Bit-identical to the sequential axpy loop.
+        {
+            DendroScalar b_cf[ETS_MAX_PROFILED_STAGES];
+            const DVec* b_sp[ETS_MAX_PROFILED_STAGES];
+            for (unsigned int k = 0; k < m_uiNumStages; k++) {
+                b_cf[k] = m_uiBi[k] * dt;
+                b_sp[k] = &m_uiStVec[k];
+            }
+            DVec::axpy_multi(pMesh, m_uiNumStages, b_cf, b_sp, m_uiEVar);
+        }
     }
 
     m_uiAppCtx->post_timestep(m_uiEVar);
@@ -685,10 +707,23 @@ void ETS_MSRK<T, Ctx>::evolve_msrk() {
             // Accumulate contributions from all previous stages (including
             // history stages) via the Aij tableau.  Skip zero coefficients
             // to avoid unnecessary axpy work on large vectors.
-            for (unsigned int p = 0; p < stage; p++) {
-                const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
-                if (aip != 0.0)
-                    DVec::axpy(pMesh, aip * dt, m_uiStVec[p], m_uiEVecTmp[0]);
+            // Fused stage build: tmp += sum_p (aip*dt) * StVec[p] in one
+            // parallel region instead of one axpy per nonzero term (cuts
+            // fork/join count). Bit-identical to the sequential axpy loop.
+            {
+                DendroScalar a_cf[ETS_MAX_PROFILED_STAGES];
+                const DVec* a_sp[ETS_MAX_PROFILED_STAGES];
+                unsigned int a_n = 0;
+                for (unsigned int p = 0; p < stage; p++) {
+                    const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
+                    if (aip != 0.0) {
+                        a_cf[a_n] = aip * dt;
+                        a_sp[a_n] = &m_uiStVec[p];
+                        a_n++;
+                    }
+                }
+                if (a_n)
+                    DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
             }
 
             m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
@@ -703,8 +738,17 @@ void ETS_MSRK<T, Ctx>::evolve_msrk() {
         // Final update: y_{n+1} = y_n + h * sum(b_i * k_i).
         dendro::logger::debug(dendro::logger::Scope{"ETS_MSRK"},
                               "Computing final update");
-        for (unsigned int k = 0; k < m_uiNumStages; k++)
-            DVec::axpy(pMesh, m_uiBi[k] * dt, m_uiStVec[k], m_uiEVar);
+        // Fused final update: EVar += sum_k (bi*dt) * StVec[k] in one parallel
+        // region. Bit-identical to the sequential axpy loop.
+        {
+            DendroScalar b_cf[ETS_MAX_PROFILED_STAGES];
+            const DVec* b_sp[ETS_MAX_PROFILED_STAGES];
+            for (unsigned int k = 0; k < m_uiNumStages; k++) {
+                b_cf[k] = m_uiBi[k] * dt;
+                b_sp[k] = &m_uiStVec[k];
+            }
+            DVec::axpy_multi(pMesh, m_uiNumStages, b_cf, b_sp, m_uiEVar);
+        }
     }
 
     m_uiAppCtx->post_timestep(m_uiEVar);

@@ -138,6 +138,16 @@ class DVector {
     static void axpy(const ot::Mesh* const pMesh, T a, const DVector<T, I>& x,
                      DVector<T, I>& y, bool local_only = true);
 
+    // Fused multi-term axpy: y += sum_{j<n} coeffs[j] * srcs[j], computed in a
+    // SINGLE parallel region instead of one per term. Accumulated in order j, so
+    // it is bit-identical to calling axpy(coeffs[j], srcs[j], y) sequentially.
+    // Same local_only semantics as axpy's default. Cuts the per-RK-stage OpenMP
+    // fork/join count (the dominant cost in the "untimed" RK update at high
+    // thread counts).
+    static void axpy_multi(const ot::Mesh* const pMesh, unsigned int n,
+                           const T* coeffs, const DVector<T, I>* const* srcs,
+                           DVector<T, I>& y);
+
     static void axpby(const ot::Mesh* const pMesh, T a, const DVector<T, I>& x,
                       T b, DVector<T, I>& y, bool local_only = true);
 
@@ -398,6 +408,59 @@ void DVector<T, I>::axpy(const ot::Mesh* const pMesh, T a,
         GPUDevice::check_last_error();
 #endif
     }
+}
+
+template <typename T, typename I>
+void DVector<T, I>::axpy_multi(const ot::Mesh* const pMesh, unsigned int n,
+                               const T* coeffs,
+                               const DVector<T, I>* const* srcs,
+                               DVector<T, I>& y) {
+    // y[local] += sum_{j<n} coeffs[j] * srcs[j][local], accumulated in order j.
+    // Each output node is touched by exactly one thread and the per-node sum is
+    // done in the same order as the sequential axpy calls, so this is
+    // bit-identical to that sequence -- just one fork/join instead of n.
+    if (n == 0 || y.m_data_ptr == nullptr) return;
+
+    constexpr unsigned int MAXJ = 16;
+    if (y.m_vec_loc != DVEC_LOC::HOST || n > MAXJ) {
+        // Device path or unexpected term count: fall back to sequential axpy
+        // (identical math, just without the fused single-region optimization).
+        for (unsigned int j = 0; j < n; j++)
+            DVector<T, I>::axpy(pMesh, coeffs[j], *srcs[j], y, true);
+        return;
+    }
+
+    const unsigned int sz_dof = y.m_size / y.m_dof;
+    const unsigned int npe    = pMesh->getNumNodesPerElement();
+    unsigned int nb, ne;
+    if (y.m_vec_type == DVEC_TYPE::OCT_SHARED_NODES) {
+        nb = pMesh->getNodeLocalBegin();
+        ne = pMesh->getNodeLocalEnd();
+    } else if (y.m_vec_type == DVEC_TYPE::OCT_LOCAL_NODES) {
+        nb = pMesh->getElementLocalBegin() * npe;
+        ne = pMesh->getElementLocalEnd() * npe;
+    } else {
+        return;
+    }
+
+    T* __restrict__ y_ptr = y.m_data_ptr;
+    const T* sp[MAXJ];
+    T cf[MAXJ];
+    for (unsigned int j = 0; j < n; j++) {
+        sp[j] = srcs[j]->m_data_ptr;
+        cf[j] = coeffs[j];
+    }
+
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
+    for (unsigned int v = 0; v < y.m_dof; v++)
+        for (unsigned int node = nb; node < ne; node++) {
+            const unsigned int idx = v * sz_dof + node;
+            T acc                  = y_ptr[idx];
+            for (unsigned int j = 0; j < n; j++) acc += cf[j] * sp[j][idx];
+            y_ptr[idx] = acc;
+        }
 }
 
 template <typename T, typename I>
