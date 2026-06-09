@@ -3408,16 +3408,22 @@ class Mesh {
      * `vecOut` via dstMesh's E2N_CG, and refreshes dstMesh's internal
      * m_uiLocalNodalDG buffer (used by the graph-partition DG ghost path).
      *
+     * Pass dof>1 to redistribute several fields at once: vecIn/vecOut are
+     * laid out [dof][CG size] (field v at vecIn + v*this->getDegOfFreedom()
+     * and vecOut + v*dstMesh->getDegOfFreedom()). The scatter plan is built
+     * once and all fields move in a single batched set of collectives,
+     * instead of one Allgatherv+Alltoallv set per field.
+     *
      * Caller responsibilities:
-     *   - vecIn sized as this->createVector<T>()
-     *   - vecOut sized as dstMesh->createVector<T>()
+     *   - vecIn sized as this->createVector<T>(dof)
+     *   - vecOut sized as dstMesh->createVector<T>(dof)
      *   - vecIn ghosts should be synchronized (performGhostExchange) before
      *     calling, otherwise DG values read from ghost elements' CG slots
      *     will be stale.
      */
     template <typename T>
-    void redistributeVec(ot::Mesh *dstMesh, const T *vecIn,
-                         T *vecOut) const;
+    void redistributeVec(ot::Mesh *dstMesh, const T *vecIn, T *vecOut,
+                         unsigned int dof = 1) const;
 
     /**
      *@brief : Returns the nodal values of a given element for a given variable

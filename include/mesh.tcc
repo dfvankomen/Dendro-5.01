@@ -5934,10 +5934,19 @@ void Mesh::syncLocalNodalDGFromCG(const T* vec) {
 }
 
 template <typename T>
-void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
-    // Redistribute a CG vector across a partition change. Assumes `this`
-    // (source) and `dstMesh` (target) contain the same global element
-    // set and dof=1 per element. See mesh.h for full contract.
+void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
+                           unsigned int dof) const {
+    // Redistribute `dof` CG fields across a partition change. `this`
+    // (source) and `dstMesh` (target) contain the same global element set.
+    // vecIn is laid out [dof][src CG size], vecOut [dof][dst CG size]:
+    // field v starts at vecIn + v*this->getDegOfFreedom() and
+    // vecOut + v*dstMesh->getDegOfFreedom(). dof defaults to 1.
+    //
+    // The scatter PLAN (src->dst routing, canonical-owner "local" flags, and
+    // the orphan-fill phys-pos mapping) is purely topological and built
+    // ONCE; only the packed values scale with dof. This batches what used to
+    // be one global Allgatherv + hash + Alltoallv set PER variable.
+    if (dof == 0) return;
 
     MPI_Comm comm = m_uiCommGlobal;
     int rank, npes;
@@ -5945,6 +5954,8 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
     MPI_Comm_size(comm, &npes);
 
     const unsigned int npe = dstMesh->getNumNodesPerElement();
+    const size_t srcCgSz   = (size_t)this->getDegOfFreedom();
+    const size_t dstCgSz   = (size_t)dstMesh->getDegOfFreedom();
 
     // ---- Step 1: Allgatherv each rank's local TreeNodes on dstMesh, build
     //              a global TreeNode -> rank map (hashed for speed).
@@ -6030,36 +6041,47 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
                 unsigned int cg = e2nO[e * npe + n];
                 bool isLocal = (cg >= m_uiNodeLocalBegin &&
                                 cg < m_uiNodeLocalEnd);
-                sendDG[target].push_back((T)vecIn[cg]);
                 sendLocalFlag[target].push_back(isLocal ? 1 : 0);
-
+                // dof values for this node, contiguous (layout [node][dof]).
+                for (unsigned int v = 0; v < dof; v++)
+                    sendDG[target].push_back((T)vecIn[v * srcCgSz + cg]);
             }
         }
     }
 
-    // ---- Step 3: alltoallv TreeNodes + per-element DG values + flags
-    std::vector<int> sendCntTN(npes), sendCntDG(npes);
-    std::vector<int> sendOffTN(npes, 0), sendOffDG(npes, 0);
+    // ---- Step 3: alltoallv TreeNodes (per elem) + flags (per node) +
+    //              DG values (per node * dof). TN/flag counts are dof-
+    //              independent; only DG counts scale with dof.
+    std::vector<int> sendCntTN(npes), sendCntFlag(npes), sendCntDG(npes);
+    std::vector<int> sendOffTN(npes, 0), sendOffFlag(npes, 0),
+        sendOffDG(npes, 0);
     for (int p = 0; p < npes; p++) {
-        sendCntTN[p] = (int)sendTN[p].size();
-        sendCntDG[p] = (int)sendDG[p].size();
+        sendCntTN[p]   = (int)sendTN[p].size();
+        sendCntFlag[p] = (int)sendLocalFlag[p].size();
+        sendCntDG[p]   = (int)sendDG[p].size();
     }
     for (int p = 1; p < npes; p++) {
-        sendOffTN[p] = sendOffTN[p - 1] + sendCntTN[p - 1];
-        sendOffDG[p] = sendOffDG[p - 1] + sendCntDG[p - 1];
+        sendOffTN[p]   = sendOffTN[p - 1] + sendCntTN[p - 1];
+        sendOffFlag[p] = sendOffFlag[p - 1] + sendCntFlag[p - 1];
+        sendOffDG[p]   = sendOffDG[p - 1] + sendCntDG[p - 1];
     }
 
-    std::vector<int> recvCntTN(npes), recvCntDG(npes);
-    std::vector<int> recvOffTN(npes, 0), recvOffDG(npes, 0);
+    std::vector<int> recvCntTN(npes), recvCntFlag(npes), recvCntDG(npes);
+    std::vector<int> recvOffTN(npes, 0), recvOffFlag(npes, 0),
+        recvOffDG(npes, 0);
     MPI_Alltoall(sendCntTN.data(), 1, MPI_INT, recvCntTN.data(), 1, MPI_INT,
                  comm);
+    MPI_Alltoall(sendCntFlag.data(), 1, MPI_INT, recvCntFlag.data(), 1,
+                 MPI_INT, comm);
     MPI_Alltoall(sendCntDG.data(), 1, MPI_INT, recvCntDG.data(), 1, MPI_INT,
                  comm);
-    int totRecvTN = 0, totRecvDG = 0;
+    int totRecvTN = 0, totRecvFlag = 0, totRecvDG = 0;
     for (int p = 0; p < npes; p++) {
-        recvOffTN[p] = totRecvTN;
-        recvOffDG[p] = totRecvDG;
+        recvOffTN[p]   = totRecvTN;
+        recvOffFlag[p] = totRecvFlag;
+        recvOffDG[p]   = totRecvDG;
         totRecvTN += recvCntTN[p];
+        totRecvFlag += recvCntFlag[p];
         totRecvDG += recvCntDG[p];
     }
 
@@ -6068,7 +6090,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
     std::vector<unsigned char> flatFlag;
     flatTN.reserve(sendOffTN[npes - 1] + sendCntTN[npes - 1]);
     flatDG.reserve(sendOffDG[npes - 1] + sendCntDG[npes - 1]);
-    flatFlag.reserve(sendOffDG[npes - 1] + sendCntDG[npes - 1]);
+    flatFlag.reserve(sendOffFlag[npes - 1] + sendCntFlag[npes - 1]);
     for (int p = 0; p < npes; p++) {
         flatTN.insert(flatTN.end(), sendTN[p].begin(), sendTN[p].end());
         flatDG.insert(flatDG.end(), sendDG[p].begin(), sendDG[p].end());
@@ -6078,7 +6100,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
 
     std::vector<ot::TreeNode> recvTN(totRecvTN);
     std::vector<T> recvDG(totRecvDG);
-    std::vector<unsigned char> recvFlag(totRecvDG);
+    std::vector<unsigned char> recvFlag(totRecvFlag);
     MPI_Alltoallv(flatTN.data(), sendCntTN.data(), sendOffTN.data(),
                   par::Mpi_datatype<ot::TreeNode>::value(), recvTN.data(),
                   recvCntTN.data(), recvOffTN.data(),
@@ -6087,9 +6109,9 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
                   par::Mpi_datatype<T>::value(), recvDG.data(),
                   recvCntDG.data(), recvOffDG.data(),
                   par::Mpi_datatype<T>::value(), comm);
-    MPI_Alltoallv(flatFlag.data(), sendCntDG.data(), sendOffDG.data(),
-                  MPI_UNSIGNED_CHAR, recvFlag.data(), recvCntDG.data(),
-                  recvOffDG.data(), MPI_UNSIGNED_CHAR, comm);
+    MPI_Alltoallv(flatFlag.data(), sendCntFlag.data(), sendOffFlag.data(),
+                  MPI_UNSIGNED_CHAR, recvFlag.data(), recvCntFlag.data(),
+                  recvOffFlag.data(), MPI_UNSIGNED_CHAR, comm);
 
     // ---- Step 4: write into dstMesh's CG via E2N_CG and refresh
     //              m_uiLocalNodalDG (used by graph-partition DG ghost path).
@@ -6133,16 +6155,21 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
     // O(recvTN * npe) passes).
     std::vector<double>& localDG = dstMesh->getLocalNodalDGRef();
     localDG.assign(numLocalEle * npe, (double)0);
+    const unsigned int lastv = dof - 1;
     for (size_t i = 0; i < recvTN.size(); i++) {
         if (eAbs[i] < 0) continue;
         const unsigned int e      = (unsigned int)eAbs[i];
         const unsigned int eLocal = e - dstEleBegin;
         for (unsigned int n = 0; n < npe; n++) {
-            const T val = recvDG[i * npe + n];
-            localDG[eLocal * npe + n] = (double)val;
+            const size_t base = ((size_t)i * npe + n) * dof;
+            // localDG is a single-field transient (refreshed before each DG
+            // ghost exchange); mirror the old per-field loop's "last field
+            // wins" by storing field (dof-1).
+            localDG[eLocal * npe + n] = (double)recvDG[base + lastv];
             if (recvFlag[i * npe + n]) {
                 const unsigned int cg = e2n[e * npe + n];
-                vecOut[cg] = val;
+                for (unsigned int v = 0; v < dof; v++)
+                    vecOut[v * dstCgSz + cg] = recvDG[base + v];
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd)
                     cgWrittenAuth[cg - dstNodeLocalBegin] = 1;
             }
@@ -6157,11 +6184,14 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
         for (unsigned int n = 0; n < npe; n++) {
             if (!recvFlag[i * npe + n]) {
                 const unsigned int cg = e2n[e * npe + n];
+                const size_t base = ((size_t)i * npe + n) * dof;
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd) {
                     if (!cgWrittenAuth[cg - dstNodeLocalBegin])
-                        vecOut[cg] = recvDG[i * npe + n];
+                        for (unsigned int v = 0; v < dof; v++)
+                            vecOut[v * dstCgSz + cg] = recvDG[base + v];
                 } else {
-                    vecOut[cg] = recvDG[i * npe + n];
+                    for (unsigned int v = 0; v < dof; v++)
+                        vecOut[v * dstCgSz + cg] = recvDG[base + v];
                 }
             }
         }
@@ -6351,10 +6381,14 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
         auto it = srcPosToLocalCG.find(
             std::make_tuple(oAllX[t], oAllY[t], oAllZ[t]));
         if (it == srcPosToLocalCG.end()) continue;
-        vecOut[oAllCG[t]] = vecIn[it->second];
+        for (unsigned int v = 0; v < dof; v++)
+            vecOut[v * dstCgSz + oAllCG[t]] = vecIn[v * srcCgSz + it->second];
     }
 
-    // Cross-rank: pack (dst_cg, value) per dst rank and alltoallv.
+    // Cross-rank: pack (dst_cg, dof values) per dst rank and alltoallv.
+    // CGO count is per-orphan; ValO count is per-orphan*dof. They stay in
+    // lockstep because each rank's ValO chunk is exactly dof * its CGO
+    // chunk, so global index i in recvCGO maps to recvValO[i*dof + v].
     std::vector<std::vector<T>>            sendValO(npes);
     std::vector<std::vector<unsigned int>> sendDstCGO(npes);
     for (int t = 0; t < oTotal; t++) {
@@ -6363,43 +6397,52 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut) const {
         auto it = srcPosToLocalCG.find(
             std::make_tuple(oAllX[t], oAllY[t], oAllZ[t]));
         if (it == srcPosToLocalCG.end()) continue;
-        sendValO[dstRank].push_back(vecIn[it->second]);
         sendDstCGO[dstRank].push_back(oAllCG[t]);
+        for (unsigned int v = 0; v < dof; v++)
+            sendValO[dstRank].push_back(vecIn[v * srcCgSz + it->second]);
     }
 
-    std::vector<int> sCntO(npes, 0), rCntO(npes, 0);
-    for (int p = 0; p < npes; p++) sCntO[p] = (int)sendValO[p].size();
-    MPI_Alltoall(sCntO.data(), 1, MPI_INT, rCntO.data(), 1, MPI_INT, comm);
-    std::vector<int> sOffO(npes, 0), rOffO(npes, 0);
-    int totSO = 0, totRO = 0;
+    std::vector<int> sCntCGO(npes, 0), rCntCGO(npes, 0);
+    std::vector<int> sCntValO(npes, 0), rCntValO(npes, 0);
     for (int p = 0; p < npes; p++) {
-        sOffO[p] = totSO;
-        totSO += sCntO[p];
-        rOffO[p] = totRO;
-        totRO += rCntO[p];
+        sCntCGO[p]  = (int)sendDstCGO[p].size();
+        sCntValO[p] = (int)sendValO[p].size();
+    }
+    MPI_Alltoall(sCntCGO.data(), 1, MPI_INT, rCntCGO.data(), 1, MPI_INT, comm);
+    MPI_Alltoall(sCntValO.data(), 1, MPI_INT, rCntValO.data(), 1, MPI_INT,
+                 comm);
+    std::vector<int> sOffCGO(npes, 0), rOffCGO(npes, 0);
+    std::vector<int> sOffValO(npes, 0), rOffValO(npes, 0);
+    int totSCGO = 0, totRCGO = 0, totSValO = 0, totRValO = 0;
+    for (int p = 0; p < npes; p++) {
+        sOffCGO[p] = totSCGO;  totSCGO += sCntCGO[p];
+        rOffCGO[p] = totRCGO;  totRCGO += rCntCGO[p];
+        sOffValO[p] = totSValO; totSValO += sCntValO[p];
+        rOffValO[p] = totRValO; totRValO += rCntValO[p];
     }
     std::vector<T>            flatValO;
     std::vector<unsigned int> flatCGO;
-    flatValO.reserve(totSO);
-    flatCGO.reserve(totSO);
+    flatValO.reserve(totSValO);
+    flatCGO.reserve(totSCGO);
     for (int p = 0; p < npes; p++) {
         flatValO.insert(flatValO.end(), sendValO[p].begin(),
                         sendValO[p].end());
         flatCGO.insert(flatCGO.end(), sendDstCGO[p].begin(),
                        sendDstCGO[p].end());
     }
-    std::vector<T>            recvValO(totRO);
-    std::vector<unsigned int> recvCGO(totRO);
-    MPI_Alltoallv(flatValO.data(), sCntO.data(), sOffO.data(),
+    std::vector<T>            recvValO(totRValO);
+    std::vector<unsigned int> recvCGO(totRCGO);
+    MPI_Alltoallv(flatValO.data(), sCntValO.data(), sOffValO.data(),
                   par::Mpi_datatype<T>::value(), recvValO.data(),
-                  rCntO.data(), rOffO.data(),
+                  rCntValO.data(), rOffValO.data(),
                   par::Mpi_datatype<T>::value(), comm);
-    MPI_Alltoallv(flatCGO.data(), sCntO.data(), sOffO.data(),
-                  MPI_UNSIGNED, recvCGO.data(), rCntO.data(),
-                  rOffO.data(), MPI_UNSIGNED, comm);
+    MPI_Alltoallv(flatCGO.data(), sCntCGO.data(), sOffCGO.data(),
+                  MPI_UNSIGNED, recvCGO.data(), rCntCGO.data(),
+                  rOffCGO.data(), MPI_UNSIGNED, comm);
 
-    for (int i = 0; i < totRO; i++) {
-        vecOut[recvCGO[i]] = recvValO[i];
+    for (int i = 0; i < totRCGO; i++) {
+        for (unsigned int v = 0; v < dof; v++)
+            vecOut[v * dstCgSz + recvCGO[i]] = recvValO[(size_t)i * dof + v];
     }
 }
 
