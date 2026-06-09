@@ -744,6 +744,10 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
             sendB = (T*)ctx.getSendBuffer();
 
+            // threaded gather into the send buffer (disjoint writes per proc)
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for private(proc_id)
+#endif
             for (unsigned int send_p = 0; send_p < sendProcList.size();
                  send_p++) {
                 proc_id = sendProcList[send_p];
@@ -841,6 +845,10 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             // copy the recv data to the vec
             recvB = (T*)m_uiMPIContexts[ctxIndex].getRecvBuffer();
 
+            // threaded scatter from recv buffer (recvNodeSM is a permutation)
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for private(proc_id)
+#endif
             for (unsigned int recv_p = 0; recv_p < recvProcList.size();
                  recv_p++) {
                 proc_id = recvProcList[recv_p];
@@ -926,6 +934,10 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 
         if (sendBSz) {
             sendB = (T*)ctx.getSendBuffer();
+            // threaded gather into the send buffer (disjoint writes per proc)
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for private(proc_id)
+#endif
             for (unsigned int send_p = 0; send_p < sendProcList.size();
                  send_p++) {
                 proc_id = sendProcList[send_p];
@@ -1004,6 +1016,10 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
             // copy the recv data to the vec
             recvB = (T*)ctx.getRecvBuffer();
 
+            // threaded scatter from recv buffer (recvNodeSM is a permutation)
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for private(proc_id)
+#endif
             for (unsigned int recv_p = 0; recv_p < recvProcList.size();
                  recv_p++) {
                 proc_id = recvProcList[recv_p];
