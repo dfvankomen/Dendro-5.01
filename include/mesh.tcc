@@ -725,18 +725,15 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             ctx.allocateRecvBuffer((sizeof(T) * recvBSz * dof));
             recvB = (T*)ctx.getRecvBuffer();
 
-            // active recv procs
+            // active recv procs -- post into the context's by-value request
+            // vector (no per-exchange heap alloc; waited via MPI_Waitall).
+            ctx.m_recv_req.resize(recvProcList.size());
             for (unsigned int recv_p = 0; recv_p < recvProcList.size();
                  recv_p++) {
-                proc_id          = recvProcList[recv_p];
-                MPI_Request* req = new MPI_Request();
+                proc_id = recvProcList[recv_p];
                 par::Mpi_Irecv((recvB + dof * nodeRecvOffset[proc_id]),
                                dof * nodeRecvCount[proc_id], proc_id,
-                               m_uiCommTag, commActive, req);
-                ctx.getRequestList().push_back(req);
-                // std::cout << this->getMPIRank() << ": receiving from proc "
-                // << proc_id << " a total of " << dof * nodeRecvCount[proc_id]
-                // << std::endl;
+                               m_uiCommTag, commActive, &ctx.m_recv_req[recv_p]);
             }
         }
 
@@ -764,18 +761,15 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                 }
             }
 
-            // active send procs
+            // active send procs -- post into the context's by-value request
+            // vector (no per-exchange heap alloc; waited via MPI_Waitall).
+            ctx.m_send_req.resize(sendProcList.size());
             for (unsigned int send_p = 0; send_p < sendProcList.size();
                  send_p++) {
-                proc_id          = sendProcList[send_p];
-                MPI_Request* req = new MPI_Request();
+                proc_id = sendProcList[send_p];
                 par::Mpi_Isend(sendB + dof * nodeSendOffset[proc_id],
                                dof * nodeSendCount[proc_id], proc_id,
-                               m_uiCommTag, commActive, req);
-                ctx.getRequestList().push_back(req);
-                // std::cout << this->getMPIRank() << ": sending from proc " <<
-                // proc_id << " a total of " << dof * nodeSendOffset[proc_id] <<
-                // std::endl;
+                               m_uiCommTag, commActive, &ctx.m_send_req[send_p]);
             }
         }
 
@@ -834,16 +828,19 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             MPI_Abort(m_uiCommActive, 0);
         }
 
-        MPI_Status status;
-        // need to wait for the commns to finish ...
-        for (unsigned int i = 0;
-             i < m_uiMPIContexts[ctxIndex].getRequestList().size(); i++) {
-            MPI_Wait(m_uiMPIContexts[ctxIndex].getRequestList()[i], &status);
-        }
+        // wait for all posted recvs + sends (one MPI_Waitall each; the request
+        // objects live in the context -- no per-request heap free needed).
+        AsyncExchangeContex& cctx = m_uiMPIContexts[ctxIndex];
+        if (!cctx.m_recv_req.empty())
+            MPI_Waitall(cctx.m_recv_req.size(), cctx.m_recv_req.data(),
+                        MPI_STATUSES_IGNORE);
+        if (!cctx.m_send_req.empty())
+            MPI_Waitall(cctx.m_send_req.size(), cctx.m_send_req.data(),
+                        MPI_STATUSES_IGNORE);
 
         if (recvBSz) {
             // copy the recv data to the vec
-            recvB = (T*)m_uiMPIContexts[ctxIndex].getRecvBuffer();
+            recvB = (T*)cctx.getRecvBuffer();
 
             // threaded scatter from recv buffer (recvNodeSM is a permutation)
 #ifdef DENDRO_HYBRID_OMP
@@ -866,14 +863,10 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             }
         }
 
-        m_uiMPIContexts[ctxIndex].deAllocateSendBuffer();
-        m_uiMPIContexts[ctxIndex].deAllocateRecvBuffer();
-
-        for (unsigned int i = 0;
-             i < m_uiMPIContexts[ctxIndex].getRequestList().size(); i++)
-            delete m_uiMPIContexts[ctxIndex].getRequestList()[i];
-
-        m_uiMPIContexts[ctxIndex].getRequestList().clear();
+        cctx.deAllocateSendBuffer();
+        cctx.deAllocateRecvBuffer();
+        cctx.m_recv_req.clear();
+        cctx.m_send_req.clear();
 
         // remove the context ...
         m_uiMPIContexts.erase(m_uiMPIContexts.begin() + ctxIndex);
