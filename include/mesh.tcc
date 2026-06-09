@@ -3029,11 +3029,16 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
     dendro::timer::t_unzip_sync_nodalval.start();
 #endif
-    std::vector<T> edgeInpIn;
-    std::vector<T> edgeInpOut;
+    // Per-thread scratch, hoisted out of the per-element allocation path: these
+    // persist across calls (the assign() below reuses the buffer and zero-fills,
+    // bit-identical to the old resize-from-empty but skips the malloc/free on
+    // every element). thread_local keeps them race-free when many threads call
+    // getElementNodalValues concurrently in the threaded unzip precompute.
+    static thread_local std::vector<T> edgeInpIn;
+    static thread_local std::vector<T> edgeInpOut;
 
-    std::vector<T> faceInpIn;
-    std::vector<T> faceInpOut;
+    static thread_local std::vector<T> faceInpIn;
+    static thread_local std::vector<T> faceInpOut;
 
     unsigned int cnum;
     bool isHanging;
@@ -3044,11 +3049,11 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
     bool nodeStatus[OCT_DIR_TOTAL];
     for (unsigned int w = 0; w < OCT_DIR_TOTAL; w++) nodeStatus[w] = false;
 
-    edgeInpIn.resize((m_uiElementOrder + 1));
-    edgeInpOut.resize((m_uiElementOrder + 1));
+    edgeInpIn.assign((m_uiElementOrder + 1), T{});
+    edgeInpOut.assign((m_uiElementOrder + 1), T{});
 
-    faceInpIn.resize((m_uiElementOrder + 1) * (m_uiElementOrder + 1));
-    faceInpOut.resize((m_uiElementOrder + 1) * (m_uiElementOrder + 1));
+    faceInpIn.assign((m_uiElementOrder + 1) * (m_uiElementOrder + 1), T{});
+    faceInpOut.assign((m_uiElementOrder + 1) * (m_uiElementOrder + 1), T{});
 
     for (unsigned int k = 1; k < (m_uiElementOrder); k++)
         for (unsigned int j = 1; j < (m_uiElementOrder); j++)
@@ -11072,34 +11077,17 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     const double d_compar_tol  = 1e-10;
 
 #if defined(DENDRO_UNZIP_OMP)
-    // OpenMP block-parallel path. Builds a block-to-element map (inverse
-    // of m_e2b_unzip_map) then parallelizes the OUTER loop over blocks.
-    // Each block has a unique output region in uzWVec, so there is no
-    // write race across threads — even at wavelet boundaries where two
-    // contributing elements would write different values to the same
-    // block cell (an element-parallel approach is wrong for that case).
-    const size_t n_blocks = m_uiLocalBlockList.size();
-    std::vector<unsigned int> b2e_count(n_blocks, 0);
-    for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
-        if (m_e2b_unzip_counts[ele] == 0) continue;
-        const unsigned int eo = m_e2b_unzip_offset[ele];
-        for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++) {
-            b2e_count[m_e2b_unzip_map[eo + i]]++;
-        }
-    }
-    std::vector<unsigned int> b2e_offset(n_blocks + 1, 0);
-    for (size_t b = 0; b < n_blocks; b++)
-        b2e_offset[b + 1] = b2e_offset[b] + b2e_count[b];
-    std::vector<unsigned int> b2e_map(b2e_offset[n_blocks]);
-    std::vector<unsigned int> b2e_cur(n_blocks, 0);
-    for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
-        if (m_e2b_unzip_counts[ele] == 0) continue;
-        const unsigned int eo = m_e2b_unzip_offset[ele];
-        for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++) {
-            const unsigned int blk                    = m_e2b_unzip_map[eo + i];
-            b2e_map[b2e_offset[blk] + b2e_cur[blk]++] = ele;
-        }
-    }
+    // OpenMP block-parallel path. Uses the block-to-element map (inverse of
+    // m_e2b_unzip_map) and parallelizes the OUTER loop over blocks. Each block
+    // has a unique output region in uzWVec, so there is no write race across
+    // threads — even at wavelet boundaries where two contributing elements would
+    // write different values to the same block cell (an element-parallel
+    // approach is wrong for that case). The b2e CSR map is now CACHED on the
+    // mesh (built once in buildE2BlockMap) instead of rebuilt on every unzip
+    // call; alias it here so the block loop below is unchanged.
+    const size_t n_blocks                       = m_uiLocalBlockList.size();
+    const std::vector<unsigned int>& b2e_offset = m_b2e_unzip_offset;
+    const std::vector<unsigned int>& b2e_map    = m_b2e_unzip_map;
 
     // Pre-compute DG values for every element ONCE, instead of redoing
     // getElementNodalValues per (ele, blk) pair (which would be ~8x more

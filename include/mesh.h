@@ -582,6 +582,15 @@ class Mesh {
      * will be zero. */
     std::vector<unsigned int> m_e2b_unzip_counts;
 
+    /**@brief block -> element CSR map (the inverse of m_e2b_unzip_map), cached
+     * here so the threaded unzip_scatter doesn't rebuild it every call. Built
+     * once in buildE2BlockMap (DENDRO_UNZIP_OMP only); element order within each
+     * block is ascending element-id, matching the original in-unzip build so
+     * results stay bit-identical (wavelet-boundary cells are order-sensitive). */
+    std::vector<unsigned int> m_b2e_unzip_count;
+    std::vector<unsigned int> m_b2e_unzip_offset;
+    std::vector<unsigned int> m_b2e_unzip_map;
+
    private:
     /**@brief build E2N map for FEM computation*/
     void buildFEM_E2N();

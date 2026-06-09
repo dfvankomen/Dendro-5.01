@@ -208,7 +208,21 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
         m_data_ptr = GPUDevice::host_malloc<T>(m_size);
 #else
 
-#ifdef DVEC_ZERO_ALLOC
+#if defined(DENDRO_HYBRID_OMP)
+        // NUMA-aware first-touch: malloc, then zero the buffer in PARALLEL so
+        // each page is first-touched by the thread that will (mostly) use it,
+        // landing it on that thread's NUMA node — matches the per-thread deriv
+        // workspace. The zero is overwritten by init/unzip, so it's
+        // correctness-neutral and subsumes DVEC_ZERO_ALLOC's zeroing on the
+        // hybrid path. (No effect on a 1-NUMA box; matters on 2-socket nodes.)
+        m_data_ptr = (T*)malloc(sizeof(T) * m_size);
+        if (m_data_ptr != nullptr) {
+            const size_t n_   = m_size;
+            T* __restrict__ p = m_data_ptr;
+#pragma omp parallel for
+            for (size_t i = 0; i < n_; i++) p[i] = T{};
+        }
+#elif defined(DVEC_ZERO_ALLOC)
         m_data_ptr = (T*)calloc(m_size, sizeof(T));
 #else
         m_data_ptr = (T*)malloc(sizeof(T) * m_size);

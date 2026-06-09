@@ -4680,6 +4680,38 @@ void Mesh::buildE2BlockMap() {
         }
     }
 
+#ifdef DENDRO_UNZIP_OMP
+    // Build the inverse block->element CSR map ONCE here and cache it, so the
+    // threaded unzip_scatter (which only runs under DENDRO_UNZIP_OMP) doesn't
+    // rebuild it on every call. Element order within a block is ascending
+    // element-id -- identical to the original in-unzip build -- so unzip results
+    // stay bit-identical (wavelet-boundary cells are last-writer-wins).
+    {
+        const size_t n_blocks = m_uiLocalBlockList.size();
+        m_b2e_unzip_count.assign(n_blocks, 0);
+        for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+            if (m_e2b_unzip_counts[ele] == 0) continue;
+            const unsigned int eo = m_e2b_unzip_offset[ele];
+            for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++)
+                m_b2e_unzip_count[m_e2b_unzip_map[eo + i]]++;
+        }
+        m_b2e_unzip_offset.assign(n_blocks + 1, 0);
+        for (size_t b = 0; b < n_blocks; b++)
+            m_b2e_unzip_offset[b + 1] =
+                m_b2e_unzip_offset[b] + m_b2e_unzip_count[b];
+        m_b2e_unzip_map.assign(m_b2e_unzip_offset[n_blocks], 0);
+        std::vector<unsigned int> b2e_cur(n_blocks, 0);
+        for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+            if (m_e2b_unzip_counts[ele] == 0) continue;
+            const unsigned int eo = m_e2b_unzip_offset[ele];
+            for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++) {
+                const unsigned int blk = m_e2b_unzip_map[eo + i];
+                m_b2e_unzip_map[m_b2e_unzip_offset[blk] + b2e_cur[blk]++] = ele;
+            }
+        }
+    }
+#endif
+
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished building the element to block map!");
 
