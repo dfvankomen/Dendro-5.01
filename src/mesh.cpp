@@ -4681,11 +4681,8 @@ void Mesh::buildE2BlockMap() {
     }
 
 #ifdef DENDRO_UNZIP_OMP
-    // Build the inverse block->element CSR map ONCE here and cache it, so the
-    // threaded unzip_scatter (which only runs under DENDRO_UNZIP_OMP) doesn't
-    // rebuild it on every call. Element order within a block is ascending
-    // element-id -- identical to the original in-unzip build -- so unzip results
-    // stay bit-identical (wavelet-boundary cells are last-writer-wins).
+    // Cache the inverse (block->element) CSR map so unzip_scatter reuses it.
+    // Ascending element order (last-writer-wins at wavelet boundaries).
     {
         const size_t n_blocks = m_uiLocalBlockList.size();
         m_b2e_unzip_count.assign(n_blocks, 0);

@@ -138,12 +138,9 @@ class DVector {
     static void axpy(const ot::Mesh* const pMesh, T a, const DVector<T, I>& x,
                      DVector<T, I>& y, bool local_only = true);
 
-    // Fused multi-term axpy: y += sum_{j<n} coeffs[j] * srcs[j], computed in a
-    // SINGLE parallel region instead of one per term. Accumulated in order j, so
-    // it is bit-identical to calling axpy(coeffs[j], srcs[j], y) sequentially.
-    // Same local_only semantics as axpy's default. Cuts the per-RK-stage OpenMP
-    // fork/join count (the dominant cost in the "untimed" RK update at high
-    // thread counts).
+    // Fused y += sum_{j<n} coeffs[j]*srcs[j] in one parallel region (vs one per
+    // term). Order-j accumulation => bit-identical to sequential axpy; same
+    // local_only semantics. Cuts per-RK-stage fork/joins.
     static void axpy_multi(const ot::Mesh* const pMesh, unsigned int n,
                            const T* coeffs, const DVector<T, I>* const* srcs,
                            DVector<T, I>& y);
@@ -209,12 +206,8 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
 #else
 
 #if defined(DENDRO_HYBRID_OMP)
-        // NUMA-aware first-touch: malloc, then zero the buffer in PARALLEL so
-        // each page is first-touched by the thread that will (mostly) use it,
-        // landing it on that thread's NUMA node — matches the per-thread deriv
-        // workspace. The zero is overwritten by init/unzip, so it's
-        // correctness-neutral and subsumes DVEC_ZERO_ALLOC's zeroing on the
-        // hybrid path. (No effect on a 1-NUMA box; matters on 2-socket nodes.)
+        // NUMA first-touch: malloc + parallel zero so pages land on the using
+        // thread's node (matters on 2-socket nodes). Overwritten by init/unzip.
         m_data_ptr = (T*)malloc(sizeof(T) * m_size);
         if (m_data_ptr != nullptr) {
             const size_t n_   = m_size;
@@ -334,11 +327,8 @@ void DVector<T, I>::copy_data(const DVector<T, I>& v) {
 
     if (v.m_vec_loc == DVEC_LOC::HOST) {
 #ifdef DENDRO_HYBRID_OMP
-        // RK hot path: copy_data runs once per stage on the full evolution
-        // vector. The serial std::memcpy here was the unthreaded part of the
-        // RK-update ("untimed") term. Thread it so it uses parallel memory
-        // bandwidth and first-touches each thread's chunk (NUMA-friendly),
-        // mirroring the threaded axpy below. Bit-identical (plain copy).
+        // Threaded copy (was a serial memcpy): parallel bandwidth + NUMA
+        // first-touch, mirroring axpy. Bit-identical.
         const size_t n            = m_size;
         T* __restrict__ dst       = m_data_ptr;
         const T* __restrict__ src = dptr;
@@ -429,10 +419,8 @@ void DVector<T, I>::axpy_multi(const ot::Mesh* const pMesh, unsigned int n,
                                const T* coeffs,
                                const DVector<T, I>* const* srcs,
                                DVector<T, I>& y) {
-    // y[local] += sum_{j<n} coeffs[j] * srcs[j][local], accumulated in order j.
-    // Each output node is touched by exactly one thread and the per-node sum is
-    // done in the same order as the sequential axpy calls, so this is
-    // bit-identical to that sequence -- just one fork/join instead of n.
+    // Per-node sum in order j (one thread per node) => bit-identical to the
+    // sequential axpy calls, one fork/join instead of n.
     if (n == 0 || y.m_data_ptr == nullptr) return;
 
     constexpr unsigned int MAXJ = 16;

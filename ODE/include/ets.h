@@ -670,9 +670,7 @@ void ETS<T, Ctx>::evolve() {
 
             m_uiEVecTmp[0].copy_data(m_uiEVar);
 
-            // Fused stage build: tmp += sum_p (aip*dt) * StVec[p] in one
-            // parallel region instead of one axpy per nonzero term (cuts
-            // fork/join count). Bit-identical to the sequential axpy loop.
+            // Fused: tmp += sum_p (aip*dt)*StVec[p] in one region (bit-identical).
             {
                 DendroScalar a_cf[ETS_MAX_PROFILED_STAGES];
                 const DVec* a_sp[ETS_MAX_PROFILED_STAGES];
@@ -703,9 +701,7 @@ void ETS<T, Ctx>::evolve() {
 #endif
         }
 
-        // Fused final update: EVar += sum_k (bi*dt) * StVec[k] in one parallel
-        // region. Includes all k (matches the original loop, which does not
-        // skip zero bi). Bit-identical to the sequential axpy loop.
+        // Fused: EVar += sum_k (bi*dt)*StVec[k] in one region (all k; bit-identical).
         {
             DendroScalar b_cf[ETS_MAX_PROFILED_STAGES];
             const DVec* b_sp[ETS_MAX_PROFILED_STAGES];

@@ -3029,11 +3029,8 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
     dendro::timer::t_unzip_sync_nodalval.start();
 #endif
-    // Per-thread scratch, hoisted out of the per-element allocation path: these
-    // persist across calls (the assign() below reuses the buffer and zero-fills,
-    // bit-identical to the old resize-from-empty but skips the malloc/free on
-    // every element). thread_local keeps them race-free when many threads call
-    // getElementNodalValues concurrently in the threaded unzip precompute.
+    // thread_local scratch: allocated once per thread, not per element (assign()
+    // below reuses + zero-fills, so bit-identical to the old resize-from-empty).
     static thread_local std::vector<T> edgeInpIn;
     static thread_local std::vector<T> edgeInpOut;
 
@@ -11077,14 +11074,9 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     const double d_compar_tol  = 1e-10;
 
 #if defined(DENDRO_UNZIP_OMP)
-    // OpenMP block-parallel path. Uses the block-to-element map (inverse of
-    // m_e2b_unzip_map) and parallelizes the OUTER loop over blocks. Each block
-    // has a unique output region in uzWVec, so there is no write race across
-    // threads — even at wavelet boundaries where two contributing elements would
-    // write different values to the same block cell (an element-parallel
-    // approach is wrong for that case). The b2e CSR map is now CACHED on the
-    // mesh (built once in buildE2BlockMap) instead of rebuilt on every unzip
-    // call; alias it here so the block loop below is unchanged.
+    // OpenMP block-parallel path: parallelize over blocks (disjoint uzWVec
+    // output regions, so race-free even at wavelet boundaries). b2e CSR map is
+    // cached on the mesh (buildE2BlockMap); alias it to keep the loop unchanged.
     const size_t n_blocks                       = m_uiLocalBlockList.size();
     const std::vector<unsigned int>& b2e_offset = m_b2e_unzip_offset;
     const std::vector<unsigned int>& b2e_map    = m_b2e_unzip_map;
