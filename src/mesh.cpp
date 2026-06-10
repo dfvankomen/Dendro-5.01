@@ -7268,6 +7268,32 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
                   << std::endl;
     }
 
+    // nonzero `unresolved` (same-level bug-class with no local cg at the
+    // expected phys) means E2N_CG slots still route to the wrong cg after
+    // repair — silent state corruption downstream. always shout (per-rank,
+    // no collective: early-returns above make a reduce unsafe).
+    // DENDRO_E2N_AUDIT_STRICT=1 turns it into an abort for validation runs.
+    // dangling_unres is NOT included: large counts at the ghost fringe are
+    // normal (slots fed by ghost exchange, not zip) and validated benign —
+    // it stays visible in the summary line above.
+    if (unresolved > 0) {
+        std::cerr << "[E2N audit r" << m_uiActiveRank
+                  << "] WARNING: " << unresolved
+                  << " same-level E2N_CG slots left unresolved -"
+                  << " graph-mode state will be corrupted at these"
+                  << " phys positions" << std::endl;
+        static const char* strict_env =
+            DENDRO_PROBE_GETENV("DENDRO_E2N_AUDIT_STRICT");
+        if (strict_env && strict_env[0] == '1' && strict_env[1] == '\0')
+            MPI_Abort(m_uiCommActive, 1);
+    }
+    if (lastPass > 0 && passes >= 3) {
+        std::cerr << "[E2N audit r" << m_uiActiveRank
+                  << "] WARNING: repair-pass cap hit (pass 3 still patched "
+                  << lastPass << " slots); routing chains may remain"
+                  << std::endl;
+    }
+
     return patched + dangling_patched;
 }
 
@@ -18376,6 +18402,12 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     if (m_partitionOption == PartitioningOptions::NoPartition) {
         return;
     }
+
+    // any repartitioned mesh gets the consensus pos-bcast by default —
+    // correctness machinery must not depend on env setup. solvers whose
+    // validated config doesn't need it (EM4-minimal) opt out explicitly
+    // via setPosBcastEnabled(false) after the twin build.
+    m_uiPosBcastEnabled = true;
 
     constexpr size_t RANK_TEST = 2;
 

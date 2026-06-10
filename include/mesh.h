@@ -654,6 +654,14 @@ class Mesh {
     std::vector<unsigned int> m_uiZipLocalDupSrc;
     std::vector<unsigned int> m_uiZipLocalDupDst;
 
+    /** Enables broadcastCgValuesByPhysPos (the consensus pos-bcast).
+     *  Set by full-machinery solvers (NLSM/BSSN buildGraphTwin); EM4's
+     *  validated minimal config leaves it off. DENDRO_FORCE_POS_BCAST=1/0
+     *  overrides in either direction for A/B runs. Previously the bcast
+     *  was a silent no-op unless the env var was set, so validated
+     *  configs depended on ambient environment setup. */
+    bool m_uiPosBcastEnabled = false;
+
     // m_uiCanonicalOverride was an old experiment in routing zip
     // writes; superseded by the explicit zip plan
     // (m_uiZipPlanCg / m_uiZipPlanUnzipIdx) and removed.
@@ -1888,6 +1896,12 @@ class Mesh {
     inline void broadcastCgValuesByPhysPosPublic(T* vec, unsigned int dof) {
         this->broadcastCgValuesByPhysPos(vec, dof);
     }
+
+    /**@brief Enable/disable the consensus pos-bcast structurally (vs the
+     * DENDRO_FORCE_POS_BCAST env override). Full-machinery solvers set
+     * this on their graph twins; default off. */
+    inline void setPosBcastEnabled(bool on) { m_uiPosBcastEnabled = on; }
+    inline bool isPosBcastEnabled() const { return m_uiPosBcastEnabled; }
 
     /**@brief Read-only accessor for the per-element ownership masks. */
     inline const std::vector<uint32_t>& getOwnerMask() const {

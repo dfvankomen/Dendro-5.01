@@ -829,16 +829,18 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
 
 template <typename T>
 void Mesh::broadcastCgValuesByPhysPos(T* vec, unsigned int dof) {
-    // gate: DENDRO_FORCE_POS_BCAST=1 enables. Disabled by default because
-    // it costs an extra allgather + alltoallv per call. enabled by
-    // em4_partitioning.h::redistributeDVec right after the dstMesh ghost
-    // exchange to bring graph-mode's ghost cgs into bit-identity with SFC
-    // at consensus phys positions post-AMR sandwich.
+    // gate: m_uiPosBcastEnabled (set by full-machinery solvers via
+    // setPosBcastEnabled on their graph twins; EM4-minimal leaves it off
+    // since it costs an extra allgather + alltoallv per call).
+    // DENDRO_FORCE_POS_BCAST=1/0 overrides either way for A/B runs.
     if (!m_uiIsActive) return;
     if (m_uiActiveNpes <= 1) return;
     static const char* gate_env = std::getenv("DENDRO_FORCE_POS_BCAST");
-    static const bool gate_on =
-        gate_env && gate_env[0] == '1' && gate_env[1] == '\0';
+    bool gate_on = m_uiPosBcastEnabled;
+    if (gate_env && gate_env[1] == '\0') {
+        if (gate_env[0] == '1') gate_on = true;
+        if (gate_env[0] == '0') gate_on = false;
+    }
     if (!gate_on) return;
 
     const unsigned int npe = m_uiNpE;
@@ -5998,9 +6000,17 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     };
     std::unordered_map<ot::TreeNode, int, TNHash> tnToRank;
     tnToRank.reserve((size_t)total);
+    size_t tnRankDup = 0;
     for (int p = 0; p < npes; p++)
         for (int i = offs[p]; i < offs[p] + counts[p]; i++)
-            tnToRank.emplace(allLocal[i], p);
+            if (!tnToRank.emplace(allLocal[i], p).second) tnRankDup++;
+    // a duplicate TN across dst ranks violates the unique-partition
+    // contract; first-wins would silently mis-route, so shout.
+    if (tnRankDup > 0)
+        std::cerr << "[redistributeVec r" << rank << "] WARNING: "
+                  << tnRankDup << " duplicate TreeNodes across dst ranks"
+                  << " (tnToRank first-wins; routing is unreliable)"
+                  << std::endl;
 
     // ---- Step 2: walk this mesh's local elements, pack per-element DG
     //              values via E2N_CG (canonical owner's CG value) into
@@ -6122,10 +6132,15 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         (size_t)(dstMesh->getElementLocalEnd() -
                  dstMesh->getElementLocalBegin()));
     {
-        const auto* pNN = dstMesh->getAllElements().data();
+        const auto* pNN  = dstMesh->getAllElements().data();
+        size_t tnLocalDup = 0;
         for (unsigned int e = dstMesh->getElementLocalBegin();
              e < dstMesh->getElementLocalEnd(); e++)
-            tnToLocal.emplace(pNN[e], e);
+            if (!tnToLocal.emplace(pNN[e], e).second) tnLocalDup++;
+        if (tnLocalDup > 0)
+            std::cerr << "[redistributeVec r" << rank << "] WARNING: "
+                      << tnLocalDup << " duplicate TreeNodes in dst local"
+                      << " range (tnToLocal first-wins)" << std::endl;
     }
 
     // Two-pass write:
@@ -6323,6 +6338,10 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         ofgk_env && ofgk_env[0] == '1' && ofgk_env[1] == '\0';
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, unsigned int>
         srcPosToLocalCG;
+    // duplicate canonical phys here is EXPECTED in graph mode (duplicate
+    // LOCAL cgs at level-transition corners); first-wins = lowest cg, the
+    // behavior all bit-identity validation ran with. count + dbg-print only.
+    size_t posKeyDup = 0;
     if (m_uiIsActive) {
         const unsigned int srcEOrd = m_uiElementOrder;
         const auto* srcPN          = m_uiAllElements.data();
@@ -6345,7 +6364,10 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                     uint64_t z =
                         (uint64_t)srcPN[e].getZ() * srcEOrd +
                         (uint64_t)(n / ((srcEOrd + 1) * (srcEOrd + 1))) * len;
-                    srcPosToLocalCG.emplace(std::make_tuple(x, y, z), cg);
+                    if (!srcPosToLocalCG
+                             .emplace(std::make_tuple(x, y, z), cg)
+                             .second)
+                        posKeyDup++;
                 }
             }
         } else {
@@ -6369,9 +6391,21 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                 uint64_t z =
                     (uint64_t)srcPN[oe].getZ() * srcEOrd +
                     (uint64_t)(on / ((srcEOrd + 1) * (srcEOrd + 1))) * len;
-                srcPosToLocalCG.emplace(std::make_tuple(x, y, z), cg);
+                if (!srcPosToLocalCG.emplace(std::make_tuple(x, y, z), cg)
+                         .second)
+                    posKeyDup++;
             }
         }
+    }
+    {
+        static const char* rdbg_env = std::getenv("DENDRO_REDIST_DBG");
+        static const bool rdbg_on =
+            rdbg_env && rdbg_env[0] == '1' && rdbg_env[1] == '\0';
+        if (rdbg_on && posKeyDup > 0)
+            std::cout << "[redistributeVec r" << rank << "] orphan-fill map: "
+                      << posKeyDup << " duplicate canonical phys keys"
+                      << " (first-wins, expected for dup-LOCAL corners)"
+                      << std::endl;
     }
 
     // Same-rank orphans: if src and dst share this rank, write locally
