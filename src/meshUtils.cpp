@@ -20,13 +20,22 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
                  unsigned int eleOrder, MPI_Comm comm, unsigned int verbose,
                  ot::SM_TYPE sm_type, unsigned int grain_sz, double ld_tol,
                  unsigned int sf_k,
-                 unsigned int (*getWeight)(const ot::TreeNode*)) {
+                 unsigned int (*getWeight)(const ot::TreeNode*),
+                 bool pBlockSetup) {
     int rank, npes;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &npes);
 
     dendro::logger::debug(dendro::logger::Scope{"OT-MeshUtils"},
                           "Now creating the mesh from input octree");
+
+    // runtime phase profiling: DENDRO_MESH_PROF=1 (rank-0 wall times)
+    static const char* mprof_env = std::getenv("DENDRO_MESH_PROF");
+    const bool mprof_on =
+        mprof_env && mprof_env[0] == '1' && mprof_env[1] == '\0';
+    double tp_start = MPI_Wtime();
+    double tp_shrink = 0, tp_dedup = 0, tp_construct = 0, tp_balance = 0,
+           tp_ctor = 0;
 
     std::vector<ot::TreeNode> tmpNodes;
 
@@ -91,8 +100,10 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
     // ensures the octree is a the correct size for each process by better
     // distributing how many nodes go to each process. It then enforces a
     // de-duplication and a sorting by SFC
+    double tp0 = MPI_Wtime();
     shrinkOrExpandOctree(tmpNodes, ld_tol, DENDRO_DEFAULT_SF_K, isActive,
                          commActive, comm);
+    tp_shrink = MPI_Wtime() - tp0;
 
     if (!isActive)
         if (tmpNodes.size() != 0) {
@@ -120,18 +131,22 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
         std::vector<ot::TreeNode> tmpVec;
 
         // this one sorts and REMOVES DUPLICATES
+        tp0 = MPI_Wtime();
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_REMOVE_DUPLICATES, sf_k, commActive);
         std::swap(tmpNodes, tmpVec);
         tmpVec.clear();
+        tp_dedup = MPI_Wtime() - tp0;
 
         // this one sorts and CONSTRUCTS THE OCTREE
+        tp0 = MPI_Wtime();
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_CONSTRUCT_OCTREE, sf_k, commActive);
         std::swap(tmpNodes, tmpVec);
         tmpVec.clear();
+        tp_construct = MPI_Wtime() - tp0;
 
         // local size then needs to be recalculated
         localSz = tmpNodes.size();
@@ -142,10 +157,12 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
                       << std::endl;
 
         // finally we perform the balancing of the octree
+        tp0 = MPI_Wtime();
         SFC::parSort::SFC_treeSort(tmpNodes, balOct, balOct, balOct, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_BALANCE_OCTREE, sf_k, commActive);
         tmpNodes.clear();
+        tp_balance = MPI_Wtime() - tp0;
 
         localSz = balOct.size();
     }
@@ -159,8 +176,17 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
                   << std::endl;
 
     // construct the mesh from the balanced tree
-    ot::Mesh* mesh = new ot::Mesh(balOct, 1, eleOrder, comm, true, sm_type,
-                                  grain_sz, ld_tol, sf_k, getWeight);
+    tp0            = MPI_Wtime();
+    ot::Mesh* mesh = new ot::Mesh(balOct, 1, eleOrder, comm, pBlockSetup,
+                                  sm_type, grain_sz, ld_tol, sf_k, getWeight);
+    tp_ctor        = MPI_Wtime() - tp0;
+    if (mprof_on && !rank)
+        std::printf(
+            "[mesh-prof] createMesh sm=%d n=%lld: shrink=%.1f dedup=%.1f"
+            " construct=%.1f balance=%.1f ctor=%.1f total=%.1f (ms)\n",
+            (int)sm_type, (long long)globalSz, tp_shrink * 1e3, tp_dedup * 1e3,
+            tp_construct * 1e3, tp_balance * 1e3, tp_ctor * 1e3,
+            (MPI_Wtime() - tp_start) * 1e3);
     localSz        = mesh->getNumLocalMeshNodes();
     par::Mpi_Reduce(&localSz, &globalSz, 1, MPI_SUM, 0, comm);
     if (!rank)

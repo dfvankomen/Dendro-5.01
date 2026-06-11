@@ -1903,6 +1903,13 @@ class Mesh {
     inline void setPosBcastEnabled(bool on) { m_uiPosBcastEnabled = on; }
     inline bool isPosBcastEnabled() const { return m_uiPosBcastEnabled; }
 
+    /**@brief Override the block-setup flag without building/destroying
+     * any block state. Sole intended use: a transient SFC twin built with
+     * pBlockSetup=false (it never unzips) must still hand
+     * m_uiIsBlockSetup=true to ReMesh so the successor mesh it constructs
+     * builds its blocks. Do NOT use to fake block state for unzip/zip. */
+    inline void setBlockSetupFlag(bool b) { m_uiIsBlockSetup = b; }
+
     /**@brief Read-only accessor for the per-element ownership masks. */
     inline const std::vector<uint32_t>& getOwnerMask() const {
         return m_uiOwnerMask;

@@ -37,6 +37,9 @@ namespace ot {
  * @param grain_sz : grain size for the partitoning,
  * @param ld_tol : Load imbalance tolerance.
  * @param sf_k : splitter fix values.
+ * @param pBlockSetup : build the block decomposition + zip plan. Pass false
+ * for transient meshes that never unzip/zip (e.g. the SFC twin in the
+ * graph-mode AMR sandwich) — block setup dominates FDM mesh construction.
  * @return Mesh mesh object.
  */
 Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
@@ -45,7 +48,8 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
                  unsigned int grain_sz = DENDRO_DEFAULT_GRAIN_SZ,
                  double ld_tol         = DENDRO_DEFAULT_LB_TOL,
                  unsigned int sf_k     = DENDRO_DEFAULT_SF_K,
-                 unsigned int (*getWeight)(const ot::TreeNode*) = NULL);
+                 unsigned int (*getWeight)(const ot::TreeNode*) = NULL,
+                 bool pBlockSetup      = true);
 
 /**
  * @brief Generates an adaptive mesh based on the Wavelet AMR

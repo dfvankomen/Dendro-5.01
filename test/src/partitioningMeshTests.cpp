@@ -3792,11 +3792,16 @@ int main(int argc, char** argv) {
 
         for (unsigned int k = 0; k < N_CYCLES; k++) {
             // --- sandwich step 1: graph mCyc -> SFC twin (same octree) ---
+            // blockSetup=false + flag re-arm mirrors the solvers'
+            // buildSFCTwin (transient twin never unzips; ReMesh successor
+            // still inherits block setup).
             std::vector<ot::TreeNode> octCur = localOct(mCyc);
             ot::Mesh* sfcCur = ot::createMesh(
                 octCur.data(), octCur.size(), eOrder, comm, 1,
-                ot::SM_TYPE::FDM, DENDRO_GRAIN_SZ, LOAD_IMB_TOL, SPLIT_FIX);
+                ot::SM_TYPE::FDM, DENDRO_GRAIN_SZ, LOAD_IMB_TOL, SPLIT_FIX,
+                /*getWeight*/ NULL, /*blockSetup*/ false);
             sfcCur->setDomainBounds(pt_min, pt_max);
+            sfcCur->setBlockSetupFlag(true);
             std::vector<double> vSfc;
             sfcCur->createVector(vSfc, (double)0);
             mCyc->redistributeVec(sfcCur, vCyc.data(), vSfc.data());

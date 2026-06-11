@@ -102,6 +102,32 @@ on SFC → `buildGraphTwin` → `redistributeDVec` back. Implemented per solver 
 `*_partitioning.h` (EM4 `em4_base_cpy`, NLSM `nlsm-gr_copy`, BSSN
 `dendrogr_dfvk_repartitioning`).
 
+**The SFC twin is built without blocks in EM4 and BSSN (2026-06-11) — NOT
+NLSM.** NLSM's twin is not transient: nlsmCtx swaps `m_uiMesh` to the twin
+and runs the wavelet refinement decision on it (unzip + `isReMeshUnzip`),
+both in the init loop and `is_remesh()` — a no-block twin deadlocks NLSM
+init in mismatched collectives. EM4/BSSN compute flags before g2s and only
+pass the twin to ReMesh/IGT. Profiling
+(`DENDRO_MESH_PROF=1`, rank-0 phase wall times in `createMesh` + the Mesh
+ctor) showed the FDM twin ctor was ~90% block setup, and of that
+`buildZipPlan` is 75–80% and `buildUnzipCanonicalWriterTable` ~18% — graph
+machinery a transient twin never uses (it never unzips/zips; all its
+consumers — redistributeVec dst, setMeshRefinementFlags, ReMesh-as-source,
+IGT-as-source, ghost exchange, pos-bcast — read no block state, and the
+zip-sync paths early-return on empty plans). EM4/BSSN `buildSFCTwin` now
+passes `blockSetup=false` to `ot::createMesh` and then
+`setBlockSetupFlag(true)` **only** so `ReMesh`'s successor mesh (which does
+need blocks) inherits the flag. Measured: twin 281 → 38 ms/call (7.4×) on
+EM4 np=4, EM4 graph
+stress run (remesh every step) 27.2 → 22.8 s wall; bit-identity unchanged
+(EM4 A/B 96/96 lines, TEST 10 maxErr 5.3e-15). Sort/dedup/balance in
+`createMesh` measured negligible (~1.5 ms) at this scale — not worth a
+skip-balance fast path yet. Next sandwich lever: the **ReMesh successor
+mesh** pays the same ~250 ms zip-plan/canon-table cost; in graph mode it is
+also transient (only IGT dst + blockInfo donor for s2g), but it is built
+inside `Mesh::ReMesh`, so skipping needs either a build-knob plumbed through
+ReMesh or lazy zip-plan construction at first unzip/zip.
+
 | Machinery | EM4 | NLSM | BSSN | Notes |
 |---|---|---|---|---|
 | buildGraphTwin: E2E_ONLY → FDM flip → repartition | yes | yes | yes | skips the FDM build repartition would discard |

@@ -222,21 +222,47 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         t_sm               = t_sm_end - t_sm_begin;
 
         double t_blk_begin = MPI_Wtime();
+        double tb_setup = 0, tb_e2blk = 0, tb_canon = 0, tb_zip = 0,
+               tb_derive = 0;
         if (m_uiIsBlockSetup) {
+            double tb0 = MPI_Wtime();
             performBlocksSetup(m_uiCoarsetBlkLev, NULL, 0);
             // computeSMSpecialPts();
+            tb_setup = MPI_Wtime() - tb0;
+            tb0      = MPI_Wtime();
             buildE2BlockMap();
+            tb_e2blk = MPI_Wtime() - tb0;
+            tb0      = MPI_Wtime();
             buildUnzipCanonicalWriterTable();
+            tb_canon = MPI_Wtime() - tb0;
+            tb0      = MPI_Wtime();
             buildZipPlan();
+            tb_zip = MPI_Wtime() - tb0;
+            tb0    = MPI_Wtime();
             // canonical block decomposition is correct on the SFC mesh.
             // stamp each local element with its block's anchor + meta
             // so this info can ride with the element through any
             // future partition exchange.
             deriveBlockInfoFromBlocks();
+            tb_derive = MPI_Wtime() - tb0;
         }
 
         double t_blk_end = MPI_Wtime();
         t_blk            = t_blk_end - t_blk_begin;
+
+        {
+            static const char* mprof_env = std::getenv("DENDRO_MESH_PROF");
+            const bool mprof_on =
+                mprof_env && mprof_env[0] == '1' && mprof_env[1] == '\0';
+            if (mprof_on && !m_uiActiveRank)
+                std::printf(
+                    "[mesh-prof] ctor sm=%d: e2e=%.1f e2n+sm=%.1f sm_dg=%.1f"
+                    " blk=%.1f (setup=%.1f e2blk=%.1f canon=%.1f zip=%.1f"
+                    " derive=%.1f) (ms)\n",
+                    (int)smType, t_e2e * 1e3, t_e2n * 1e3, t_sm * 1e3,
+                    t_blk * 1e3, tb_setup * 1e3, tb_e2blk * 1e3,
+                    tb_canon * 1e3, tb_zip * 1e3, tb_derive * 1e3);
+        }
 
 #ifdef __PROFILE_MESH__
         par::computeOverallStats(&t_e2e, t_e2e_g, m_uiCommActive, "mesh e2e ");
@@ -472,18 +498,43 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         t_sm               = t_sm_end - t_sm_begin;
 
         double t_blk_begin = MPI_Wtime();
-
+        double tb_setup = 0, tb_e2blk = 0, tb_canon = 0, tb_zip = 0,
+               tb_derive = 0;
         if (m_uiIsBlockSetup) {
+            double tb0 = MPI_Wtime();
             performBlocksSetup(m_uiCoarsetBlkLev, blk_tags, blk_tags_sz);
             // computeSMSpecialPts();
+            tb_setup = MPI_Wtime() - tb0;
+            tb0      = MPI_Wtime();
             buildE2BlockMap();
+            tb_e2blk = MPI_Wtime() - tb0;
+            tb0      = MPI_Wtime();
             buildUnzipCanonicalWriterTable();
+            tb_canon = MPI_Wtime() - tb0;
+            tb0      = MPI_Wtime();
             buildZipPlan();
+            tb_zip = MPI_Wtime() - tb0;
+            tb0    = MPI_Wtime();
             deriveBlockInfoFromBlocks();
+            tb_derive = MPI_Wtime() - tb0;
         }
 
         double t_blk_end = MPI_Wtime();
         t_blk            = t_blk_end - t_blk_begin;
+
+        {
+            static const char* mprof_env = std::getenv("DENDRO_MESH_PROF");
+            const bool mprof_on =
+                mprof_env && mprof_env[0] == '1' && mprof_env[1] == '\0';
+            if (mprof_on && !m_uiActiveRank)
+                std::printf(
+                    "[mesh-prof] ctor sm=%d: e2e=%.1f e2n+sm=%.1f sm_dg=%.1f"
+                    " blk=%.1f (setup=%.1f e2blk=%.1f canon=%.1f zip=%.1f"
+                    " derive=%.1f) (ms)\n",
+                    (int)m_uiScatterMapType, t_e2e * 1e3, t_e2n * 1e3,
+                    t_sm * 1e3, t_blk * 1e3, tb_setup * 1e3, tb_e2blk * 1e3,
+                    tb_canon * 1e3, tb_zip * 1e3, tb_derive * 1e3);
+        }
 
 #ifdef __PROFILE_MESH__
         par::computeOverallStats(&t_e2e, t_e2e_g, m_uiCommActive, "mesh e2e ");
