@@ -571,6 +571,64 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
             }
         }
 
+        // Containment-rescue pass (2026-06-11): SFC_treeSearch above
+        // assumes m_uiAllElements is SFC-sorted and the splitters
+        // describe SFC ranges — both false on graph-partitioned meshes,
+        // where lookups fail luck-dependently (the BSSN BH-tracker "key
+        // not found" noise; froze puncture tracking under graph mode).
+        // For every point this rank has not already resolved, scan the
+        // LOCAL element range for direct containment (local ranges are
+        // disjoint, so globally at most one rank rescues each point).
+        // No-op when the search above succeeded everywhere.
+        {
+            std::vector<bool> found(numPts, false);
+            for (unsigned int v : validIndices)
+                if (v < numPts) found[v] = true;
+            for (unsigned int i = 0; i < numPts; i++) {
+                if (found[i]) continue;
+                const unsigned int ox = (unsigned int)(grid_limit[0].x() +
+                    (domain_coords[m_uiDim * i + 0] - domain_limit[0].x()) *
+                        (gridRangeX / domainRangeX));
+                const unsigned int oy = (unsigned int)(grid_limit[0].y() +
+                    (domain_coords[m_uiDim * i + 1] - domain_limit[0].y()) *
+                        (gridRangeY / domainRangeY));
+                const unsigned int oz = (unsigned int)(grid_limit[0].z() +
+                    (domain_coords[m_uiDim * i + 2] - domain_limit[0].z()) *
+                        (gridRangeZ / domainRangeZ));
+                for (unsigned int e = localElementBegin; e < localElementEnd;
+                     e++) {
+                    const ot::TreeNode& el = meshOctree[e];
+                    if (ox < el.minX() || ox >= el.maxX()) continue;
+                    if (oy < el.minY() || oy >= el.maxY()) continue;
+                    if (oz < el.minZ() || oz >= el.maxZ()) continue;
+
+                    Point r_min(
+                        domain_limit[0].x() + ((el.minX() - grid_limit[0].x()) *
+                                               (domainRangeX / gridRangeX)),
+                        domain_limit[0].y() + ((el.minY() - grid_limit[0].y()) *
+                                               (domainRangeY / gridRangeY)),
+                        domain_limit[0].z() + ((el.minZ() - grid_limit[0].z()) *
+                                               (domainRangeZ / gridRangeZ)));
+                    Point r_max(
+                        domain_limit[0].x() + ((el.maxX() - grid_limit[0].x()) *
+                                               (domainRangeX / gridRangeX)),
+                        domain_limit[0].y() + ((el.maxY() - grid_limit[0].y()) *
+                                               (domainRangeY / gridRangeY)),
+                        domain_limit[0].z() + ((el.maxZ() - grid_limit[0].z()) *
+                                               (domainRangeZ / gridRangeZ)));
+
+                    double c[3];
+                    c[0]   = domain_coords[m_uiDim * i];
+                    c[1]   = domain_coords[m_uiDim * i + 1];
+                    c[2]   = domain_coords[m_uiDim * i + 2];
+                    out[i] = lagrangeInterpElementToCoord(
+                        mesh, in, c, r_min, r_max, e, mesh->getElementOrder());
+                    validIndices.push_back(i);
+                    break;
+                }
+            }
+        }
+
         std::sort(validIndices.begin(), validIndices.end());
         meshOctree.clear();
     }

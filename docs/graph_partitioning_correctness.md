@@ -122,11 +122,42 @@ EM4 np=4, EM4 graph
 stress run (remesh every step) 27.2 → 22.8 s wall; bit-identity unchanged
 (EM4 A/B 96/96 lines, TEST 10 maxErr 5.3e-15). Sort/dedup/balance in
 `createMesh` measured negligible (~1.5 ms) at this scale — not worth a
-skip-balance fast path yet. Next sandwich lever: the **ReMesh successor
-mesh** pays the same ~250 ms zip-plan/canon-table cost; in graph mode it is
-also transient (only IGT dst + blockInfo donor for s2g), but it is built
-inside `Mesh::ReMesh`, so skipping needs either a build-knob plumbed through
-ReMesh or lazy zip-plan construction at first unzip/zip.
+skip-balance fast path yet.
+
+**Zip plan + canon-writer table: eager by default; `DENDRO_LAZY_ZIPPLAN=1`
+opt-in (2026-06-11).** Lazy construction (defer both to first
+`unzip_scatter`/`zip` via `ensureZipPlanBuilt()`, mesh.h) lets the ReMesh
+successor mesh in the graph sandwich skip them entirely — measured savings
+~250 ms/remesh at EM4 scale and **~1.4 s/remesh at BSSN scale** (successor
+ctor blk=1395 ms = zip-plan 1135 + canon-table 230). EM4 lazy was
+bit-identical and NLSM A/B clean, BUT lazy mode exposed a **NaN in BSSN BBH
+graph runs** (EV at the punctures goes NaN mid-step-4 with bit-identical BH
+trajectories through step 3, before any sandwich; eager mode with identical
+machinery is clean) — the signature of an allocation-timing-dependent
+uninitialized read somewhere in the BSSN pipeline, not a plan-content
+difference. Until that read is found (sanitizer hunt, see §8), lazy stays
+opt-in. Two hardenings landed alongside, active in BOTH modes:
+- `Mesh::unifyE2NCgAcrossTNInstances()` — the E2N_CG cross-instance repair
+  formerly buried at the END of `buildZipPlan` (it MUTATES E2N_CG, so
+  deferring it with the plan changed mesh semantics). Now hoisted: runs
+  eagerly in both ctors and (idempotently) in `buildZipPlan` so the
+  repartition path is unchanged. No-op on unique-TN (all ctor-built SFC)
+  meshes.
+- **Graph-safe `interpolateToCoords`** (include/daUtils.tcc): the SFC
+  splitter+`SFC_treeSearch` point lookup silently fails on
+  graph-partitioned meshes (unsorted `m_uiAllElements`, non-SFC splitters)
+  — the BSSN BH-tracker "key not found" noise; in BBH runs the tracker was
+  search-blind to one puncture for its first steps in EVERY config, with
+  recovery by luck. A containment-rescue pass now scans the LOCAL element
+  range for any point the SFC search failed to resolve (disjoint local
+  ranges → at most one rank rescues each point; no-op when the search
+  succeeds). BH punctures are now found deterministically from step 1.
+
+BSSN BBH sandwich, np=4, steady state over 44 sandwiches (default
+semantics, no env): **g2s 1653 → ~365 ms (4.5×)**, s2g ~256 ms,
+remesh+IGT ~1760 ms (dominated by the successor's eager zip-plan ~1.4 s —
+the opt-in lazy prize), **total 3460 → ~2385 ms (31%)**; mesh stable,
+punctures inspiraling smoothly.
 
 | Machinery | EM4 | NLSM | BSSN | Notes |
 |---|---|---|---|---|
@@ -216,12 +247,17 @@ run is silently SFC and proves nothing.
 
 ## 8. Open items / follow-ups
 
-1. **BSSN BH-tracker ~55k "rank N key not found"** (tracking still correct).
-   Suspect: point lookup assuming SFC-sorted `m_uiAllElements` (splitter
-   search / `binary_search`). Recipe: find the tracker's point-locate call in
-   dendrogr, check what it searches; if SFC-based, route through
-   `findContainingElementInAllNodes` (spatial hash is cleared after block
-   setup — may need an on-demand rebuild).
+1. **Hunt the BSSN lazy-mode NaN** (unblocks ~1.4 s/remesh): EV at the
+   punctures goes NaN at step 4 of a BBH graph run when `DENDRO_LAZY_ZIPPLAN=1`,
+   after three bit-identical steps; eager is clean. Allocation timing is the
+   only difference → almost certainly an uninitialized read whose content
+   shifts with heap layout. Reproducer: bssn_smoke `bhloc.toml`, np=4,
+   `DENDRO_LAZY_ZIPPLAN=1`, watch "Black Hole 1 new position" go NaN by
+   sample 4. Hunt with ASan/MSan or valgrind on a small config.
+1b. ~~BSSN BH-tracker ~55k "rank N key not found"~~ **FIXED 2026-06-11**
+   (containment rescue in `interpolateToCoords`, see §4). Residual "not
+   found" prints from the SFC-search stage are now informational only —
+   every point gets rescued; consider silencing the print.
 2. **Test gaps:** no dendrolib dof>1 redistribute test (solver-level only);
    suite exercised mainly at np=4, maxDepth=7; no empty-rank (inactive-rank)
    test; no standalone `redistributeFlags` test; OMP path unvalidated;

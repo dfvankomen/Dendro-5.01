@@ -6497,6 +6497,7 @@ void Mesh::zip(const T* unzippedVec, T* zippedVec) {
     static const bool use_legacy =
         legacy_env && legacy_env[0] == '1' && legacy_env[1] == '\0';
     if (!use_legacy) {
+        ensureZipPlanBuilt();
         const size_t N = m_uiZipPlanCg.size();
         const unsigned int* __restrict__ cgs   = m_uiZipPlanCg.data();
         const unsigned int* __restrict__ idxs  = m_uiZipPlanUnzipIdx.data();
@@ -13066,6 +13067,12 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
 
 template <typename T>
 void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
+    // first unzip on a ctor-built mesh builds the deferred canon-writer
+    // table + zip plan (no-op on graph meshes — repartitionMeshGlobal
+    // builds them eagerly). collective-safe: unzip is called by all
+    // active ranks together, same pattern as the old ctor-time build.
+    ensureZipPlanBuilt();
+
     // probe: dump INPUT cg values at start of unzip. gates same as bbuf
     // dump (DENDRO_BBUF_DUMP_DIR / MIN_CALL / MAX_CALL). file name uses
     // "ucgin" prefix to distinguish from bbuf dumps.

@@ -232,13 +232,31 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             tb0      = MPI_Wtime();
             buildE2BlockMap();
             tb_e2blk = MPI_Wtime() - tb0;
-            tb0      = MPI_Wtime();
-            buildUnzipCanonicalWriterTable();
-            tb_canon = MPI_Wtime() - tb0;
-            tb0      = MPI_Wtime();
-            buildZipPlan();
-            tb_zip = MPI_Wtime() - tb0;
-            tb0    = MPI_Wtime();
+            // E2N repair must be eager (mutates E2N_CG; no-op on unique-TN
+            // SFC meshes).
+            unifyE2NCgAcrossTNInstances();
+            // canon-writer table + zip plan: built eagerly BY DEFAULT.
+            // DENDRO_LAZY_ZIPPLAN=1 defers them to first unzip/zip
+            // (ensureZipPlanBuilt) — saves ~1.4s/sandwich at BSSN scale
+            // (transient ReMesh successors never use them) but exposed an
+            // allocation-timing NaN in BSSN BBH (2026-06-11, see
+            // docs/graph_partitioning_correctness.md) — keep opt-in until
+            // that uninitialized-read is hunted down.
+            {
+                static const char* lzp_env =
+                    std::getenv("DENDRO_LAZY_ZIPPLAN");
+                static const bool lzp_on =
+                    lzp_env && lzp_env[0] == '1' && lzp_env[1] == '\0';
+                if (!lzp_on) {
+                    tb0 = MPI_Wtime();
+                    buildUnzipCanonicalWriterTable();
+                    tb_canon = MPI_Wtime() - tb0;
+                    tb0      = MPI_Wtime();
+                    buildZipPlan();
+                    tb_zip = MPI_Wtime() - tb0;
+                }
+            }
+            tb0 = MPI_Wtime();
             // canonical block decomposition is correct on the SFC mesh.
             // stamp each local element with its block's anchor + meta
             // so this info can ride with the element through any
@@ -508,13 +526,25 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             tb0      = MPI_Wtime();
             buildE2BlockMap();
             tb_e2blk = MPI_Wtime() - tb0;
-            tb0      = MPI_Wtime();
-            buildUnzipCanonicalWriterTable();
-            tb_canon = MPI_Wtime() - tb0;
-            tb0      = MPI_Wtime();
-            buildZipPlan();
-            tb_zip = MPI_Wtime() - tb0;
-            tb0    = MPI_Wtime();
+            // E2N repair must be eager (see non-weighted ctor).
+            unifyE2NCgAcrossTNInstances();
+            // canon-writer table + zip plan: eager by default,
+            // DENDRO_LAZY_ZIPPLAN=1 defers — see the non-weighted ctor.
+            {
+                static const char* lzp_env =
+                    std::getenv("DENDRO_LAZY_ZIPPLAN");
+                static const bool lzp_on =
+                    lzp_env && lzp_env[0] == '1' && lzp_env[1] == '\0';
+                if (!lzp_on) {
+                    tb0 = MPI_Wtime();
+                    buildUnzipCanonicalWriterTable();
+                    tb_canon = MPI_Wtime() - tb0;
+                    tb0      = MPI_Wtime();
+                    buildZipPlan();
+                    tb_zip = MPI_Wtime() - tb0;
+                }
+            }
+            tb0 = MPI_Wtime();
             deriveBlockInfoFromBlocks();
             tb_derive = MPI_Wtime() - tb0;
         }
@@ -7348,9 +7378,124 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
     return patched + dangling_patched;
 }
 
+void Mesh::unifyE2NCgAcrossTNInstances() {
+    // E2N_CG cross-instance unification (hoisted out of buildZipPlan
+    // 2026-06-11 so it runs EAGERLY at mesh build — it mutates E2N_CG,
+    // so deferring it with the lazy zip plan changed mesh semantics).
+    //
+    // When the mesh has multiple instances of the same TreeNode in
+    // m_uiAllElements (deeper ghost layers from R2/R3 fetch), each
+    // instance gets its own cascade walk producing E2N_CG entries. For
+    // instances with incomplete neighbor sets (deeper ghosts) the walk
+    // lands at wrong cgs. Cascade is deterministic: instances of the
+    // same TN SHOULD produce identical E2N_CG; where they differ, the
+    // instance whose routed cg's phys_pos matches the (e, sub) phys_pos
+    // is correct — override the others. No-op on meshes with unique TNs
+    // (every ctor-built SFC mesh).
+    if (!m_uiIsActive) return;
+    if (m_uiE2NMapping_CG.empty() || m_uiCG2DG.empty()) return;
+
+    const unsigned int npe     = m_uiNpE;
+    const unsigned int eOrd    = m_uiElementOrder;
+    const size_t nElTot        = m_uiAllElements.size();
+    const ot::TreeNode* pNodes = m_uiAllElements.data();
+
+    auto encodeKey = [&](unsigned int e, unsigned int n,
+                         unsigned long long& x, unsigned long long& y,
+                         unsigned long long& z) {
+        unsigned long long len =
+            (unsigned long long)1 << (m_uiMaxDepth - pNodes[e].getLevel());
+        unsigned int ni = n % (eOrd + 1);
+        unsigned int nj = (n / (eOrd + 1)) % (eOrd + 1);
+        unsigned int nk = n / ((eOrd + 1) * (eOrd + 1));
+        x               = (unsigned long long)pNodes[e].getX() * eOrd +
+            (unsigned long long)ni * len;
+        y = (unsigned long long)pNodes[e].getY() * eOrd +
+            (unsigned long long)nj * len;
+        z = (unsigned long long)pNodes[e].getZ() * eOrd +
+            (unsigned long long)nk * len;
+    };
+
+    struct TNKey {
+        unsigned int x, y, z, lev;
+        bool operator==(const TNKey& o) const {
+            return x == o.x && y == o.y && z == o.z && lev == o.lev;
+        }
+    };
+    struct TNKeyHash {
+        size_t operator()(const TNKey& k) const {
+            size_t h = std::hash<unsigned int>()(k.x);
+            h ^= std::hash<unsigned int>()(k.y) << 1;
+            h ^= std::hash<unsigned int>()(k.z) << 2;
+            h ^= std::hash<unsigned int>()(k.lev) << 3;
+            return h;
+        }
+    };
+    std::unordered_map<TNKey, std::vector<unsigned int>, TNKeyHash> tnGroups;
+    for (unsigned int e = 0; e < nElTot; e++) {
+        TNKey k{pNodes[e].getX(), pNodes[e].getY(), pNodes[e].getZ(),
+                pNodes[e].getLevel()};
+        tnGroups[k].push_back(e);
+    }
+    size_t e2n_cross_fixed = 0;
+    for (auto& kv : tnGroups) {
+        if (kv.second.size() <= 1) continue;
+        for (unsigned int sub = 0; sub < npe; sub++) {
+            unsigned long long ex, ey, ez;
+            encodeKey(kv.second[0], sub, ex, ey, ez);
+            unsigned int best_cg = LOOK_UP_TABLE_DEFAULT;
+            for (unsigned int e : kv.second) {
+                unsigned int cg = m_uiE2NMapping_CG[e * npe + sub];
+                if (cg >= m_uiCG2DG.size()) continue;
+                unsigned int dg = m_uiCG2DG[cg];
+                if (dg == LOOK_UP_TABLE_DEFAULT) continue;
+                unsigned int oe = dg / npe;
+                unsigned int os = dg % npe;
+                if (oe >= nElTot) continue;
+                unsigned long long rx, ry, rz;
+                encodeKey(oe, os, rx, ry, rz);
+                if (rx == ex && ry == ey && rz == ez) {
+                    best_cg = cg;
+                    break;
+                }
+            }
+            if (best_cg == LOOK_UP_TABLE_DEFAULT) continue;
+            for (unsigned int e : kv.second) {
+                unsigned int cg = m_uiE2NMapping_CG[e * npe + sub];
+                if (cg == best_cg) continue;
+                bool wrong = (cg >= m_uiCG2DG.size());
+                if (!wrong) {
+                    unsigned int dg = m_uiCG2DG[cg];
+                    if (dg == LOOK_UP_TABLE_DEFAULT) {
+                        wrong = true;
+                    } else {
+                        unsigned int oe = dg / npe;
+                        unsigned int os = dg % npe;
+                        if (oe >= nElTot)
+                            wrong = true;
+                        else {
+                            unsigned long long rx, ry, rz;
+                            encodeKey(oe, os, rx, ry, rz);
+                            if (rx != ex || ry != ey || rz != ez) wrong = true;
+                        }
+                    }
+                }
+                if (wrong) {
+                    m_uiE2NMapping_CG[e * npe + sub] = best_cg;
+                    e2n_cross_fixed++;
+                }
+            }
+        }
+    }
+    (void)e2n_cross_fixed;
+}
+
 void Mesh::buildZipPlan() {
     m_uiZipPlanCg.clear();
     m_uiZipPlanUnzipIdx.clear();
+    // mark before the guards: an early-return below means the plan is
+    // legitimately empty for this rank, not "retry on next ensure".
+    m_uiZipPlanBuilt = true;
     if (!m_uiIsActive) return;
     if (!m_uiIsBlockSetup) return;
     if (m_uiLocalBlockList.empty()) return;
@@ -8387,98 +8532,10 @@ void Mesh::buildZipPlan() {
     }
 
     // ---- E2N_CG cross-instance unification ----
-    //
-    // When the mesh has multiple instances of the same TreeNode in
-    // m_uiAllElements (deeper ghost layers from R2/R3 fetch), each
-    // instance gets its own cascade walk producing E2N_CG entries.
-    // For instances with incomplete neighbor sets (deeper ghosts), the
-    // walk lands at wrong cgs — observed at level-transition edges
-    // where elem 1056 sub (0,6,3) routes to a cg whose phys_pos is
-    // off by 8 grid units in Z.
-    //
-    // Cascade is deterministic: any two instances of the same TN
-    // SHOULD produce identical E2N_CG. When they don't, the one whose
-    // routed cg's phys_pos matches the (e, sub) phys_pos is correct;
-    // others are wrong. Override wrong instances to use the correct.
-    {
-        struct TNKey {
-            unsigned int x, y, z, lev;
-            bool operator==(const TNKey& o) const {
-                return x == o.x && y == o.y && z == o.z && lev == o.lev;
-            }
-        };
-        struct TNKeyHash {
-            size_t operator()(const TNKey& k) const {
-                size_t h = std::hash<unsigned int>()(k.x);
-                h ^= std::hash<unsigned int>()(k.y) << 1;
-                h ^= std::hash<unsigned int>()(k.z) << 2;
-                h ^= std::hash<unsigned int>()(k.lev) << 3;
-                return h;
-            }
-        };
-        std::unordered_map<TNKey, std::vector<unsigned int>, TNKeyHash>
-            tnGroups;
-        for (unsigned int e = 0; e < nElTot; e++) {
-            TNKey k{pNodes[e].getX(), pNodes[e].getY(),
-                    pNodes[e].getZ(), pNodes[e].getLevel()};
-            tnGroups[k].push_back(e);
-        }
-        size_t e2n_cross_fixed = 0;
-        for (auto& kv : tnGroups) {
-            if (kv.second.size() <= 1) continue;
-            for (unsigned int sub = 0; sub < npe; sub++) {
-                unsigned long long ex, ey, ez;
-                encodeKey(kv.second[0], sub, ex, ey, ez);
-                unsigned int best_cg = LOOK_UP_TABLE_DEFAULT;
-                for (unsigned int e : kv.second) {
-                    unsigned int cg = m_uiE2NMapping_CG[e * npe + sub];
-                    if (cg >= m_uiCG2DG.size()) continue;
-                    unsigned int dg = m_uiCG2DG[cg];
-                    if (dg == LOOK_UP_TABLE_DEFAULT) continue;
-                    unsigned int oe = dg / npe;
-                    unsigned int os = dg % npe;
-                    if (oe >= nElTot) continue;
-                    unsigned long long rx, ry, rz;
-                    encodeKey(oe, os, rx, ry, rz);
-                    if (rx == ex && ry == ey && rz == ez) {
-                        best_cg = cg;
-                        break;
-                    }
-                }
-                if (best_cg == LOOK_UP_TABLE_DEFAULT) continue;
-                for (unsigned int e : kv.second) {
-                    unsigned int cg = m_uiE2NMapping_CG[e * npe + sub];
-                    if (cg == best_cg) continue;
-                    bool wrong = (cg >= m_uiCG2DG.size());
-                    if (!wrong) {
-                        unsigned int dg = m_uiCG2DG[cg];
-                        if (dg == LOOK_UP_TABLE_DEFAULT) {
-                            wrong = true;
-                        } else {
-                            unsigned int oe = dg / npe;
-                            unsigned int os = dg % npe;
-                            if (oe >= nElTot) wrong = true;
-                            else {
-                                unsigned long long rx, ry, rz;
-                                encodeKey(oe, os, rx, ry, rz);
-                                if (rx != ex || ry != ey || rz != ez)
-                                    wrong = true;
-                            }
-                        }
-                    }
-                    if (wrong) {
-                        m_uiE2NMapping_CG[e * npe + sub] = best_cg;
-                        e2n_cross_fixed++;
-                    }
-                }
-            }
-        }
-        if (dbgWinnerCleanup) {
-            std::cout << "[passd-cleanup r" << m_uiActiveRank
-                      << "] E2N_CG cross-TN unify: fixed="
-                      << e2n_cross_fixed << std::endl;
-        }
-    }
+    // hoisted into Mesh::unifyE2NCgAcrossTNInstances (runs eagerly at
+    // mesh build since it mutates E2N_CG; re-run here so the
+    // repartition path keeps its original ordering — idempotent).
+    this->unifyE2NCgAcrossTNInstances();
 }
 
 void Mesh::computeNodalScatterMapDG(MPI_Comm comm) {

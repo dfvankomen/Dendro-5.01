@@ -545,6 +545,14 @@ class Mesh {
     std::vector<unsigned int> m_uiZipPlanCg;
     std::vector<unsigned int> m_uiZipPlanUnzipIdx;
 
+    /** Lazy-build marker for the zip plan (+ canon-writer table). The
+     *  ctor defers both to first unzip/zip — transient meshes (ReMesh
+     *  successor in the graph sandwich) never pay the ~90% of FDM block
+     *  setup they represent. repartitionMeshGlobal still builds eagerly
+     *  (graph meshes need the sync side-channels before first ghost
+     *  exchange). */
+    bool m_uiZipPlanBuilt = false;
+
     /** Per-element 27-bit ownership mask (eOrd=2 representative
      *  layout). Bit r ∈ [0, 27) is set iff this element owns the
      *  sub-node at representative r = nk*9 + nj*3 + ni for ni,nj,nk
@@ -1239,6 +1247,21 @@ class Mesh {
      * mesh change. */
     void buildZipPlan();
 
+    /**@brief Unify E2N_CG across duplicate TreeNode instances (deeper
+     * ghost layers). Mutates E2N_CG, so it must run eagerly at mesh
+     * build — NOT deferred with the lazy zip plan. Idempotent; no-op on
+     * meshes with unique TNs (all ctor-built SFC meshes). */
+    void unifyE2NCgAcrossTNInstances();
+
+    /**@brief Lazy entry for the deferred ctor-time zip plan: builds the
+     * canon-writer table + zip plan on first unzip/zip. No-op once built
+     * (repartitionMeshGlobal's direct builder calls also satisfy it). */
+    inline void ensureZipPlanBuilt() {
+        if (m_uiZipPlanBuilt) return;
+        if (!m_uiUnzipCanonWriterBuilt) buildUnzipCanonicalWriterTable();
+        buildZipPlan();
+    }
+
     /**@brief Derive the per-element 27-bit ownership mask
      * (m_uiOwnerMask) from the current cascade output. For each
      * element e, walk the 27 representative sub-nodes (eOrd=2
@@ -1909,6 +1932,11 @@ class Mesh {
      * m_uiIsBlockSetup=true to ReMesh so the successor mesh it constructs
      * builds its blocks. Do NOT use to fake block state for unzip/zip. */
     inline void setBlockSetupFlag(bool b) { m_uiIsBlockSetup = b; }
+
+    /**@brief Public entry for the lazy zip-plan build (see
+     * ensureZipPlanBuilt). For callers that need the plan's side-channel
+     * products (zip-sync maps etc.) before any unzip/zip runs. */
+    inline void ensureZipPlanBuiltPublic() { this->ensureZipPlanBuilt(); }
 
     /**@brief Read-only accessor for the per-element ownership masks. */
     inline const std::vector<uint32_t>& getOwnerMask() const {
