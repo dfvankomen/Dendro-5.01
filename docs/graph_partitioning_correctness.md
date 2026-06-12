@@ -247,13 +247,38 @@ run is silently SFC and proves nothing.
 
 ## 8. Open items / follow-ups
 
-1. **Hunt the BSSN lazy-mode NaN** (unblocks ~1.4 s/remesh): EV at the
-   punctures goes NaN at step 4 of a BBH graph run when `DENDRO_LAZY_ZIPPLAN=1`,
-   after three bit-identical steps; eager is clean. Allocation timing is the
-   only difference → almost certainly an uninitialized read whose content
-   shifts with heap layout. Reproducer: bssn_smoke `bhloc.toml`, np=4,
-   `DENDRO_LAZY_ZIPPLAN=1`, watch "Black Hole 1 new position" go NaN by
-   sample 4. Hunt with ASan/MSan or valgrind on a small config.
+1. ~~Hunt the BSSN lazy-mode NaN~~ **RESOLVED 2026-06-12.** The "lazy NaN"
+   was three stacked defects, none specific to lazy:
+   (a) `redistributeVec` left undelivered dst cgs (and the whole dst ghost
+   region) holding undefined buffer contents — now: full delivery-coverage
+   bitmap + deterministic fill (solver-registered `setPhantomFillValues`,
+   default 0) + ghost-region zeroing + a loud warning;
+   (b) graph local element ranges contain coarse duplicate instances
+   overlapping true leaves, whose E2N routes to phantom cgs (the
+   `dangling_unres` class — NOT benign for direct E2N readers): the BH
+   tracker interpolated those — now `interpolateToCoords` picks the
+   DEEPEST containing local element and `computeBHLocations` resolves
+   cross-rank claims depth-wins;
+   (c) `enforce_bssn_constraints` guarded only det<0 (with an `exit(0)`
+   and an unreachable FIXME flat-reset) — exact-zero metric data flowed
+   into det^(-1/3) → NaN that spread via unzip padding. Now det<=0 resets
+   the point to flat space (At zeroed, warn-limited).
+   The eager/lazy difference was pure heap-layout luck on the undefined
+   reads — the validated June baselines carried finite garbage at phantom
+   cgs and a tracker that was search-blind to one puncture for its first
+   steps. Post-fix: BBH graph clean in BOTH modes (default: 89 sandwiches,
+   zero non-finite EV, stable mesh, smooth inspiral; lazy reproducer:
+   clean through 7 sandwiches). `DENDRO_LAZY_ZIPPLAN=1` remains opt-in
+   pending a long-haul lazy A/B. UBSan also flagged + fixed: f2o
+   wavelet-split at maxDepth (UB shift + illegal children), 32-bit
+   blockVolume shift, empty-vector deref in
+   enforceSiblingsAreNotPartitioned. Diagnostics kept (env-gated):
+   `DENDRO_NAN_SCAN=1` per-phase non-finite scanner + 
+   `DENDRO_NAN_SCAN_DUMP_CG=<cg>` value dump in ets.h,
+   `DENDRO_INTERP_PROBE=1` in daUtils. LESSON: `DENDRO_PROBE_GETENV`
+   compiles to nullptr without the `DENDRO_ENABLE_DEBUG_PROBES` build
+   option — new probes must use plain `std::getenv` or positive-control
+   the detector first.
 1b. ~~BSSN BH-tracker ~55k "rank N key not found"~~ **FIXED 2026-06-11**
    (containment rescue in `interpolateToCoords`, see §4). Residual "not
    found" prints from the SFC-search stage are now informational only —

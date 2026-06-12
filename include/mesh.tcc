@@ -1180,11 +1180,15 @@ void Mesh::broadcastCgValuesByPhysPos(T* vec, unsigned int dof) {
         auto wit = winners.find(k);
         if (wit == winners.end()) continue;
         if (wit->second.is_local) continue;  // some rank owns it; keep value
-        // no local writer anywhere — zero out my cg at this position
+        // no local writer anywhere — reset my cg at this position to the
+        // solver-registered phantom value (default 0; BSSN registers
+        // flat space — a zero metric NaNs its constraint enforcement).
         const unsigned int my_cg = myClaims[i].cg;
         for (unsigned int v = 0; v < dof; v++) {
-            T* vp = vec + v * nTotal_cg;
-            vp[my_cg] = (T)0;
+            T* vp     = vec + v * nTotal_cg;
+            vp[my_cg] = (v < m_uiPhantomFill.size())
+                            ? (T)m_uiPhantomFill[v]
+                            : (T)0;
         }
     }
 }
@@ -5937,7 +5941,9 @@ void Mesh::syncLocalNodalDGFromCG(const T* vec) {
 
 template <typename T>
 void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
-                           unsigned int dof) const {
+                           unsigned int dof,
+                           std::vector<unsigned int>* unfilledOut) const {
+    if (unfilledOut) unfilledOut->clear();
     // Redistribute `dof` CG fields across a partition change. `this`
     // (source) and `dstMesh` (target) contain the same global element set.
     // vecIn is laid out [dof][src CG size], vecOut [dof][dst CG size]:
@@ -6158,6 +6164,31 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     const unsigned int numLocalEle = dstMesh->getElementLocalEnd() - dstEleBegin;
     std::vector<unsigned char> cgWrittenAuth(
         dstNodeLocalEnd - dstNodeLocalBegin, 0);
+    // full delivery coverage over dst-LOCAL cgs: marked by EVERY write
+    // path (auth, non-auth, orphan fills). Anything still unmarked at the
+    // end gets zero-filled — unwritten local cgs used to inherit
+    // undefined buffer contents (NaN heap garbage on a fresh DVec at the
+    // initial swap; root cause of the 2026-06-12 BSSN BBH tracker NaN).
+    std::vector<unsigned char> cgWrittenAny(
+        dstNodeLocalEnd - dstNodeLocalBegin, 0);
+    // dst GHOST regions: a fresh DVec's ghost slots are undefined until
+    // the first standard exchange delivers them, but the zip-sync mirror
+    // paths inside performGhostExchange can copy ghost->local BEFORE that
+    // delivery (Fix B's "stale ghost" class). Zero them so every read is
+    // defined.
+    {
+        const unsigned int dstCgTot = (unsigned int)dstCgSz;
+        for (unsigned int v = 0; v < dof; v++) {
+            for (unsigned int cg = 0; cg < dstNodeLocalBegin; cg++)
+                vecOut[(size_t)v * dstCgSz + cg] = (T)0;
+            for (unsigned int cg = dstNodeLocalEnd; cg < dstCgTot; cg++)
+                vecOut[(size_t)v * dstCgSz + cg] = (T)0;
+        }
+    }
+    auto markWritten = [&](unsigned int cg) {
+        if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd)
+            cgWrittenAny[cg - dstNodeLocalBegin] = 1;
+    };
     // resolve tnToLocal once per recvTN entry (was 3x: pass 1, pass 2,
     // and the separate localDG-fill pass).
     std::vector<int> eAbs(recvTN.size(), -1);
@@ -6187,6 +6218,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                     vecOut[v * dstCgSz + cg] = recvDG[base + v];
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd)
                     cgWrittenAuth[cg - dstNodeLocalBegin] = 1;
+                markWritten(cg);
             }
         }
     }
@@ -6204,6 +6236,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                     if (!cgWrittenAuth[cg - dstNodeLocalBegin])
                         for (unsigned int v = 0; v < dof; v++)
                             vecOut[v * dstCgSz + cg] = recvDG[base + v];
+                    markWritten(cg);
                 } else {
                     for (unsigned int v = 0; v < dof; v++)
                         vecOut[v * dstCgSz + cg] = recvDG[base + v];
@@ -6417,6 +6450,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         if (it == srcPosToLocalCG.end()) continue;
         for (unsigned int v = 0; v < dof; v++)
             vecOut[v * dstCgSz + oAllCG[t]] = vecIn[v * srcCgSz + it->second];
+        markWritten(oAllCG[t]);
     }
 
     // Cross-rank: pack (dst_cg, dof values) per dst rank and alltoallv.
@@ -6477,6 +6511,33 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     for (int i = 0; i < totRCGO; i++) {
         for (unsigned int v = 0; v < dof; v++)
             vecOut[v * dstCgSz + recvCGO[i]] = recvValO[(size_t)i * dof + v];
+        markWritten(recvCGO[i]);
+    }
+
+    // Deterministic residual fill: any dst-LOCAL cg that NO write path
+    // covered (element delivery, orphan fill same-rank or cross-rank)
+    // gets ZERO in all dof fields instead of inheriting undefined buffer
+    // contents. Zero matches the pos-bcast's no-canonical-writer
+    // semantics (SFC far-field hanging-position IC). Warn so residuals
+    // stay visible.
+    {
+        size_t unfilled = 0;
+        const std::vector<double>& pf = dstMesh->m_uiPhantomFill;
+        for (unsigned int cg = dstNodeLocalBegin; cg < dstNodeLocalEnd;
+             cg++) {
+            if (cgWrittenAny[cg - dstNodeLocalBegin]) continue;
+            for (unsigned int v = 0; v < dof; v++)
+                vecOut[v * dstCgSz + cg] =
+                    (v < pf.size()) ? (T)pf[v] : (T)0;
+            if (unfilledOut) unfilledOut->push_back(cg);
+            unfilled++;
+        }
+        if (unfilled > 0)
+            std::cerr << "[redistributeVec r" << rank << "] WARNING: "
+                      << unfilled << " dst-local cgs received no value from"
+                      << " any path; zero-filled (callers with non-zero"
+                      << " physical vacua should repatch via unfilledOut)"
+                      << std::endl;
     }
 }
 

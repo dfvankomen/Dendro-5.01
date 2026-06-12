@@ -301,6 +301,13 @@ int function2Octree(std::function<double(double, double, double)> fx,
                 nodes_new.push_back(elem);
                 continue;
             }
+            // an element at maxDepth cannot split — without this guard the
+            // child-anchor shift below is (maxDepth-level-1) = -1 (UB,
+            // flagged by UBSan) and addChildren would emit illegal octants.
+            if (elem.getLevel() >= maxDepth) {
+                nodes_new.push_back(elem);
+                continue;
+            }
 
             mySz = (1 << (maxDepth - elem.getLevel()));
             h1   = mySz / (double)elementOrder;
@@ -543,6 +550,13 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
                 nodes_new.push_back(elem);
                 continue;
             }
+            // an element at maxDepth cannot split — without this guard the
+            // child-anchor shift below is (maxDepth-level-1) = -1 (UB,
+            // flagged by UBSan) and addChildren would emit illegal octants.
+            if (elem.getLevel() >= maxDepth) {
+                nodes_new.push_back(elem);
+                continue;
+            }
 
             mySz = (1 << (maxDepth - elem.getLevel()));
             h1   = mySz / (double)elementOrder;
@@ -726,7 +740,9 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
 
         numRegGridOcts     = 0;
         numIdealRegGridOct = (1u << (currRegGridLev - parent.getLevel()));
-        blockVolume        = 1u << ((maxDepth - parent.getLevel()) * 3);
+        // shift must be evaluated in 128-bit: (maxDepth-level)*3 exceeds 32
+        // bits for coarse parents (UBSan: shift exponent 33).
+        blockVolume = ((DendroUInt_128)1) << ((maxDepth - parent.getLevel()) * 3);
         (m_uiDim == 3)
                    ? numIdealRegGridOct =
                   numIdealRegGridOct* numIdealRegGridOct* numIdealRegGridOct
@@ -1102,7 +1118,8 @@ void octree2BlockDecompositionRepartitioned(
                 : numIdealRegGridOct * numIdealRegGridOct;
 
         double blockFillRatio = (double)numRegGridOcts / numIdealRegGridOct;
-        DendroUInt_128 blockVolume = 1u << ((maxDepth - parent.getLevel()) * 3);
+        DendroUInt_128 blockVolume =
+            ((DendroUInt_128)1) << ((maxDepth - parent.getLevel()) * 3);
 
 #if 0
         std::cout << rank << ": on block: " << parent.getX() << " "
@@ -1344,9 +1361,11 @@ void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
         assert(in.size() >= sendCount);
         std::vector<ot::TreeNode> recvBuffer;
         recvBuffer.resize(recvCount);
-        par::Mpi_Sendrecv(&(*(in.begin())), sendCount, prev, 2,
-                          &(*(recvBuffer.begin())), recvCount, next, 2, comm,
-                          &status);
+        // .data() instead of &(*begin()): the vectors can be empty when
+        // send/recvCount is 0, and dereferencing begin() of an empty
+        // vector is UB (UBSan: null reference binding).
+        par::Mpi_Sendrecv(in.data(), sendCount, prev, 2, recvBuffer.data(),
+                          recvCount, next, 2, comm, &status);
         // std::cout<<"rank: "<<m_uiActiveRank<<" send recv ended
         // "<<std::endl;
 

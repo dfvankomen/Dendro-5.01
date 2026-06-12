@@ -71,13 +71,20 @@ T linear_lagrange(const ot::Mesh* mesh, const T* in, double* domain_coord,
  * domain.
  * @param[out] out: interpolated values.
  * @param[out] valid_index: indices of out that are found in the current rank
+ * @param[out] outLev: optional, per-point level of the containing local
+ * element used for interpolation (-1 when the point is not on this rank).
+ * Graph-partitioned local element ranges can contain coarse duplicate
+ * instances overlapping the true leaves, so a point may be claimed by two
+ * ranks — callers combining contributions across ranks should keep the
+ * DEEPEST claim (see bssn::computeBHLocations).
  * */
 template <typename T, typename CoordT>
 void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                          const CoordT* domain_coords, unsigned int length,
                          const Point* const grid_limit,
                          const Point* const domain_limit, T* out,
-                         std::vector<unsigned int>& validIndices);
+                         std::vector<unsigned int>& validIndices,
+                         std::vector<int>* outLev = nullptr);
 
 /**
  * @brief interpolates a given input vector to given coordinate values.

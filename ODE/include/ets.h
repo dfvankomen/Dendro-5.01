@@ -33,6 +33,78 @@ namespace ts {
 // (eOrder-scaled tree coords). bbox format: "xlo,xhi,ylo,yhi,zlo,zhi".
 // Optionally restrict to a specific step via EM4_CG_TRACE_STEP=N.
 // dumps to <dir>/<tag>_step<S>_sub<I>_r<R>.txt.
+// DENDRO_NAN_SCAN=1: per-phase NaN detector. Scans all dof fields of a
+// CG vector; on first hit prints rank/step/stage/tag, per-var counts and
+// the first few offending cgs (LOCAL vs ghost). Cheap enough to leave in
+// (one pass over the vector per call site, gated off by default).
+template <typename T>
+static void ets_nan_scan(const ot::Mesh* pMesh, const T* vec,
+                         unsigned int dof, const char* tag, int step,
+                         int substage) {
+    // plain getenv on purpose: DENDRO_PROBE_GETENV compiles to nullptr
+    // without the DENDRO_ENABLE_DEBUG_PROBES build option, which silently
+    // disabled this scanner in default builds (lesson learned 2026-06-12).
+    static const char* ns_env = std::getenv("DENDRO_NAN_SCAN");
+    static const bool ns_on =
+        ns_env && ns_env[0] == '1' && ns_env[1] == '\0';
+    if (!ns_on || !pMesh->isActive() || vec == nullptr) return;
+    // one-shot pointer identity print (first few calls): lets the tracker
+    // probe's `in` pointer be matched against the scanned buffer.
+    static int ptr_prints = 0;
+    if (ptr_prints < 12) {
+        std::fprintf(stderr, "[nan-scan r%d %s] scanning ptr=%p dof=%u\n",
+                     pMesh->getMPIRank(), tag, (const void*)vec, dof);
+        std::fflush(stderr);
+        ptr_prints++;
+    }
+    const unsigned int cgSz = pMesh->getDegOfFreedom();
+    const unsigned int nLB  = pMesh->getNodeLocalBegin();
+    const unsigned int nLE  = pMesh->getNodeLocalEnd();
+    // targeted value dump: DENDRO_NAN_SCAN_DUMP_CG=<cg> prints all dof
+    // values at that cg at every scan point (signature identifies the
+    // writer of unphysical-but-finite values).
+    {
+        static const char* dc_env =
+            std::getenv("DENDRO_NAN_SCAN_DUMP_CG");
+        static const long dump_cg = dc_env ? std::atol(dc_env) : -1;
+        if (dump_cg >= 0 && (unsigned long)dump_cg < cgSz) {
+            std::fprintf(stderr, "[cg-dump r%d step=%d %s cg=%ld]",
+                         pMesh->getMPIRank(), step, tag, dump_cg);
+            for (unsigned int v = 0; v < dof; v++)
+                std::fprintf(stderr, " %.3e",
+                             (double)vec[(size_t)v * cgSz + dump_cg]);
+            std::fprintf(stderr, "\n");
+            std::fflush(stderr);
+        }
+    }
+    size_t total            = 0;
+    for (unsigned int v = 0; v < dof; v++) {
+        size_t cnt        = 0;
+        unsigned int firstCg[3];
+        for (unsigned int cg = 0; cg < cgSz; cg++) {
+            if (!std::isfinite((double)vec[(size_t)v * cgSz + cg])) {
+                if (cnt < 3) firstCg[cnt] = cg;
+                cnt++;
+            }
+        }
+        if (cnt) {
+            std::fprintf(stderr,
+                         "[nan-scan r%d step=%d stage=%d %s] var=%u count=%zu"
+                         " ptr=%p first:",
+                         pMesh->getMPIRank(), step, substage, tag, v,
+                         cnt, (const void*)vec);
+            for (size_t k = 0; k < cnt && k < 3; k++)
+                std::fprintf(stderr, " cg=%u(%s)", firstCg[k],
+                             (firstCg[k] >= nLB && firstCg[k] < nLE)
+                                 ? "LOCAL"
+                                 : "ghost");
+            std::fprintf(stderr, "\n");
+            std::fflush(stderr);
+            total += cnt;
+        }
+    }
+}
+
 template <typename T>
 static void em4_cg_trace(const ot::Mesh* pMesh, const T* vec,
                          unsigned int dof, const char* tag, int step,
@@ -772,9 +844,13 @@ void ETS<T, Ctx>::evolve() {
     double current_t_adv   = current_t;
     const double dt        = m_uiTimeInfo._m_uiTh;
 
+    ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                 "00_evolveEnter", (int)m_uiTimeInfo._m_uiStep, -1);
     _EV_TRACE("01_pre_timestep_start");
     m_uiAppCtx->pre_timestep(m_uiEVar);
     _EV_TRACE("02_pre_timestep_done");
+    ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                 "05_postPreTimestep", (int)m_uiTimeInfo._m_uiStep, -1);
 
     const unsigned int DOF    = m_uiEVar.get_dof();
     const unsigned int szPDof = pMesh->getDegOfFreedom();
@@ -899,6 +975,9 @@ void ETS<T, Ctx>::evolve() {
             em4_cg_trace(pMesh, m_uiEVecTmp[0].get_vec_ptr(),
                          m_uiEVecTmp[0].get_dof(), "10_preRHS",
                          trace_step, stage);
+            ets_nan_scan(pMesh, m_uiEVecTmp[0].get_vec_ptr(),
+                         m_uiEVecTmp[0].get_dof(), "10_preRHS",
+                         trace_step, stage);
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
                 std::fprintf(stderr,
@@ -927,6 +1006,9 @@ void ETS<T, Ctx>::evolve() {
             em4_cg_trace(pMesh, m_uiStVec[stage].get_vec_ptr(),
                          m_uiStVec[stage].get_dof(), "20_postRHS",
                          trace_step, stage);
+            ets_nan_scan(pMesh, m_uiStVec[stage].get_vec_ptr(),
+                         m_uiStVec[stage].get_dof(), "20_postRHS",
+                         trace_step, stage);
 
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
@@ -945,6 +1027,8 @@ void ETS<T, Ctx>::evolve() {
                        m_uiEVar);
         _EV_TRACE("21_post_final_axpy");
         em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                     "30_postFinalAxpy", trace_step, -1);
+        ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                      "30_postFinalAxpy", trace_step, -1);
     }
     _EV_TRACE("22_pre_post_axpy_sync");
@@ -970,6 +1054,8 @@ void ETS<T, Ctx>::evolve() {
             pMeshMut->syncZipNonPrimaryPublic(dvec_ptr, DOFV);
             em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                          "40_postSync", trace_step, -1);
+            ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                         "40_postSync", trace_step, -1);
             // additional pass: position-keyed broadcast (gated by
             // DENDRO_FORCE_POS_BCAST=1). brings every cg at consensus
             // phys_pos into bit-identity across ranks, plus zeros out
@@ -978,12 +1064,16 @@ void ETS<T, Ctx>::evolve() {
             pMeshMut->broadcastCgValuesByPhysPosPublic(dvec_ptr, DOFV);
             em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                          "50_postBcast", trace_step, -1);
+            ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                         "50_postBcast", trace_step, -1);
         }
     }
 
     _EV_TRACE("30_pre_final_post_timestep");
     m_uiAppCtx->post_timestep(m_uiEVar);
     _EV_TRACE("31_post_final_post_timestep");
+    ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
+                 "60_postTimestep", trace_step, -1);
 
     m_uiAppCtx->increment_ts_info();
     m_uiTimeInfo = m_uiAppCtx->get_ts_info();

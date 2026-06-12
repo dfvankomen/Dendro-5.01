@@ -670,6 +670,14 @@ class Mesh {
      *  configs depended on ambient environment setup. */
     bool m_uiPosBcastEnabled = false;
 
+    /** Per-var fill values for "phantom" cgs — graph-partition positions
+     *  with no canonical writer anywhere (bcast zero-out post-pass) or no
+     *  redistribute delivery. Default empty = fill with 0, which is the
+     *  correct vacuum for EM4/NLSM but NaNs BSSN's algebraic constraint
+     *  enforcement (zero metric, det=0) — BSSN registers flat-space
+     *  values. Indexed by dof var; vars beyond the vector size fill 0. */
+    std::vector<double> m_uiPhantomFill;
+
     // m_uiCanonicalOverride was an old experiment in routing zip
     // writes; superseded by the explicit zip plan
     // (m_uiZipPlanCg / m_uiZipPlanUnzipIdx) and removed.
@@ -1925,6 +1933,13 @@ class Mesh {
      * this on their graph twins; default off. */
     inline void setPosBcastEnabled(bool on) { m_uiPosBcastEnabled = on; }
     inline bool isPosBcastEnabled() const { return m_uiPosBcastEnabled; }
+
+    /**@brief Register per-var phantom-cg fill values (see
+     * m_uiPhantomFill). Solvers with a non-zero physical vacuum (BSSN
+     * flat space) must set this on their graph meshes. */
+    inline void setPhantomFillValues(std::vector<double>&& vals) {
+        m_uiPhantomFill = std::move(vals);
+    }
 
     /**@brief Override the block-setup flag without building/destroying
      * any block state. Sole intended use: a transient SFC twin built with
@@ -3471,8 +3486,15 @@ class Mesh {
      *     will be stale.
      */
     template <typename T>
+    /* unfilledOut (optional): dst-local cgs that received no value from
+     * any delivery path (element matching + orphan fill). They are
+     * zero-filled; solvers whose physical vacuum is non-zero (e.g. BSSN
+     * flat space) must repatch them — zero metric data NaNs algebraic
+     * constraint enforcement. */
     void redistributeVec(ot::Mesh *dstMesh, const T *vecIn, T *vecOut,
-                         unsigned int dof = 1) const;
+                         unsigned int dof                       = 1,
+                         std::vector<unsigned int> *unfilledOut = nullptr)
+        const;
 
     /**
      *@brief : Returns the nodal values of a given element for a given variable

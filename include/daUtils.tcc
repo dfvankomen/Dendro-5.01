@@ -100,6 +100,39 @@ T lagrangeInterpElementToCoord(const ot::Mesh* mesh, const T* in,
 
     mesh->getElementNodalValues(in, &(*(nodalValues.begin())), elementID);
 
+    // probe (DENDRO_INTERP_PROBE=1): are the gathered nodal values finite?
+    {
+        static const char* ipb = std::getenv("DENDRO_INTERP_PROBE");
+        if (ipb && ipb[0] == '1') {
+            unsigned int bad = 0, firstBad = 0;
+            for (unsigned int n = 0; n < nPe; n++)
+                if (!std::isfinite((double)nodalValues[n])) {
+                    if (!bad) firstBad = n;
+                    bad++;
+                }
+            if (bad) {
+                // locate the first nonfinite direct INPUT read for this
+                // element: which cg, vs the per-var size, and the pointer.
+                const unsigned int cgSz = mesh->getDegOfFreedom();
+                unsigned int badCg = 0xFFFFFFFFu;
+                const unsigned int* e2n =
+                    mesh->getE2NMapping().data() + (size_t)elementID * nPe;
+                for (unsigned int n = 0; n < nPe; n++) {
+                    const unsigned int cg = e2n[n];
+                    if (cg < cgSz && !std::isfinite((double)in[cg])) {
+                        badCg = cg;
+                        break;
+                    }
+                }
+                std::printf(
+                    "[interp-nodal r%u elem=%u local=[%u,%u) badNodal=%u "
+                    "first=n%u val=%.6e badInputCg=%u cgSz=%u in=%p]\n",
+                    rankActive, elementID, localBegin, localEnd, bad, firstBad,
+                    (double)nodalValues[firstBad], badCg, cgSz, (void*)in);
+            }
+        }
+    }
+
     const double x              = domain_coord[0];
     const double y              = domain_coord[1];
     const double z              = domain_coord[2];
@@ -386,7 +419,8 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                          const CoordT* domain_coords, unsigned int length,
                          const Point* const grid_limit,
                          const Point* const domain_limit, T* out,
-                         std::vector<unsigned int>& validIndices) {
+                         std::vector<unsigned int>& validIndices,
+                         std::vector<int>* outLev) {
     unsigned int rankGlobal = mesh->getMPIRankGlobal();
     unsigned int npesGlobal = mesh->getMPICommSizeGlobal();
 
@@ -441,6 +475,7 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
 
         // 1. convert coords to octants
         const unsigned int numPts = length / m_uiDim;
+        if (outLev) outLev->assign(numPts, -1);
         std::vector<ot::SearchKey> coordOcts_skey;
         unsigned int octree_coords[m_uiDim];
 
@@ -526,6 +561,24 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                 searchResult = coordOcts_key[i].getSearchResult();
                 ownerList    = coordOcts_key[i].getOwnerList();
 
+                // containment-verify (2026-06-12): SFC_treeSearch on a
+                // graph-partitioned mesh can return FALSE POSITIVES (the
+                // walk assumes SFC-sorted elements). Interpolating a point
+                // far outside the wrong element extrapolates the Lagrange
+                // basis to huge/±inf values that poison downstream
+                // reductions (BSSN BH tracker NaN). Treat a non-containing
+                // hit as not-found — the containment-rescue pass below
+                // picks the point up on its true owner rank.
+                {
+                    const ot::TreeNode& fe = meshOctree[searchResult];
+                    const unsigned int kx  = coordOcts_key[i].minX();
+                    const unsigned int ky  = coordOcts_key[i].minY();
+                    const unsigned int kz  = coordOcts_key[i].minZ();
+                    if (kx < fe.minX() || kx >= fe.maxX() || ky < fe.minY() ||
+                        ky >= fe.maxY() || kz < fe.minZ() || kz >= fe.maxZ())
+                        continue;
+                }
+
                 coord[0] =
                     domain_limit[0].x() +
                     ((meshOctree[searchResult].minX() - grid_limit[0].x()) *
@@ -566,26 +619,44 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                         mesh->getElementOrder());
                     // out[(*ownerList)[w]] = linear_lagrange(mesh, in, coord,
                     // pt_min, pt_max, searchResult);
+                    {
+                        static const char* ipb =
+                            std::getenv("DENDRO_INTERP_PROBE");
+                        if (ipb && ipb[0] == '1')
+                            std::printf(
+                                "[interp-probe r%u FOUND pt=%u c=(%.17g,%.17g,"
+                                "%.17g) elem=%u box=(%g,%g,%g)-(%g,%g,%g) "
+                                "val=%.6e]\n",
+                                rankActive, (*ownerList)[w], coord[0],
+                                coord[1], coord[2], searchResult, pt_min.x(),
+                                pt_min.y(), pt_min.z(), pt_max.x(), pt_max.y(),
+                                pt_max.z(),
+                                (double)out[(*ownerList)[w]]);
+                    }
                     validIndices.push_back((*ownerList)[w]);
                 }
             }
         }
 
-        // Containment-rescue pass (2026-06-11): SFC_treeSearch above
-        // assumes m_uiAllElements is SFC-sorted and the splitters
-        // describe SFC ranges — both false on graph-partitioned meshes,
-        // where lookups fail luck-dependently (the BSSN BH-tracker "key
-        // not found" noise; froze puncture tracking under graph mode).
-        // For every point this rank has not already resolved, scan the
-        // LOCAL element range for direct containment (local ranges are
-        // disjoint, so globally at most one rank rescues each point).
-        // No-op when the search above succeeded everywhere.
+        // Deepest-containing-local pass (2026-06-12, supersedes the
+        // 2026-06-11 containment rescue): the SFC search above fails or
+        // returns shallow results luck-dependently on graph-partitioned
+        // meshes (unsorted m_uiAllElements, non-SFC splitters), AND the
+        // graph local range can contain COARSE duplicate instances that
+        // overlap the true fine leaves — interpolating those reads
+        // phantom cgs with no canonical writer (the BSSN BH-tracker NaN,
+        // see docs/graph_partitioning_correctness.md). For EVERY point,
+        // scan the LOCAL range and interpolate from the DEEPEST
+        // containing element (the true leaf). Overrides any shallower
+        // SFC-search result. outLev (when provided) reports the chosen
+        // element level per point so callers can resolve cross-rank
+        // duplicate-instance contributions by depth.
         {
             std::vector<bool> found(numPts, false);
             for (unsigned int v : validIndices)
                 if (v < numPts) found[v] = true;
+            validIndices.clear();
             for (unsigned int i = 0; i < numPts; i++) {
-                if (found[i]) continue;
                 const unsigned int ox = (unsigned int)(grid_limit[0].x() +
                     (domain_coords[m_uiDim * i + 0] - domain_limit[0].x()) *
                         (gridRangeX / domainRangeX));
@@ -595,38 +666,61 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                 const unsigned int oz = (unsigned int)(grid_limit[0].z() +
                     (domain_coords[m_uiDim * i + 2] - domain_limit[0].z()) *
                         (gridRangeZ / domainRangeZ));
+                unsigned int bestE   = LOOK_UP_TABLE_DEFAULT;
+                unsigned int bestLev = 0;
                 for (unsigned int e = localElementBegin; e < localElementEnd;
                      e++) {
                     const ot::TreeNode& el = meshOctree[e];
                     if (ox < el.minX() || ox >= el.maxX()) continue;
                     if (oy < el.minY() || oy >= el.maxY()) continue;
                     if (oz < el.minZ() || oz >= el.maxZ()) continue;
-
-                    Point r_min(
-                        domain_limit[0].x() + ((el.minX() - grid_limit[0].x()) *
-                                               (domainRangeX / gridRangeX)),
-                        domain_limit[0].y() + ((el.minY() - grid_limit[0].y()) *
-                                               (domainRangeY / gridRangeY)),
-                        domain_limit[0].z() + ((el.minZ() - grid_limit[0].z()) *
-                                               (domainRangeZ / gridRangeZ)));
-                    Point r_max(
-                        domain_limit[0].x() + ((el.maxX() - grid_limit[0].x()) *
-                                               (domainRangeX / gridRangeX)),
-                        domain_limit[0].y() + ((el.maxY() - grid_limit[0].y()) *
-                                               (domainRangeY / gridRangeY)),
-                        domain_limit[0].z() + ((el.maxZ() - grid_limit[0].z()) *
-                                               (domainRangeZ / gridRangeZ)));
-
-                    double c[3];
-                    c[0]   = domain_coords[m_uiDim * i];
-                    c[1]   = domain_coords[m_uiDim * i + 1];
-                    c[2]   = domain_coords[m_uiDim * i + 2];
-                    out[i] = lagrangeInterpElementToCoord(
-                        mesh, in, c, r_min, r_max, e, mesh->getElementOrder());
-                    validIndices.push_back(i);
-                    break;
+                    if (bestE == LOOK_UP_TABLE_DEFAULT ||
+                        el.getLevel() > bestLev) {
+                        bestE   = e;
+                        bestLev = el.getLevel();
+                    }
                 }
+                if (bestE == LOOK_UP_TABLE_DEFAULT) continue;
+
+                const ot::TreeNode& el = meshOctree[bestE];
+                Point r_min(
+                    domain_limit[0].x() + ((el.minX() - grid_limit[0].x()) *
+                                           (domainRangeX / gridRangeX)),
+                    domain_limit[0].y() + ((el.minY() - grid_limit[0].y()) *
+                                           (domainRangeY / gridRangeY)),
+                    domain_limit[0].z() + ((el.minZ() - grid_limit[0].z()) *
+                                           (domainRangeZ / gridRangeZ)));
+                Point r_max(
+                    domain_limit[0].x() + ((el.maxX() - grid_limit[0].x()) *
+                                           (domainRangeX / gridRangeX)),
+                    domain_limit[0].y() + ((el.maxY() - grid_limit[0].y()) *
+                                           (domainRangeY / gridRangeY)),
+                    domain_limit[0].z() + ((el.maxZ() - grid_limit[0].z()) *
+                                           (domainRangeZ / gridRangeZ)));
+
+                double c[3];
+                c[0]   = domain_coords[m_uiDim * i];
+                c[1]   = domain_coords[m_uiDim * i + 1];
+                c[2]   = domain_coords[m_uiDim * i + 2];
+                out[i] = lagrangeInterpElementToCoord(
+                    mesh, in, c, r_min, r_max, bestE,
+                    mesh->getElementOrder());
+                if (outLev) (*outLev)[i] = (int)bestLev;
+                {
+                    static const char* ipb =
+                        std::getenv("DENDRO_INTERP_PROBE");
+                    if (ipb && ipb[0] == '1')
+                        std::printf(
+                            "[interp-probe r%u DEEPEST pt=%u c=(%.17g,"
+                            "%.17g,%.17g) elem=%u lev=%u box=(%g,%g,%g)-"
+                            "(%g,%g,%g) val=%.6e]\n",
+                            rankActive, i, c[0], c[1], c[2], bestE, bestLev,
+                            r_min.x(), r_min.y(), r_min.z(), r_max.x(),
+                            r_max.y(), r_max.z(), (double)out[i]);
+                }
+                validIndices.push_back(i);
             }
+            (void)found;
         }
 
         std::sort(validIndices.begin(), validIndices.end());
