@@ -70,3 +70,4 @@ em4_*prof*.prof
 
 # personal recovery cheat sheet (intentionally untracked)
 RECOVERY.md
+build_omp/
