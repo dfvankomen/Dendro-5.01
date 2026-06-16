@@ -50,6 +50,11 @@ enum ETSPROFILE {
     STAGE_5,
     ETS_LAST
 };
+#endif
+
+// Also bounds the fused RK axpy scratch arrays (used unconditionally), so it
+// must be defined regardless of __PROFILE_ETS__ to keep the build turn-off-able.
+#ifndef ETS_MAX_PROFILED_STAGES
 #define ETS_MAX_PROFILED_STAGES 6
 #endif
 
