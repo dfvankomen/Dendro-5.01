@@ -30,6 +30,9 @@
  */
 
 #pragma once
+#include <algorithm>  // std::fill
+#include <cmath>      // std::abs
+
 #include "ets.h"
 
 namespace ts {
