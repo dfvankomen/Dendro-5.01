@@ -640,4 +640,72 @@ MatrixDiagonalEntries* createBYU_A6_2ND_R085_OP2_Diagonals(
 MatrixDiagonalEntries* createBYU_A6_2ND_R085_OP3_Diagonals(
     const std::vector<double>& D_coeffs);
 
+// ---- BYU C6 second-derivative generated operators ----
+MatrixDiagonalEntries* createBYU_C6_2ND_R060_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R060_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R060_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R060_OP4_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R060_OP5_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R060_OP6_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R065_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R065_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R065_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R065_OP4_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R065_OP5_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R065_OP6_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R070_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R070_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R070_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R070_OP4_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R070_OP5_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R070_OP6_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R075_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R075_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R075_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R075_OP4_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R075_OP5_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R080_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R080_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R080_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R080_OP4_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R080_OP5_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R085_OP1_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R085_OP2_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R085_OP3_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R085_OP4_Diagonals(
+    const std::vector<double>& D_coeffs);
+MatrixDiagonalEntries* createBYU_C6_2ND_R085_OP5_Diagonals(
+    const std::vector<double>& D_coeffs);
+
 }  // namespace dendroderivs
