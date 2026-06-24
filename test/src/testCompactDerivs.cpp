@@ -69,6 +69,9 @@ unsigned int deriv2_matrixID        = 1;
 
 // dendro_cfd::FilterType filter_type    = dendro_cfd::FILT_NONE;
 uint32_t num_tests                  = 1000;
+// number of field variables processed per timed step (RHS-style var loop).
+// nvar=1 reproduces the original single-variable behavior exactly.
+uint32_t nvar                       = 1;
 uint32_t data_init                  = 2;
 uint32_t num_x_blocks               = 10;
 uint32_t num_y_blocks               = 10;
@@ -112,6 +115,10 @@ void readParams(const char *inFile) {
 
     if (file.contains("num_tests")) {
         num_tests = file["num_tests"].as_integer();
+    }
+    if (file.contains("nvar")) {
+        nvar = file["nvar"].as_integer();
+        if (nvar < 1) nvar = 1;
     }
     if (file.contains("data_init")) {
         data_init = file["data_init"].as_integer();
@@ -187,6 +194,7 @@ void readParams(const char *inFile) {
     std::cout << "  deriv2_matrixID : " << deriv2_matrixID << std::endl;
     // std::cout << "  filter_type : " << filter_type << std::endl;
     std::cout << "  num_tests : " << num_tests << std::endl;
+    std::cout << "  nvar : " << nvar << std::endl;
     std::cout << "  data_init : " << data_init << std::endl;
     std::cout << "  num_x_blocks : " << num_x_blocks << std::endl;
     std::cout << "  num_y_blocks : " << num_y_blocks << std::endl;
@@ -1242,7 +1250,7 @@ void test_cfd_with_original_stencil(
 void profile_compact_stencils(double_t *const u_var, const uint32_t *sz,
                               const double *deltas,
                               dendroderivs::DendroDerivatives *deriv,
-                              uint32_t num_runs) {
+                              uint32_t num_runs, uint32_t nvar = 1) {
     const uint32_t totalSize   = sz[0] * sz[1] * sz[2];
     double_t *deriv_workspace  = new double_t[totalSize * 3];
 
@@ -1253,6 +1261,9 @@ void profile_compact_stencils(double_t *const u_var, const uint32_t *sz,
     // matching profile_class_based_stencils so the comparison is interior-only
     uint32_t bflag             = 0;
 
+    // total single-grad calls timed = num_runs steps x nvar field variables.
+    const uint32_t iters       = num_runs * nvar;
+
     const uint32_t n_warmups   = 0;
 
     // warmup runs
@@ -1261,7 +1272,7 @@ void profile_compact_stencils(double_t *const u_var, const uint32_t *sz,
     }
 
     helpers::t_compact_deriv_x.start();
-    for (uint32_t ii = 0; ii < num_runs; ii++) {
+    for (uint32_t ii = 0; ii < iters; ii++) {
         deriv->grad_x(derivx_cfd, u_var, deltas[0], sz, bflag);
     }
     helpers::t_compact_deriv_x.stop();
@@ -1272,7 +1283,7 @@ void profile_compact_stencils(double_t *const u_var, const uint32_t *sz,
     }
 
     helpers::t_compact_deriv_y.start();
-    for (uint32_t ii = 0; ii < num_runs; ii++) {
+    for (uint32_t ii = 0; ii < iters; ii++) {
         deriv->grad_y(derivy_cfd, u_var, deltas[1], sz, bflag);
     }
     helpers::t_compact_deriv_y.stop();
@@ -1283,7 +1294,7 @@ void profile_compact_stencils(double_t *const u_var, const uint32_t *sz,
     }
 
     helpers::t_compact_deriv_z.start();
-    for (uint32_t ii = 0; ii < num_runs; ii++) {
+    for (uint32_t ii = 0; ii < iters; ii++) {
         deriv->grad_z(derivz_cfd, u_var, deltas[2], sz, bflag);
     }
     helpers::t_compact_deriv_z.stop();
@@ -1293,7 +1304,8 @@ void profile_compact_stencils(double_t *const u_var, const uint32_t *sz,
 
 void profile_class_based_stencils(double_t *const u_var, const uint32_t *sz,
                                   dendroderivs::DendroDerivatives *deriv,
-                                  const double *deltas, uint32_t num_runs) {
+                                  const double *deltas, uint32_t num_runs,
+                                  uint32_t nvar = 1) {
     const uint32_t totalSize       = sz[0] * sz[1] * sz[2];
     double_t *deriv_workspace      = new double_t[totalSize * 3];
 
@@ -1302,6 +1314,9 @@ void profile_class_based_stencils(double_t *const u_var, const uint32_t *sz,
     double_t *const derivz_stencil = deriv_workspace + 2 * totalSize;
 
     uint32_t bflag                 = 0;
+
+    // total single-grad calls timed = num_runs steps x nvar field variables.
+    const uint32_t iters           = num_runs * nvar;
 
     helpers::t_deriv_x.clear();
     helpers::t_deriv_y.clear();
@@ -1313,7 +1328,7 @@ void profile_class_based_stencils(double_t *const u_var, const uint32_t *sz,
     }
 
     helpers::t_deriv_x.start();
-    for (uint32_t ii = 0; ii < num_runs; ii++) {
+    for (uint32_t ii = 0; ii < iters; ii++) {
         deriv->grad_x(derivx_stencil, u_var, deltas[0], sz, bflag);
     }
     helpers::t_deriv_x.stop();
@@ -1324,7 +1339,7 @@ void profile_class_based_stencils(double_t *const u_var, const uint32_t *sz,
     }
 
     helpers::t_deriv_y.start();
-    for (uint32_t ii = 0; ii < num_runs; ii++) {
+    for (uint32_t ii = 0; ii < iters; ii++) {
         deriv->grad_y(derivy_stencil, u_var, deltas[1], sz, bflag);
     }
     helpers::t_deriv_y.stop();
@@ -1335,7 +1350,7 @@ void profile_class_based_stencils(double_t *const u_var, const uint32_t *sz,
     }
 
     helpers::t_deriv_z.start();
-    for (uint32_t ii = 0; ii < num_runs; ii++) {
+    for (uint32_t ii = 0; ii < iters; ii++) {
         deriv->grad_z(derivz_stencil, u_var, deltas[2], sz, bflag);
     }
     helpers::t_deriv_z.stop();
@@ -1344,7 +1359,8 @@ void profile_class_based_stencils(double_t *const u_var, const uint32_t *sz,
 }
 
 void profile_original_stencils(double_t *const u_var, const uint32_t *sz,
-                               const double *deltas, uint32_t num_runs) {
+                               const double *deltas, uint32_t num_runs,
+                               uint32_t nvar = 1) {
     const uint32_t totalSize       = sz[0] * sz[1] * sz[2];
     double_t *deriv_workspace      = new double_t[totalSize * 3];
 
@@ -1353,6 +1369,9 @@ void profile_original_stencils(double_t *const u_var, const uint32_t *sz,
     double_t *const derivz_stencil = deriv_workspace + 2 * totalSize;
 
     uint32_t bflag                 = 0;
+
+    // total single-grad calls timed = num_runs steps x nvar field variables.
+    const uint32_t iters           = num_runs * nvar;
 
     helpers::t_deriv_original_x.clear();
     helpers::t_deriv_original_y.clear();
@@ -1364,7 +1383,7 @@ void profile_original_stencils(double_t *const u_var, const uint32_t *sz,
     }
 
     helpers::t_deriv_original_x.start();
-    for (uint32_t ii = 0; ii < num_runs; ii++) {
+    for (uint32_t ii = 0; ii < iters; ii++) {
         deriv_x<3>(derivx_stencil, u_var, deltas[0], sz, bflag);
     }
     helpers::t_deriv_original_x.stop();
@@ -1375,7 +1394,7 @@ void profile_original_stencils(double_t *const u_var, const uint32_t *sz,
     }
 
     helpers::t_deriv_original_y.start();
-    for (uint32_t ii = 0; ii < num_runs; ii++) {
+    for (uint32_t ii = 0; ii < iters; ii++) {
         deriv_y<3>(derivy_stencil, u_var, deltas[1], sz, bflag);
     }
     helpers::t_deriv_original_y.stop();
@@ -1386,7 +1405,7 @@ void profile_original_stencils(double_t *const u_var, const uint32_t *sz,
     }
 
     helpers::t_deriv_original_z.start();
-    for (uint32_t ii = 0; ii < num_runs; ii++) {
+    for (uint32_t ii = 0; ii < iters; ii++) {
         deriv_z<3>(derivz_stencil, u_var, deltas[2], sz, bflag);
     }
     helpers::t_deriv_original_z.stop();
@@ -1489,19 +1508,19 @@ int main(int argc, char **argv) {
 
     std::cout << "... now profiling first set of derivs......" << std::endl;
     profile_class_based_stencils((double_t *const)u_var, sz, &deriv, deltas,
-                                 params::num_tests);
+                                 params::num_tests, params::nvar);
 
     std::cout << "... now profiling second set of derivs......" << std::endl;
     profile_compact_stencils((double_t *const)u_var, sz, deltas, &deriv_cfd,
-                             params::num_tests);
+                             params::num_tests, params::nvar);
 
     std::cout << "... now profiling true original set of derivs......"
               << std::endl;
     profile_original_stencils((double_t *const)u_var, sz, deltas,
-                              params::num_tests);
+                              params::num_tests, params::nvar);
 
-    // then print the profiler results
-    helpers::print_profiler_results(params::num_tests);
+    // then print the profiler results (averaged over num_tests * nvar calls)
+    helpers::print_profiler_results(params::num_tests * params::nvar);
 
     // now we'll do a quick test to see how well rectangular matrices doo
 
@@ -1555,6 +1574,7 @@ int main(int argc, char **argv) {
 
                 std::cout << ":::xfused, yfused, zfused: " << xfused << ", "
                           << yfused << ", " << zfused << ":::" << std::endl;
+                std::cout << ":::nvar: " << params::nvar << ":::" << std::endl;
                 std::cout << " - Size: " << new_sz[0] << ", " << new_sz[1]
                           << ", " << new_sz[2] << std::endl;
 
@@ -1643,13 +1663,17 @@ int main(int argc, char **argv) {
                 // profile these sizes...
                 std::cout << "\tNow profiling ..." << std::endl;
                 profile_class_based_stencils((double_t *const)u_larger, new_sz,
-                                             &deriv, deltas, params::num_tests);
+                                             &deriv, deltas, params::num_tests,
+                                             params::nvar);
                 profile_compact_stencils((double_t *const)u_larger, new_sz,
-                                         deltas, &deriv_cfd, params::num_tests);
+                                         deltas, &deriv_cfd, params::num_tests,
+                                         params::nvar);
                 profile_original_stencils((double_t *const)u_larger, new_sz,
-                                          deltas, params::num_tests);
+                                          deltas, params::num_tests,
+                                          params::nvar);
 
-                helpers::print_profiler_results(params::num_tests, "\t", true);
+                helpers::print_profiler_results(
+                    params::num_tests * params::nvar, "\t", true);
                 std::cout << "-------------------------------------"
                           << std::endl
                           << std::endl;
