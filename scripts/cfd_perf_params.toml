@@ -1,0 +1,43 @@
+# params used by cfd_perf_compare.py
+# eleorder is overwritten on the command line per run
+
+"eleorder" = 4
+
+"deriv_type" = "JTT6"
+"deriv_type_2nd" = "JTT6"
+"deriv1_matrixID" = 1
+"deriv2_matrixID" = 1
+
+"deriv_stencil_order" = 6
+
+# inner-loop reps inside the test binary's profiler
+"num_tests" = 2000
+
+# number of field variables processed per timed step (RHS-style var loop).
+# nvar=1 reproduces the original single-variable timing. cfd_perf_compare.py
+# overrides this per-run when sweeping the nvar axis.
+"nvar" = 1
+
+"data_init" = 2
+
+# block-fusion sweep is xfused, yfused, zfused = 1..N (the diagonal is what we plot)
+"num_x_blocks" = 4
+"num_y_blocks" = 4
+"num_z_blocks" = 4
+
+"x_start" = 0.3
+"y_start" = 0.1
+"z_start" = 0.2
+
+"dx" = 0.05
+"dy" = 0.10
+"dz" = 0.20
+
+inmatfilt_1 = "BYUT6"
+inmatfilt_2 = "BYUT6"
+
+inmatfilt_X_coeffs = [0.5]
+inmatfilt_XX_coeffs = [0.5]
+
+deriv_X_coeffs = []
+deriv_XX_coeffs = []
