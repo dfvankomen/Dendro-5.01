@@ -26,13 +26,20 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   set(DENDRO_CPU_ARCH "native" CACHE STRING "Target CPU architecture (native, x86-64-v3, znver3, etc.)")
   set(DENDRO_CPU_ARCH_STRINGS
       "native"
+      "nosimd"
       "znver1" "znver2" "znver3" "znver4"
       "haswell" "broadwell" "skylake-avx512" "cascadelake" "icelake-server"
       "generic_avx2" "x86-64-v3"
   )
   set_property(CACHE DENDRO_CPU_ARCH PROPERTY STRINGS ${DENDRO_CPU_ARCH_STRINGS})
 
-  if(DENDRO_CPU_ARCH STREQUAL "generic_avx2")
+  if(DENDRO_CPU_ARCH STREQUAL "nosimd")
+    # Pure-scalar profiling baseline: x86-64 v1 (SSE2 is mandated by the ABI, but
+    # disable AVX/AVX2/AVX-512 and auto-vectorization). This controls the COMPILED
+    # production explicit derivative kernels. NOTE: the LIBXSMM matrix-form path JITs
+    # at runtime from CPUID, not these flags — force it with LIBXSMM_TARGET=sse.
+    add_compile_options(-march=x86-64 -mno-avx -mno-avx2 -mno-avx512f -fno-tree-vectorize)
+  elseif(DENDRO_CPU_ARCH STREQUAL "generic_avx2")
     add_compile_options(-mavx2 -mfma)
   elseif(DENDRO_CPU_ARCH IN_LIST DENDRO_CPU_ARCH_STRINGS)
     add_compile_options(-march=${DENDRO_CPU_ARCH})
