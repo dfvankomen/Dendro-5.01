@@ -64,7 +64,10 @@ option(WITH_CUDA "Build dendro with CUDA" OFF)
 option(BUILD_WITH_PETSC "Build dendro with PETSc" OFF)
 option(USE_FD_INTERP_FOR_UNZIP "Use FD style interpolation for unzip" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "Allow MPI to be aware of CUDA support" OFF)
-option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" OFF)
+# Default ON: matrix-form/compact derivs read the full block including the
+# never-filled boundary-ghost padding, so un-zeroed alloc -> NaN. Hybrid-OMP
+# zeros via first-touch; pure-MPI builds rely on this. Turn OFF only for perf A/B.
+option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" ON)
 # ---------------------------------------------------------------------------
 # Unzip/zip speedup toggles
 #
