@@ -162,30 +162,32 @@ static void run_dispatch_microbench(unsigned int eleorder) {
  * @brief Verify the facade mixed 2nd-derivative API (grad_xy/xz/yz) against
  *        the analytical mixed second of the sine field, for each engine kind.
  *
- * Uses isotropic spacing so the matrix engine exercises its fused single-pass
- * kernel and the others fall back to two 1st-order passes. Runs on the single
- * (2*eleorder+1)^3 block the banded engine supports.
+ * Called twice: isotropic spacing, then anisotropic. The anisotropic case is
+ * the real test of the per-axis fused scaling — matrix engines take the fused
+ * single-pass kernel; the others compose two 1st-order passes. Runs on the
+ * single (2*eleorder+1)^3 block the banded engine supports.
  *
  * @return number of failing (engine, direction) checks.
  */
-static int run_mixed_second_test(unsigned int eleorder) {
+static int run_mixed_second_test(unsigned int eleorder, double dx, double dy,
+                                 double dz, const char *tag) {
     const unsigned int pw    = eleorder / 2;
     const unsigned int n     = eleorder * 2 + 1;
     const unsigned int sz[3] = {n, n, n};
     const unsigned int total = n * n * n;
-    const double h           = 0.05;  // isotropic -> matrix uses fused path
     const double twopi       = 2.0 * M_PI;
 
     // u = sin(2pi x) sin(2pi y) sin(2pi z); analytical mixed seconds:
     //   d2/dxdy = (2pi)^2 cos(2pi x) cos(2pi y) sin(2pi z), etc.
     std::vector<double> u(total), txy(total), txz(total), tyz(total);
     for (unsigned int k = 0; k < n; k++) {
-        double z = (k - (double)pw) * h, sz_ = sin(twopi * z), cz = cos(twopi * z);
+        double z = (k - (double)pw) * dz, sz_ = sin(twopi * z),
+               cz = cos(twopi * z);
         for (unsigned int j = 0; j < n; j++) {
-            double y = (j - (double)pw) * h, sy = sin(twopi * y),
+            double y = (j - (double)pw) * dy, sy = sin(twopi * y),
                    cy = cos(twopi * y);
             for (unsigned int i = 0; i < n; i++) {
-                double x = (i - (double)pw) * h, sx = sin(twopi * x),
+                double x = (i - (double)pw) * dx, sx = sin(twopi * x),
                        cx = cos(twopi * x);
                 unsigned int idx = i + j * n + k * n * n;
                 u[idx]   = sx * sy * sz_;
@@ -207,8 +209,8 @@ static int run_mixed_second_test(unsigned int eleorder) {
         {"JTT6Banded", "banded"},
     };
 
-    std::cout << "\n===== Mixed 2nd-derivative API (grad_xy/xz/yz, " << n
-              << "^3) =====" << std::endl;
+    std::cout << "\n===== Mixed 2nd-derivative API (" << tag << ", grad_xy/xz/yz, "
+              << n << "^3) =====" << std::endl;
     std::cout << std::left << std::setw(20) << "engine" << std::setw(13)
               << "rmse_xy" << std::setw(13) << "rmse_xz" << std::setw(13)
               << "rmse_yz" << "status" << std::endl;
@@ -220,9 +222,9 @@ static int run_mixed_second_test(unsigned int eleorder) {
 
         std::vector<double> ws(total), dxy(total, 0.0), dxz(total, 0.0),
             dyz(total, 0.0);
-        deriv.grad_xy(dxy.data(), u.data(), ws.data(), h, h, sz, 0);
-        deriv.grad_xz(dxz.data(), u.data(), ws.data(), h, h, sz, 0);
-        deriv.grad_yz(dyz.data(), u.data(), ws.data(), h, h, sz, 0);
+        deriv.grad_xy(dxy.data(), u.data(), ws.data(), dx, dy, sz, 0);
+        deriv.grad_xz(dxz.data(), u.data(), ws.data(), dx, dz, sz, 0);
+        deriv.grad_yz(dyz.data(), u.data(), ws.data(), dy, dz, sz, 0);
 
         double exy = compute_rmse(dxy.data(), txy.data(), total, pw, sz);
         double exz = compute_rmse(dxz.data(), txz.data(), total, pw, sz);
@@ -238,7 +240,7 @@ static int run_mixed_second_test(unsigned int eleorder) {
     }
 
     std::cout << std::string(60, '-') << std::endl;
-    std::cout << "Mixed 2nd-derivative: "
+    std::cout << "Mixed 2nd-derivative (" << tag << "): "
               << (fails == 0 ? "ALL OK" : std::to_string(fails) + " FAILED")
               << std::endl;
     return fails;
@@ -901,8 +903,12 @@ int main() {
     // quantify explicit-dispatch overhead (vtable vs raw fn ptr vs direct)
     run_dispatch_microbench(eleorder);
 
-    // mixed 2nd-derivative facade API correctness across engine kinds
-    int mixed_fail = run_mixed_second_test(eleorder);
+    // mixed 2nd-derivative facade API: isotropic + anisotropic (the latter
+    // exercises the per-axis fused scaling)
+    int mixed_fail = run_mixed_second_test(eleorder, 0.05, 0.05, 0.05,
+                                           "isotropic") +
+                     run_mixed_second_test(eleorder, 0.02, 0.013, 0.01,
+                                           "anisotropic");
 
     // batch-vs-per-call timing + bit-identical gate for all four engine kinds
     int bench_fail = run_batch_vs_percall(eleorder);
