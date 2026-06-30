@@ -84,6 +84,12 @@ class MatrixCompactDerivs : public CompactDerivs {
     std::vector<double> workspace_;
     unsigned int workspace_tot_;
 
+    // reused scratch for the fused mixed-2nd kernels: two scaled operator
+    // copies + one intermediate. grown once and refilled per call, so the
+    // fused path does no per-call heap allocation. not thread-safe to share
+    // (same as workspace_); the block-parallel model clones per thread.
+    std::vector<double> fused_a_, fused_b_, fused_tmp_;
+
     std::unordered_map<unsigned int, std::unique_ptr<DerivMatrixStorage>>
         D_storage_map_;
 
@@ -300,16 +306,19 @@ class MatrixCompactDerivs : public CompactDerivs {
         // (1/(dx*dy)). dx==dy recovers the isotropic 1/dx^2.
         const double alpha_x = 1.0 / dx;
         const double alpha_y = 1.0 / dy;
-        std::vector<double> Dx_scaled(nx * nx);
-        std::vector<double> Dy_scaled(ny * ny);
+        std::vector<double> &Dx_scaled = fused_a_;
+        std::vector<double> &Dy_scaled = fused_b_;
+        Dx_scaled.resize((size_t)nx * nx);
+        Dy_scaled.resize((size_t)ny * ny);
         for (size_t i = 0; i < (size_t)nx * nx; i++)
             Dx_scaled[i] = Dx->data()[i] * alpha_x;
         for (size_t i = 0; i < (size_t)ny * ny; i++)
             Dy_scaled[i] = Dy->data()[i] * alpha_y;
 
         // per-slice intermediate buffer; (nx * ny) doubles fits in L1 at
-        // typical block sizes. Sized once.
-        std::vector<double> tmp((size_t)nx * ny);
+        // typical block sizes. reused member scratch, no per-call alloc.
+        std::vector<double> &tmp = fused_tmp_;
+        tmp.resize((size_t)nx * ny);
 
         const unsigned int y_start   = pw;
         const unsigned int y_end     = ny - pw;
@@ -390,14 +399,17 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         const double alpha_x = 1.0 / dx;
         const double alpha_z = 1.0 / dz;
-        std::vector<double> Dx_scaled(nx * nx);
-        std::vector<double> Dz_scaled(nz * nz);
+        std::vector<double> &Dx_scaled = fused_a_;
+        std::vector<double> &Dz_scaled = fused_b_;
+        Dx_scaled.resize((size_t)nx * nx);
+        Dz_scaled.resize((size_t)nz * nz);
         for (size_t i = 0; i < (size_t)nx * nx; i++)
             Dx_scaled[i] = Dx->data()[i] * alpha_x;
         for (size_t i = 0; i < (size_t)nz * nz; i++)
             Dz_scaled[i] = Dz->data()[i] * alpha_z;
 
-        std::vector<double> tmp((size_t)nx * nz);
+        std::vector<double> &tmp = fused_tmp_;
+        tmp.resize((size_t)nx * nz);
 
         const unsigned int y_start   = pw;
         const unsigned int y_end     = ny - pw;
@@ -487,8 +499,10 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         const double alpha_y = 1.0 / dy;
         const double alpha_z = 1.0 / dz;
-        std::vector<double> Dy_scaled(ny * ny);
-        std::vector<double> Dz_scaled(nz * nz);
+        std::vector<double> &Dy_scaled = fused_a_;
+        std::vector<double> &Dz_scaled = fused_b_;
+        Dy_scaled.resize((size_t)ny * ny);
+        Dz_scaled.resize((size_t)nz * nz);
         for (size_t i = 0; i < (size_t)ny * ny; i++)
             Dy_scaled[i] = Dy->data()[i] * alpha_y;
         for (size_t i = 0; i < (size_t)nz * nz; i++)
@@ -501,7 +515,8 @@ class MatrixCompactDerivs : public CompactDerivs {
         const unsigned int slab_sz   = nx * ny_active;     // per z-slice in tmp
         const unsigned int ld_3d     = nx * ny;
 
-        std::vector<double> tmp((size_t)slab_sz * nz);
+        std::vector<double> &tmp = fused_tmp_;
+        tmp.resize((size_t)slab_sz * nz);
 
         // y kernel: tmp_slab(nx, ny_active) = u_slice(nx, ny) * D_y_active^T
         //   M=nx, N=ny_active, K=ny; LDA=nx, LDB=ny, LDC=nx; TRANS_B
