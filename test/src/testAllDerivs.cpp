@@ -64,6 +64,92 @@ static double compute_rmse(const double *a, const double *b, unsigned int n,
 }
 
 /**
+ * @brief Verify the facade mixed 2nd-derivative API (grad_xy/xz/yz) against
+ *        the analytical mixed second of the sine field, for each engine kind.
+ *
+ * Uses isotropic spacing so the matrix engine exercises its fused single-pass
+ * kernel and the others fall back to two 1st-order passes. Runs on the single
+ * (2*eleorder+1)^3 block the banded engine supports.
+ *
+ * @return number of failing (engine, direction) checks.
+ */
+static int run_mixed_second_test(unsigned int eleorder) {
+    const unsigned int pw    = eleorder / 2;
+    const unsigned int n     = eleorder * 2 + 1;
+    const unsigned int sz[3] = {n, n, n};
+    const unsigned int total = n * n * n;
+    const double h           = 0.05;  // isotropic -> matrix uses fused path
+    const double twopi       = 2.0 * M_PI;
+
+    // u = sin(2pi x) sin(2pi y) sin(2pi z); analytical mixed seconds:
+    //   d2/dxdy = (2pi)^2 cos(2pi x) cos(2pi y) sin(2pi z), etc.
+    std::vector<double> u(total), txy(total), txz(total), tyz(total);
+    for (unsigned int k = 0; k < n; k++) {
+        double z = (k - (double)pw) * h, sz_ = sin(twopi * z), cz = cos(twopi * z);
+        for (unsigned int j = 0; j < n; j++) {
+            double y = (j - (double)pw) * h, sy = sin(twopi * y),
+                   cy = cos(twopi * y);
+            for (unsigned int i = 0; i < n; i++) {
+                double x = (i - (double)pw) * h, sx = sin(twopi * x),
+                       cx = cos(twopi * x);
+                unsigned int idx = i + j * n + k * n * n;
+                u[idx]   = sx * sy * sz_;
+                txy[idx] = twopi * twopi * cx * cy * sz_;
+                txz[idx] = twopi * twopi * cx * sy * cz;
+                tyz[idx] = twopi * twopi * sx * cy * cz;
+            }
+        }
+    }
+
+    struct EngineSpec {
+        const char *name;
+        const char *kind;
+    };
+    const std::vector<EngineSpec> engines = {
+        {"E6", "explicit"},
+        {"E6Matrix", "matrixonly"},
+        {"JTT6", "compact"},
+        {"JTT6Banded", "banded"},
+    };
+
+    std::cout << "\n===== Mixed 2nd-derivative API (grad_xy/xz/yz, " << n
+              << "^3) =====" << std::endl;
+    std::cout << std::left << std::setw(20) << "engine" << std::setw(13)
+              << "rmse_xy" << std::setw(13) << "rmse_xz" << std::setw(13)
+              << "rmse_yz" << "status" << std::endl;
+
+    int fails = 0;
+    for (auto &eng : engines) {
+        DendroDerivatives deriv(eng.name, eng.name, eleorder);
+        deriv.set_maximum_block_size(total);
+
+        std::vector<double> ws(total), dxy(total, 0.0), dxz(total, 0.0),
+            dyz(total, 0.0);
+        deriv.grad_xy(dxy.data(), u.data(), ws.data(), h, h, sz, 0);
+        deriv.grad_xz(dxz.data(), u.data(), ws.data(), h, h, sz, 0);
+        deriv.grad_yz(dyz.data(), u.data(), ws.data(), h, h, sz, 0);
+
+        double exy = compute_rmse(dxy.data(), txy.data(), total, pw, sz);
+        double exz = compute_rmse(dxz.data(), txz.data(), total, pw, sz);
+        double eyz = compute_rmse(dyz.data(), tyz.data(), total, pw, sz);
+        bool ok = std::isfinite(exy) && std::isfinite(exz) &&
+                  std::isfinite(eyz) && exy < 10.0 && exz < 10.0 && eyz < 10.0;
+        if (!ok) fails++;
+
+        std::cout << std::left << std::setw(20) << eng.name << std::scientific
+                  << std::setprecision(2) << std::setw(13) << exy
+                  << std::setw(13) << exz << std::setw(13) << eyz
+                  << (ok ? "OK" : "FAIL") << std::endl;
+    }
+
+    std::cout << std::string(60, '-') << std::endl;
+    std::cout << "Mixed 2nd-derivative: "
+              << (fails == 0 ? "ALL OK" : std::to_string(fails) + " FAILED")
+              << std::endl;
+    return fails;
+}
+
+/**
  * @brief Time batch vs per-call derivatives for each engine kind and verify
  *        the batch output is bit-identical to the per-call output.
  *
@@ -717,11 +803,14 @@ int main() {
     std::cout << "Fused-block correctness: " << fused_pass << " pass, "
               << fused_fail << " fail" << std::endl;
 
+    // mixed 2nd-derivative facade API correctness across engine kinds
+    int mixed_fail = run_mixed_second_test(eleorder);
+
     // batch-vs-per-call timing + bit-identical gate for all four engine kinds
     int bench_fail = run_batch_vs_percall(eleorder);
 
     return (fail > 0 || coeff_fail > 0 || batch_fail > 0 || fused_fail > 0 ||
-            bench_fail > 0)
+            mixed_fail > 0 || bench_fail > 0)
                ? 1
                : 0;
 }
