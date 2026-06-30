@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 #include "derivatives/derivs_utils.h"
 #include "lapac.h"
@@ -297,6 +298,152 @@ void BandedCompactDerivs::do_grad_z(double *const du, const double *const u,
             for (unsigned int k = 0; k < nz; k++) {
                 du[INDEX_3D(i, j, k)] = transposed[k + i * nz];
             }
+        }
+    }
+}
+
+// each batch method mirrors its single-call sibling per variable, but selects
+// the variant once and stacks every variable's RHS into one widened dgbsvx
+// (NRHS = p_n * n_vars). dgbsvx solves each column independently, so the
+// per-variable output is bit-identical to n_vars separate do_grad_* calls.
+
+void BandedCompactDerivs::do_grad_x_batch(double **du_arr,
+                                          const double **u_arr,
+                                          unsigned int n_vars, const double dx,
+                                          const unsigned int *sz,
+                                          const unsigned int bflag) {
+    if (n_vars == 0) return;
+    check_block_size(sz, p_n);
+    const double alpha    = (Q_parity_ > 0.0) ? 1.0 / (dx * dx) : 1.0 / dx;
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
+    Variant &v            = select_x(bflag);
+    ensure_batch_scratch(n_vars);
+    const int ncols = (int)ny * (int)n_vars;
+
+    for (unsigned int k = 0; k < nz; k++) {
+        // stacked RHS = alpha * Q * u, one column-block per variable
+        for (unsigned int vv = 0; vv < n_vars; vv++) {
+            const double *const u_slice = u_arr[vv] + (size_t)k * nx * ny;
+            for (unsigned int j = 0; j < ny; j++) {
+                double *const u_row   = const_cast<double *>(u_slice) + j * nx;
+                double *const rhs_col =
+                    batch_B_.data() + ((size_t)vv * ny + j) * nx;
+                bandedMatrixVectorMult(rhs_col, v.Qb.data(), u_row, v.qkl,
+                                       v.qku, alpha, p_n);
+            }
+        }
+
+        lapack::dgbsvx_cpp_safe(
+            v.vars->FACT, v.vars->TRANS, (int)nx, &v.pkl, &v.pku, ncols,
+            v.Pb.data(), v.vars->LDAB, v.vars->AFB, v.vars->LDAFB,
+            v.vars->IPIV, v.vars->EQUED, v.vars->R, v.vars->C, batch_B_.data(),
+            (int)nx, batch_X_.data(), (int)nx, v.vars->RCOND,
+            batch_ferr_.data(), batch_berr_.data(), v.vars->WORK,
+            v.vars->IWORK, v.vars->INFO);
+
+        // scatter each variable's solution back into its own output block
+        for (unsigned int vv = 0; vv < n_vars; vv++) {
+            double *const du_slice = du_arr[vv] + (size_t)k * nx * ny;
+            std::memcpy(du_slice, batch_X_.data() + (size_t)vv * ny * nx,
+                        (size_t)nx * ny * sizeof(double));
+        }
+    }
+}
+
+void BandedCompactDerivs::do_grad_y_batch(double **du_arr,
+                                          const double **u_arr,
+                                          unsigned int n_vars, const double dx,
+                                          const unsigned int *sz,
+                                          const unsigned int bflag) {
+    if (n_vars == 0) return;
+    check_block_size(sz, p_n);
+    const double alpha    = (Q_parity_ > 0.0) ? 1.0 / (dx * dx) : 1.0 / dx;
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
+    Variant &v            = select_y(bflag);
+    ensure_batch_scratch(n_vars);
+    const int ncols       = (int)nx * (int)n_vars;
+    // gather scratch for one transposed y-line; workspace_ is idle here
+    double *const tcol    = workspace_.data();
+
+    for (unsigned int k = 0; k < nz; k++) {
+        for (unsigned int vv = 0; vv < n_vars; vv++) {
+            const double *const u_slice = u_arr[vv] + (size_t)k * nx * ny;
+            for (unsigned int i = 0; i < nx; i++) {
+                for (unsigned int j = 0; j < ny; j++)
+                    tcol[j] = u_slice[i + j * nx];
+                double *const rhs_col =
+                    batch_B_.data() + ((size_t)vv * nx + i) * ny;
+                bandedMatrixVectorMult(rhs_col, v.Qb.data(), tcol, v.qkl,
+                                       v.qku, alpha, p_n);
+            }
+        }
+
+        lapack::dgbsvx_cpp_safe(
+            v.vars->FACT, v.vars->TRANS, (int)ny, &v.pkl, &v.pku, ncols,
+            v.Pb.data(), v.vars->LDAB, v.vars->AFB, v.vars->LDAFB,
+            v.vars->IPIV, v.vars->EQUED, v.vars->R, v.vars->C, batch_B_.data(),
+            (int)ny, batch_X_.data(), (int)ny, v.vars->RCOND,
+            batch_ferr_.data(), batch_berr_.data(), v.vars->WORK,
+            v.vars->IWORK, v.vars->INFO);
+
+        for (unsigned int vv = 0; vv < n_vars; vv++) {
+            double *const du_slice    = du_arr[vv] + (size_t)k * nx * ny;
+            const double *const x_blk = batch_X_.data() + (size_t)vv * nx * ny;
+            for (unsigned int i = 0; i < nx; i++)
+                for (unsigned int j = 0; j < ny; j++)
+                    du_slice[INDEX_N2D(i, j, nx)] = x_blk[j + i * ny];
+        }
+    }
+}
+
+void BandedCompactDerivs::do_grad_z_batch(double **du_arr,
+                                          const double **u_arr,
+                                          unsigned int n_vars, const double dx,
+                                          const unsigned int *sz,
+                                          const unsigned int bflag) {
+    if (n_vars == 0) return;
+    check_block_size(sz, p_n);
+    const double alpha    = (Q_parity_ > 0.0) ? 1.0 / (dx * dx) : 1.0 / dx;
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
+    Variant &v            = select_z(bflag);
+    ensure_batch_scratch(n_vars);
+    const int ncols       = (int)nx * (int)n_vars;
+    // gather scratch for one transposed z-line; workspace_ is idle here
+    double *const tcol    = workspace_.data();
+
+    for (unsigned int j = 0; j < ny; j++) {
+        for (unsigned int vv = 0; vv < n_vars; vv++) {
+            const double *const u = u_arr[vv];
+            for (unsigned int i = 0; i < nx; i++) {
+                for (unsigned int k = 0; k < nz; k++)
+                    tcol[k] = u[INDEX_3D(i, j, k)];
+                double *const rhs_col =
+                    batch_B_.data() + ((size_t)vv * nx + i) * nz;
+                bandedMatrixVectorMult(rhs_col, v.Qb.data(), tcol, v.qkl,
+                                       v.qku, alpha, p_n);
+            }
+        }
+
+        lapack::dgbsvx_cpp_safe(
+            v.vars->FACT, v.vars->TRANS, (int)nz, &v.pkl, &v.pku, ncols,
+            v.Pb.data(), v.vars->LDAB, v.vars->AFB, v.vars->LDAFB,
+            v.vars->IPIV, v.vars->EQUED, v.vars->R, v.vars->C, batch_B_.data(),
+            (int)nz, batch_X_.data(), (int)nz, v.vars->RCOND,
+            batch_ferr_.data(), batch_berr_.data(), v.vars->WORK,
+            v.vars->IWORK, v.vars->INFO);
+
+        for (unsigned int vv = 0; vv < n_vars; vv++) {
+            double *const du          = du_arr[vv];
+            const double *const x_blk = batch_X_.data() + (size_t)vv * nx * nz;
+            for (unsigned int i = 0; i < nx; i++)
+                for (unsigned int k = 0; k < nz; k++)
+                    du[INDEX_3D(i, j, k)] = x_blk[k + i * nz];
         }
     }
 }

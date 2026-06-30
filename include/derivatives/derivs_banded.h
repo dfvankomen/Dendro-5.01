@@ -44,6 +44,24 @@ class BandedCompactDerivs : public CompactDerivs {
     // workspace for matmul + solve (reused across directions, not thread-safe)
     std::vector<double> workspace_;
 
+    // batched-solve scratch (grown on demand). separate from workspace_ and
+    // the per-variant FERR/BERR because the widened NRHS = p_n*n_vars overruns
+    // them. B/X hold p_n*(p_n*n_vars); ferr/berr hold p_n*n_vars.
+    std::vector<double> batch_B_;
+    std::vector<double> batch_X_;
+    std::vector<double> batch_ferr_;
+    std::vector<double> batch_berr_;
+
+    // ensure the batch scratch can hold n_vars stacked RHS for this p_n
+    inline void ensure_batch_scratch(unsigned int n_vars) {
+        const size_t ncols = (size_t)p_n * n_vars;
+        const size_t need  = (size_t)p_n * ncols;
+        if (batch_B_.size() < need) batch_B_.resize(need);
+        if (batch_X_.size() < need) batch_X_.resize(need);
+        if (batch_ferr_.size() < ncols) batch_ferr_.resize(ncols);
+        if (batch_berr_.size() < ncols) batch_berr_.resize(ncols);
+    }
+
     // ignored: kept only because old derived classes still pass it in.
     BandedMatrixDiagonalWidths *kVals = nullptr;
 
@@ -109,6 +127,22 @@ class BandedCompactDerivs : public CompactDerivs {
                    const unsigned int *sz, const unsigned int bflag) override;
     void do_grad_z(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) override;
+
+    // batched solve: factor is already shared, so the win is selecting the
+    // variant once and widening the per-slice dgbsvx to NRHS = p_n*n_vars.
+    // dgbsvx solves each column independently -> bit-identical to N singles.
+    void do_grad_x_batch(double **du_arr, const double **u_arr,
+                         unsigned int n_vars, const double dx,
+                         const unsigned int *sz,
+                         const unsigned int bflag) override;
+    void do_grad_y_batch(double **du_arr, const double **u_arr,
+                         unsigned int n_vars, const double dx,
+                         const unsigned int *sz,
+                         const unsigned int bflag) override;
+    void do_grad_z_batch(double **du_arr, const double **u_arr,
+                         unsigned int n_vars, const double dx,
+                         const unsigned int *sz,
+                         const unsigned int bflag) override;
 
     void set_maximum_block_size(size_t block_size) override {};
 };
