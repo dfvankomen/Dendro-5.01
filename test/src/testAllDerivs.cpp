@@ -8,9 +8,25 @@
 #include <vector>
 
 #include "derivatives.h"
+#include "derivatives/derivs_explicit.h"  // deriv644_x<> for the direct-call arm
 #include "derivatives/derivs_factory.h"
 
 using namespace dendroderivs;
+
+// compiler barrier: force a value to be treated as opaque (defeats
+// devirtualization / constant-folding of the pointer). standard microbench
+// trick; no-op on compilers without GNU inline asm.
+#if defined(__GNUC__) || defined(__clang__)
+template <typename T>
+static inline void launder(T &v) {
+    asm volatile("" : "+r"(v));
+}
+static inline void touch(void *p) { asm volatile("" : : "g"(p) : "memory"); }
+#else
+template <typename T>
+static inline void launder(T &) {}
+static inline void touch(void *) {}
+#endif
 
 // simple sine test function: u = sin(2*pi*x) * sin(2*pi*y) * sin(2*pi*z)
 // analytical dx = 2*pi * cos(2*pi*x) * sin(2*pi*y) * sin(2*pi*z)
@@ -61,6 +77,85 @@ static double compute_rmse(const double *a, const double *b, unsigned int n,
         }
     }
     return count > 0 ? sqrt(sum / count) : 0.0;
+}
+
+/**
+ * @brief Settle the explicit-dispatch cost question with data: time the SAME
+ *        E6 grad_x stencil reached three ways and report ns/call.
+ *
+ *   vtable  - virtual call through a laundered Derivs* base pointer
+ *   rawptr  - indirect call through the cached raw fn pointer (current path)
+ *   direct  - direct call to deriv644_x<3> that the compiler can inline
+ *
+ * All three run the identical stencil, so the deltas isolate dispatch +
+ * lost-inlining cost. A small block maximizes the per-call dispatch fraction;
+ * a large block shows how quickly it washes out against the O(n^3) loop.
+ */
+static void run_dispatch_microbench(unsigned int eleorder) {
+    std::vector<double> empty_coeffs, test_coeffs = {0.5};
+    std::string no_filter = "none";
+    auto &first_reg       = get_first_order_registry();
+    auto deriv = first_reg.at("E6")(eleorder, no_filter, empty_coeffs,
+                                    test_coeffs, 1);
+    Derivs *praw          = deriv.get();
+    const unsigned int big = (4 * eleorder + 1) * (4 * eleorder + 1) *
+                             (4 * eleorder + 1);
+    deriv->set_maximum_block_size(big);
+
+    const double dx                      = 0.05;
+    const unsigned int iters             = 20000;
+    const std::vector<unsigned int> ns_v = {2 * eleorder + 1, 4 * eleorder + 1};
+
+    std::cout << "\n===== Dispatch microbench (E6 grad_x, ns/call) ====="
+              << std::endl;
+    std::cout << "same stencil, three dispatch paths; lower = faster"
+              << std::endl;
+    std::cout << std::left << std::setw(8) << "n" << std::setw(12) << "vtable"
+              << std::setw(12) << "rawptr" << std::setw(12) << "direct"
+              << "ptr-vs-direct" << std::endl;
+
+    for (auto n : ns_v) {
+        const unsigned int sz[3] = {n, n, n};
+        const unsigned int total = n * n * n;
+        std::vector<double> u(total), du(total, 0.0);
+        for (unsigned int i = 0; i < total; i++) u[i] = sin(0.1 * i);
+
+        auto best = [&](auto fn) {
+            double b = 1e300;
+            for (int rep = 0; rep < 5; rep++) {
+                auto t0 = std::chrono::high_resolution_clock::now();
+                for (unsigned int it = 0; it < iters; it++) {
+                    fn();
+                    touch(du.data());
+                }
+                auto t1 = std::chrono::high_resolution_clock::now();
+                double nsc =
+                    std::chrono::duration<double, std::nano>(t1 - t0).count() /
+                    iters;
+                if (nsc < b) b = nsc;
+            }
+            return b;
+        };
+
+        double tv = best([&]() {
+            Derivs *p = praw;
+            launder(p);  // opaque base ptr -> real vtable dispatch
+            p->do_grad_x(du.data(), u.data(), dx, sz, 0);
+        });
+        double tr = best([&]() {
+            Derivs::RawStencilFn f = praw->get_raw_grad_x();
+            launder(f);  // opaque fn ptr -> real indirect call
+            f(du.data(), u.data(), dx, sz, 0);
+        });
+        double td = best([&]() {
+            deriv644_x<3>(du.data(), u.data(), dx, sz, 0);
+        });
+
+        std::cout << std::left << std::setw(8) << n << std::fixed
+                  << std::setprecision(1) << std::setw(12) << tv
+                  << std::setw(12) << tr << std::setw(12) << td
+                  << std::setprecision(2) << (tr - td) << " ns" << std::endl;
+    }
 }
 
 /**
@@ -802,6 +897,9 @@ int main() {
     std::cout << std::string(60, '-') << std::endl;
     std::cout << "Fused-block correctness: " << fused_pass << " pass, "
               << fused_fail << " fail" << std::endl;
+
+    // quantify explicit-dispatch overhead (vtable vs raw fn ptr vs direct)
+    run_dispatch_microbench(eleorder);
 
     // mixed 2nd-derivative facade API correctness across engine kinds
     int mixed_fail = run_mixed_second_test(eleorder);
