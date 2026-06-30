@@ -551,6 +551,37 @@ class MatrixCompactDerivs : public CompactDerivs {
         }
     }
 
+    // expose the fused mixed-2nd kernels to the facade (1st-order only;
+    // 2nd-order operators don't compose this way). isotropic only — the
+    // fused ops scale both Ds by 1/h, matching the facade's dx==dy guard.
+    bool try_fused_grad_xy_last(double *const w, const double *const u,
+                                const double h, const unsigned int *sz,
+                                const unsigned int bflag) override {
+        if constexpr (DerivOrder == 1) {
+            do_grad_xy_last(w, u, h, sz, bflag);
+            return true;
+        }
+        return false;
+    }
+    bool try_fused_grad_xz_last(double *const w, const double *const u,
+                                const double h, const unsigned int *sz,
+                                const unsigned int bflag) override {
+        if constexpr (DerivOrder == 1) {
+            do_grad_xz_last(w, u, h, sz, bflag);
+            return true;
+        }
+        return false;
+    }
+    bool try_fused_grad_yz_last(double *const w, const double *const u,
+                                const double h, const unsigned int *sz,
+                                const unsigned int bflag) override {
+        if constexpr (DerivOrder == 1) {
+            do_grad_yz_last(w, u, h, sz, bflag);
+            return true;
+        }
+        return false;
+    }
+
     // batch overrides: pre-scale D once and apply to all variables,
     // keeping the scaled matrix and kernel hot in cache
     void do_grad_x_batch(double **du_arr, const double **u_arr,
