@@ -533,6 +533,15 @@ class Derivs {
      * derivatives in mixed-2nd-order chains. The next operator in the
      * chain reads padding cells that the _last path leaves untouched.
      *
+     * _last is a performance hint, never required for correctness: interior
+     * output is bit-identical to plain do_grad_* on every engine (explicit
+     * falls back to the plain stencil; matrix/compact/banded apply the same
+     * operator, with any in-matrix filter already merged in, and only toggle
+     * whether padding cells are written). So plain grad_y on the final
+     * application of a mixed chain is correct; _last there is just a speedup,
+     * even for the compact/implicit schemes. The hard rule is the negative one
+     * above: never _last an intermediate derivative.
+     *
      * (grad_z does not have a _last variant: the project convention is
      * "z is always last in mixed chains", so do_grad_z already
      * unconditionally skips the y-padding output cells.)
@@ -887,6 +896,14 @@ class DendroDerivatives {
     // padding cells, recovering a ~3.4x speedup on x and ~1.9x on y at
     // eleorder=6. See Derivs::do_grad_x_last for the full contract.
     //
+    // _last is an optimization, NOT a correctness requirement: interior
+    // output matches plain grad_* bit-for-bit on every engine (explicit,
+    // matrix, compact, banded). So plain grad_y on the final application
+    // of a mixed chain is correct; grad_y_last there just adds the
+    // padding-skip speedup. The only hard rule is the inverse — never use
+    // _last for the INTERMEDIATE derivative of a mixed chain, whose output
+    // is re-read (padding included) by the next operator.
+    //
     // grad_z has no _last variant because do_grad_z already
     // unconditionally skips by project convention.
     void grad_x_last(double *du, const double *u, double dx,
@@ -990,17 +1007,74 @@ class DendroDerivatives {
     void grad_x_batch(double **du_arr, const double **u_arr,
                       unsigned int n_vars, double dx,
                       const unsigned int *sz, unsigned int bflag) {
-        _first_deriv->do_grad_x_batch(du_arr, u_arr, n_vars, dx, sz, bflag);
+        // explicit schemes: loop the raw fn so batch keeps per-call's
+        // devirtualization. matrix/banded have no raw fn -> shared-operator path.
+        if (_raw_1st_grad_x) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_1st_grad_x(du_arr[v], u_arr[v], dx, sz, bflag);
+        } else {
+            _first_deriv->do_grad_x_batch(du_arr, u_arr, n_vars, dx, sz, bflag);
+        }
     }
     void grad_y_batch(double **du_arr, const double **u_arr,
                       unsigned int n_vars, double dy,
                       const unsigned int *sz, unsigned int bflag) {
-        _first_deriv->do_grad_y_batch(du_arr, u_arr, n_vars, dy, sz, bflag);
+        if (_raw_1st_grad_y) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_1st_grad_y(du_arr[v], u_arr[v], dy, sz, bflag);
+        } else {
+            _first_deriv->do_grad_y_batch(du_arr, u_arr, n_vars, dy, sz, bflag);
+        }
     }
     void grad_z_batch(double **du_arr, const double **u_arr,
                       unsigned int n_vars, double dz,
                       const unsigned int *sz, unsigned int bflag) {
-        _first_deriv->do_grad_z_batch(du_arr, u_arr, n_vars, dz, sz, bflag);
+        if (_raw_1st_grad_z) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_1st_grad_z(du_arr[v], u_arr[v], dz, sz, bflag);
+        } else {
+            _first_deriv->do_grad_z_batch(du_arr, u_arr, n_vars, dz, sz, bflag);
+        }
+    }
+
+    /**
+     * @brief Batch second derivatives (grad_xx/yy/zz) for n_vars variables.
+     *
+     * Routes through the second-derivative operator's do_grad_*_batch (second
+     * derivatives are first-order applications of the 2nd-order operator), so
+     * it reuses the same shared-operator batch the first-order path uses; no
+     * separate do_grad_xx_batch family is needed. Explicit stencils keep their
+     * raw-fn devirtualization.
+     */
+    void grad_xx_batch(double **du_arr, const double **u_arr,
+                       unsigned int n_vars, double dx,
+                       const unsigned int *sz, unsigned int bflag) {
+        if (_raw_2nd_grad_x) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_2nd_grad_x(du_arr[v], u_arr[v], dx, sz, bflag);
+        } else {
+            _second_deriv->do_grad_x_batch(du_arr, u_arr, n_vars, dx, sz, bflag);
+        }
+    }
+    void grad_yy_batch(double **du_arr, const double **u_arr,
+                       unsigned int n_vars, double dy,
+                       const unsigned int *sz, unsigned int bflag) {
+        if (_raw_2nd_grad_y) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_2nd_grad_y(du_arr[v], u_arr[v], dy, sz, bflag);
+        } else {
+            _second_deriv->do_grad_y_batch(du_arr, u_arr, n_vars, dy, sz, bflag);
+        }
+    }
+    void grad_zz_batch(double **du_arr, const double **u_arr,
+                       unsigned int n_vars, double dz,
+                       const unsigned int *sz, unsigned int bflag) {
+        if (_raw_2nd_grad_z) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_2nd_grad_z(du_arr[v], u_arr[v], dz, sz, bflag);
+        } else {
+            _second_deriv->do_grad_z_batch(du_arr, u_arr, n_vars, dz, sz, bflag);
+        }
     }
 
     std::string toString() {
