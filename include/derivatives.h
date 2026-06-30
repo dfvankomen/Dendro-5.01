@@ -637,24 +637,27 @@ class Derivs {
 
     /**
      * Single-pass fused mixed 2nd derivative (d^2/dab) for engines that
-     * provide one. h is the (isotropic) grid spacing — both operators are
-     * scaled by 1/h, so the fused path is only valid when the two spacings
-     * are equal. Returns false if this engine has no fused path; the facade
-     * then composes two 1st-order passes instead. Only matrix engines
-     * override these; the default is "unsupported".
+     * provide one. The two spacings are the per-axis grid steps (e.g.
+     * (dx, dy) for xy); the operators are scaled independently, so this is
+     * correct for anisotropic blocks. Returns false if this engine has no
+     * fused path; the facade then composes two 1st-order passes instead.
+     * Only matrix engines override these; the default is "unsupported".
      */
     virtual bool try_fused_grad_xy_last(double *const, const double *const,
-                                        const double, const unsigned int *,
+                                        const double, const double,
+                                        const unsigned int *,
                                         const unsigned int) {
         return false;
     }
     virtual bool try_fused_grad_xz_last(double *const, const double *const,
-                                        const double, const unsigned int *,
+                                        const double, const double,
+                                        const unsigned int *,
                                         const unsigned int) {
         return false;
     }
     virtual bool try_fused_grad_yz_last(double *const, const double *const,
-                                        const double, const unsigned int *,
+                                        const double, const double,
+                                        const unsigned int *,
                                         const unsigned int) {
         return false;
     }
@@ -1107,35 +1110,32 @@ class DendroDerivatives {
      * Computed from the FIRST-derivative operator applied twice — this is a
      * standalone entry for solvers that need the mixed second but not the
      * standalone 1st derivatives. When the engine has a fused single-pass
-     * kernel and the two spacings are equal it uses that; otherwise it
-     * composes two 1st-order passes through the caller-provided workspace
-     * (block-sized scratch, same convention as filter()). The intermediate
-     * uses the non-_last pass (its padding is read by the second operator);
-     * the output is terminal, so its padding cells are not written.
+     * kernel it uses that (anisotropic-correct); otherwise it composes two
+     * 1st-order passes through the caller-provided workspace (block-sized
+     * scratch, same convention as filter()). The intermediate uses the
+     * non-_last pass (its padding is read by the second operator); the output
+     * is terminal, so its padding cells are not written.
      *
      * @param workspace block-sized scratch (>= product of sz); not aliased
      *                  with du or u.
      */
     void grad_xy(double *du, const double *u, double *workspace, double dx,
                  double dy, const unsigned int *sz, unsigned int bflag) {
-        if (dx == dy &&
-            _first_deriv->try_fused_grad_xy_last(du, u, dx, sz, bflag))
+        if (_first_deriv->try_fused_grad_xy_last(du, u, dx, dy, sz, bflag))
             return;
         grad_x(workspace, u, dx, sz, bflag);
         grad_y_last(du, workspace, dy, sz, bflag);
     }
     void grad_xz(double *du, const double *u, double *workspace, double dx,
                  double dz, const unsigned int *sz, unsigned int bflag) {
-        if (dx == dz &&
-            _first_deriv->try_fused_grad_xz_last(du, u, dx, sz, bflag))
+        if (_first_deriv->try_fused_grad_xz_last(du, u, dx, dz, sz, bflag))
             return;
         grad_x(workspace, u, dx, sz, bflag);
         grad_z(du, workspace, dz, sz, bflag);  // grad_z is always last
     }
     void grad_yz(double *du, const double *u, double *workspace, double dy,
                  double dz, const unsigned int *sz, unsigned int bflag) {
-        if (dy == dz &&
-            _first_deriv->try_fused_grad_yz_last(du, u, dy, sz, bflag))
+        if (_first_deriv->try_fused_grad_yz_last(du, u, dy, dz, sz, bflag))
             return;
         grad_y(workspace, u, dy, sz, bflag);
         grad_z(du, workspace, dz, sz, bflag);  // grad_z is always last

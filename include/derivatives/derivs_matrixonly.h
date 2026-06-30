@@ -274,9 +274,15 @@ class MatrixCompactDerivs : public CompactDerivs {
     // mixed 2nd-derivs use two 1st-order applications, so this is the
     // relevant order. Output: w in i in [0, nx), j in [pw, ny-pw),
     // k in [pw, nz-pw). The y- and z-padding cells of w are NOT written.
+    // isotropic forwarder (kept for existing callers): dx == dy
     void do_grad_xy_last(double *const w, const double *const u,
                          const double dx, const unsigned int *sz,
                          const unsigned int bflag) {
+        do_grad_xy_last(w, u, dx, dx, sz, bflag);
+    }
+    void do_grad_xy_last(double *const w, const double *const u,
+                         const double dx, const double dy,
+                         const unsigned int *sz, const unsigned int bflag) {
         static_assert(DerivOrder == 1,
                       "do_grad_xy_last is only for 1st-order MatrixCompactDerivs");
         const unsigned int nx = sz[0];
@@ -289,15 +295,17 @@ class MatrixCompactDerivs : public CompactDerivs {
         auto *Dx = get_deriv_mat_by_bflag_x(sx, bflag);
         auto *Dy = get_deriv_mat_by_bflag_y(sy, bflag);
 
-        // pre-scale both Ds by 1/dx so each per-slice GEMM applies 1/dx,
-        // and the product applies 1/dx^2 as required for d^2/dxdy
-        const double alpha = 1.0 / dx;
+        // pre-scale Dx by 1/dx and Dy by 1/dy so the per-slice GEMMs apply
+        // each axis spacing; their product gives the d^2/dxdy scaling
+        // (1/(dx*dy)). dx==dy recovers the isotropic 1/dx^2.
+        const double alpha_x = 1.0 / dx;
+        const double alpha_y = 1.0 / dy;
         std::vector<double> Dx_scaled(nx * nx);
         std::vector<double> Dy_scaled(ny * ny);
         for (size_t i = 0; i < (size_t)nx * nx; i++)
-            Dx_scaled[i] = Dx->data()[i] * alpha;
+            Dx_scaled[i] = Dx->data()[i] * alpha_x;
         for (size_t i = 0; i < (size_t)ny * ny; i++)
-            Dy_scaled[i] = Dy->data()[i] * alpha;
+            Dy_scaled[i] = Dy->data()[i] * alpha_y;
 
         // per-slice intermediate buffer; (nx * ny) doubles fits in L1 at
         // typical block sizes. Sized once.
@@ -321,7 +329,7 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         if (!kx || !ky_skip) {
             this->do_grad_x(tmp.data(), u, dx, sz, bflag);
-            this->do_grad_y_last(w, tmp.data(), dx, sz, bflag);
+            this->do_grad_y_last(w, tmp.data(), dy, sz, bflag);
             return;
         }
 
@@ -359,9 +367,15 @@ class MatrixCompactDerivs : public CompactDerivs {
     // (project convention) so it reads tmp only at active y; grad_x writes
     // tmp at all y, wasting ~46% on the y-padding cells. Fused only
     // computes tmp at active y.
+    // isotropic forwarder (kept for existing callers): dx == dz
     void do_grad_xz_last(double *const w, const double *const u,
                          const double dx, const unsigned int *sz,
                          const unsigned int bflag) {
+        do_grad_xz_last(w, u, dx, dx, sz, bflag);
+    }
+    void do_grad_xz_last(double *const w, const double *const u,
+                         const double dx, const double dz,
+                         const unsigned int *sz, const unsigned int bflag) {
         static_assert(DerivOrder == 1,
                       "do_grad_xz_last is only for 1st-order MatrixCompactDerivs");
         const unsigned int nx = sz[0];
@@ -374,13 +388,14 @@ class MatrixCompactDerivs : public CompactDerivs {
         auto *Dx  = get_deriv_mat_by_bflag_x(sx, bflag);
         auto *Dz  = get_deriv_mat_by_bflag_z(sz_s, bflag);
 
-        const double alpha = 1.0 / dx;
+        const double alpha_x = 1.0 / dx;
+        const double alpha_z = 1.0 / dz;
         std::vector<double> Dx_scaled(nx * nx);
         std::vector<double> Dz_scaled(nz * nz);
         for (size_t i = 0; i < (size_t)nx * nx; i++)
-            Dx_scaled[i] = Dx->data()[i] * alpha;
+            Dx_scaled[i] = Dx->data()[i] * alpha_x;
         for (size_t i = 0; i < (size_t)nz * nz; i++)
-            Dz_scaled[i] = Dz->data()[i] * alpha;
+            Dz_scaled[i] = Dz->data()[i] * alpha_z;
 
         std::vector<double> tmp((size_t)nx * nz);
 
@@ -404,7 +419,7 @@ class MatrixCompactDerivs : public CompactDerivs {
             // fallback: do the chain with a heap intermediate
             std::vector<double> chain_tmp((size_t)nx * ny * nz);
             this->do_grad_x(chain_tmp.data(), u, dx, sz, bflag);
-            this->do_grad_z(w, chain_tmp.data(), dx, sz, bflag);
+            this->do_grad_z(w, chain_tmp.data(), dz, sz, bflag);
             return;
         }
 
@@ -449,9 +464,15 @@ class MatrixCompactDerivs : public CompactDerivs {
     // doubles = 9.5 KB, comfortably in L1. Chain saves vs. chain by
     // avoiding grad_y's writes to y-padding cells AND by reusing the
     // tmp from L1 instead of reading it from RAM in grad_z.
+    // isotropic forwarder (kept for existing callers): dy == dz
     void do_grad_yz_last(double *const w, const double *const u,
-                         const double dx, const unsigned int *sz,
+                         const double dy, const unsigned int *sz,
                          const unsigned int bflag) {
+        do_grad_yz_last(w, u, dy, dy, sz, bflag);
+    }
+    void do_grad_yz_last(double *const w, const double *const u,
+                         const double dy, const double dz,
+                         const unsigned int *sz, const unsigned int bflag) {
         static_assert(DerivOrder == 1,
                       "do_grad_yz_last is only for 1st-order MatrixCompactDerivs");
         const unsigned int nx = sz[0];
@@ -464,13 +485,14 @@ class MatrixCompactDerivs : public CompactDerivs {
         auto *Dy  = get_deriv_mat_by_bflag_y(sy, bflag);
         auto *Dz  = get_deriv_mat_by_bflag_z(sz_s, bflag);
 
-        const double alpha = 1.0 / dx;
+        const double alpha_y = 1.0 / dy;
+        const double alpha_z = 1.0 / dz;
         std::vector<double> Dy_scaled(ny * ny);
         std::vector<double> Dz_scaled(nz * nz);
         for (size_t i = 0; i < (size_t)ny * ny; i++)
-            Dy_scaled[i] = Dy->data()[i] * alpha;
+            Dy_scaled[i] = Dy->data()[i] * alpha_y;
         for (size_t i = 0; i < (size_t)nz * nz; i++)
-            Dz_scaled[i] = Dz->data()[i] * alpha;
+            Dz_scaled[i] = Dz->data()[i] * alpha_z;
 
         const unsigned int y_start   = pw;
         const unsigned int z_start   = pw;
@@ -493,8 +515,8 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         if (!ky_skip || !kz_skip) {
             std::vector<double> chain_tmp((size_t)nx * ny * nz);
-            this->do_grad_y(chain_tmp.data(), u, dx, sz, bflag);
-            this->do_grad_z(w, chain_tmp.data(), dx, sz, bflag);
+            this->do_grad_y(chain_tmp.data(), u, dy, sz, bflag);
+            this->do_grad_z(w, chain_tmp.data(), dz, sz, bflag);
             return;
         }
 
@@ -555,28 +577,31 @@ class MatrixCompactDerivs : public CompactDerivs {
     // 2nd-order operators don't compose this way). isotropic only — the
     // fused ops scale both Ds by 1/h, matching the facade's dx==dy guard.
     bool try_fused_grad_xy_last(double *const w, const double *const u,
-                                const double h, const unsigned int *sz,
+                                const double dx, const double dy,
+                                const unsigned int *sz,
                                 const unsigned int bflag) override {
         if constexpr (DerivOrder == 1) {
-            do_grad_xy_last(w, u, h, sz, bflag);
+            do_grad_xy_last(w, u, dx, dy, sz, bflag);
             return true;
         }
         return false;
     }
     bool try_fused_grad_xz_last(double *const w, const double *const u,
-                                const double h, const unsigned int *sz,
+                                const double dx, const double dz,
+                                const unsigned int *sz,
                                 const unsigned int bflag) override {
         if constexpr (DerivOrder == 1) {
-            do_grad_xz_last(w, u, h, sz, bflag);
+            do_grad_xz_last(w, u, dx, dz, sz, bflag);
             return true;
         }
         return false;
     }
     bool try_fused_grad_yz_last(double *const w, const double *const u,
-                                const double h, const unsigned int *sz,
+                                const double dy, const double dz,
+                                const unsigned int *sz,
                                 const unsigned int bflag) override {
         if constexpr (DerivOrder == 1) {
-            do_grad_yz_last(w, u, h, sz, bflag);
+            do_grad_yz_last(w, u, dy, dz, sz, bflag);
             return true;
         }
         return false;
