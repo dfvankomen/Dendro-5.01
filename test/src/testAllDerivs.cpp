@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 
+#include <sys/wait.h>
+#include <unistd.h>
+
 #include "derivatives.h"
 #include "derivatives/derivs_explicit.h"  // deriv644_x<> for the direct-call arm
 #include "derivatives/derivs_factory.h"
@@ -77,6 +80,75 @@ static double compute_rmse(const double *a, const double *b, unsigned int n,
         }
     }
     return count > 0 ? sqrt(sum / count) : 0.0;
+}
+
+/**
+ * @brief Clone-safety check for the block-parallel model: each block-thread
+ *        runs on its own clone(), so a clone must reproduce the original's
+ *        output exactly.
+ *
+ * For each engine: build it, clone it, run grad_x on both, compare. Each engine
+ * runs in a forked child so a clone that dereferences uninitialized state
+ * (e.g. a null factorization) is reported as CRASH instead of taking down the
+ * whole harness. Informational — does not gate the suite return code.
+ */
+static void run_clone_safety_check(unsigned int eleorder) {
+    const unsigned int n     = eleorder * 2 + 1;
+    const unsigned int sz[3] = {n, n, n};
+    const unsigned int total = n * n * n;
+    const double dx          = 0.05;
+    const std::vector<std::string> names = {"E6", "E6Matrix", "JTT6",
+                                            "JTT6Banded"};
+
+    std::cout << "\n===== Clone-safety check (orig vs clone, grad_x) ====="
+              << std::endl;
+    std::cout << "each engine cloned then run; clone output must match original"
+              << std::endl;
+    std::cout << std::left << std::setw(16) << "engine" << "result"
+              << std::endl;
+
+    std::vector<double> empty, test_coeffs = {0.5};
+    std::string no_filter = "none";
+    auto &reg             = get_first_order_registry();
+
+    for (auto &name : names) {
+        std::cout.flush();
+        pid_t pid = fork();
+        if (pid == 0) {
+            // child: build, clone, compare — any crash is contained here
+            auto orig = reg.at(name)(eleorder, no_filter, empty, test_coeffs, 1);
+            orig->set_maximum_block_size(total);
+            auto cl = orig->clone();
+            cl->set_maximum_block_size(total);
+
+            std::vector<double> u(total), ref(total, 0.0), got(total, 0.0);
+            for (unsigned int i = 0; i < total; i++) u[i] = sin(0.1 * i);
+            orig->do_grad_x(ref.data(), u.data(), dx, sz, 0);
+            cl->do_grad_x(got.data(), u.data(), dx, sz, 0);
+
+            int rc = 0;
+            for (unsigned int i = 0; i < total; i++)
+                if (ref[i] != got[i]) {
+                    rc = 2;
+                    break;
+                }
+            _exit(rc);
+        }
+        int status = 0;
+        waitpid(pid, &status, 0);
+        std::string res;
+        if (WIFSIGNALED(status))
+            res = "CRASH (signal " + std::to_string(WTERMSIG(status)) + ")";
+        else if (WIFEXITED(status)) {
+            int e = WEXITSTATUS(status);
+            res   = (e == 0)   ? "OK (clone matches original)"
+                    : (e == 2) ? "MISMATCH (clone != original)"
+                               : "ERROR (exit " + std::to_string(e) + ")";
+        } else
+            res = "UNKNOWN";
+        std::cout << std::left << std::setw(16) << name << res << std::endl;
+    }
+    std::cout << std::string(60, '-') << std::endl;
 }
 
 /**
@@ -433,6 +505,12 @@ static int run_batch_vs_percall(unsigned int eleorder) {
 
 int main() {
     const unsigned int eleorder = 6;
+
+    // run first, while the process is still single-threaded: this forks per
+    // engine, and forking after libxsmm/OpenMP have spawned threads would
+    // deadlock the child on an inherited lock.
+    run_clone_safety_check(eleorder);
+
     const unsigned int pw = eleorder / 2;
     const unsigned int n = eleorder * 2 + 1;  // single block size
     const unsigned int sz[3] = {n, n, n};
