@@ -63,6 +63,191 @@ static double compute_rmse(const double *a, const double *b, unsigned int n,
     return count > 0 ? sqrt(sum / count) : 0.0;
 }
 
+/**
+ * @brief Time batch vs per-call derivatives for each engine kind and verify
+ *        the batch output is bit-identical to the per-call output.
+ *
+ * Runs explicit / matrixonly / compact / banded at the given element order on a
+ * single (2*eleorder+1)^3 block (banded only supports that single-block size).
+ * Reports speedup = per-call_us / batch_us (>1 means batch wins) for grad_x/y/z
+ * and grad_xx/yy/zz, plus an exact-match flag. The generator side uses these
+ * numbers to decide whether to emit grad_*_batch instead of the per-call loop.
+ *
+ * @return number of (engine, nvars) rows whose batch output was NOT
+ *         bit-identical to the per-call output (0 = all exact).
+ */
+static int run_batch_vs_percall(unsigned int eleorder) {
+    const unsigned int pw    = eleorder / 2;
+    const double dx = 0.05, dy = 0.05, dz = 0.05;
+    const unsigned int iters = 200;
+
+    // banded only supports the single-block size (2*eleorder+1); the other
+    // engines run on a larger block so the per-call cost is well above timer
+    // noise. n_small = 13, n_big = 25 at eleorder 6.
+    const unsigned int n_small = eleorder * 2 + 1;
+    const unsigned int n_big   = eleorder * 4 + 1;
+
+    struct EngineSpec {
+        const char *name;
+        const char *kind;
+        unsigned int n;
+    };
+    const std::vector<EngineSpec> engines = {
+        {"E6", "explicit", n_big},
+        {"E6Matrix", "matrixonly", n_big},
+        {"JTT6", "compact", n_big},
+        {"JTT6Banded", "banded", n_small},
+    };
+    const std::vector<unsigned int> var_counts = {1, 25};
+
+    std::cout << "\n===== Batch vs per-call (ele_order " << eleorder
+              << ") =====" << std::endl;
+    std::cout << "speedup = per-call us / batch us  (>1 => batch faster)"
+              << std::endl;
+    std::cout << "gate: batch must be bit-identical and never slower than "
+                 "per-call (>=~1.0)"
+              << std::endl;
+
+    int fails = 0;
+    for (auto &eng : engines) {
+        const unsigned int n     = eng.n;
+        const unsigned int sz[3] = {n, n, n};
+        const unsigned int total = n * n * n;
+
+        DendroDerivatives deriv(eng.name, eng.name, eleorder);
+        deriv.set_maximum_block_size(total);
+
+        std::cout << "\n--- " << eng.name << " (" << eng.kind << ", " << n
+                  << "^3) ---\n"
+                  << std::left << std::setw(6) << "nvars" << std::setw(9)
+                  << "x_spd" << std::setw(9) << "y_spd" << std::setw(9)
+                  << "z_spd" << std::setw(9) << "xx_spd" << std::setw(9)
+                  << "yy_spd" << std::setw(9) << "zz_spd" << "exact"
+                  << std::endl;
+
+        for (auto nv : var_counts) {
+            std::vector<std::vector<double>> u(nv, std::vector<double>(total));
+            std::vector<std::vector<double>> a(nv,
+                                               std::vector<double>(total, 0.0));
+            std::vector<std::vector<double>> b(nv,
+                                               std::vector<double>(total, 0.0));
+            for (unsigned int v = 0; v < nv; v++) {
+                double phase = 0.3 * v;
+                for (unsigned int idx = 0; idx < total; idx++) {
+                    unsigned int i = idx % n, j = (idx / n) % n,
+                                 k = idx / (n * n);
+                    double x = (i - (double)pw) * dx + phase;
+                    double y = (j - (double)pw) * dy;
+                    double z = (k - (double)pw) * dz;
+                    u[v][idx] = sin(2.0 * M_PI * x) * sin(2.0 * M_PI * y) *
+                                sin(2.0 * M_PI * z);
+                }
+            }
+            std::vector<const double *> up(nv);
+            std::vector<double *> ap(nv), bp(nv);
+            for (unsigned int v = 0; v < nv; v++) {
+                up[v] = u[v].data();
+                ap[v] = a[v].data();
+                bp[v] = b[v].data();
+            }
+
+            // min of a few timed runs -> least noise from the tiny per-block
+            // work; returns us per single call
+            auto time_us = [&](auto fn) {
+                double best = 1e300;
+                for (int rep = 0; rep < 3; rep++) {
+                    auto t0 = std::chrono::high_resolution_clock::now();
+                    for (unsigned int it = 0; it < iters; it++) fn();
+                    auto t1 = std::chrono::high_resolution_clock::now();
+                    double us =
+                        std::chrono::duration<double, std::micro>(t1 - t0)
+                            .count() /
+                        iters;
+                    if (us < best) best = us;
+                }
+                return best;
+            };
+
+            bool exact = true;
+            // run per-call into a[] and batch into b[], check identical, then
+            // time both. percall_one(v,out) does one variable; batch_all(out)
+            // does the whole batch.
+            auto bench_dir = [&](auto percall_one, auto batch_all) {
+                for (unsigned int v = 0; v < nv; v++) percall_one(v, ap[v]);
+                batch_all(bp.data());
+                for (unsigned int v = 0; v < nv && exact; v++)
+                    for (unsigned int idx = 0; idx < total; idx++)
+                        if (a[v][idx] != b[v][idx]) {
+                            exact = false;
+                            break;
+                        }
+                double pc = time_us([&]() {
+                    for (unsigned int v = 0; v < nv; v++) percall_one(v, ap[v]);
+                });
+                double bt = time_us([&]() { batch_all(bp.data()); });
+                return bt > 0.0 ? pc / bt : 0.0;
+            };
+
+            double xs = bench_dir(
+                [&](unsigned int v, double *o) {
+                    deriv.grad_x(o, u[v].data(), dx, sz, 0);
+                },
+                [&](double **o) {
+                    deriv.grad_x_batch(o, up.data(), nv, dx, sz, 0);
+                });
+            double ys = bench_dir(
+                [&](unsigned int v, double *o) {
+                    deriv.grad_y(o, u[v].data(), dy, sz, 0);
+                },
+                [&](double **o) {
+                    deriv.grad_y_batch(o, up.data(), nv, dy, sz, 0);
+                });
+            double zs = bench_dir(
+                [&](unsigned int v, double *o) {
+                    deriv.grad_z(o, u[v].data(), dz, sz, 0);
+                },
+                [&](double **o) {
+                    deriv.grad_z_batch(o, up.data(), nv, dz, sz, 0);
+                });
+            double xxs = bench_dir(
+                [&](unsigned int v, double *o) {
+                    deriv.grad_xx(o, u[v].data(), dx, sz, 0);
+                },
+                [&](double **o) {
+                    deriv.grad_xx_batch(o, up.data(), nv, dx, sz, 0);
+                });
+            double yys = bench_dir(
+                [&](unsigned int v, double *o) {
+                    deriv.grad_yy(o, u[v].data(), dy, sz, 0);
+                },
+                [&](double **o) {
+                    deriv.grad_yy_batch(o, up.data(), nv, dy, sz, 0);
+                });
+            double zzs = bench_dir(
+                [&](unsigned int v, double *o) {
+                    deriv.grad_zz(o, u[v].data(), dz, sz, 0);
+                },
+                [&](double **o) {
+                    deriv.grad_zz_batch(o, up.data(), nv, dz, sz, 0);
+                });
+
+            if (!exact) fails++;
+            std::cout << std::left << std::setw(6) << nv << std::fixed
+                      << std::setprecision(2) << std::setw(9) << xs
+                      << std::setw(9) << ys << std::setw(9) << zs
+                      << std::setw(9) << xxs << std::setw(9) << yys
+                      << std::setw(9) << zzs << (exact ? "OK" : "FAIL")
+                      << std::endl;
+        }
+    }
+
+    std::cout << std::string(60, '-') << std::endl;
+    std::cout << "Batch vs per-call exact-match: "
+              << (fails == 0 ? "ALL OK" : std::to_string(fails) + " FAILED")
+              << std::endl;
+    return fails;
+}
+
 int main() {
     const unsigned int eleorder = 6;
     const unsigned int pw = eleorder / 2;
@@ -532,7 +717,11 @@ int main() {
     std::cout << "Fused-block correctness: " << fused_pass << " pass, "
               << fused_fail << " fail" << std::endl;
 
-    return (fail > 0 || coeff_fail > 0 || batch_fail > 0 || fused_fail > 0)
+    // batch-vs-per-call timing + bit-identical gate for all four engine kinds
+    int bench_fail = run_batch_vs_percall(eleorder);
+
+    return (fail > 0 || coeff_fail > 0 || batch_fail > 0 || fused_fail > 0 ||
+            bench_fail > 0)
                ? 1
                : 0;
 }
