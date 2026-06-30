@@ -47,7 +47,10 @@ class JonathanTyler_JTT4_FirstOrder_Banded : public BandedCompactDerivs {
     ~JonathanTyler_JTT4_FirstOrder_Banded() {}
 
     std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTT4_FirstOrder_Banded>(*this);
+        // rebuild from ele_order: the banded copy ctor drops the
+        // factorization (variants_), so a copied clone crashes on first use.
+        return std::make_unique<JonathanTyler_JTT4_FirstOrder_Banded>(
+            p_ele_order);
     }
 
     DerivType getDerivType() const override { return DerivType::D_JTT4; }
@@ -95,7 +98,9 @@ class JonathanTyler_JTT4_SecondOrder_Banded : public BandedCompactDerivs {
     ~JonathanTyler_JTT4_SecondOrder_Banded() {}
 
     std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTT4_SecondOrder_Banded>(*this);
+        // rebuild from ele_order (banded copy ctor drops the factorization)
+        return std::make_unique<JonathanTyler_JTT4_SecondOrder_Banded>(
+            p_ele_order);
     }
 
     DerivType getDerivType() const override { return DerivType::D_JTT4; }
@@ -143,7 +148,9 @@ class JonathanTyler_JTT6_FirstOrder_Banded : public BandedCompactDerivs {
     ~JonathanTyler_JTT6_FirstOrder_Banded() {}
 
     std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTT6_FirstOrder_Banded>(*this);
+        // rebuild from ele_order (banded copy ctor drops the factorization)
+        return std::make_unique<JonathanTyler_JTT6_FirstOrder_Banded>(
+            p_ele_order);
     }
 
     DerivType getDerivType() const override { return DerivType::D_JTT6; }
@@ -191,7 +198,9 @@ class JonathanTyler_JTT6_SecondOrder_Banded : public BandedCompactDerivs {
     ~JonathanTyler_JTT6_SecondOrder_Banded() {}
 
     std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTT6_SecondOrder_Banded>(*this);
+        // rebuild from ele_order (banded copy ctor drops the factorization)
+        return std::make_unique<JonathanTyler_JTT6_SecondOrder_Banded>(
+            p_ele_order);
     }
 
     DerivType getDerivType() const override { return DerivType::D_JTT6; }
@@ -224,7 +233,9 @@ class JonathanTyler_JTP6_FirstOrder_Banded : public BandedCompactDerivs {
     ~JonathanTyler_JTP6_FirstOrder_Banded() {}
 
     std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTP6_FirstOrder_Banded>(*this);
+        // rebuild from ele_order (banded copy ctor drops the factorization)
+        return std::make_unique<JonathanTyler_JTP6_FirstOrder_Banded>(
+            p_ele_order);
     }
 
     DerivType getDerivType() const override { return DerivType::D_JTP6; }
@@ -256,7 +267,9 @@ class JonathanTyler_JTP6_SecondOrder_Banded : public BandedCompactDerivs {
     ~JonathanTyler_JTP6_SecondOrder_Banded() {}
 
     std::unique_ptr<Derivs> clone() const override {
-        return std::make_unique<JonathanTyler_JTP6_SecondOrder_Banded>(*this);
+        // rebuild from ele_order (banded copy ctor drops the factorization)
+        return std::make_unique<JonathanTyler_JTP6_SecondOrder_Banded>(
+            p_ele_order);
     }
 
     DerivType getDerivType() const override { return DerivType::D_JTP6; }
