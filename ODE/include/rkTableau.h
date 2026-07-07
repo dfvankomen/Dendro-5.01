@@ -102,8 +102,10 @@ inline int get_rk_tableau(ETSType type, unsigned int& nstages,
             0.17476028226269036,
             // (125.0 - 1000.0 * sqrt(5.0)) / 3828.0,
             -0.551480662878733,
-            // (3426304.0 - 1661952.0 * sqrt(5.0)) / 5924787.0,
-            -0.04893570812617069,
+            // (3426304.0 + 1661952.0 * sqrt(5.0)) / 5924787.0,
+            // the +sqrt(5) sign matters: a prior -sign made sum(b) = -0.25 (not
+            // 1) and killed convergence. keep it +.
+            1.2055355993965235,
             // (30.0 - 4.0 * sqrt(5.0)) / 123.0,
             0.17118478121951902};
         static const DendroScalar ETS_T[] = {0.0,
