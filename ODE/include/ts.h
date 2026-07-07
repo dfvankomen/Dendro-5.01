@@ -23,7 +23,8 @@ namespace ts {
  */
 // experimental's MSRK trio is canonical; derivatives' Ralston/Cash-Karp/RKF45
 // (and the Nystrom RK5 variant) are appended as additional opt-in methods so
-// existing enum values keep their indices.
+// existing enum values keep their indices. RK6 (Luther's 7-stage 6th-order
+// method) is appended last for the same reason.
 enum ETSType {
     RK3 = 0,
     RK4,
@@ -34,7 +35,8 @@ enum ETSType {
     RK4_RALSTON,
     RK45_CASH_KARP,
     RKF45,
-    RK5_NYSTROM
+    RK5_NYSTROM,
+    RK6
 };
 typedef ot::DVector<DendroScalar, unsigned int> DVec;
 

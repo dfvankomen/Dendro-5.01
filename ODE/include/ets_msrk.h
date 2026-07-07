@@ -208,26 +208,10 @@ ETS_MSRK<T, Ctx>::ETS_MSRK(Ctx* appCtx, ETSType msrkType)
     : ETS<T, Ctx>(appCtx) {
     m_uiMSRKType  = msrkType;
 
-    // All MSRK variants use 4 logical stages.
+    // All MSRK variants use 4 logical stages. set_msrk_coefficients() fills the
+    // tableau and sets m_uiNumHistorySlots / m_uiFirstFreshStage (and aborts on
+    // an invalid type) via the shared ts::get_msrk_tableau().
     m_uiNumStages = 4;
-
-    switch (msrkType) {
-        case ETSType::RK4_MSRK2_1:
-        case ETSType::RK4_MSRK2_2:
-            m_uiNumHistorySlots = 1;
-            m_uiFirstFreshStage = 1;
-            break;
-        case ETSType::RK4_MSRK3:
-            m_uiNumHistorySlots = 2;
-            m_uiFirstFreshStage = 2;
-            break;
-        default:
-            dendro::logger::error(
-                dendro::logger::Scope{"ETS_MSRK"},
-                "Invalid MSRK type.  Use RK4_MSRK2_1, RK4_MSRK2_2, or "
-                "RK4_MSRK3.");
-            MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
-    }
 
     set_msrk_coefficients(msrkType);
     use_msrk_coefficients();
@@ -262,119 +246,13 @@ ETS_MSRK<T, Ctx>::~ETS_MSRK() {
 
 template <typename T, typename Ctx>
 void ETS_MSRK<T, Ctx>::set_msrk_coefficients(ETSType type) {
-    // Zero-initialize all arrays.
-    std::fill(m_uiMSRK_Aij, m_uiMSRK_Aij + 16, 0.0);
-    std::fill(m_uiMSRK_Bi, m_uiMSRK_Bi + 4, 0.0);
-    std::fill(m_uiMSRK_Ci, m_uiMSRK_Ci + 4, 0.0);
-
-    if (type == ETSType::RK4_MSRK2_1) {
-        /*-----------------------------------------------------------
-         * RK4-2(1): 2-step method, variant 1.
-         * arXiv:2603.05763, Eq. 9–13, Table 1.
-         *
-         * Best imaginary-axis stability intercept among MSRK variants
-         * (2.54 vs 2.83 for standard RK4).  Recommended for
-         * wave-dominated systems such as BSSNOK.
-         *
-         * k0 = f(t_{n-1}, y_{n-1})                   [from history]
-         * k1 = f(t_n, y_n)                            [fresh]
-         * k2 = f(t_n + c2*h, y_n + h*(a20*k0+a21*k1)) [fresh]
-         * k3 = f(t_n + c3*h, y_n + h*(a30*k0+a31*k1+a32*k2)) [fresh]
-         * y_{n+1} = y_n + h*(b0*k0 + b1*k1 + b2*k2 + b3*k3)
-         *---------------------------------------------------------*/
-
-        // Final weights b_i.
-        m_uiMSRK_Bi[0]          = -643.0 / 1536.0;
-        m_uiMSRK_Bi[1]          = -4237.0 / 1092.0;
-        m_uiMSRK_Bi[2]          = 38125.0 / 10752.0;
-        m_uiMSRK_Bi[3]          = 4375.0 / 2496.0;
-
-        // Time coefficients c_i.  c0 is unused (history stage).
-        // c1 = 0 (evaluation at t_n).
-        m_uiMSRK_Ci[0]          = 0.0;
-        m_uiMSRK_Ci[1]          = 0.0;
-        m_uiMSRK_Ci[2]          = 7.0 / 25.0;
-        m_uiMSRK_Ci[3]          = -13.0 / 25.0;
-
-        // Stage weight matrix a_ij.
-        // Row 0: history stage (all zeros).
-        // Row 1: f(t_n, y_n) — no previous-stage contributions.
-        // Row 2:
-        m_uiMSRK_Aij[2 * 4 + 0] = -49.0 / 1250.0;  // a20
-        m_uiMSRK_Aij[2 * 4 + 1] = 399.0 / 1250.0;  // a21
-        // Row 3:
-        m_uiMSRK_Aij[3 * 4 + 0] = 7033.0 / 960000.0;     // a30
-        m_uiMSRK_Aij[3 * 4 + 1] = -217633.0 / 210000.0;  // a31
-        m_uiMSRK_Aij[3 * 4 + 2] = 5473.0 / 10752.0;      // a32
-
-        dendro::logger::debug(dendro::logger::Scope{"ETS_MSRK"},
-                              "Coefficients set for RK4-2(1)");
-
-    } else if (type == ETSType::RK4_MSRK2_2) {
-        /*-----------------------------------------------------------
-         * RK4-2(2): 2-step method, variant 2.
-         * arXiv:2603.05763, Eq. 9–13, Table 1.
-         *
-         * Same structure as RK4-2(1) but with alternative coefficients
-         * that may perform better for certain PDE systems.
-         * Imaginary-axis stability intercept: 2.46.
-         *---------------------------------------------------------*/
-
-        m_uiMSRK_Bi[0]          = -191.0 / 882.0;
-        m_uiMSRK_Bi[1]          = 48241.0 / 59994.0;
-        m_uiMSRK_Bi[2]          = 193750.0 / 4351347.0;
-        m_uiMSRK_Bi[3]          = 100000.0 / 271791.0;
-
-        m_uiMSRK_Ci[0]          = 0.0;
-        m_uiMSRK_Ci[1]          = 0.0;
-        m_uiMSRK_Ci[2]          = -99.0 / 50.0;
-        m_uiMSRK_Ci[3]          = 101.0 / 100.0;
-
-        m_uiMSRK_Aij[2 * 4 + 0] = 1309.0 / 15500.0;
-        m_uiMSRK_Aij[2 * 4 + 1] = -31999.0 / 15500.0;
-
-        m_uiMSRK_Aij[3 * 4 + 0] = -241289.0 / 5880000.0;
-        m_uiMSRK_Aij[3 * 4 + 1] = 22846301.0 / 16170000.0;
-        m_uiMSRK_Aij[3 * 4 + 2] = -936169.0 / 2587200.0;
-
-        dendro::logger::debug(dendro::logger::Scope{"ETS_MSRK"},
-                              "Coefficients set for RK4-2(2)");
-
-    } else if (type == ETSType::RK4_MSRK3) {
-        /*-----------------------------------------------------------
-         * RK4-3: 3-step method.
-         * arXiv:2603.05763, Eq. 14–18, Table 1.
-         *
-         * Reuses evaluations from the two preceding time steps,
-         * requiring only 2 fresh RHS evaluations per step (50% savings).
-         * Imaginary-axis stability intercept is lower (1.31), so a
-         * smaller dt may be required compared to standard RK4.
-         *
-         * k0 = f(t_{n-2}, y_{n-2})                     [from history]
-         * k1 = f(t_{n-1}, y_{n-1})                     [from history]
-         * k2 = f(t_n, y_n)                              [fresh]
-         * k3 = f(t_n + c3*h, y_n + h*(a30*k0+a31*k1+a32*k2)) [fresh]
-         * y_{n+1} = y_n + h*(b0*k0 + b1*k1 + b2*k2 + b3*k3)
-         *---------------------------------------------------------*/
-
-        m_uiMSRK_Bi[0]          = -85.0 / 1416.0;
-        m_uiMSRK_Bi[1]          = 131.0 / 408.0;
-        m_uiMSRK_Bi[2]          = -29.0 / 24.0;
-        m_uiMSRK_Bi[3]          = 15625.0 / 8024.0;
-
-        // c0, c1 unused (history stages).  c2 = 0 (evaluation at t_n).
-        m_uiMSRK_Ci[0]          = 0.0;
-        m_uiMSRK_Ci[1]          = 0.0;
-        m_uiMSRK_Ci[2]          = 0.0;
-        m_uiMSRK_Ci[3]          = 9.0 / 25.0;
-
-        // Only stage 3 has non-trivial Aij entries.
-        m_uiMSRK_Aij[3 * 4 + 0] = 2511.0 / 62500.0;
-        m_uiMSRK_Aij[3 * 4 + 1] = -2268.0 / 15625.0;
-        m_uiMSRK_Aij[3 * 4 + 2] = 29061.0 / 62500.0;
-
-        dendro::logger::debug(dendro::logger::Scope{"ETS_MSRK"},
-                              "Coefficients set for RK4-3");
+    // Delegate to the shared tableau (ts::get_msrk_tableau in rkTableau.h),
+    // which fills the 4x4 Aij / b / c arrays and reports the history-stage
+    // layout. Coefficients from arXiv:2603.05763, Table 1. See that function
+    // for the k0..k3 / history-reuse structure of each variant.
+    if (ts::get_msrk_tableau(type, m_uiMSRK_Aij, m_uiMSRK_Bi, m_uiMSRK_Ci,
+                             m_uiFirstFreshStage, m_uiNumHistorySlots) != 0) {
+        MPI_Abort(MPI_COMM_WORLD, EXIT_FAILURE);
     }
 }
 
@@ -557,8 +435,8 @@ void ETS_MSRK<T, Ctx>::evolve_bootstrap() {
 
             // Fused: tmp += sum_p (aip*dt)*StVec[p] in one region (bit-identical).
             {
-                DendroScalar a_cf[ETS_MAX_PROFILED_STAGES];
-                const DVec* a_sp[ETS_MAX_PROFILED_STAGES];
+                DendroScalar a_cf[ETS_MAX_STAGES];
+                const DVec* a_sp[ETS_MAX_STAGES];
                 unsigned int a_n = 0;
                 for (unsigned int p = 0; p < stage; p++) {
                     const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
@@ -584,8 +462,8 @@ void ETS_MSRK<T, Ctx>::evolve_bootstrap() {
         // Final update: y_{n+1} = y_n + sum(b_i * k_i * dt).
         // Fused: EVar += sum_k (bi*dt)*StVec[k] in one region (all k; bit-identical).
         {
-            DendroScalar b_cf[ETS_MAX_PROFILED_STAGES];
-            const DVec* b_sp[ETS_MAX_PROFILED_STAGES];
+            DendroScalar b_cf[ETS_MAX_STAGES];
+            const DVec* b_sp[ETS_MAX_STAGES];
             for (unsigned int k = 0; k < m_uiNumStages; k++) {
                 b_cf[k] = m_uiBi[k] * dt;
                 b_sp[k] = &m_uiStVec[k];
@@ -709,8 +587,8 @@ void ETS_MSRK<T, Ctx>::evolve_msrk() {
             // to avoid unnecessary axpy work on large vectors.
             // Fused: tmp += sum_p (aip*dt)*StVec[p] in one region (bit-identical).
             {
-                DendroScalar a_cf[ETS_MAX_PROFILED_STAGES];
-                const DVec* a_sp[ETS_MAX_PROFILED_STAGES];
+                DendroScalar a_cf[ETS_MAX_STAGES];
+                const DVec* a_sp[ETS_MAX_STAGES];
                 unsigned int a_n = 0;
                 for (unsigned int p = 0; p < stage; p++) {
                     const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
@@ -738,8 +616,8 @@ void ETS_MSRK<T, Ctx>::evolve_msrk() {
                               "Computing final update");
         // Fused: EVar += sum_k (bi*dt)*StVec[k] in one region (all k; bit-identical).
         {
-            DendroScalar b_cf[ETS_MAX_PROFILED_STAGES];
-            const DVec* b_sp[ETS_MAX_PROFILED_STAGES];
+            DendroScalar b_cf[ETS_MAX_STAGES];
+            const DVec* b_sp[ETS_MAX_STAGES];
             for (unsigned int k = 0; k < m_uiNumStages; k++) {
                 b_cf[k] = m_uiBi[k] * dt;
                 b_sp[k] = &m_uiStVec[k];
