@@ -489,6 +489,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testBandedVsXSMM test/src/testBandedVsXSMM.cpp)
   dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)
   dendro_add_deriv_test(testRhsWorkflow test/src/testRhsWorkflow.cpp)
+  dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
 
   if(WITH_CUDA)
     # cuda GPU tests
