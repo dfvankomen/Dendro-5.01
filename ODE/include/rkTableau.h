@@ -380,4 +380,53 @@ inline int get_msrk_tableau(ETSType type, DendroScalar* aij, DendroScalar* b,
     return 0;
 }
 
+/**
+ * @brief Coefficients for the order-6 two-step Runge-Kutta (TSRK) method.
+ *
+ * s=4 stages -> 4 fresh evals/step (RK4 communication), depth-2 reuse. Order 6,
+ * imag stab 1.85, real 1.31, zero-stable. Numerically optimized (findings/14) --
+ * a prototype, not a closed-form construction. Matrices row-major (A[i*4+j]).
+ *   Y_i     = y_n + h[ A1_ij F1_j + A2_ij F2_j + sum_{j<i} r_ij F_j ]
+ *   y_{n+1} = y_n + h[ b_i F_i + v1_j F1_j + v2_j F2_j ]
+ * (F_j fresh this step; F1/F2 = f from 1/2 steps back.)
+ */
+inline void get_tsrk_o6_tableau(DendroScalar c[4], DendroScalar A1[16],
+                                DendroScalar A2[16], DendroScalar r[16],
+                                DendroScalar b[4], DendroScalar v1[4],
+                                DendroScalar v2[4]) {
+    static const DendroScalar C[4] = {
+        0.522088590380295, 0.7452619451362457, 0.9571737813079717,
+        1.3269429892668887};
+    static const DendroScalar A1S[16] = {
+        0.013593190529617938, 0.21175157807916295, -0.12595036277141974, 0.4757104110436477,
+        -0.0708335997874584, 0.17706373925409918, 0.15598039225995208, -0.04203496245036641,
+        -0.07471584482081398, 0.2589845732144846, 0.12873016139377028, 0.21921271021279182,
+        -0.2957467086460748, 0.4341609248017752, 0.678325363931038, 0.07602500907276638};
+    static const DendroScalar A2S[16] = {
+        -0.03771812922029248, 0.14116512647628252, -0.14028789950350323, -0.016175324253200424,
+        -0.05424333545301849, 0.18847606951984108, -0.17007719286131595, 0.0037751342424668377,
+        -0.04246130841437379, 0.10736428370341408, -0.02311686313880127, -0.13501933772931757,
+        -0.1919639769736794, 0.43391220601192226, -0.027219055049993328, -0.48287151555336155};
+    static const DendroScalar RS[16] = {
+        0.0, 0.0, 0.0, 0.0,
+        0.55715570041205, 0.0, 0.0, 0.0,
+        0.03143043938004049, 0.48676496750677734, 0.0, 0.0,
+        -0.016155720486475872, -0.38659089230841814, 1.1050673544673897, 0.0};
+    static const DendroScalar BS[4] = {0.1860879824774312, 0.29389561663531305,
+                                       0.11922369721530686,
+                                       -0.003920034931639108};
+    static const DendroScalar V1S[4] = {0.07838759529108924, 0.1778168831343859,
+                                        0.061607402210060086,
+                                        0.23596604652835984};
+    static const DendroScalar V2S[4] = {-0.047952779499139855, 0.138819433426463,
+                                        -0.06754081105372743,
+                                        -0.17239103143390233};
+    for (int i = 0; i < 4; i++) {
+        c[i] = C[i]; b[i] = BS[i]; v1[i] = V1S[i]; v2[i] = V2S[i];
+    }
+    for (int i = 0; i < 16; i++) {
+        A1[i] = A1S[i]; A2[i] = A2S[i]; r[i] = RS[i];
+    }
+}
+
 }  // namespace ts

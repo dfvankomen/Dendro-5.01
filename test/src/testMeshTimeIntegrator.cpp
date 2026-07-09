@@ -18,6 +18,7 @@
 #include "dvec.h"
 #include "ets.h"
 #include "ets_msrk.h"
+#include "ets_tsrk.h"
 #include "hcurvedata.h"
 #include "mesh.h"
 #include "meshUtils.h"
@@ -202,16 +203,21 @@ class MeshTICtx : public ts::Ctx<MeshTICtx, DendroScalar, unsigned int> {
 };
 
 // ---------------------------------------------------------------------------
-static void run(ot::Mesh* mesh, const char* name, ts::ETSType type, bool msrk,
+// kind: 0 = single-step ETS, 1 = ETS_MSRK, 2 = ETS_TSRK
+static void run(ot::Mesh* mesh, const char* name, ts::ETSType type, int kind,
                 bool adv, double T, MPI_Comm comm) {
     const std::vector<int> Ns = {10, 20, 40, 80};
     std::vector<double> errs;
     for (int N : Ns) {
         MeshTICtx ctx(mesh, adv);
         ctx.set_ts_info({0.0, T, 0, 0.0, T / N});
-        if (msrk) {
+        if (kind == 1) {
             ts::ETS_MSRK<DendroScalar, MeshTICtx> ets(&ctx, type);
             ets.set_ets_coefficients(ts::ETSType::RK4);
+            ets.init();
+            for (int s = 0; s < N; s++) ets.evolve();
+        } else if (kind == 2) {
+            ts::ETS_TSRK<DendroScalar, MeshTICtx> ets(&ctx);
             ets.init();
             for (int s = 0; s < N; s++) ets.evolve();
         } else {
@@ -260,15 +266,16 @@ int main(int argc, char** argv) {
 
     if ((mode == "decay" || mode == "both")) {
         if (!rank) std::printf("=== DECAY  du/dt=-%.1f u  (clean temporal order) ===\n", LAMBDA);
-        run(mesh, "RK4", ts::ETSType::RK4, false, false, 1.0, comm);
-        run(mesh, "RK6", ts::ETSType::RK6, false, false, 1.0, comm);
-        run(mesh, "RK4_MSRK2_1", ts::ETSType::RK4_MSRK2_1, true, false, 1.0, comm);
+        run(mesh, "RK4", ts::ETSType::RK4, 0, false, 1.0, comm);
+        run(mesh, "RK6", ts::ETSType::RK6, 0, false, 1.0, comm);
+        run(mesh, "RK4_MSRK2_1", ts::ETSType::RK4_MSRK2_1, 1, false, 1.0, comm);
+        run(mesh, "RK6_TSRK", ts::ETSType::RK6_TSRK, 2, false, 1.0, comm);
     }
     if ((mode == "adv" || mode == "both")) {
         if (!rank) std::printf("=== ADVECTION  du/dt=-%.1f du/dx  (BL6, T=0.1, interior) ===\n", AVEL);
-        run(mesh, "RK4", ts::ETSType::RK4, false, true, 0.1, comm);
-        run(mesh, "RK6", ts::ETSType::RK6, false, true, 0.1, comm);
-        run(mesh, "RK4_MSRK2_1", ts::ETSType::RK4_MSRK2_1, true, true, 0.1, comm);
+        run(mesh, "RK4", ts::ETSType::RK4, 0, true, 0.1, comm);
+        run(mesh, "RK6", ts::ETSType::RK6, 0, true, 0.1, comm);
+        run(mesh, "RK6_TSRK", ts::ETSType::RK6_TSRK, 2, true, 0.1, comm);
     }
 
     delete mesh;

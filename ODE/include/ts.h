@@ -36,7 +36,8 @@ enum ETSType {
     RK45_CASH_KARP,
     RKF45,
     RK5_NYSTROM,
-    RK6
+    RK6,
+    RK6_TSRK
 };
 typedef ot::DVector<DendroScalar, unsigned int> DVec;
 
