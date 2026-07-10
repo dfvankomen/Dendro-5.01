@@ -1323,8 +1323,10 @@ class Mesh {
     /**@brief returns the dof for a partition (grid points) */
     inline unsigned int getDegOfFreedom() const { return m_uiNumActualNodes; }
 
-    /**@brief returns the dof for a partition (grid points) */
-    inline unsigned int getDegOfFreedomUnZip() const {
+    /**@brief returns the dof for a partition (grid points). DendroIntL, not
+     * unsigned int: m_uiUnZippedVecSz is 64-bit and callers use it in index
+     * math (v * getDegOfFreedomUnZip() + ...) that must not overflow. */
+    inline DendroIntL getDegOfFreedomUnZip() const {
         return m_uiUnZippedVecSz;
     }
 
