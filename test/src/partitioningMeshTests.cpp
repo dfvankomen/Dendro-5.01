@@ -833,6 +833,58 @@ int main(int argc, char** argv) {
                           << "\n---\n\n";
             }
         }
+
+        // ---- COVERAGE TEST: the other direction of the proof ----
+        // missing = ghost CGs the unzip needs but the recv scatter map
+        // never delivers (need \ recvSM). The minimality test above only
+        // proves recvSM \ need is unread; a reduced map that STARVES the
+        // unzip (missing > 0 AND read) is exactly what broke the first
+        // DENDRO_MINIMAL_SCATTER filter (EM4 long-haul step-20
+        // divergence, 2026-07-15). Poison exactly the missing slots and
+        // unzip WITHOUT an exchange: contamination must be zero.
+        {
+            std::vector<unsigned int> missing;
+            std::set_difference(unzipGhostNodes.begin(),
+                                unzipGhostNodes.end(),
+                                scatterMapNodes.begin(),
+                                scatterMapNodes.end(),
+                                std::back_inserter(missing));
+            unsigned int nMissing = missing.size(), gMissing = 0;
+            MPI_Allreduce(&nMissing, &gMissing, 1, MPI_UNSIGNED, MPI_SUM,
+                          comm);
+
+            std::vector<double> vc, u;
+            mesh_repartitioned->createVector(vc);
+            mesh_repartitioned->createUnZippedVector(u);
+            std::fill(vc.begin(), vc.end(), 1.0);
+            std::fill(u.begin(), u.end(), 1.0);
+            const double kNaN = std::numeric_limits<double>::quiet_NaN();
+            for (unsigned int cg : missing) vc[cg] = kNaN;
+            mesh_repartitioned->unzip(vc.data(), u.data(), 1);
+
+            unsigned int localNaN = 0;
+            for (double x : u)
+                if (std::isnan(x)) localNaN++;
+            unsigned int gNaNMiss = 0;
+            MPI_Allreduce(&localNaN, &gNaNMiss, 1, MPI_UNSIGNED, MPI_SUM,
+                          comm);
+
+            if (!rank) {
+                std::cout << "--- COVERAGE TEST (missing = unzip need "
+                             "minus recv-SM) ---\n";
+                std::cout << "Undelivered unzip-needed nodes: " << gMissing
+                          << "\n";
+                if (gNaNMiss == 0)
+                    std::cout << "COVERAGE TEST PASSED: unzip outputs "
+                                 "contaminated by missing: 0\n---\n\n";
+                else
+                    std::cout << "COVERAGE TEST FAILED: unzip outputs "
+                                 "contaminated by missing: "
+                              << gNaNMiss
+                              << "  => scatter map STARVES the unzip\n"
+                                 "---\n\n";
+            }
+        }
     }
 
     // ---- TEST 6: setMeshRefinementFlags + ReMesh ----

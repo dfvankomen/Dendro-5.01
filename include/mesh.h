@@ -924,6 +924,17 @@ class Mesh {
     DendroIntL m_uiCommStatMsgRecv     = 0;
     DendroIntL m_uiCommStatExchanges   = 0;
 
+    // process-scope mirrors of the above. every remesh destroys the mesh and
+    // with it the per-instance tallies, so a long-haul total (which spans ~18
+    // meshes) has to accumulate somewhere that outlives any one Mesh.
+    static DendroIntL s_uiCommStatNodesSentAll;
+    static DendroIntL s_uiCommStatNodesRecvAll;
+    static DendroIntL s_uiCommStatBytesSentAll;
+    static DendroIntL s_uiCommStatBytesRecvAll;
+    static DendroIntL s_uiCommStatMsgSentAll;
+    static DendroIntL s_uiCommStatMsgRecvAll;
+    static DendroIntL s_uiCommStatExchangesAll;
+
     /**@brief : number of elements that needed to be sent to each processor*/
     std::vector<unsigned int> m_uiSendEleCount;
     /**@brief : number of elements that recieved from each processor*/
@@ -2813,6 +2824,14 @@ class Mesh {
         m_uiCommStatMsgSent += msgSent;
         m_uiCommStatMsgRecv += msgRecv;
         m_uiCommStatExchanges++;
+
+        s_uiCommStatNodesSentAll += nodesSent;
+        s_uiCommStatNodesRecvAll += nodesRecv;
+        s_uiCommStatBytesSentAll += nodesSent * (DendroIntL)tsize;
+        s_uiCommStatBytesRecvAll += nodesRecv * (DendroIntL)tsize;
+        s_uiCommStatMsgSentAll += msgSent;
+        s_uiCommStatMsgRecvAll += msgRecv;
+        s_uiCommStatExchangesAll++;
     }
 
     /**@brief tally one collective (Alltoallv) nodal ghost exchange: scans the
@@ -2855,6 +2874,11 @@ class Mesh {
     /**@brief reduce+print the comms counters over the active comm to rank 0.
      * `tag` labels the line; safe to call when disabled (prints nothing). */
     void dumpCommStats(std::ostream& out, const char* tag);
+
+    /**@brief same, but over the process-scope tallies, which survive remesh —
+     * this is the whole-run total. reduces over THIS mesh's active comm, so
+     * call it on the final mesh; ranks inactive there won't contribute. */
+    void dumpCommStatsCumulative(std::ostream& out, const char* tag);
 
     /**@brief reduce+print a static partition-quality snapshot of THIS (rebuilt)
      * mesh: per-rank element load + ghost-node surface (the communication
@@ -4215,6 +4239,11 @@ class Mesh {
                     oct_connectivity_map[lid_ele].vertexNeighbors[counter] =
                         eid_vec[temp_local];
                 }
+
+                // without this every corner dir wrote to vertexNeighbors[0]:
+                // 7 of the 8 corners were silently dropped, so
+                // DENDRO_GRAPH_FULL_STENCIL fed fastpart 12 edges + 1 corner.
+                counter++;
             }
         }
         ele_offsets.push_back(num_ele_global);

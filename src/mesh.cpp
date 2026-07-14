@@ -661,6 +661,42 @@ Mesh::~Mesh() {
     }
 }
 
+DendroIntL Mesh::s_uiCommStatNodesSentAll = 0;
+DendroIntL Mesh::s_uiCommStatNodesRecvAll = 0;
+DendroIntL Mesh::s_uiCommStatBytesSentAll = 0;
+DendroIntL Mesh::s_uiCommStatBytesRecvAll = 0;
+DendroIntL Mesh::s_uiCommStatMsgSentAll   = 0;
+DendroIntL Mesh::s_uiCommStatMsgRecvAll   = 0;
+DendroIntL Mesh::s_uiCommStatExchangesAll = 0;
+
+void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
+    if (m_uiCommStatsOn != 1 || !m_uiIsActive) return;
+
+    // [0]=bytesSent [1]=bytesRecv [2]=nodesSent [3]=nodesRecv [4]=exchanges
+    DendroIntL local[5] = {s_uiCommStatBytesSentAll, s_uiCommStatBytesRecvAll,
+                           s_uiCommStatNodesSentAll, s_uiCommStatNodesRecvAll,
+                           s_uiCommStatExchangesAll};
+    DendroIntL sum[5]   = {0, 0, 0, 0, 0};
+    DendroIntL maxv[5]  = {0, 0, 0, 0, 0};
+    par::Mpi_Reduce(local, sum, 5, MPI_SUM, 0, m_uiCommActive);
+    par::Mpi_Reduce(local, maxv, 5, MPI_MAX, 0, m_uiCommActive);
+
+    if (m_uiActiveRank == 0) {
+        const double meanBytesSent =
+            (m_uiActiveNpes > 0) ? (double)sum[0] / (double)m_uiActiveNpes
+                                 : 0.0;
+        const double imbal =
+            (meanBytesSent > 0.0) ? (double)maxv[0] / meanBytesSent : 0.0;
+        out << "[comm-stats-cumulative] " << tag << " npes=" << m_uiActiveNpes
+            << " total_bytes_sent=" << sum[0]
+            << " total_bytes_recv=" << sum[1]
+            << " total_nodes_sent=" << sum[2]
+            << " total_exchanges=" << sum[4]
+            << " max_rank_bytes_sent=" << maxv[0]
+            << " bytes_sent_imbalance=" << imbal << std::endl;
+    }
+}
+
 void Mesh::dumpCommStats(std::ostream &out, const char *tag) {
     // reduce the per-rank comms-volume accumulators to rank 0 and print a
     // one-line summary. no-op unless DENDRO_COMM_STATS=1 (see commStatsOn()).
@@ -8414,6 +8450,11 @@ void Mesh::buildZipPlan() {
         }
     }
 
+    // zip-plan stats (DENDRO_ZIPPLAN_STATS=1): how the mirror pairing
+    // degrades under a reduced scatter map (minimal-scatter debugging)
+    size_t zpsNonPrimary = 0, zpsInvMiss = 0;
+    std::vector<unsigned int> zpsMissCgs;
+
     // For each LOCAL cg where I'm the primary, build a plan entry.
     // The writer (elem, sub) is the smallest-TN local elem at this
     // phys_pos (lookup via myMin).
@@ -8441,12 +8482,17 @@ void Mesh::buildZipPlan() {
         const bool this_is_primary_cg = i_am_primary_rank
             && (wit->second.cg == cg);
         if (!this_is_primary_cg) {
+            zpsNonPrimary++;
             const uint64_t key =
                 (uint64_t(wit->second.rank) << 32)
                 | uint64_t(wit->second.cg);
             auto iit = invScatter.find(key);
             if (iit != invScatter.end())
                 m_uiZipNonPrimaryToGhostCg[cg] = iit->second;
+            else {
+                zpsInvMiss++;
+                zpsMissCgs.push_back(cg);
+            }
             continue;
         }
         // Primary path falls through to plan-entry construction.
@@ -8618,6 +8664,43 @@ void Mesh::buildZipPlan() {
                   << "] built " << m_uiZipGhostToLocalAtConsensus.size()
                   << " element-read fixup entries"
                   << std::endl;
+    }
+
+    if (std::getenv("DENDRO_ZIPPLAN_STATS")) {
+        // targets outside the active recv SM never get refreshed by the
+        // per-step exchange -> mirroring from them reads stale data
+        std::unordered_set<unsigned int> recvSet(
+            m_uiScatterMapActualNodeRecv.begin(),
+            m_uiScatterMapActualNodeRecv.end());
+        size_t passDStale = 0, stage3Stale = 0;
+        for (const auto& kv : m_uiPassDDemotedToGhostCg)
+            if (!recvSet.count(kv.second)) passDStale++;
+        for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
+            if (!recvSet.count(kv.second)) stage3Stale++;
+        // a pairless non-primary cg is fine if the zip-sync alltoallv
+        // delivers the primary's value to it; count the ones it doesn't
+        std::unordered_set<unsigned int> syncRecvSet(
+            m_uiZipSyncRecvCg.begin(), m_uiZipSyncRecvCg.end());
+        size_t zpsUnprotected = 0;
+        for (unsigned int cg : zpsMissCgs) {
+            const bool synced = syncRecvSet.count(cg) > 0;
+            if (!synced) zpsUnprotected++;
+            fprintf(stderr,
+                    "[zipplan-stats r%d]   invMiss cg=%u inZipSyncRecv=%d "
+                    "inFixup=%d\n",
+                    m_uiActiveRank, cg, (int)synced,
+                    (int)(m_uiZipGhostToLocalAtConsensus.count(cg) > 0));
+        }
+        fprintf(stderr,
+                "[zipplan-stats r%d] nonPrimary=%zu mirrorPairs=%zu "
+                "invMiss=%zu unprotected=%zu passDSurvive=%zu "
+                "passDTargetNotInRecvSM=%zu stage3TargetNotInRecvSM=%zu "
+                "recvSM=%zu\n",
+                m_uiActiveRank, zpsNonPrimary,
+                m_uiZipNonPrimaryToGhostCg.size(), zpsInvMiss,
+                zpsUnprotected, m_uiPassDDemotedToGhostCg.size(),
+                passDStale, stage3Stale,
+                m_uiScatterMapActualNodeRecv.size());
     }
 
     // ---- E2N_CG cross-instance unification ----
@@ -19249,7 +19332,24 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // The expansion code produced empty scatter maps (we zeroed the
     // inputs). Build them from the now-correct member E2N by iterating
     // over ghost element nodes and checking DG ownership.
-    {
+    // DENDRO_MINIMAL_SCATTER: shrink the per-step nodal scatter map to
+    // the slots its consumers actually read. The map is always built FULL
+    // first (so buildZipPlan derives the same mirror pairs / send decodes
+    // as the default path), then rebuilt post-zip-plan keeping only slots
+    // in the keep-set: local-element E2N ghost reads, unzip block-padding
+    // reads, and Stage-3/Pass-D mirror sources. Kept entries resolve to
+    // the identical sender decode as the full map, so every surviving
+    // exchange effect is byte-identical to the default path. (NOTE:
+    // isGhostTwo is a fetch-round label, not a geometric ring — an
+    // element-level R2 skip starves the unzip; see the coverage check.)
+    const char* minScatterEnv = std::getenv("DENDRO_MINIMAL_SCATTER");
+    const bool minimalScatter = (minScatterEnv && minScatterEnv[0] == '1');
+    if (minimalScatter && rank == 0)
+        std::cout << "[minimal-scatter] shrinking per-step nodal scatter "
+                     "map to consumer-read slots"
+                  << std::endl;
+    auto buildNodalSM = [&](const std::unordered_set<unsigned int>*
+                                keepSlots) {
         std::vector<unsigned int> recvNodeSM_r[npes];
         std::vector<unsigned int> recvNodeDGG[npes];
         std::vector<unsigned char> recvNodeIsDG[npes];
@@ -19287,6 +19387,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 if (cgIdx >= m_uiNodeLocalBegin &&
                     cgIdx < m_uiNodeLocalEnd)
                     continue;
+
+                // shrink pass: drop slots no consumer reads
+                if (keepSlots && !keepSlots->count(cgIdx)) continue;
 
                 unsigned int ownerGid;
                 unsigned int ownerTrank;
@@ -19498,7 +19601,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             if (m_uiSendNodeCount[p] != 0) m_uiSendProcList.push_back(p);
             if (m_uiRecvNodeCount[p] != 0) m_uiRecvProcList.push_back(p);
         }
-    }
+    };
+    buildNodalSM(nullptr);
     __phase("nodal-scatter-map");
 
     // -----
@@ -19740,6 +19844,139 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             buildE2BlockMap();
             buildUnzipCanonicalWriterTable();
             buildZipPlan();
+
+            // minimal-scatter shrink: rebuild the nodal SM keeping only
+            // consumer-read slots. Runs AFTER buildZipPlan so the mirror
+            // pairs were derived from the FULL map and their source slots
+            // land in the keep-set (identical last-writer semantics to
+            // the default path). Collective — every active rank passes
+            // through here.
+            if (minimalScatter) {
+                std::unordered_set<unsigned int> keepSlots;
+                // (1) ghost slots read via local elements' E2N (shared
+                // faces / hanging interpolation / elemental loops)
+                for (unsigned int e = m_uiElementLocalBegin;
+                     e < m_uiElementLocalEnd; e++)
+                    for (unsigned int n = 0; n < m_uiNpE; n++) {
+                        const unsigned int cg =
+                            m_uiE2NMapping_CG[e * m_uiNpE + n];
+                        if (cg < m_uiNodeLocalBegin
+                            || cg >= m_uiNodeLocalEnd)
+                            keepSlots.insert(cg);
+                    }
+                // (2) ghost slots the unzip reads (block padding)
+                {
+                    std::vector<unsigned int> blkEleIDs;
+                    for (unsigned int b = 0;
+                         b < m_uiLocalBlockList.size(); b++) {
+                        blkUnzipElementIDs(b, blkEleIDs);
+                        for (unsigned int eid : blkEleIDs) {
+                            if (eid >= m_uiElementLocalBegin
+                                && eid < m_uiElementLocalEnd)
+                                continue;
+                            for (unsigned int n = 0; n < m_uiNpE; n++) {
+                                const unsigned int cg =
+                                    m_uiE2NMapping_CG[eid * m_uiNpE + n];
+                                if (cg < m_uiNodeLocalBegin
+                                    || cg >= m_uiNodeLocalEnd)
+                                    keepSlots.insert(cg);
+                            }
+                        }
+                    }
+                }
+                // (3) mirror sources — post-exchange last-writers of
+                // non-primary local cgs must keep full-map semantics
+                for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
+                    keepSlots.insert(kv.second);
+                for (const auto& kv : m_uiPassDDemotedToGhostCg)
+                    keepSlots.insert(kv.second);
+                buildNodalSM(&keepSlots);
+            }
+
+            // coverage check (DENDRO_SM_COVERAGE_CHECK=1): does the recv
+            // SM deliver every ghost cg the unzip reads? the minimality
+            // test only proved recvSM \ need is unread; need \ recvSM
+            // was never checked and is exactly what a bad R2 filter
+            // proxy would break.
+            if (std::getenv("DENDRO_SM_COVERAGE_CHECK")) {
+                std::set<unsigned int> needSet;
+                std::vector<unsigned int> blkEleIDs;
+                for (unsigned int b = 0; b < m_uiLocalBlockList.size();
+                     b++) {
+                    blkUnzipElementIDs(b, blkEleIDs);
+                    for (unsigned int eid : blkEleIDs) {
+                        if (eid >= m_uiElementLocalBegin
+                            && eid < m_uiElementLocalEnd)
+                            continue;
+                        for (unsigned int n = 0; n < m_uiNpE; n++) {
+                            const unsigned int cg =
+                                m_uiE2NMapping_CG[eid * m_uiNpE + n];
+                            if (cg >= m_uiNodeLocalBegin
+                                && cg < m_uiNodeLocalEnd)
+                                continue;
+                            needSet.insert(cg);
+                        }
+                    }
+                }
+                std::unordered_set<unsigned int> recvSet(
+                    m_uiScatterMapActualNodeRecv.begin(),
+                    m_uiScatterMapActualNodeRecv.end());
+                std::vector<unsigned int> missCgs;
+                for (unsigned int cg : needSet)
+                    if (!recvSet.count(cg)) missCgs.push_back(cg);
+                // needSet over-approximates the true read set (canonical
+                // writers mean not every ghost-elem node lands in the
+                // padding). poison exactly the missing slots and unzip
+                // without an exchange: NaN in the output = the reduced
+                // map genuinely starves the unzip.
+                size_t nPoisoned = 0;
+                {
+                    std::vector<double> vc, u;
+                    createVector(vc);
+                    createUnZippedVector(u);
+                    std::fill(vc.begin(), vc.end(), 1.0);
+                    std::fill(u.begin(), u.end(), 1.0);
+                    const double kNaN =
+                        std::numeric_limits<double>::quiet_NaN();
+                    for (unsigned int cg : missCgs) vc[cg] = kNaN;
+                    unzip(vc.data(), u.data(), 1);
+                    for (double x : u)
+                        if (std::isnan(x)) nPoisoned++;
+                }
+                fprintf(stderr,
+                        "[sm-coverage r%d] unzipNeed=%zu recvSM=%zu "
+                        "missing=%zu unzipOutputsPoisonedByMissing=%zu\n",
+                        m_uiActiveRank, needSet.size(), recvSet.size(),
+                        missCgs.size(), nPoisoned);
+                // for each missing cg: which ghost elements reference it,
+                // and are they all R2-classified?
+                for (size_t mi = 0; mi < missCgs.size() && mi < 8; mi++) {
+                    const unsigned int cg = missCgs[mi];
+                    std::string refs;
+                    for (unsigned int eid = 0;
+                         eid < m_uiNumTotalElements; eid++) {
+                        if (eid >= m_uiElementLocalBegin
+                            && eid < m_uiElementLocalEnd)
+                            continue;
+                        for (unsigned int n = 0; n < m_uiNpE; n++) {
+                            if (m_uiE2NMapping_CG[eid * m_uiNpE + n]
+                                != cg)
+                                continue;
+                            const bool r2 =
+                                (eid < new_oct_connectivity_map.size())
+                                    ? new_oct_connectivity_map[eid]
+                                          .isGhostTwo
+                                    : false;
+                            refs += " e" + std::to_string(eid)
+                                    + (r2 ? "(R2)" : "(R1)");
+                            break;
+                        }
+                    }
+                    fprintf(stderr,
+                            "[sm-coverage r%d]   missing cg=%u refs:%s\n",
+                            m_uiActiveRank, cg, refs.c_str());
+                }
+            }
 
             // post-buildZipPlan E2N_CG dump for target TN slots. used to
             // detect whether buildZipPlan's cross-TN unify or any other

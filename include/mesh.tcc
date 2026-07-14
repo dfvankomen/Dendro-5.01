@@ -1611,6 +1611,17 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
             }
         }
 
+        // comms-volume tally (DENDRO_COMM_STATS=1), same as the non-ctx
+        // variant. this is the path Ctx::unzip drives, so it carries the bulk
+        // of a solver run's ghost traffic.
+        if (this->commStatsOn())
+            this->recordCommExchange(dof * sendBSz, dof * recvBSz,
+                                     sendBSz ? (DendroIntL)sendProcList.size()
+                                             : 0,
+                                     recvBSz ? (DendroIntL)recvProcList.size()
+                                             : 0,
+                                     sizeof(T));
+
         m_uiCommTag++;
     }
 
