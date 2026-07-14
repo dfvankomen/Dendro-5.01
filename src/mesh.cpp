@@ -705,27 +705,43 @@ void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
     const DendroIntL sendProcs = (DendroIntL)m_uiSendProcList.size();
     const DendroIntL recvProcs = (DendroIntL)m_uiRecvProcList.size();
 
-    DendroIntL local[5] = {localEle, ghostSend, ghostRecv, sendProcs,
-                           recvProcs};
-    DendroIntL sum[5]   = {0, 0, 0, 0, 0};
-    DendroIntL maxv[5]  = {0, 0, 0, 0, 0};
-    par::Mpi_Reduce(local, sum, 5, MPI_SUM, 0, m_uiCommActive);
-    par::Mpi_Reduce(local, maxv, 5, MPI_MAX, 0, m_uiCommActive);
+    // LTS work load = sum of per-element sub-cycling weight (oct_work_weight).
+    // This is the quantity the weighted partition (DENDRO_GRAPH_VTX_WEIGHTED=1)
+    // aims to balance; comparing its imbalance vs the unweighted partition is
+    // the static validation that the weights did their job.
+    unsigned int lmin = 0, lmax = 0;
+    this->computeMinMaxLevel(lmin, lmax);
+    DendroIntL workLoad = 0;
+    for (unsigned int ele = m_uiElementLocalBegin; ele < m_uiElementLocalEnd;
+         ele++)
+        workLoad +=
+            (DendroIntL)oct_work_weight(m_uiAllElements[ele].getLevel(), lmin,
+                                        lmax);
+
+    DendroIntL local[6] = {localEle,  ghostSend, ghostRecv,
+                           sendProcs, recvProcs, workLoad};
+    DendroIntL sum[6]   = {0, 0, 0, 0, 0, 0};
+    DendroIntL maxv[6]  = {0, 0, 0, 0, 0, 0};
+    par::Mpi_Reduce(local, sum, 6, MPI_SUM, 0, m_uiCommActive);
+    par::Mpi_Reduce(local, maxv, 6, MPI_MAX, 0, m_uiCommActive);
 
     if (m_uiActiveRank == 0) {
-        const double meanEle =
-            (m_uiActiveNpes > 0) ? (double)sum[0] / (double)m_uiActiveNpes
-                                 : 0.0;
-        const double eleImbal =
-            (meanEle > 0.0) ? (double)maxv[0] / meanEle : 0.0;
-        const double meanGhost =
-            (m_uiActiveNpes > 0) ? (double)sum[1] / (double)m_uiActiveNpes
-                                 : 0.0;
+        const double invNpes =
+            (m_uiActiveNpes > 0) ? 1.0 / (double)m_uiActiveNpes : 0.0;
+        const double meanEle   = (double)sum[0] * invNpes;
+        const double eleImbal  = (meanEle > 0.0) ? (double)maxv[0] / meanEle
+                                                 : 0.0;
+        const double meanGhost = (double)sum[1] * invNpes;
         const double ghostImbal =
             (meanGhost > 0.0) ? (double)maxv[1] / meanGhost : 0.0;
+        const double meanWork = (double)sum[5] * invNpes;
+        const double workImbal =
+            (meanWork > 0.0) ? (double)maxv[5] / meanWork : 0.0;
         out << "[part-stats] " << tag << " npes=" << m_uiActiveNpes
             << " total_elements=" << sum[0]
             << " ele_imbalance=" << eleImbal
+            << " total_work=" << sum[5]
+            << " work_imbalance=" << workImbal
             << " total_ghost_send_nodes=" << sum[1]
             << " total_ghost_recv_nodes=" << sum[2]
             << " max_rank_ghost_send=" << maxv[1]
@@ -18697,8 +18713,74 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         fastpart_uint_t *parts = static_cast<fastpart_uint_t *>(
             malloc(oct_connectivity_map.size() * sizeof(fastpart_uint_t)));
 
-        fastpart_partgraph_octree(vtx_dist, temp_oct_data.data(), parts,
-                                  &commActive);
+        // LTS-weighted graph partition (DENDRO_GRAPH_VTX_WEIGHTED):
+        //   unset/0 -> the octree wrapper, element-count balance (default).
+        //   1       -> low-level fastpart_setup with per-element vertex
+        //              weights = oct_work_weight(level) so the partition
+        //              balances sub-cycled work under adaptive time stepping.
+        //   2       -> same low-level CSR path but UNIFORM weights: the
+        //              equivalence gate that isolates CSR-build correctness
+        //              from the weighting itself.
+        // No fastpart source changes: we build the CSR (global-eid adjncy from
+        // the connectivity map's e2e) and vwgt here and call the already-public
+        // fastpart_setup / fastpart_partgraph / fastpart_destroy.
+        const char *wpartEnv = std::getenv("DENDRO_GRAPH_VTX_WEIGHTED");
+        const int wpartMode  = (wpartEnv) ? atoi(wpartEnv) : 0;
+        if (wpartMode == 0) {
+            fastpart_partgraph_octree(vtx_dist, temp_oct_data.data(), parts,
+                                      &commActive);
+        } else {
+            unsigned int lmin = 0, lmax = 0;
+            this->computeMinMaxLevel(lmin, lmax);
+
+            const size_t n = oct_connectivity_map.size();
+            // vtx_dist for the ParMETIS-style API needs npes+1 entries
+            // (last = global total); the octree wrapper's vtx_dist has only
+            // npes, so build a proper one here.
+            std::vector<fastpart_uint_t> vtxDistLL(npes + 1);
+            for (unsigned int rk = 0; rk < npes; ++rk)
+                vtxDistLL[rk] = ele_offsets[rk];
+            vtxDistLL[npes] = ele_offsets[npes - 1] + ele_counts[npes - 1];
+
+            std::vector<fastpart_uint_t> xadj(n + 1, 0);
+            std::vector<fastpart_uint_t> adjncy;
+            adjncy.reserve(n * 6);
+            std::vector<fastpart_uint_t> vwgt(n, 1);
+            for (size_t i = 0; i < n; ++i) {
+                const auto &oct = oct_connectivity_map[i];
+                for (unsigned int j = 0; j < 6; ++j) {
+                    const auto nb = oct.e2e[j];
+                    // face adjacency is mutual, so listing each element's own
+                    // neighbors gives a symmetric distributed graph without
+                    // shipping reverse edges; fastpart_setup localizes it.
+                    if (nb != LOOK_UP_TABLE_DEFAULT)
+                        adjncy.push_back((fastpart_uint_t)nb);
+                }
+                xadj[i + 1] = (fastpart_uint_t)adjncy.size();
+                vwgt[i]     = (wpartMode == 1)
+                                  ? (fastpart_uint_t)ot::oct_work_weight(
+                                        oct.level, lmin, lmax)
+                                  : 1u;
+            }
+
+            const fastpart_uint_t wgtflag =
+                (wpartMode == 1) ? FASTPART_VTX_WEIGHTED : FASTPART_UNWEIGHTED;
+            const fastpart_uint_t *vwgtPtr =
+                (wpartMode == 1) ? vwgt.data() : nullptr;
+
+            fastpart_ctrl ctrl;
+            fastpart_setup(&ctrl, vtxDistLL.data(), xadj.data(), adjncy.data(),
+                           vwgtPtr, nullptr, wgtflag, &commActive);
+            fastpart_partgraph(&ctrl, parts, /*use_diffusion*/ true,
+                               &commActive, /*verbose*/ 0);
+            fastpart_destroy(&ctrl);
+
+            if (rank == 0)
+                std::cout << "[graph-vtx-weighted] mode=" << wpartMode
+                          << " (1=LTS-weighted,2=uniform) lmin=" << lmin
+                          << " lmax=" << lmax << " local_edges=" << adjncy.size()
+                          << std::endl;
+        }
 
         // BLOCK-ATOMIC POST-PROCESSING:
         // for each canonical SFC block on this source rank, override

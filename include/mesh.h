@@ -488,6 +488,24 @@ struct NodeTuple {
 
 namespace ot {
 
+/**@brief LTS work weight for an octant, for weighted graph partitioning under
+ * adaptive/local time stepping. Under ENUTS a block at `level` is sub-cycled
+ * ~2^(lmax-level) times per coarse step, so it does that much more work. This
+ * mirrors ExplicitNUTS::getOctWeight (ODE/include/enuts.h) for the standard
+ * factor tfac(L)=2^(lmax-L): weight = (2^(lmax-lmin) - 1) / 2^(lmax-level),
+ * clamped to >= 1. Kept here (not the ENUTS template) so the mesh/partition
+ * layer can build a vwgt array without the Ctx type. A solver with a
+ * non-standard getBlkTimestepFac should instead supply its own weights. */
+inline unsigned int oct_work_weight(unsigned int level, unsigned int lmin,
+                                    unsigned int lmax) {
+    if (lmax < level) return 1u;  // defensive; level should be in [lmin,lmax]
+    const unsigned int finest_t  = 1u;                    // 2^(lmax-lmax)
+    const unsigned int coarset_t = 1u << (lmax - lmin);   // 2^(lmax-lmin)
+    const unsigned int tfac_lvl  = 1u << (lmax - level);  // 2^(lmax-level)
+    const unsigned int w         = (coarset_t - finest_t) / tfac_lvl;
+    return (w < 1u) ? 1u : w;
+}
+
 /**
  * @breif Contains all the information needed to build neighbourhood information
  * for the balanced octree based on treeSearch.
