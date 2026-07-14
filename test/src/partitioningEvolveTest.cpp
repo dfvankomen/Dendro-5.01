@@ -515,6 +515,10 @@ int main(int argc, char** argv) {
 
     if (!rank) std::cout << "meshes built\n";
 
+    // initial partition-quality snapshot (comparable SFC vs graph).
+    mesh_sfc->dumpPartitionStats(std::cout, "sfc-initial");
+    mesh_repart->dumpPartitionStats(std::cout, "graph-initial");
+
     auto runOne = [&](ot::Mesh*& mesh, const std::string& tag) {
         std::vector<double> u, tmp, k1, k2, k3, k4, uzIn, uzOut;
         mesh->createVector(u, initFunc);
@@ -534,6 +538,9 @@ int main(int argc, char** argv) {
 
         if (!rank)
             std::cout << "[" << tag << "] dt=" << dt << "\n";
+
+        // start the comms-volume tally fresh for this mesh's evolution.
+        mesh->resetCommStats();
 
         for (int step = 1; step <= numSteps; step++) {
             rk4_step(mesh, u, tmp, k1, k2, k3, k4, uzIn, uzOut, dt);
@@ -793,6 +800,10 @@ int main(int argc, char** argv) {
                 }
             }
         }
+
+        // comms-volume tally + final partition snapshot for this run.
+        mesh->dumpCommStats(std::cout, tag.c_str());
+        mesh->dumpPartitionStats(std::cout, tag.c_str());
 
         return u;
     };

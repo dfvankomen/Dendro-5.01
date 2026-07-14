@@ -692,6 +692,48 @@ void Mesh::dumpCommStats(std::ostream &out, const char *tag) {
     }
 }
 
+void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
+    // static partition-quality snapshot of the current (rebuilt) mesh:
+    // element load balance + ghost-node communication surface. Comparable
+    // SFC-vs-graph (unlike physics norms). Uses only already-built scatter
+    // maps, so no extra communication beyond the two small reductions.
+    if (!m_uiIsActive) return;
+
+    const DendroIntL localEle  = (DendroIntL)m_uiNumLocalElements;
+    const DendroIntL ghostSend = getGhostExcgTotalSendNodeCount();
+    const DendroIntL ghostRecv = getGhostExcgTotalRecvNodeCount();
+    const DendroIntL sendProcs = (DendroIntL)m_uiSendProcList.size();
+    const DendroIntL recvProcs = (DendroIntL)m_uiRecvProcList.size();
+
+    DendroIntL local[5] = {localEle, ghostSend, ghostRecv, sendProcs,
+                           recvProcs};
+    DendroIntL sum[5]   = {0, 0, 0, 0, 0};
+    DendroIntL maxv[5]  = {0, 0, 0, 0, 0};
+    par::Mpi_Reduce(local, sum, 5, MPI_SUM, 0, m_uiCommActive);
+    par::Mpi_Reduce(local, maxv, 5, MPI_MAX, 0, m_uiCommActive);
+
+    if (m_uiActiveRank == 0) {
+        const double meanEle =
+            (m_uiActiveNpes > 0) ? (double)sum[0] / (double)m_uiActiveNpes
+                                 : 0.0;
+        const double eleImbal =
+            (meanEle > 0.0) ? (double)maxv[0] / meanEle : 0.0;
+        const double meanGhost =
+            (m_uiActiveNpes > 0) ? (double)sum[1] / (double)m_uiActiveNpes
+                                 : 0.0;
+        const double ghostImbal =
+            (meanGhost > 0.0) ? (double)maxv[1] / meanGhost : 0.0;
+        out << "[part-stats] " << tag << " npes=" << m_uiActiveNpes
+            << " total_elements=" << sum[0]
+            << " ele_imbalance=" << eleImbal
+            << " total_ghost_send_nodes=" << sum[1]
+            << " total_ghost_recv_nodes=" << sum[2]
+            << " max_rank_ghost_send=" << maxv[1]
+            << " ghost_send_imbalance=" << ghostImbal
+            << " max_send_partners=" << maxv[3] << std::endl;
+    }
+}
+
 void Mesh::generateSearchKeys() {
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;

@@ -2838,6 +2838,14 @@ class Mesh {
      * `tag` labels the line; safe to call when disabled (prints nothing). */
     void dumpCommStats(std::ostream& out, const char* tag);
 
+    /**@brief reduce+print a static partition-quality snapshot of THIS (rebuilt)
+     * mesh: per-rank element load + ghost-node surface (the communication
+     * surface a ghost exchange must move) and their max/mean imbalance. This is
+     * the SFC-vs-graph-comparable partition-quality metric. Always computes
+     * (not gated by DENDRO_COMM_STATS) so it can be called at each repartition;
+     * callers gate the call site. */
+    void dumpPartitionStats(std::ostream& out, const char* tag);
+
     /**@brief : returns the coarset block level allowed. */
     inline unsigned int getCoarsetBlockLevAllowed() const {
         return m_uiCoarsetBlkLev;
