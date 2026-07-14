@@ -663,6 +663,8 @@ void Mesh::performGhostExchange(std::vector<T>& vec) {
             vec[m_uiScatterMapActualNodeRecv[k]] = (T)m_uiRecvBufferNodes[k];
         }
     }
+
+    if (this->commStatsOn()) this->recordAlltoallvCommStats(sizeof(T));
 }
 
 template <typename T>
@@ -727,6 +729,8 @@ void Mesh::performGhostExchange(T* vec) {
             vec[m_uiScatterMapActualNodeRecv[k]] = (T)m_uiRecvBufferNodes[k];
         }
     }
+
+    if (this->commStatsOn()) this->recordAlltoallvCommStats(sizeof(T));
 
     // Sync non-primary local cgs from ghost. Each non-primary local
     // cg is at a phys_pos where another rank holds the primary; the
@@ -1360,6 +1364,16 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                 // std::endl;
             }
         }
+
+        // comms-volume tally (DENDRO_COMM_STATS=1): one exchange, one
+        // message per active partner, dof*bufsize nodes each way.
+        if (this->commStatsOn())
+            this->recordCommExchange(dof * sendBSz, dof * recvBSz,
+                                     sendBSz ? (DendroIntL)sendProcList.size()
+                                             : 0,
+                                     recvBSz ? (DendroIntL)recvProcList.size()
+                                             : 0,
+                                     sizeof(T));
 
         m_uiCommTag++;
         m_uiMPIContexts.push_back(ctx);

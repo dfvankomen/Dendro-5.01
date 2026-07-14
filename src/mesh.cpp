@@ -661,6 +661,37 @@ Mesh::~Mesh() {
     }
 }
 
+void Mesh::dumpCommStats(std::ostream &out, const char *tag) {
+    // reduce the per-rank comms-volume accumulators to rank 0 and print a
+    // one-line summary. no-op unless DENDRO_COMM_STATS=1 (see commStatsOn()).
+    if (m_uiCommStatsOn != 1 || !m_uiIsActive) return;
+
+    // [0]=bytesSent [1]=bytesRecv [2]=nodesSent [3]=nodesRecv [4]=exchanges
+    DendroIntL local[5] = {m_uiCommStatBytesSent, m_uiCommStatBytesRecv,
+                           m_uiCommStatNodesSent, m_uiCommStatNodesRecv,
+                           m_uiCommStatExchanges};
+    DendroIntL sum[5]   = {0, 0, 0, 0, 0};
+    DendroIntL maxv[5]  = {0, 0, 0, 0, 0};
+    par::Mpi_Reduce(local, sum, 5, MPI_SUM, 0, m_uiCommActive);
+    par::Mpi_Reduce(local, maxv, 5, MPI_MAX, 0, m_uiCommActive);
+
+    if (m_uiActiveRank == 0) {
+        // partition-quality proxy: max per-rank bytes-sent over the mean.
+        const double meanBytesSent =
+            (m_uiActiveNpes > 0) ? (double)sum[0] / (double)m_uiActiveNpes
+                                 : 0.0;
+        const double imbal =
+            (meanBytesSent > 0.0) ? (double)maxv[0] / meanBytesSent : 0.0;
+        out << "[comm-stats] " << tag << " npes=" << m_uiActiveNpes
+            << " total_bytes_sent=" << sum[0]
+            << " total_bytes_recv=" << sum[1]
+            << " total_nodes_sent=" << sum[2]
+            << " total_exchanges=" << sum[4]
+            << " max_rank_bytes_sent=" << maxv[0]
+            << " bytes_sent_imbalance=" << imbal << std::endl;
+    }
+}
+
 void Mesh::generateSearchKeys() {
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;

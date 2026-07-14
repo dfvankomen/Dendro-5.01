@@ -892,6 +892,20 @@ class Mesh {
     /**Recv node count offset*/
     std::vector<unsigned int> m_uiRecvNodeOffset;
 
+    // --- comms-volume instrumentation (DENDRO_COMM_STATS=1) ---------------
+    // accumulators tallied on every nodal ghost exchange, so we can compare
+    // total inter-rank communication volume between SFC and graph partitions.
+    // OFF by default => zero overhead (the enable flag is checked once and
+    // cached; m_uiCommStatsOn == -1 means "not yet resolved from env").
+    int m_uiCommStatsOn                = -1;
+    DendroIntL m_uiCommStatNodesSent   = 0;
+    DendroIntL m_uiCommStatNodesRecv   = 0;
+    DendroIntL m_uiCommStatBytesSent   = 0;
+    DendroIntL m_uiCommStatBytesRecv   = 0;
+    DendroIntL m_uiCommStatMsgSent     = 0;
+    DendroIntL m_uiCommStatMsgRecv     = 0;
+    DendroIntL m_uiCommStatExchanges   = 0;
+
     /**@brief : number of elements that needed to be sent to each processor*/
     std::vector<unsigned int> m_uiSendEleCount;
     /**@brief : number of elements that recieved from each processor*/
@@ -2756,6 +2770,73 @@ class Mesh {
         else
             return 0;
     }
+
+    // --- comms-volume instrumentation API (DENDRO_COMM_STATS=1) -----------
+    /**@brief true when comms-volume tallying is enabled (env, cached once). */
+    inline bool commStatsOn() {
+        if (m_uiCommStatsOn < 0) {
+            const char* e   = std::getenv("DENDRO_COMM_STATS");
+            m_uiCommStatsOn = (e && e[0] == '1') ? 1 : 0;
+        }
+        return m_uiCommStatsOn == 1;
+    }
+
+    /**@brief accumulate one nodal ghost exchange into the comms counters.
+     * nodesSent/Recv are element counts (already ×dof); tsize = sizeof(T).
+     * no-op unless commStatsOn(). */
+    inline void recordCommExchange(DendroIntL nodesSent, DendroIntL nodesRecv,
+                                   DendroIntL msgSent, DendroIntL msgRecv,
+                                   size_t tsize) {
+        if (m_uiCommStatsOn != 1) return;
+        m_uiCommStatNodesSent += nodesSent;
+        m_uiCommStatNodesRecv += nodesRecv;
+        m_uiCommStatBytesSent += nodesSent * (DendroIntL)tsize;
+        m_uiCommStatBytesRecv += nodesRecv * (DendroIntL)tsize;
+        m_uiCommStatMsgSent += msgSent;
+        m_uiCommStatMsgRecv += msgRecv;
+        m_uiCommStatExchanges++;
+    }
+
+    /**@brief tally one collective (Alltoallv) nodal ghost exchange: scans the
+     * per-partner node counts for volume + nonzero-partner message counts.
+     * dof is always 1 on the Alltoallv path. no-op unless commStatsOn(). */
+    inline void recordAlltoallvCommStats(size_t tsize) {
+        if (m_uiCommStatsOn != 1) return;
+        DendroIntL ns = 0, nr = 0, ms = 0, mr = 0;
+        for (unsigned int p = 0; p < (unsigned int)m_uiActiveNpes; p++) {
+            if (m_uiSendNodeCount[p]) {
+                ns += m_uiSendNodeCount[p];
+                ms++;
+            }
+            if (m_uiRecvNodeCount[p]) {
+                nr += m_uiRecvNodeCount[p];
+                mr++;
+            }
+        }
+        recordCommExchange(ns, nr, ms, mr, tsize);
+    }
+
+    /**@brief zero the comms counters (call at the start of a measured run). */
+    inline void resetCommStats() {
+        m_uiCommStatNodesSent = m_uiCommStatNodesRecv = 0;
+        m_uiCommStatBytesSent = m_uiCommStatBytesRecv = 0;
+        m_uiCommStatMsgSent = m_uiCommStatMsgRecv = 0;
+        m_uiCommStatExchanges = 0;
+    }
+
+    inline DendroIntL getCommStatNodesSent() const {
+        return m_uiCommStatNodesSent;
+    }
+    inline DendroIntL getCommStatBytesSent() const {
+        return m_uiCommStatBytesSent;
+    }
+    inline DendroIntL getCommStatExchanges() const {
+        return m_uiCommStatExchanges;
+    }
+
+    /**@brief reduce+print the comms counters over the active comm to rank 0.
+     * `tag` labels the line; safe to call when disabled (prints nothing). */
+    void dumpCommStats(std::ostream& out, const char* tag);
 
     /**@brief : returns the coarset block level allowed. */
     inline unsigned int getCoarsetBlockLevAllowed() const {
