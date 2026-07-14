@@ -18715,15 +18715,14 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         // LTS-weighted graph partition (DENDRO_GRAPH_VTX_WEIGHTED):
         //   unset/0 -> the octree wrapper, element-count balance (default).
-        //   1       -> low-level fastpart_setup with per-element vertex
+        //   1       -> fastpart_partgraph_octree_ex with per-element vertex
         //              weights = oct_work_weight(level) so the partition
         //              balances sub-cycled work under adaptive time stepping.
-        //   2       -> same low-level CSR path but UNIFORM weights: the
-        //              equivalence gate that isolates CSR-build correctness
-        //              from the weighting itself.
-        // No fastpart source changes: we build the CSR (global-eid adjncy from
-        // the connectivity map's e2e) and vwgt here and call the already-public
-        // fastpart_setup / fastpart_partgraph / fastpart_destroy.
+        //   2       -> _ex with NULL opts: neutrality gate, must equal mode 0.
+        // Routed through the fastpart `_ex` API (docs/ATS_PARTITIONING_PROPOSAL)
+        // so it reuses dgraph_from_octree's proven boundary-pair symmetrization
+        // (the earlier hand-built CSR truncated in the remesh sandwich). vwgt is
+        // aligned to temp_oct_data[i] as the _ex contract requires.
         const char *wpartEnv = std::getenv("DENDRO_GRAPH_VTX_WEIGHTED");
         const int wpartMode  = (wpartEnv) ? atoi(wpartEnv) : 0;
         if (wpartMode == 0) {
@@ -18734,52 +18733,22 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             this->computeMinMaxLevel(lmin, lmax);
 
             const size_t n = oct_connectivity_map.size();
-            // vtx_dist for the ParMETIS-style API needs npes+1 entries
-            // (last = global total); the octree wrapper's vtx_dist has only
-            // npes, so build a proper one here.
-            std::vector<fastpart_uint_t> vtxDistLL(npes + 1);
-            for (unsigned int rk = 0; rk < npes; ++rk)
-                vtxDistLL[rk] = ele_offsets[rk];
-            vtxDistLL[npes] = ele_offsets[npes - 1] + ele_counts[npes - 1];
-
-            std::vector<fastpart_uint_t> xadj(n + 1, 0);
-            std::vector<fastpart_uint_t> adjncy;
-            adjncy.reserve(n * 6);
             std::vector<fastpart_uint_t> vwgt(n, 1);
-            for (size_t i = 0; i < n; ++i) {
-                const auto &oct = oct_connectivity_map[i];
-                for (unsigned int j = 0; j < 6; ++j) {
-                    const auto nb = oct.e2e[j];
-                    // face adjacency is mutual, so listing each element's own
-                    // neighbors gives a symmetric distributed graph without
-                    // shipping reverse edges; fastpart_setup localizes it.
-                    if (nb != LOOK_UP_TABLE_DEFAULT)
-                        adjncy.push_back((fastpart_uint_t)nb);
-                }
-                xadj[i + 1] = (fastpart_uint_t)adjncy.size();
-                vwgt[i]     = (wpartMode == 1)
-                                  ? (fastpart_uint_t)ot::oct_work_weight(
-                                        oct.level, lmin, lmax)
-                                  : 1u;
-            }
+            if (wpartMode == 1)
+                for (size_t i = 0; i < n; ++i)
+                    vwgt[i] = (fastpart_uint_t)ot::oct_work_weight(
+                        oct_connectivity_map[i].level, lmin, lmax);
 
-            const fastpart_uint_t wgtflag =
-                (wpartMode == 1) ? FASTPART_VTX_WEIGHTED : FASTPART_UNWEIGHTED;
-            const fastpart_uint_t *vwgtPtr =
-                (wpartMode == 1) ? vwgt.data() : nullptr;
-
-            fastpart_ctrl ctrl;
-            fastpart_setup(&ctrl, vtxDistLL.data(), xadj.data(), adjncy.data(),
-                           vwgtPtr, nullptr, wgtflag, &commActive);
-            fastpart_partgraph(&ctrl, parts, /*use_diffusion*/ true,
-                               &commActive, /*verbose*/ 0);
-            fastpart_destroy(&ctrl);
+            fastpart_oct_partopts opts;
+            fastpart_oct_partopts_init(&opts);
+            opts.vwgt = (wpartMode == 1) ? vwgt.data() : nullptr;
+            fastpart_partgraph_octree_ex(vtx_dist, temp_oct_data.data(), &opts,
+                                         parts, &commActive);
 
             if (rank == 0)
-                std::cout << "[graph-vtx-weighted] mode=" << wpartMode
-                          << " (1=LTS-weighted,2=uniform) lmin=" << lmin
-                          << " lmax=" << lmax << " local_edges=" << adjncy.size()
-                          << std::endl;
+                std::cout << "[graph-vtx-weighted] ex mode=" << wpartMode
+                          << " (1=LTS-weighted,2=neutral) lmin=" << lmin
+                          << " lmax=" << lmax << std::endl;
         }
 
         // BLOCK-ATOMIC POST-PROCESSING:
