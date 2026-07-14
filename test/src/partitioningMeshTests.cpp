@@ -791,6 +791,48 @@ int main(int argc, char** argv) {
             }
             std::cout << "---\n\n";
         }
+
+        // ---- MINIMALITY TEST: is the scatter-map excess actually read? ----
+        // excess = ghost CGs the recv scatter map delivers every step but the
+        // unzip does NOT require (the R1+R2+R3 correctness halo minus the true
+        // unzip need). Poison exactly those slots with NaN, set everything else
+        // to 1.0, run unzip WITHOUT a ghost exchange (so the poison survives),
+        // and count contaminated unzip outputs. Zero contamination ⇒ the excess
+        // is dead weight per step and is safe to drop from the exchange.
+        {
+            std::vector<unsigned int> excess;
+            std::set_difference(scatterMapNodes.begin(), scatterMapNodes.end(),
+                                unzipGhostNodes.begin(), unzipGhostNodes.end(),
+                                std::back_inserter(excess));
+            unsigned int nExcess = excess.size(), gExcess = 0;
+            MPI_Allreduce(&nExcess, &gExcess, 1, MPI_UNSIGNED, MPI_SUM, comm);
+
+            std::vector<double> vc, u;
+            mesh_repartitioned->createVector(vc);
+            mesh_repartitioned->createUnZippedVector(u);
+            std::fill(vc.begin(), vc.end(), 1.0);
+            const double kNaN = std::numeric_limits<double>::quiet_NaN();
+            for (unsigned int cg : excess) vc[cg] = kNaN;
+            mesh_repartitioned->unzip(vc.data(), u.data(), 1);
+
+            unsigned int localNaN = 0;
+            for (double x : u)
+                if (std::isnan(x)) localNaN++;
+            unsigned int gNaN = 0;
+            MPI_Allreduce(&localNaN, &gNaN, 1, MPI_UNSIGNED, MPI_SUM, comm);
+
+            if (!rank) {
+                std::cout << "--- MINIMALITY TEST (excess = recv-SM minus "
+                             "unzip need) ---\n";
+                std::cout << "Reducible scatter-map excess (nodes): " << gExcess
+                          << "\n";
+                std::cout << "Unzip outputs contaminated by excess: " << gNaN
+                          << (gNaN == 0
+                                  ? "  => excess UNREAD by unzip (safe to drop)"
+                                  : "  => excess IS read (not pure over-comm)")
+                          << "\n---\n\n";
+            }
+        }
     }
 
     // ---- TEST 6: setMeshRefinementFlags + ReMesh ----
