@@ -18674,15 +18674,14 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 temp_oct_data[i].e2e[j] = oct.e2e[j];
             }
             temp_oct_data[i].level = oct.level;
-#if 0
-                for (unsigned int j = 0; j < 12; ++j) {
-                    temp_oct_data[i].edgeNeighbors[j] = oct.edgeNeighbors[j];
-                }
-                for (unsigned int j = 0; j < 8; ++j) {
-                    temp_oct_data[i].vertexNeighbors[j] =
-                        oct.vertexNeighbors[j];
-                }
-#endif
+            // diagonal (edge/corner) stencil neighbors — cheap to always copy;
+            // fastpart only reads them when opts.include_edge_corner is set
+            // (DENDRO_GRAPH_FULL_STENCIL), so this is a no-op for the default
+            // face-only path.
+            for (unsigned int j = 0; j < 12; ++j)
+                temp_oct_data[i].edgeNeighbors[j] = oct.edgeNeighbors[j];
+            for (unsigned int j = 0; j < 8; ++j)
+                temp_oct_data[i].vertexNeighbors[j] = oct.vertexNeighbors[j];
         }
 
         // vtx_dist is a prefix scan of the element count for each MPI node
@@ -18725,7 +18724,12 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // aligned to temp_oct_data[i] as the _ex contract requires.
         const char *wpartEnv = std::getenv("DENDRO_GRAPH_VTX_WEIGHTED");
         const int wpartMode  = (wpartEnv) ? atoi(wpartEnv) : 0;
-        if (wpartMode == 0) {
+        // DENDRO_GRAPH_FULL_STENCIL=1: partition the FULL FD-stencil adjacency
+        // (faces + 12 edges + 8 corners) instead of just the 6 faces, so the
+        // cut tracks the ghost-node surface that is actually communicated.
+        const char *fsEnv      = std::getenv("DENDRO_GRAPH_FULL_STENCIL");
+        const bool fullStencil = (fsEnv && fsEnv[0] == '1');
+        if (wpartMode == 0 && !fullStencil) {
             fastpart_partgraph_octree(vtx_dist, temp_oct_data.data(), parts,
                                       &commActive);
         } else {
@@ -18741,14 +18745,15 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
             fastpart_oct_partopts opts;
             fastpart_oct_partopts_init(&opts);
-            opts.vwgt = (wpartMode == 1) ? vwgt.data() : nullptr;
+            opts.vwgt               = (wpartMode == 1) ? vwgt.data() : nullptr;
+            opts.include_edge_corner = fullStencil;
             fastpart_partgraph_octree_ex(vtx_dist, temp_oct_data.data(), &opts,
                                          parts, &commActive);
 
             if (rank == 0)
-                std::cout << "[graph-vtx-weighted] ex mode=" << wpartMode
-                          << " (1=LTS-weighted,2=neutral) lmin=" << lmin
-                          << " lmax=" << lmax << std::endl;
+                std::cout << "[graph-part-ex] wmode=" << wpartMode
+                          << " full_stencil=" << (fullStencil ? 1 : 0)
+                          << " lmin=" << lmin << " lmax=" << lmax << std::endl;
         }
 
         // BLOCK-ATOMIC POST-PROCESSING:
