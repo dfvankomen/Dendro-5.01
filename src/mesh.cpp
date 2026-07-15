@@ -7615,6 +7615,303 @@ void Mesh::unifyE2NCgAcrossTNInstances() {
     (void)e2n_cross_fixed;
 }
 
+void Mesh::buildZipPlanArbitrateDistributed(
+    const std::vector<unsigned long long>& myX,
+    const std::vector<unsigned long long>& myY,
+    const std::vector<unsigned long long>& myZ,
+    const std::vector<unsigned int>& myTNX,
+    const std::vector<unsigned int>& myTNY,
+    const std::vector<unsigned int>& myTNZ,
+    const std::vector<unsigned int>& myTNLev,
+    const std::vector<unsigned int>& myCg,
+    const std::vector<unsigned int>& myInterior, bool use_packtn,
+    std::vector<int>& winRank, std::vector<unsigned int>& winCg,
+    std::vector<unsigned int>& winTNX, std::vector<unsigned int>& winTNY,
+    std::vector<unsigned int>& winTNZ, std::vector<unsigned int>& winTNLev,
+    std::vector<unsigned int>& winInterior) {
+    const int npes   = m_uiActiveNpes;
+    const int myRank = m_uiActiveRank;
+    const int n      = (int)myX.size();
+    // must match buildZipPlan's local constant: a ghost-only claim carries
+    // this level and can never win the cascade.
+    const unsigned int TN_LEV_NONE = (unsigned int)-1;
+
+    winRank.assign(n, -1);
+    winCg.assign(n, 0);
+    winTNX.assign(n, 0);
+    winTNY.assign(n, 0);
+    winTNZ.assign(n, 0);
+    winTNLev.assign(n, TN_LEV_NONE);
+    winInterior.assign(n, 0);
+
+    // identical cascade comparator to the default path (see buildZipPlan):
+    // "a wins over b"; TN_LEV_NONE (ghost-only claim) never wins.
+    auto claimLT = [&](unsigned int aX, unsigned int aY, unsigned int aZ,
+                       unsigned int aL, unsigned int bX, unsigned int bY,
+                       unsigned int bZ, unsigned int bL) -> bool {
+        if (aL == TN_LEV_NONE) return false;
+        if (bL == TN_LEV_NONE) return true;
+        if (use_packtn) {
+            unsigned long long pa = ((unsigned long long)(aL & 0xFFULL) << 56) |
+                                    ((unsigned long long)(aX & 0xFFFFFFFULL)
+                                     << 28) |
+                                    (unsigned long long)(aY & 0xFFFFFFFULL);
+            unsigned long long pb = ((unsigned long long)(bL & 0xFFULL) << 56) |
+                                    ((unsigned long long)(bX & 0xFFFFFFFULL)
+                                     << 28) |
+                                    (unsigned long long)(bY & 0xFFFFFFFULL);
+            return pa < pb;
+        }
+        if (aL != bL) return aL < bL;
+        ot::TreeNode ta(aX, aY, aZ, aL, m_uiDim, m_uiMaxDepth);
+        ot::TreeNode tb(bX, bY, bZ, bL, m_uiDim, m_uiMaxDepth);
+        return ta < tb;
+    };
+
+    // home(phys): pure integer mix, so every rank agrees. Positions -- not
+    // claims -- are what must land together for arbitration to be exact.
+    auto homeOf = [npes](unsigned long long x, unsigned long long y,
+                         unsigned long long z) -> int {
+        unsigned long long h = x * 0x9E3779B97F4A7C15ULL;
+        h ^= y + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+        h ^= z + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+        h ^= h >> 33;
+        h *= 0xFF51AFD7ED558CCDULL;
+        h ^= h >> 33;
+        return (int)(h % (unsigned long long)npes);
+    };
+
+    struct ClaimMsg {
+        unsigned long long x, y, z;
+        unsigned int tnX, tnY, tnZ, tnLev, cg, interior;
+    };
+    struct WinMsg {
+        int rank;
+        unsigned int cg, tnX, tnY, tnZ, tnLev, interior;
+    };
+
+    // ---- route claims to their home rank ------------------------------
+    // bucket PRESERVING original per-rank order: the default path's tie-break
+    // depends on claim order within a rank, not just on rank order.
+    std::vector<int> sCnt(npes, 0), sOff(npes, 0), rCnt(npes, 0), rOff(npes, 0);
+    std::vector<int> homeIdx(n);
+    for (int i = 0; i < n; i++) {
+        homeIdx[i] = homeOf(myX[i], myY[i], myZ[i]);
+        sCnt[homeIdx[i]]++;
+    }
+    for (int p = 1; p < npes; p++) sOff[p] = sOff[p - 1] + sCnt[p - 1];
+    MPI_Alltoall(sCnt.data(), 1, MPI_INT, rCnt.data(), 1, MPI_INT,
+                 m_uiCommActive);
+    for (int p = 1; p < npes; p++) rOff[p] = rOff[p - 1] + rCnt[p - 1];
+    const int nRecv = (npes > 0) ? (rOff[npes - 1] + rCnt[npes - 1]) : 0;
+
+    std::vector<ClaimMsg> sendC(n);
+    std::vector<int> myPos(n), slot(sOff);
+    for (int i = 0; i < n; i++) {
+        const int s = slot[homeIdx[i]]++;
+        myPos[i]    = s;
+        sendC[s]    = ClaimMsg{myX[i],   myY[i],   myZ[i],
+                               myTNX[i], myTNY[i], myTNZ[i],
+                               myTNLev[i], myCg[i], myInterior[i]};
+    }
+
+    std::vector<ClaimMsg> recvC(nRecv);
+    {
+        const int E = (int)sizeof(ClaimMsg);
+        std::vector<int> sB(npes), sO(npes), rB(npes), rO(npes);
+        for (int p = 0; p < npes; p++) {
+            sB[p] = sCnt[p] * E;
+            sO[p] = sOff[p] * E;
+            rB[p] = rCnt[p] * E;
+            rO[p] = rOff[p] * E;
+        }
+        MPI_Alltoallv(sendC.data(), sB.data(), sO.data(), MPI_BYTE,
+                      recvC.data(), rB.data(), rO.data(), MPI_BYTE,
+                      m_uiCommActive);
+    }
+
+    // ---- arbitrate locally: this home owns every claim at these positions --
+    // iterate ORIGIN RANK ASCENDING, then sender order. This reproduces the
+    // default path's implicit "lowest rank wins" tie-break exactly.
+    std::unordered_map<PhysKey3, WinMsg, PhysKey3Hash> homeWin;
+    homeWin.reserve(nRecv);
+    for (int p = 0; p < npes; p++) {
+        for (int i = rOff[p]; i < rOff[p] + rCnt[p]; i++) {
+            const ClaimMsg& c = recvC[i];
+            PhysKey3 k{c.x, c.y, c.z};
+            auto it = homeWin.find(k);
+            if (it == homeWin.end()) {
+                homeWin[k] = WinMsg{p,      c.cg,    c.tnX,    c.tnY,
+                                    c.tnZ,  c.tnLev, c.interior};
+                continue;
+            }
+            WinMsg& w    = it->second;
+            bool replace = false;
+            if (c.interior != w.interior) {
+                replace = (c.interior > w.interior);
+            } else if (claimLT(c.tnX, c.tnY, c.tnZ, c.tnLev, w.tnX, w.tnY,
+                               w.tnZ, w.tnLev)) {
+                replace = true;
+            } else if (!claimLT(w.tnX, w.tnY, w.tnZ, w.tnLev, c.tnX, c.tnY,
+                                c.tnZ, c.tnLev) &&
+                       p < w.rank) {
+                replace = true;
+            }
+            if (replace)
+                w = WinMsg{p, c.cg, c.tnX, c.tnY, c.tnZ, c.tnLev, c.interior};
+        }
+    }
+
+    // ---- return each claim's winner to its claimant --------------------
+    std::vector<WinMsg> backSend(nRecv), backRecv(n);
+    for (int i = 0; i < nRecv; i++)
+        backSend[i] = homeWin[PhysKey3{recvC[i].x, recvC[i].y, recvC[i].z}];
+    {
+        const int E = (int)sizeof(WinMsg);
+        std::vector<int> sB(npes), sO(npes), rB(npes), rO(npes);
+        for (int p = 0; p < npes; p++) {  // reversed: recv counts now send
+            sB[p] = rCnt[p] * E;
+            sO[p] = rOff[p] * E;
+            rB[p] = sCnt[p] * E;
+            rO[p] = sOff[p] * E;
+        }
+        MPI_Alltoallv(backSend.data(), sB.data(), sO.data(), MPI_BYTE,
+                      backRecv.data(), rB.data(), rO.data(), MPI_BYTE,
+                      m_uiCommActive);
+    }
+    for (int i = 0; i < n; i++) {
+        const WinMsg& w = backRecv[myPos[i]];
+        winRank[i]      = w.rank;
+        winCg[i]        = w.cg;
+        winTNX[i]       = w.tnX;
+        winTNY[i]       = w.tnY;
+        winTNZ[i]       = w.tnZ;
+        winTNLev[i]     = w.tnLev;
+        winInterior[i]  = w.interior;
+    }
+
+    // ---- build the sync channel ---------------------------------------
+    // Recv side and intra-rank duplicates are now purely LOCAL: a claim whose
+    // winner lives elsewhere must receive; one whose winner is a different cg
+    // of mine is an intra-rank dup. The SEND side falls out by symmetry --
+    // every non-primary claimant sends the primary a request, so the primary
+    // never needs the group broadcast.
+    m_uiZipSyncSendCounts.assign(npes, 0);
+    m_uiZipSyncRecvCounts.assign(npes, 0);
+    m_uiZipSyncSendOffsets.assign(npes, 0);
+    m_uiZipSyncRecvOffsets.assign(npes, 0);
+    m_uiZipSyncSendCg.clear();
+    m_uiZipSyncRecvCg.clear();
+    m_uiZipLocalDupSrc.clear();
+    m_uiZipLocalDupDst.clear();
+
+    struct ReqMsg {
+        unsigned long long x, y, z;
+        unsigned int cg;  // claimant's cg (its recv destination)
+    };
+    // recv entries keyed by a TOTAL order (phys, cg) so both peers agree
+    struct RecvEnt {
+        unsigned long long x, y, z;
+        unsigned int cg;
+        int from;
+    };
+    std::vector<RecvEnt> recvEnts;
+    std::vector<std::vector<ReqMsg>> reqTo(npes);
+    for (int i = 0; i < n; i++) {
+        if (winRank[i] < 0) continue;
+        if (winRank[i] != myRank) {
+            recvEnts.push_back(RecvEnt{myX[i], myY[i], myZ[i], myCg[i],
+                                       winRank[i]});
+            reqTo[winRank[i]].push_back(ReqMsg{myX[i], myY[i], myZ[i],
+                                               myCg[i]});
+        } else if (winCg[i] != myCg[i]) {
+            m_uiZipLocalDupSrc.push_back(winCg[i]);
+            m_uiZipLocalDupDst.push_back(myCg[i]);
+        }
+    }
+
+    auto entLT = [](unsigned long long ax, unsigned long long ay,
+                    unsigned long long az, unsigned int acg,
+                    unsigned long long bx, unsigned long long by,
+                    unsigned long long bz, unsigned int bcg) -> bool {
+        if (ax != bx) return ax < bx;
+        if (ay != by) return ay < by;
+        if (az != bz) return az < bz;
+        return acg < bcg;
+    };
+
+    std::sort(recvEnts.begin(), recvEnts.end(),
+              [&](const RecvEnt& a, const RecvEnt& b) {
+                  if (a.from != b.from) return a.from < b.from;
+                  return entLT(a.x, a.y, a.z, a.cg, b.x, b.y, b.z, b.cg);
+              });
+    for (const RecvEnt& e : recvEnts) m_uiZipSyncRecvCounts[e.from]++;
+    for (int p = 1; p < npes; p++)
+        m_uiZipSyncRecvOffsets[p] =
+            m_uiZipSyncRecvOffsets[p - 1] + m_uiZipSyncRecvCounts[p - 1];
+    m_uiZipSyncRecvCg.resize(recvEnts.size());
+    for (size_t k = 0; k < recvEnts.size(); k++)
+        m_uiZipSyncRecvCg[k] = recvEnts[k].cg;
+
+    // ship requests to primaries; each becomes one send entry
+    std::vector<int> qsC(npes, 0), qsO(npes, 0), qrC(npes, 0), qrO(npes, 0);
+    for (int p = 0; p < npes; p++) qsC[p] = (int)reqTo[p].size();
+    for (int p = 1; p < npes; p++) qsO[p] = qsO[p - 1] + qsC[p - 1];
+    MPI_Alltoall(qsC.data(), 1, MPI_INT, qrC.data(), 1, MPI_INT,
+                 m_uiCommActive);
+    for (int p = 1; p < npes; p++) qrO[p] = qrO[p - 1] + qrC[p - 1];
+    const int nReqOut = qsO[npes - 1] + qsC[npes - 1];
+    const int nReqIn  = qrO[npes - 1] + qrC[npes - 1];
+
+    std::vector<ReqMsg> qs(nReqOut), qr(nReqIn);
+    for (int p = 0; p < npes; p++)
+        for (int k = 0; k < (int)reqTo[p].size(); k++)
+            qs[qsO[p] + k] = reqTo[p][k];
+    {
+        const int E = (int)sizeof(ReqMsg);
+        std::vector<int> sB(npes), sO(npes), rB(npes), rO(npes);
+        for (int p = 0; p < npes; p++) {
+            sB[p] = qsC[p] * E;
+            sO[p] = qsO[p] * E;
+            rB[p] = qrC[p] * E;
+            rO[p] = qrO[p] * E;
+        }
+        MPI_Alltoallv(qs.data(), sB.data(), sO.data(), MPI_BYTE, qr.data(),
+                      rB.data(), rO.data(), MPI_BYTE, m_uiCommActive);
+    }
+
+    // my winning cg per position (all my claims at a position agree on it)
+    std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash> posToWinCg;
+    posToWinCg.reserve(n);
+    for (int i = 0; i < n; i++)
+        if (winRank[i] == myRank)
+            posToWinCg[PhysKey3{myX[i], myY[i], myZ[i]}] = winCg[i];
+
+    // sort each requester's block by the SAME total key the requester used
+    for (int p = 0; p < npes; p++) {
+        if (qrC[p] <= 0) continue;
+        std::sort(qr.begin() + qrO[p], qr.begin() + qrO[p] + qrC[p],
+                  [&](const ReqMsg& a, const ReqMsg& b) {
+                      return entLT(a.x, a.y, a.z, a.cg, b.x, b.y, b.z, b.cg);
+                  });
+    }
+    m_uiZipSyncSendCg.resize(nReqIn);
+    for (int p = 0; p < npes; p++) m_uiZipSyncSendCounts[p] = qrC[p];
+    for (int p = 1; p < npes; p++)
+        m_uiZipSyncSendOffsets[p] =
+            m_uiZipSyncSendOffsets[p - 1] + m_uiZipSyncSendCounts[p - 1];
+    for (int p = 0; p < npes; p++) {
+        for (int k = 0; k < qrC[p]; k++) {
+            const ReqMsg& q = qr[qrO[p] + k];
+            auto it         = posToWinCg.find(PhysKey3{q.x, q.y, q.z});
+            // a request can only arrive if I won that position, so a miss is a
+            // logic error, not a tolerable one -- send my own cg would corrupt.
+            m_uiZipSyncSendCg[m_uiZipSyncSendOffsets[p] + k] =
+                (it != posToWinCg.end()) ? it->second : LOOK_UP_TABLE_DEFAULT;
+        }
+    }
+}
+
 void Mesh::buildZipPlan() {
     m_uiZipPlanCg.clear();
     m_uiZipPlanUnzipIdx.clear();
@@ -7624,6 +7921,21 @@ void Mesh::buildZipPlan() {
     if (!m_uiIsActive) return;
     if (!m_uiIsBlockSetup) return;
     if (m_uiLocalBlockList.empty()) return;
+
+    // stage timing: DENDRO_ZIPPLAN_PROF=1 (rank-0 wall times). buildZipPlan is
+    // ~51% of repartitionMeshGlobal; this splits it so we know which part.
+    static const char* __zp_env = std::getenv("DENDRO_ZIPPLAN_PROF");
+    const bool __zp_on = __zp_env && __zp_env[0] == '1' && __zp_env[1] == '\0';
+    const double __zp_t0 = __zp_on ? MPI_Wtime() : 0.0;
+    double __zp_claims = 0, __zp_coll = 0, __zp_win = 0;
+    // sub-splits of what was one 'stage3' bucket (it was a 580-line bundle)
+    double __zp_passd = 0, __zp_sortkey = 0, __zp_sync = 0, __zp_inv = 0,
+           __zp_plan = 0, __zp_clean2 = 0;
+    // ceiling check: how many claims are ghost-only (never win, exist purely as
+    // recv destinations) and how many phys_pos are ACTUALLY contested. Bounds
+    // what any claim-set reduction could ever buy.
+    size_t __zp_nLocalClaims = 0, __zp_nGhostClaims = 0, __zp_nContested = 0,
+           __zp_nUniquePos = 0;
 
     const unsigned int npe  = m_uiNpE;
     const unsigned int eOrd = m_uiElementOrder;
@@ -7978,6 +8290,13 @@ void Mesh::buildZipPlan() {
                 interior = isInteriorWriter(we, wn) ? 1u : 0u;
             }
         }
+        if (__zp_on) {
+            if (is_local)
+                __zp_nLocalClaims++;
+            else
+                __zp_nGhostClaims++;
+        }
+
         myX.push_back(x);
         myY.push_back(y);
         myZ.push_back(z);
@@ -7990,6 +8309,16 @@ void Mesh::buildZipPlan() {
     }
 
 
+    if (__zp_on) __zp_claims = MPI_Wtime();
+
+    // DENDRO_ZIPPLAN_DIST=1: arbitrate on home ranks instead of replicating
+    // the whole global picture on every rank. Same rule, same winners; the
+    // default path's O(total)=O(P*local) per-rank cost becomes O(local).
+    // See buildZipPlanArbitrateDistributed.
+    static const char* __zp_dist_env = std::getenv("DENDRO_ZIPPLAN_DIST");
+    const bool zpDist = __zp_dist_env && __zp_dist_env[0] == '1' &&
+                        __zp_dist_env[1] == '\0' && m_uiActiveNpes > 1;
+
     int myCount = (int)myX.size();
     std::vector<int> counts(m_uiActiveNpes), offs(m_uiActiveNpes, 0);
     MPI_Allgather(&myCount, 1, MPI_INT, counts.data(), 1, MPI_INT,
@@ -7999,9 +8328,15 @@ void Mesh::buildZipPlan() {
         offs[p] = total;
         total += counts[p];
     }
-    std::vector<unsigned long long> allX(total), allY(total), allZ(total);
-    std::vector<unsigned int> allTNX(total), allTNY(total),
-        allTNZ(total), allTNLev(total), allCg(total);
+    // zpDist skips every one of these: allocating+gathering `total` entries on
+    // every rank IS the scaling wall (~58 MB/rank at np=4, and it grows with P).
+    std::vector<unsigned long long> allX, allY, allZ;
+    std::vector<unsigned int> allTNX, allTNY, allTNZ, allTNLev, allCg;
+    std::vector<unsigned int> allInterior;
+    if (!zpDist) {
+    allX.resize(total); allY.resize(total); allZ.resize(total);
+    allTNX.resize(total); allTNY.resize(total); allTNZ.resize(total);
+    allTNLev.resize(total); allCg.resize(total);
     MPI_Allgatherv(myX.data(), myCount, MPI_UINT64_T, allX.data(),
                    counts.data(), offs.data(), MPI_UINT64_T,
                    m_uiCommActive);
@@ -8022,8 +8357,11 @@ void Mesh::buildZipPlan() {
     agU(myTNZ, allTNZ);
     agU(myTNLev, allTNLev);
     agU(myCg, allCg);
-    std::vector<unsigned int> allInterior(total);
+    allInterior.resize(total);
     agU(myInterior, allInterior);
+    }  // end if (!zpDist): the global gather
+
+    if (__zp_on) __zp_coll = MPI_Wtime();
 
     // Cascade-rule cross-rank comparator. claim "a wins over b"
     // means a is strictly smaller under (level, ot::TreeNode::<).
@@ -8066,6 +8404,27 @@ void Mesh::buildZipPlan() {
     };
 
     std::unordered_map<PhysKey3, Winner, PhysKey3Hash> winners;
+    if (zpDist) {
+        // Home-rank arbitration. Every downstream consumer of `winners` only
+        // ever looks it up at a position where THIS rank holds a cg (plan build
+        // and fixup walk nLB..nLE; the rest derive from our own elements), so a
+        // map covering exactly our own claims is sufficient — we never needed
+        // the global one.
+        std::vector<int> winRank;
+        std::vector<unsigned int> winCg, winTNX, winTNY, winTNZ, winTNLev,
+            winInterior;
+        buildZipPlanArbitrateDistributed(myX, myY, myZ, myTNX, myTNY, myTNZ,
+                                         myTNLev, myCg, myInterior, use_packtn,
+                                         winRank, winCg, winTNX, winTNY, winTNZ,
+                                         winTNLev, winInterior);
+        winners.reserve(myCount);
+        for (int i = 0; i < myCount; i++) {
+            if (winRank[i] < 0) continue;
+            winners[PhysKey3{myX[i], myY[i], myZ[i]}] =
+                Winner{winRank[i],  winCg[i],    winTNX[i], winTNY[i],
+                       winTNZ[i],   winTNLev[i], winInterior[i]};
+        }
+    } else {
     winners.reserve(total);
     for (int p = 0; p < m_uiActiveNpes; p++) {
         for (int i = offs[p]; i < offs[p] + counts[p]; i++) {
@@ -8097,6 +8456,7 @@ void Mesh::buildZipPlan() {
             }
         }
     }
+    }  // end else: the global (replicated) winners build
 
     // ---- Cleanup: remove cascade-primary cgs from PassD's demoted
     // mirror list ----
@@ -8120,6 +8480,8 @@ void Mesh::buildZipPlan() {
     // entry from m_uiPassDDemotedToGhostCg. Cascade primaries are NOT
     // demoted; they're the source of truth.
 
+    if (__zp_on) __zp_win = MPI_Wtime();
+
     size_t passDCleanupErased = 0;
     bool dbgWinnerCleanup =
         (DENDRO_PROBE_GETENV("DENDRO_PASSD_CLEANUP_DBG") != nullptr);
@@ -8134,6 +8496,8 @@ void Mesh::buildZipPlan() {
                   << " winner-cgs from PassDDemotedToGhostCg"
                   << std::endl;
     }
+
+    if (__zp_on) __zp_passd = MPI_Wtime();
 
     // ---- Side-channel non-primary sync via direct Alltoallv ----
     //
@@ -8152,6 +8516,9 @@ void Mesh::buildZipPlan() {
     // from the global allgathered claims. To keep send/recv ordering
     // consistent across rank pairs, we iterate phys_pos in a sorted
     // order.
+    // zpDist already built these (recv side + intra-rank dups locally, send
+    // side from the peers' requests). Re-running this would clear them.
+    if (!zpDist) {
     m_uiZipSyncSendCounts.assign(m_uiActiveNpes, 0);
     m_uiZipSyncRecvCounts.assign(m_uiActiveNpes, 0);
     m_uiZipSyncSendOffsets.assign(m_uiActiveNpes, 0);
@@ -8227,6 +8594,8 @@ void Mesh::buildZipPlan() {
         }
 
         // First pass: count send/recv per rank.
+        if (__zp_on) __zp_sortkey = MPI_Wtime();
+
         // Walk consecutive entries with same (x, y, z) to identify
         // claim groups per phys_pos. (sidx[k] indexes the all* arrays.)
         // cache multi-claim group (begin, end, winner_rank, winner_cg)
@@ -8248,6 +8617,10 @@ void Mesh::buildZipPlan() {
                    && allZ[sidx[j]] == allZ[sidx[i]])
                 ++j;
             // [i, j) is the claim group for one phys_pos.
+            if (__zp_on) {
+                __zp_nUniquePos++;
+                if (j - i > 1) __zp_nContested++;
+            }
             if (j - i > 1) {
                 // Multi-claim phys_pos: find primary, count sync.
                 auto wit = winners.find(PhysKey3{
@@ -8399,6 +8772,9 @@ void Mesh::buildZipPlan() {
             s_dup_probe_call_id++;
         }
     }
+    }  // end if (!zpDist): the global side-channel sync build
+
+    if (__zp_on) __zp_sync = MPI_Wtime();
 
     // ---- Stage 3: build inverse scatter map for non-primary sync ----
     //
@@ -8449,6 +8825,8 @@ void Mesh::buildZipPlan() {
             }
         }
     }
+
+    if (__zp_on) __zp_inv = MPI_Wtime();
 
     // zip-plan stats (DENDRO_ZIPPLAN_STATS=1): how the mirror pairing
     // degrades under a reduced scatter map (minimal-scatter debugging)
@@ -8542,6 +8920,8 @@ void Mesh::buildZipPlan() {
         m_uiZipPlanUnzipIdx.push_back(unzip_idx);
     }
 
+    if (__zp_on) __zp_plan = MPI_Wtime();
+
     // ---- Cleanup pass 2: PassD's heuristic mirror is shadowed by
     // (a) the precise Stage 3 mirror m_uiZipNonPrimaryToGhostCg, and
     // (b) the side-channel Alltoallv syncZipNonPrimary which delivers
@@ -8570,6 +8950,8 @@ void Mesh::buildZipPlan() {
                   << " (Stage3+SyncZipNonPrimary coverage)"
                   << std::endl;
     }
+
+    if (__zp_on) __zp_clean2 = MPI_Wtime();
 
     // ---- Build element-read fixup map ----
     //
@@ -8707,7 +9089,34 @@ void Mesh::buildZipPlan() {
     // hoisted into Mesh::unifyE2NCgAcrossTNInstances (runs eagerly at
     // mesh build since it mutates E2N_CG; re-run here so the
     // repartition path keeps its original ordering — idempotent).
+    const double __zp_pre_unify = __zp_on ? MPI_Wtime() : 0.0;
     this->unifyE2NCgAcrossTNInstances();
+
+    if (__zp_on && !m_uiActiveRank) {
+        const double t_end = MPI_Wtime();
+        // __zp_sortkey is only set when the multi-claim sync block runs
+        // (npes>1); fall back so the split still sums correctly.
+        const double sortEnd = (__zp_sortkey > 0.0) ? __zp_sortkey : __zp_passd;
+        std::printf(
+            "[zipplan-prof] claims=%.1f coll_x10=%.1f winners=%.1f "
+            "passd=%.1f SORT_x2=%.1f sync_rest=%.1f inv=%.1f plan=%.1f "
+            "clean2=%.1f fixup=%.1f unify=%.1f | total=%.1f ms "
+            "(myClaims=%d [local=%zu ghost=%zu] globalClaims=%d "
+            "uniquePos=%zu CONTESTED=%zu npes=%d)\n",
+            (__zp_claims - __zp_t0) * 1e3,
+            (__zp_coll - __zp_claims) * 1e3,
+            (__zp_win - __zp_coll) * 1e3,
+            (__zp_passd - __zp_win) * 1e3,
+            (sortEnd - __zp_passd) * 1e3,
+            (__zp_sync - sortEnd) * 1e3,
+            (__zp_inv - __zp_sync) * 1e3,
+            (__zp_plan - __zp_inv) * 1e3,
+            (__zp_clean2 - __zp_plan) * 1e3,
+            (__zp_pre_unify - __zp_clean2) * 1e3,
+            (t_end - __zp_pre_unify) * 1e3, (t_end - __zp_t0) * 1e3,
+            myCount, __zp_nLocalClaims, __zp_nGhostClaims, total,
+            __zp_nUniquePos, __zp_nContested, m_uiActiveNpes);
+    }
 }
 
 void Mesh::computeNodalScatterMapDG(MPI_Comm comm) {
@@ -19838,12 +20247,19 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     m_uiElementLocalEnd, m_uiElementOrder, m_uiE2EMapping,
                     m_uiCoarsetBlkLev, NULL, 0);
             }
+            // the enclosing 'block-decomposition' phase bundles 5 different
+            // jobs; split them so the label stops hiding where the time goes.
+            __phase("  blk: decomposition");
 
             performBlocksSetupRepartitioned(m_uiCoarsetBlkLev, NULL, 0);
+            __phase("  blk: performBlocksSetup");
 
             buildE2BlockMap();
+            __phase("  blk: buildE2BlockMap");
             buildUnzipCanonicalWriterTable();
+            __phase("  blk: buildUnzipCanonWriter");
             buildZipPlan();
+            __phase("  blk: buildZipPlan");
 
             // minimal-scatter shrink: rebuild the nodal SM keeping only
             // consumer-read slots. Runs AFTER buildZipPlan so the mirror

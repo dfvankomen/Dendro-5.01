@@ -91,10 +91,11 @@ void usage(const char* argv0) {
         << "  --partition-tol X    load imbalance tol      (default 0.1)\n"
         << "  --eorder N           element order           (default 4)\n"
         << "  --grain N            dendro grain size       (default 50)\n"
-        << "  --refine NAME        sine|blob|offblob       (default sine)\n"
+        << "  --refine NAME        sine|blob|offblob|puncture|puncture2\n"
+        << "                       (default sine)\n"
         << "  --variants LIST      comma list of:\n"
-        << "                         sfc, fastpart, fastpart_fullstencil,\n"
-        << "                         fastpart_weighted\n"
+        << "                         sfc, sfc_weighted, sfc_levelwise, fastpart,\n"
+        << "                         fastpart_fullstencil, fastpart_weighted\n"
         << "                       (default sfc,fastpart)\n"
         << "  --label S            free-form tag copied into config.label\n"
         << "  --json PATH          write JSONL here (rank 0); default stdout\n";
@@ -122,8 +123,69 @@ struct Metrics {
     double edge_cut_frac = 0.0;
     double ele_imbalance = 0.0;
     double work_imbalance = 0.0;
+    double lts_eff = 0.0;        // per-sub-step ENUTS parallel efficiency
+    double lts_eff_bound = 0.0;  // ceil-granularity ceiling on lts_eff
+    double lts_comm_scoped_ratio = 0.0;  // scoped-exchange comms / full-every-substep
     long long n_elements = 0;
 };
+
+/** Per-sub-step ENUTS parallel efficiency of a labelling.
+ *
+ * work_imbalance above scores TOTAL LTS work per rank -- which any weighted
+ * 1-D prefix split balances trivially and which does NOT predict LTS speedup.
+ * What gates the ENUTS evolve is per-PARTIAL-STEP balance: partial_evolve(pt)
+ * runs a collective DG ghost exchange per RK stage (enuts.h:1905), so every
+ * rank waits on the busiest rank at every pt. A block at level L fires when
+ * pt % 2^(lmax-L) == 0 (getBlkTimestepFac), each firing costing ~its element
+ * count. So:
+ *
+ *   eff = sum_pt mean_rank(active work at pt) / sum_pt max_rank(active work)
+ *
+ * = the fraction of busiest-rank-gated capacity doing useful work, the same
+ * accounting dump_est_speedup does (it reduces min/sum/max per pt but only
+ * prints the sum). eff_bound is the ceil-granularity ceiling: even a perfect
+ * partition cannot beat ceil(active_total/np) on the max at any pt -- the
+ * "deepest levels are near-point" floor, made visible.
+ */
+void score_lts_substeps(const std::vector<unsigned int>& local_gids,
+                        const std::vector<unsigned int>& label_of_gid,
+                        const std::vector<unsigned int>& level_of_local,
+                        unsigned int lmin, unsigned int lmax, unsigned int npes,
+                        MPI_Comm comm, Metrics& m) {
+    const unsigned int nlev = lmax - lmin + 1;
+    std::vector<long long> cnt(npes * nlev, 0), cnt_g(npes * nlev, 0);
+    for (size_t i = 0; i < local_gids.size(); ++i) {
+        unsigned int lev = level_of_local[i];
+        if (lev < lmin) lev = lmin;
+        if (lev > lmax) lev = lmax;
+        cnt[label_of_gid[local_gids[i]] * nlev + (lev - lmin)] += 1;
+    }
+    MPI_Allreduce(cnt.data(), cnt_g.data(), npes * nlev, MPI_LONG_LONG, MPI_SUM,
+                  comm);
+
+    const unsigned int coarset_t = 1u << (lmax - lmin);
+    double sum_mean = 0.0, sum_max = 0.0, sum_ideal = 0.0;
+    std::vector<long long> active(npes);
+    for (unsigned int pt = 0; pt < coarset_t; ++pt) {
+        long long total = 0, amax = 0;
+        for (unsigned int p = 0; p < npes; ++p) {
+            long long a = 0;
+            for (unsigned int l = 0; l < nlev; ++l) {
+                const unsigned int blk_dt = 1u << (lmax - (lmin + l));
+                if (pt % blk_dt == 0) a += cnt_g[p * nlev + l];
+            }
+            active[p] = a;
+            total += a;
+            amax = std::max(amax, a);
+        }
+        if (total == 0) continue;
+        sum_mean += (double)total / (double)npes;
+        sum_max += (double)amax;
+        sum_ideal += (double)((total + npes - 1) / npes);  // ceil(total/np)
+    }
+    m.lts_eff = sum_max > 0 ? sum_mean / sum_max : 0.0;
+    m.lts_eff_bound = sum_ideal > 0 ? sum_mean / sum_ideal : 0.0;
+}
 
 /** Score one labelling under one adjacency graph.
  *
@@ -146,6 +208,10 @@ Metrics score(const std::vector<std::vector<unsigned int>>& adj,
     Metrics m;
     long long cut_d = 0, edges_d = 0, bnd = 0, commvol = 0;
     std::vector<long long> ele_per_part(npes, 0), work_per_part(npes, 0);
+    // comm volume binned by the OWNING element's level -> lets us model a
+    // ghost exchange scoped to the blocks active at each LTS sub-step.
+    const unsigned int nlev = lmax - lmin + 1;
+    std::vector<long long> commvol_by_lev(nlev, 0);
 
     for (size_t i = 0; i < adj.size(); ++i) {
         const unsigned int gid = local_gids[i];
@@ -166,6 +232,10 @@ Metrics score(const std::vector<std::vector<unsigned int>>& adj,
         if (!remote_parts.empty()) {
             bnd++;
             commvol += (long long)remote_parts.size();
+            unsigned int lev = level_of_local[i];
+            if (lev < lmin) lev = lmin;
+            if (lev > lmax) lev = lmax;
+            commvol_by_lev[lev - lmin] += (long long)remote_parts.size();
         }
     }
 
@@ -186,6 +256,28 @@ Metrics score(const std::vector<std::vector<unsigned int>>& adj,
     m.boundary_vertices = sum[2];
     m.total_comm_volume = sum[3];
     m.edge_cut_frac = sum[1] ? (double)sum[0] / (double)sum[1] : 0.0;
+
+    // --- scoping prize: LTS comms with a per-active-block exchange vs the
+    // current full-ghost-layer-every-sub-step exchange (enuts.h:1905, which does
+    // NOT scope to m_uiActiveBlkIDs). Over one coarse step of coarset_t=2^(lmax-
+    // lmin) sub-steps the current code pays coarset_t * full_volume (== GTS
+    // comms; LTS saves compute but not comms). A scoped exchange sends a level-L
+    // boundary element only on the 2^(L-lmin) sub-steps where L fires. Model:
+    // attribute each send slot to its owning element's level (first-order --
+    // ignores the coarser-neighbour pull a fine block makes; same-level
+    // dominates). ratio = scoped/full in (0,1]; prize = 1-ratio.
+    std::vector<long long> cvl(nlev, 0);
+    MPI_Allreduce(commvol_by_lev.data(), cvl.data(), nlev, MPI_LONG_LONG,
+                  MPI_SUM, comm);
+    const double coarset_t = (double)(1u << (lmax - lmin));
+    double scoped = 0.0, full_tot = 0.0;
+    for (unsigned int l = 0; l < nlev; ++l) {
+        const double fire = (double)(1u << l);  // 2^(L-lmin) firings/coarse step
+        scoped += (double)cvl[l] * fire;
+        full_tot += (double)cvl[l];
+    }
+    m.lts_comm_scoped_ratio =
+        full_tot > 0 ? scoped / (coarset_t * full_tot) : 0.0;
 
     long long ele_tot = 0, work_tot = 0, ele_max = 0, work_max = 0;
     for (unsigned int p = 0; p < npes; ++p) {
@@ -229,6 +321,9 @@ void emit(std::ostream& os, const Opts& o, unsigned int npes,
        << ",\"total_comm_volume\":" << m.total_comm_volume
        << ",\"ele_imbalance\":" << m.ele_imbalance
        << ",\"work_imbalance\":" << m.work_imbalance
+       << ",\"lts_eff\":" << m.lts_eff
+       << ",\"lts_eff_bound\":" << m.lts_eff_bound
+       << ",\"lts_comm_scoped_ratio\":" << m.lts_comm_scoped_ratio
        << "}}" << std::endl;
 }
 
@@ -305,6 +400,30 @@ int main(int argc, char** argv) {
             double r2 = (xx - cx) * (xx - cx) + (yy - cy) * (yy - cy) +
                         (zz - cz) * (zz - cz);
             return exp(-r2 / 2.0);
+        };
+    } else if (o.refine == "puncture" || o.refine == "puncture2") {
+        // SHARP near-point spike(s) -- the LTS regime offblob cannot expose.
+        // offblob's sigma=1 gaussian is diffuse: the deep levels occupy a
+        // sizeable region and several ranks share them. A puncture (BBH) is the
+        // opposite: the deepest levels live in a tiny volume = a SHORT stretch
+        // of the Hilbert curve = ONE rank under any contiguous SFC split, even
+        // weighted. That rank then gates every fine sub-step. puncture2 places
+        // two spikes (BBH-like) off-axis so neither sits on an octant seam.
+        const double sig2 = 2.0 * 0.25 * 0.25;  // sigma=0.25 -> near-point
+        const bool two = (o.refine == "puncture2");
+        func = [d_min, d_max, sig2, two](double x, double y, double z) {
+            double xx = (x / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            double yy = (y / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            double zz = (z / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            double r2a = (xx - 2.1) * (xx - 2.1) + (yy - 0.3) * (yy - 0.3) +
+                         (zz - 0.3) * (zz - 0.3);
+            double v = exp(-r2a / sig2);
+            if (two) {
+                double r2b = (xx + 2.1) * (xx + 2.1) +
+                             (yy + 0.3) * (yy + 0.3) + (zz + 0.3) * (zz + 0.3);
+                v += exp(-r2b / sig2);
+            }
+            return v;
         };
     } else if (o.refine == "sine") {
         // matches partitioningMeshTests.cpp so results are comparable to the
@@ -404,6 +523,74 @@ int main(int argc, char** argv) {
     for (size_t i = 0; i < nloc; ++i)
         work_w[i] = ot::oct_work_weight(conn[i].level, lmin, lmax);
 
+    // ---- SFC-WEIGHTED labels: the honest LTS baseline. sfc_label balances
+    // element COUNT; under LTS the sensible SFC choice balances WORK -- split
+    // the SAME Hilbert order into equal-WEIGHT segments (idealised, element-
+    // granular). This is what ENUTS useWpart does via Dendro's weighted flexible
+    // partition (getOctWeight == oct_work_weight), and the tougher baseline graph
+    // must beat: if sfc_weighted already balances work, graph's LTS advantage is
+    // illusory -- the lever is WEIGHTING (available to both), not the graph.
+    // (Confirmed empirically: nlsmNUTS SFC-weighted LD Bal was perfect 1.000.)
+    std::vector<unsigned int> sfc_weighted_label(num_ele_global, 0);
+    {
+        std::vector<int> cnt(npes), disp(npes);
+        for (unsigned int p = 0; p < npes; ++p) {
+            cnt[p]  = (int)(ele_offsets[p + 1] - ele_offsets[p]);
+            disp[p] = (int)ele_offsets[p];
+        }
+        std::vector<long long> gw(num_ele_global, 0), mine(nloc);
+        for (size_t i = 0; i < nloc; ++i) mine[i] = (long long)work_w[i];
+        MPI_Allgatherv(mine.data(), (int)nloc, MPI_LONG_LONG, gw.data(),
+                       cnt.data(), disp.data(), MPI_LONG_LONG, comm);
+        long long total = 0;
+        for (unsigned int g = 0; g < num_ele_global; ++g) total += gw[g];
+        // assign each element by the midpoint of its weight-interval -> balanced,
+        // contiguous segments (SFC order preserved since the prefix is monotone).
+        const double target = (double)total / (double)npes;
+        long long prefix = 0;
+        for (unsigned int g = 0; g < num_ele_global; ++g) {
+            double mid    = (double)prefix + 0.5 * (double)gw[g];
+            unsigned int p = target > 0 ? (unsigned int)(mid / target) : 0;
+            sfc_weighted_label[g] = (p >= npes) ? npes - 1 : p;
+            prefix += gw[g];
+        }
+    }
+
+    // ---- SFC-LEVELWISE labels: split EACH LEVEL's elements into equal-count
+    // contiguous Hilbert segments, independently per level. Every rank then
+    // holds ~1/np of every level => near-perfect PER-SUB-STEP balance by
+    // construction -- the thing neither sfc_weighted (contiguous prefix split;
+    // total-weight balance only) nor single-constraint fastpart optimises.
+    // This is the cheap stand-in for a multi-constraint partition: its lts_eff
+    // is (approximately) the ceiling any partitioner could reach, and its edge
+    // cut is the comms price of reaching it the curve-contiguous-per-level way.
+    // Each rank owns up to nlev curve segments instead of 1, so expect the cut
+    // to rise; whether it rises less than lts_eff gains is the experiment.
+    std::vector<unsigned int> sfc_levelwise_label(num_ele_global, 0);
+    {
+        std::vector<int> cnt(npes), disp(npes);
+        for (unsigned int p = 0; p < npes; ++p) {
+            cnt[p]  = (int)(ele_offsets[p + 1] - ele_offsets[p]);
+            disp[p] = (int)ele_offsets[p];
+        }
+        std::vector<unsigned int> glev(num_ele_global, 0);
+        MPI_Allgatherv(level_of_local.data(), (int)nloc, MPI_UNSIGNED,
+                       glev.data(), cnt.data(), disp.data(), MPI_UNSIGNED,
+                       comm);
+        std::vector<unsigned long long> n_of_lev(m_uiMaxDepth + 2, 0),
+            k_of_lev(m_uiMaxDepth + 2, 0);
+        for (unsigned int g = 0; g < num_ele_global; ++g) n_of_lev[glev[g]]++;
+        for (unsigned int g = 0; g < num_ele_global; ++g) {
+            const unsigned int lev = glev[g];
+            // k-th of n_L elements at this level -> part floor(k*np/n_L)
+            unsigned int p =
+                (unsigned int)((k_of_lev[lev] * (unsigned long long)npes) /
+                               n_of_lev[lev]);
+            sfc_levelwise_label[g] = (p >= npes) ? npes - 1 : p;
+            k_of_lev[lev]++;
+        }
+    }
+
     std::ofstream fout;
     std::ostream* os = &std::cout;
     if (!o.json_path.empty() && rank == 0) {
@@ -420,6 +607,10 @@ int main(int argc, char** argv) {
 
         if (v == "sfc") {
             label_of_gid = sfc_label;
+        } else if (v == "sfc_weighted") {
+            label_of_gid = sfc_weighted_label;
+        } else if (v == "sfc_levelwise") {
+            label_of_gid = sfc_levelwise_label;
         } else if (v == "fastpart" || v == "fastpart_fullstencil" ||
                    v == "fastpart_weighted") {
             std::vector<fastpart_uint_t> parts(nloc, 0);
@@ -455,6 +646,12 @@ int main(int argc, char** argv) {
                            lmin, lmax, npes, comm);
         Metrics ms = score(adj_sten, local_gids, label_of_gid, level_of_local,
                            lmin, lmax, npes, comm);
+        // lts_eff is a property of the labelling alone (graph-independent);
+        // compute once, report on both graph rows.
+        score_lts_substeps(local_gids, label_of_gid, level_of_local, lmin, lmax,
+                           npes, comm, ms);
+        mf.lts_eff       = ms.lts_eff;
+        mf.lts_eff_bound = ms.lts_eff_bound;
         if (rank == 0) {
             emit(*os, o, npes, v, "face6", mf);
             emit(*os, o, npes, v, "stencil26", ms);

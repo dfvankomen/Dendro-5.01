@@ -1298,6 +1298,41 @@ class Mesh {
      * mesh change. */
     void buildZipPlan();
 
+    /**@brief DENDRO_ZIPPLAN_DIST=1: home-rank arbitration for buildZipPlan.
+     *
+     * The default path Allgathers every rank's claims to every rank, builds a
+     * global winners map, and sorts the whole thing — O(total)=O(P*local) work
+     * and memory PER RANK, so it gets worse as ranks are added. This does the
+     * same arbitration distributed: each claim is routed to home(phys) by hash,
+     * each home arbitrates only its own positions with the identical rule, and
+     * winners are returned to claimants. Per-rank cost becomes O(local).
+     *
+     * Semantics are identical, which depends on two things:
+     *  - homes iterate claims in ORIGIN-RANK-ASCENDING order, and within a rank
+     *    in the sender's original claim order. The default path's "smallest rank
+     *    wins" tie-break is implicit in exactly that order (its explicit
+     *    `p < w.rank` check is dead code — the outer loop already ascends).
+     *  - send/recv lists are sorted by a TOTAL key (phys, cg) on both sides, so
+     *    the k-th value a primary sends is the k-th its peer writes.
+     *
+     * Fills the per-claim winner arrays (parallel to the my-claim inputs) and,
+     * as a side effect, the m_uiZipSync and m_uiZipLocalDup lists — everything
+     * the default path's side-channel sync section produces. */
+    void buildZipPlanArbitrateDistributed(
+        const std::vector<unsigned long long>& myX,
+        const std::vector<unsigned long long>& myY,
+        const std::vector<unsigned long long>& myZ,
+        const std::vector<unsigned int>& myTNX,
+        const std::vector<unsigned int>& myTNY,
+        const std::vector<unsigned int>& myTNZ,
+        const std::vector<unsigned int>& myTNLev,
+        const std::vector<unsigned int>& myCg,
+        const std::vector<unsigned int>& myInterior, bool use_packtn,
+        std::vector<int>& winRank, std::vector<unsigned int>& winCg,
+        std::vector<unsigned int>& winTNX, std::vector<unsigned int>& winTNY,
+        std::vector<unsigned int>& winTNZ, std::vector<unsigned int>& winTNLev,
+        std::vector<unsigned int>& winInterior);
+
     /**@brief Unify E2N_CG across duplicate TreeNode instances (deeper
      * ghost layers). Mutates E2N_CG, so it must run eagerly at mesh
      * build — NOT deferred with the lazy zip plan. Idempotent; no-op on
