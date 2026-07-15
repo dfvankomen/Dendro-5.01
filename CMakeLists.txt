@@ -294,6 +294,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(newPartitioning test/src/test_new_partitioning.cpp)
   dendro_add_example(testPartitioning test/src/partitioningMeshTests.cpp)
   dendro_add_example(testPartitioningEvolve test/src/partitioningEvolveTest.cpp)
+  dendro_add_example(edgeCutCompare test/src/edgeCutCompare.cpp)
 
   if(WITH_CUDA)
     # cuda GPU tests
