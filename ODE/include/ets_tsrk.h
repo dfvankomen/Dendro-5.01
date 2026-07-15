@@ -1,14 +1,23 @@
 /**
  * @file ets_tsrk.h
- * @brief Two-step Runge-Kutta (TSRK) explicit time stepper (prototype).
+ * @brief General multistep Runge-Kutta explicit time stepper (prototype).
  *
  * RK-like sibling of ETS_MSRK: single solution vector, reusing the previous
- * `depth` steps' stage-derivative clouds (no stage-value cloud). The order-6
- * method (s=4 -> 4 fresh evals/step = RK4 communication, depth-2, imag stab
- * 1.85) is from get_tsrk_o6_tableau(); coefficients are numerically optimized
- * (findings/14) -- a prototype. Startup bootstraps the clouds with RK6 micro-
- * integration (reusing base ETS::evolve at RK6); re-bootstraps on remesh/dt
- * change like ETS_MSRK.
+ * `depth` steps' stage-derivative clouds (no stage-value cloud).
+ *
+ * Terminology: "TSRK" (Two-Step Runge-Kutta, Jackiewicz & Tracogna 1995) names
+ * the family this grew out of, where the update references the two most recent
+ * step points {t_{n-1}, t_n} -- i.e. reuses ONE prior step (depth 1). The
+ * committed order-6 method runs depth 2 (it reuses BOTH t_{n-1} and t_{n-2}, via
+ * v1/v2), so it is strictly a 3-step / general multistep RK, not a literal
+ * two-step method; only depth-1 members are TSRK in the strict sense. The class
+ * name is kept as ETS_TSRK for the family lineage.
+ *
+ * The order-6 method (s=4 -> 4 fresh evals/step = RK4 communication, depth-2,
+ * imag stab 1.85) is from get_tsrk_o6_tableau(); coefficients are numerically
+ * optimized (findings/14) -- a prototype. Startup bootstraps the clouds with RK6
+ * micro-integration (reusing base ETS::evolve at RK6); re-bootstraps on
+ * remesh/dt change like ETS_MSRK.
  */
 #pragma once
 #include <vector>

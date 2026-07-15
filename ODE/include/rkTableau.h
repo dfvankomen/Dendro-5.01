@@ -381,7 +381,11 @@ inline int get_msrk_tableau(ETSType type, DendroScalar* aij, DendroScalar* b,
 }
 
 /**
- * @brief Coefficients for the order-6 two-step Runge-Kutta (TSRK) method.
+ * @brief Coefficients for the order-6 multistep Runge-Kutta method (TSRK family).
+ *
+ * Named "TSRK" for the two-step-RK family it extends (Jackiewicz & Tracogna
+ * 1995); with depth-2 reuse (both t_{n-1} and t_{n-2}) this specific method is
+ * strictly a 3-step / general multistep RK, not a literal two-step method.
  *
  * s=4 stages -> 4 fresh evals/step (RK4 communication), depth-2 reuse. Order 6,
  * imag stab 1.85, real 1.31, zero-stable. Numerically optimized (findings/14) --
