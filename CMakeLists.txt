@@ -66,6 +66,7 @@ option(DENDRO_VTK_BINARY "Write VTK/VTU files in binary mode" ON)
 option(DENDRO_VTK_ZLIB_COMPRES "Compress VTK/VTU (requires Binary)" OFF)
 option(ALLTOALL_SPARSE "Use isend/irecv for ghost exchange" OFF)
 option(ENABLE_DENDRO_PROFILE_COUNTERS "Enable dendro internal profile counters" OFF)
+option(PROFILE_MESH "Report per-stage mesh construction timings (sort/balance/e2e/e2n/sm/blk)" OFF)
 option(RK_SOLVER_OVERLAP_COMM_AND_COMP "Enable RK solver comm/comp overlap" ON)
 option(WITH_CUDA "Build dendro with CUDA" OFF)
 option(BUILD_WITH_PETSC "Build dendro with PETSc" OFF)
@@ -329,6 +330,12 @@ endif()
 
 if(ENABLE_DENDRO_PROFILE_COUNTERS)
   target_compile_definitions(dendro_config INTERFACE ENABLE_DENDRO_PROFILE_COUNTERS __PROFILE_CTX__ __PROFILE_ETS__)
+endif()
+
+# Separate from the counters above: this reports once per mesh build (init +
+# every remesh), so it is too chatty to fold into the per-step counters.
+if(PROFILE_MESH)
+  target_compile_definitions(dendro_config INTERFACE __PROFILE_MESH__)
 endif()
 
 # VTK Logic

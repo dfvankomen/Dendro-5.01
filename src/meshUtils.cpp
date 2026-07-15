@@ -99,15 +99,23 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
         ot::TreeNode root(m_uiDim, m_uiMaxDepth);
         std::vector<ot::TreeNode> tmpVec;
 
+        // Stage timings pair with the ctor's e2e/e2n/sm/blk under
+        // __PROFILE_MESH__, so one build reports the whole createMesh cost.
+        double t_dup = 0, t_cons = 0, t_bal = 0, t_stage_begin = 0;
+
+        t_stage_begin = MPI_Wtime();
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_REMOVE_DUPLICATES, sf_k, commActive);
+        t_dup = MPI_Wtime() - t_stage_begin;
         std::swap(tmpNodes, tmpVec);
         tmpVec.clear();
 
+        t_stage_begin = MPI_Wtime();
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_CONSTRUCT_OCTREE, sf_k, commActive);
+        t_cons = MPI_Wtime() - t_stage_begin;
         std::swap(tmpNodes, tmpVec);
         tmpVec.clear();
 
@@ -118,10 +126,26 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
             std::cout << GRN << " # const. octants: " << globalSz << NRM
                       << std::endl;
 
+        t_stage_begin = MPI_Wtime();
         SFC::parSort::SFC_treeSort(tmpNodes, balOct, balOct, balOct, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_BALANCE_OCTREE, sf_k, commActive);
+        t_bal = MPI_Wtime() - t_stage_begin;
         tmpNodes.clear();
+
+#ifdef __PROFILE_MESH__
+        double t_dup_g[3], t_cons_g[3], t_bal_g[3];
+        par::computeOverallStats(&t_dup, t_dup_g, commActive,
+                                 "createMesh sfc remove_duplicates ");
+        par::computeOverallStats(&t_cons, t_cons_g, commActive,
+                                 "createMesh sfc construct_octree ");
+        par::computeOverallStats(&t_bal, t_bal_g, commActive,
+                                 "createMesh sfc balance_octree ");
+#else
+        (void)t_dup;
+        (void)t_cons;
+        (void)t_bal;
+#endif
 
         localSz = balOct.size();
     }
@@ -134,9 +158,18 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
         std::cout << GRN << " balanced # octants : " << globalSz << NRM
                   << std::endl;
 
-    ot::Mesh* mesh = new ot::Mesh(balOct, 1, eleOrder, comm, true, sm_type,
-                                  grain_sz, ld_tol, sf_k, getWeight);
-    localSz        = mesh->getNumLocalMeshNodes();
+    // Total ctor cost; its internal e2e/e2n/sm/blk split prints separately.
+    double t_ctor_begin = MPI_Wtime();
+    ot::Mesh* mesh      = new ot::Mesh(balOct, 1, eleOrder, comm, true, sm_type,
+                                       grain_sz, ld_tol, sf_k, getWeight);
+    double t_ctor       = MPI_Wtime() - t_ctor_begin;
+#ifdef __PROFILE_MESH__
+    double t_ctor_g[3];
+    par::computeOverallStats(&t_ctor, t_ctor_g, comm, "createMesh Mesh ctor ");
+#else
+    (void)t_ctor;
+#endif
+    localSz = mesh->getNumLocalMeshNodes();
     par::Mpi_Reduce(&localSz, &globalSz, 1, MPI_SUM, 0, comm);
     if (!rank)
         std::cout << GRN << " # of CG nodes (vertices) : " << globalSz << NRM
