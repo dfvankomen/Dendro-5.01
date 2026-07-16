@@ -927,6 +927,9 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 
         if (sendBSz) {
             sendB = (T*)ctx.getSendBuffer();
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+            dendro::timer::t_ghost_pack.start();
+#endif
             // threaded gather into the send buffer (disjoint writes per proc)
 #ifdef DENDRO_HYBRID_OMP
 #pragma omp parallel for private(proc_id)
@@ -946,6 +949,9 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                     }
                 }
             }
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+            dendro::timer::t_ghost_pack.stop();
+#endif
 
             // active send procs
             for (unsigned int send_p = 0; send_p < sendProcList.size();
@@ -1000,15 +1006,28 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
 
         MPI_Status status;
         // need to wait for the commns to finish ...
+        // t_ghost_wait is an UPPER BOUND on wire time, not a measurement of it:
+        // a rank that reaches this Waitall early because its neighbours are
+        // still computing blocks will bill that neighbour imbalance to comm.
+        // Rising t_ghost_wait therefore does NOT imply the network got slower.
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+        dendro::timer::t_ghost_wait.start();
+#endif
         MPI_Waitall(sendProcList.size(), ctx.m_send_req.data(),
                     MPI_STATUSES_IGNORE);
         MPI_Waitall(recvProcList.size(), ctx.m_recv_req.data(),
                     MPI_STATUSES_IGNORE);
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+        dendro::timer::t_ghost_wait.stop();
+#endif
 
         if (recvBSz) {
             // copy the recv data to the vec
             recvB = (T*)ctx.getRecvBuffer();
 
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+            dendro::timer::t_ghost_unpack.start();
+#endif
             // threaded scatter from recv buffer (recvNodeSM is a permutation)
 #ifdef DENDRO_HYBRID_OMP
 #pragma omp parallel for private(proc_id)
@@ -1028,6 +1047,9 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
                     }
                 }
             }
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+            dendro::timer::t_ghost_unpack.stop();
+#endif
         }
     }
 

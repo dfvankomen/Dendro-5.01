@@ -25,6 +25,10 @@ profiler_t t_unzip_async_internal;
 profiler_t t_unzip_async_external;
 profiler_t t_unzip_async_comm;
 
+profiler_t t_ghost_pack;
+profiler_t t_ghost_wait;
+profiler_t t_ghost_unpack;
+
 }  // end of namespace timer
 
 }  // end of namespace dendro
