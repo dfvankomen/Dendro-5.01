@@ -90,6 +90,85 @@ void build_family_matrices(const CCDRowSet& rs, unsigned int n_fill,
 
 }  // namespace
 
+namespace {
+
+// build one interior row: coefficients for offsets -m..+m, centered.
+// `sym` is the parity of the outward entries about the center: the +k entry is
+// `sign * v[k-1]` and the -k entry is `sym * sign * v[k-1]`.
+std::vector<double> expand_row(const std::vector<double>& v, double sign,
+                               double sym, double center) {
+    const size_t m = v.size();
+    std::vector<double> row(2 * m + 1, 0.0);
+    row[m] = center;
+    for (size_t k = 1; k <= m; ++k) {
+        row[m + k] = sign * v[k - 1];
+        row[m - k] = sym * sign * v[k - 1];
+    }
+    return row;
+}
+
+void require_same_width(const std::vector<double>& a,
+                        const std::vector<double>& b,
+                        const std::vector<double>& c, const char* eq) {
+    if (a.size() != b.size() || a.size() != c.size()) {
+        std::ostringstream os;
+        os << "ccd_from_blocks: the three families of " << eq
+           << " must all have one entry per off-diagonal, but got sizes "
+           << a.size() << ", " << b.size() << " and " << c.size()
+           << ". A (2m+1)-point scheme needs exactly m in each.";
+        throw std::invalid_argument(os.str());
+    }
+    if (a.empty()) {
+        throw std::invalid_argument(
+            "ccd_from_blocks: a CCD scheme needs at least one off-diagonal "
+            "(m >= 1); the lists for the interior stencil are empty.");
+    }
+}
+
+}  // namespace
+
+CCDDiagonalEntries* ccd_from_blocks(const CCDBlocks& blk) {
+    require_same_width(blk.b1, blk.c1, blk.a1, "eq1 (b1, c1, a1)");
+    require_same_width(blk.b2, blk.c2, blk.a2, "eq2 (b2, c2, a2)");
+
+    // eq1, the f' equation. Reading the k-th blocks
+    //     A_k = [-b1_k  -c1_k*dx]   B_k = [-b1_k  +c1_k*dx]
+    // row 0 gives, in the scaled unknowns (dx cancels):
+    //     g:  -b1_k on BOTH sides            -> sign -1, even
+    //     w:  -c1_k at +k, +c1_k at -k       -> sign -1, odd
+    //     f:  +a1_k at +k, -a1_k at -k       -> sign +1, odd
+    // the pinned g_i is 1 and there is no w_i term; eq1's f center is 0 by
+    // antisymmetry.
+    CCDRowSet eq1;
+    eq1.GInterior = expand_row(blk.b1, -1.0, +1.0, 1.0);
+    eq1.WInterior = expand_row(blk.c1, -1.0, -1.0, 0.0);
+    eq1.FInterior = expand_row(blk.a1, +1.0, -1.0, 0.0);
+
+    // eq2, the f'' equation. Row 1 of the same blocks:
+    //     A_k = [-b2_k/dx  -c2_k]   B_k = [+b2_k/dx  -c2_k]
+    //     g:  -b2_k at +k, +b2_k at -k       -> sign -1, odd
+    //     w:  -c2_k on BOTH sides            -> sign -1, even
+    //     f:  +a2_k on BOTH sides            -> sign +1, even
+    // the pinned w_i is 1 and there is no g_i term. eq2's f center is NOT free:
+    // the row must annihilate a constant, so it is -2*sum(a2_k).
+    double a2_sum = 0.0;
+    for (double v : blk.a2) a2_sum += v;
+
+    CCDRowSet eq2;
+    eq2.GInterior = expand_row(blk.b2, -1.0, -1.0, 0.0);
+    eq2.WInterior = expand_row(blk.c2, -1.0, +1.0, 1.0);
+    eq2.FInterior = expand_row(blk.a2, +1.0, +1.0, -2.0 * a2_sum);
+
+    eq1.GBoundary  = blk.gBoundary1;
+    eq1.WBoundary  = blk.wBoundary1;
+    eq1.FBoundary  = blk.fBoundary1;
+    eq2.GBoundary  = blk.gBoundary2;
+    eq2.WBoundary  = blk.wBoundary2;
+    eq2.FBoundary  = blk.fBoundary2;
+
+    return new CCDDiagonalEntries(eq1, eq2);
+}
+
 template <unsigned int DerivOrder>
 std::unique_ptr<DerivMatrixStorage> createCCDMatrixSystemForSingleSize(
     const unsigned int pw, const unsigned int n,

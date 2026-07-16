@@ -63,35 +63,40 @@ namespace dendroderivs {
  * backstop, not a licence to reintroduce the term.
  */
 CCDDiagonalEntries* createCCD6Diagonals() {
-    // interior stencils, centered on the diagonal (offsets -1, 0, +1)
-    CCDRowSet eq1;
-    eq1.GInterior = {7.0 / 16.0, 1.0, 7.0 / 16.0};
-    eq1.WInterior = {1.0 / 16.0, 0.0, -1.0 / 16.0};
-    eq1.FInterior = {-15.0 / 16.0, 0.0, 15.0 / 16.0};
+    CCDBlocks blk;
 
-    CCDRowSet eq2;
-    eq2.GInterior = {-9.0 / 8.0, 0.0, 9.0 / 8.0};
-    eq2.WInterior = {-1.0 / 8.0, 1.0, -1.0 / 8.0};
-    eq2.FInterior = {3.0, -6.0, 3.0};
+    // Interior: one entry per off-diagonal, so a 3-point scheme is one each.
+    // These are the block coefficients with dx already cancelled by the scaled
+    // unknowns -- the same numbers you would write in A_k / B_k.
+    //
+    // NOTE the leading minus in A_k = [-b1 ...]: the f'_{i±1} coefficient of
+    // this scheme is +7/16, so b1 is -7/16. Same for b2. See CCDBlocks.
+    blk.b1 = {-7.0 / 16.0};  // g family, eq1
+    blk.c1 = {1.0 / 16.0};   // w family, eq1
+    blk.a1 = {15.0 / 16.0};  // f family, eq1 (rhs)
+
+    blk.b2 = {-9.0 / 8.0};   // g family, eq2
+    blk.c2 = {1.0 / 8.0};    // w family, eq2
+    blk.a2 = {3.0};          // f family, eq2 (rhs); center -2*3 = -6 is derived
 
     // One-sided 8th-order closure at the boundary node. Rows are dense lists
     // indexed from column 0, so an omitted term is an explicit 0.0.
-    //   eq1:  g_0 - (17/10) g_1 - 3 w_1     = sum_k F_k f_k
-    //   eq2:  (89/10) g_0 + (43/5) g_1 + w_0 - 6 w_1 = sum_k F_k f_k
-    eq1.GBoundary = {{1.0, -17.0 / 10.0}};
-    eq1.WBoundary = {{0.0, -3.0}};  // leading 0.0: no w_0 — see the warning
-    eq1.FBoundary = {{-89.0 / 20.0, 6379.0 / 600.0, -15.0 / 2.0, 5.0 / 3.0,
-                      -5.0 / 12.0, 3.0 / 40.0, -1.0 / 150.0}};
+    //   eq1:  g_0 - (17/10) g_1 - 3 w_1                = sum_k f_k coefficients
+    //   eq2:  (89/10) g_0 + (43/5) g_1 + w_0 - 6 w_1   = sum_k f_k coefficients
+    blk.gBoundary1 = {{1.0, -17.0 / 10.0}};
+    blk.wBoundary1 = {{0.0, -3.0}};  // leading 0.0: no w_0 — see the warning
+    blk.fBoundary1 = {{-89.0 / 20.0, 6379.0 / 600.0, -15.0 / 2.0, 5.0 / 3.0,
+                       -5.0 / 12.0, 3.0 / 40.0, -1.0 / 150.0}};
 
-    eq2.GBoundary = {{89.0 / 10.0, 43.0 / 5.0}};
-    eq2.WBoundary = {{1.0, -6.0}};
-    eq2.FBoundary = {{-41929.0 / 1800.0, 8959.0 / 300.0, -15.0 / 2.0,
-                      10.0 / 9.0, -5.0 / 24.0, 3.0 / 100.0, -1.0 / 450.0}};
+    blk.gBoundary2 = {{89.0 / 10.0, 43.0 / 5.0}};
+    blk.wBoundary2 = {{1.0, -6.0}};
+    blk.fBoundary2 = {{-41929.0 / 1800.0, 8959.0 / 300.0, -15.0 / 2.0,
+                       10.0 / 9.0, -5.0 / 24.0, 3.0 / 100.0, -1.0 / 450.0}};
 
     // ends are symmetric, so the lower closure mirrors the upper: the ctor
     // copies the rows and the builder applies the per-family parity when it
     // places them.
-    return new CCDDiagonalEntries(eq1, eq2);
+    return ccd_from_blocks(blk);
 }
 
 }  // namespace dendroderivs

@@ -124,6 +124,76 @@ struct CCDDiagonalEntries {
 };
 
 /**
+ * @brief A CCD scheme written in our block notation. THIS is where you add one.
+ *
+ * A scheme is a stack of 2x2 blocks, one per stencil offset k, acting on the
+ * pair v_i = (f'_i, f''_i):
+ *
+ *     B_k v_{i-k}  +  D v_i  +  A_k v_{i+k}   =   (rhs on f)
+ *
+ *     A_k = [ -b1_k   -c1_k*dx ]     B_k = [ -b1_k   +c1_k*dx ]
+ *           [ -b2_k/dx  -c2_k  ]           [ +b2_k/dx  -c2_k  ]
+ *
+ *     D   = [ 1  0 ]
+ *           [ 0  1 ]
+ *
+ * so row 0 is the f' equation and row 1 is the f'' equation, and D is the
+ * identity because each equation is normalized on its own unknown.
+ *
+ * ## dx does not appear here, and that is not a simplification
+ *
+ * Solving in the scaled unknowns g = h f' and w = h^2 f'' cancels every dx in
+ * the blocks above *exactly* -- eq1 comes out with an overall 1/h and eq2 with
+ * 1/h^2, which is precisely the factor MatrixCompactDerivs already applies per
+ * call. The named coefficients survive untouched. So the numbers you type here
+ * are the same b1, c1, b2, c2 as on the whiteboard; you just never write the dx.
+ * (This is also what lets one operator be cached and reused at every h.)
+ *
+ * ## What to type
+ *
+ * One entry per off-diagonal k = 1..m, ordered outward from the diagonal, for a
+ * (2m+1)-point scheme. A 3-point scheme has one entry in each list. The RHS f
+ * coefficients are `a1` (f' equation) and `a2` (f'' equation), matching the a1
+ * in the C1 matrix of the N x N form.
+ *
+ * The center f coefficients are NOT typed: they are forced by consistency (the
+ * operator must annihilate a constant), so ccd_from_blocks() derives them --
+ * 0 for eq1 by antisymmetry, -2*sum(a2_k) for eq2. Two fewer numbers to get
+ * wrong.
+ *
+ * Interior symmetry is likewise applied for you, not typed: the g and w rows
+ * follow the A_k/B_k sign pattern above, so a scheme is exactly 6m numbers plus
+ * its closure rows.
+ *
+ * @note Sign convention follows the blocks as literally written -- A_k carries
+ * a LEADING MINUS on b1. So a scheme whose f'_{i±1} coefficient is +7/16 is
+ * entered here as `b1 = {-7.0/16.0}`. If your notes write b1 = +7/16, they are
+ * using A_k = [+b1 ...] and every b1/b2 sign here flips.
+ */
+struct CCDBlocks {
+    // eq1 -- the f' equation. b1: g family, c1: w family, a1: f (rhs).
+    std::vector<double> b1, c1, a1;
+    // eq2 -- the f'' equation. b2: g family, c2: w family, a2: f (rhs).
+    std::vector<double> b2, c2, a2;
+
+    // One-sided closure rows, one per near-boundary node, each a dense list
+    // indexed from column 0 (an omitted term is an explicit 0.0). These do not
+    // use the b/c/a naming: a one-sided row has no symmetry to exploit, so it
+    // is written out in full. Suffix 1 = f' equation, 2 = f'' equation.
+    std::vector<std::vector<double>> gBoundary1, wBoundary1, fBoundary1;
+    std::vector<std::vector<double>> gBoundary2, wBoundary2, fBoundary2;
+};
+
+/**
+ * @brief Expand the block notation into the interleaved row form the builder
+ * assembles from.
+ *
+ * @throws std::invalid_argument if the families of an equation disagree on m,
+ * or if m is 0.
+ */
+CCDDiagonalEntries *ccd_from_blocks(const CCDBlocks &blk);
+
+/**
  * @brief Build the four bflag variants of a CCD operator for one block size.
  *
  * `DerivOrder` selects which half of the coupled solution is kept: 1 -> D1
