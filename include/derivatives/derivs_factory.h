@@ -11,6 +11,7 @@
 #include "derivatives/impl_boris.h"
 #include "derivatives/impl_bradylivescu.h"
 #include "derivatives/impl_byuderivs.h"
+#include "derivatives/impl_ccd.h"
 #include "derivatives/impl_explicitmatrix.h"
 #include "derivatives/impl_hybrid_approaches.h"
 #include "derivatives/impl_jonathantyler.h"
@@ -111,6 +112,20 @@ std::unique_ptr<Derivs> make_with_coeffs_and_id(unsigned int eo,
                                                 const std::vector<double> &coeffs,
                                                 unsigned int matID) {
     return std::make_unique<T>(eo, ft, fc, coeffs, matID);
+}
+
+// pattern E: combined compact (CCD) schemes. Note the SAME DiagFn is used for
+// both registries, unlike the P/Q families which need a separate
+// create*DiagonalsFirstOrder / *SecondOrder: a CCD scheme's entries describe
+// the whole coupled system, and Order selects which half gets sliced out.
+template <unsigned int Order, CCDDiagCreatorFn DiagFn, DerivType DType>
+std::unique_ptr<Derivs> make_ccd(unsigned int eo, const std::string &ft,
+                                 const std::vector<double> &fc,
+                                 const std::vector<double> &, unsigned int) {
+    return std::make_unique<GenericCCDDerivs<Order>>(
+        DiagFn, DType,
+        std::string("CCD_") + std::to_string(static_cast<int>(DType)), eo, ft,
+        fc);
 }
 
 // ============================================================
@@ -376,6 +391,9 @@ get_first_order_registry() {
         {"JTT4", make_generic<1, createJTT4DiagonalsFirstOrder, DerivType::D_JTT4>},
         {"JTT6", make_generic<1, createJTT6DiagonalsFirstOrder, DerivType::D_JTT6>},
         {"JTP6", make_generic<1, createJTP6DiagonalsFirstOrder, DerivType::D_JTP6>},
+
+        // combined compact (CCD) — same DiagFn as the 2nd-order entry below
+        {"CCD6", make_ccd<1, createCCD6Diagonals, DerivType::D_CCD6>},
         {"JTT4Banded", make_explicit<JonathanTyler_JTT4_FirstOrder_Banded>},
         {"JTT6Banded", make_explicit<JonathanTyler_JTT6_FirstOrder_Banded>},
         {"JTP6Banded", make_explicit<JonathanTyler_JTP6_FirstOrder_Banded>},
@@ -428,6 +446,10 @@ get_second_order_registry() {
         {"JTT4", make_generic<2, createJTT4DiagonalsSecondOrder, DerivType::D_JTT4>},
         {"JTT6", make_generic<2, createJTT6DiagonalsSecondOrder, DerivType::D_JTT6>},
         {"JTP6", make_generic<2, createJTP6DiagonalsSecondOrder, DerivType::D_JTP6>},
+
+        // combined compact (CCD) — same DiagFn as the 1st-order entry above;
+        // Order=2 slices the f'' half out of the same coupled solve
+        {"CCD6", make_ccd<2, createCCD6Diagonals, DerivType::D_CCD6>},
         {"JTT4Banded", make_explicit<JonathanTyler_JTT4_SecondOrder_Banded>},
         {"JTT6Banded", make_explicit<JonathanTyler_JTT6_SecondOrder_Banded>},
         {"JTP6Banded", make_explicit<JonathanTyler_JTP6_SecondOrder_Banded>},

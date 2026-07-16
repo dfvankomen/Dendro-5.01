@@ -79,6 +79,14 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
     const bool skip_leftright = false);
 
 template <unsigned int DerivOrder>
+std::unique_ptr<DerivMatrixStorage>
+createMatrixSystemForSingleSizeInMatrixFilter(
+    const unsigned int pw, const unsigned int n,
+    const MatrixDiagonalEntries *diagEntries,
+    const MatrixDiagonalEntries *filterEntries, const bool skip_leftright,
+    const InMatFilterType filt_type);
+
+template <unsigned int DerivOrder>
 class MatrixCompactDerivs : public CompactDerivs {
    protected:
     std::vector<double> workspace_;
@@ -130,6 +138,28 @@ class MatrixCompactDerivs : public CompactDerivs {
     }
 
    protected:
+    /**
+     * @brief Build the four bflag variants of D for one block size.
+     *
+     * The single source of truth for "how does *this* scheme build D". Both
+     * init() (eager, for the common sizes) and get_storage_for_size() (lazy, on
+     * a cache miss) route through here, so a scheme that builds D some other way
+     * overrides this one method and is correct on both paths.
+     *
+     * Only called on a cache miss, so the virtual dispatch never lands on the
+     * hot path — and it's dwarfed by the LAPACK solve it wraps anyway.
+     */
+    virtual std::unique_ptr<DerivMatrixStorage> build_storage_for_size(
+        unsigned int n, bool skip_leftright) {
+        if (in_matrix_filter_->get_filter_type() == InMatFilterType::IMFT_NONE) {
+            return createMatrixSystemForSingleSize<DerivOrder>(
+                p_pw, n, diagEntries, skip_leftright);
+        }
+        return createMatrixSystemForSingleSizeInMatrixFilter<DerivOrder>(
+            p_pw, n, diagEntries, in_matrix_filter_->get_diag_entries(),
+            skip_leftright, in_matrix_filter_->get_filter_type());
+    }
+
     // defensive: matmul_y_dim/matmul_z_dim need 2*Nx*Ny*Nz scratch. if the
     // user forgot to call set_maximum_block_size, or sees a block bigger than
     // anything previously seen, grow the workspace lazily. fast path is a
@@ -191,10 +221,11 @@ class MatrixCompactDerivs : public CompactDerivs {
             return _cached_storage;
         }
 
-        // first time seeing this size — create matrices
-        D_storage_map_.emplace(
-            n, createMatrixSystemForSingleSize<DerivOrder>(
-                   p_pw, n, diagEntries, false));
+        // first time seeing this size — create matrices. goes through the
+        // virtual so a scheme with its own build (in-matrix filter, boris'
+        // per-side diagonals, CCD's coupled system) stays correct here and not
+        // just on the eager init() path.
+        D_storage_map_.emplace(n, build_storage_for_size(n, false));
 
         _cached_sz      = n;
         _cached_storage = D_storage_map_[n].get();

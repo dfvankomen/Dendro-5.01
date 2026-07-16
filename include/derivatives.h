@@ -391,8 +391,9 @@ enum DerivType {
     D_BYU_C6_2ND_R085_OP4,
     D_BYU_C6_2ND_R085_OP5,
 
-
-
+    // combined compact difference (CCD): one coupled system yields both f' and
+    // f'', so a single DerivType serves both registries.
+    D_CCD6,
 
 
 };

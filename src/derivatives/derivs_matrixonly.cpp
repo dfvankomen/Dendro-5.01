@@ -338,18 +338,9 @@ void MatrixCompactDerivs<DerivOrder>::init() {
 
         // because we're using smart pointers, just store the result immediately
         // std::cout << " n = " << n << " and i==1:" << (i == 1) << std::endl;
-        if (in_matrix_filter_->get_filter_type() ==
-            InMatFilterType::IMFT_NONE) {
-            D_storage_map_.emplace(n,
-                                   createMatrixSystemForSingleSize<DerivOrder>(
-                                       p_pw, n, diagEntries, i == 1));
-        } else {
-            D_storage_map_.emplace(
-                n,
-                createMatrixSystemForSingleSizeInMatrixFilter<DerivOrder>(
-                    p_pw, n, diagEntries, in_matrix_filter_->get_diag_entries(),
-                    i == 1, in_matrix_filter_->get_filter_type()));
-        }
+        // the filter/scheme branch lives in build_storage_for_size so that this
+        // eager path and the lazy get_storage_for_size path cannot disagree.
+        D_storage_map_.emplace(n, build_storage_for_size(n, i == 1));
     }
 }
 
