@@ -11846,7 +11846,10 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 template <typename T>
 void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
                                unsigned int n_vars) {
-    if (!m_uiIsActive) return;
+    // Same guard as Mesh::unzip: callers use these interchangeably, and with an
+    // empty block list the scatter has nothing to do but the DG precompute would
+    // still allocate all_dg and walk every element.
+    if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
 #if !defined(DENDRO_UNZIP_OMP)
     // Non-OMP build: just loop. No win to amortize.
     for (unsigned int v = 0; v < n_vars; v++)

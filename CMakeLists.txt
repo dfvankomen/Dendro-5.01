@@ -99,6 +99,17 @@ option(DENDRO_UNZIP_SCATTER_FAST
 option(DENDRO_UNZIP_OMP
        "Enable OpenMP block-parallel unzip path (reserved hook; implementation lives on a separate hybrid branch). Implies the unzip/zip speedups."
        OFF)
+# Route Ctx::unzip through Mesh::unzip_scatter_batch instead of Mesh::unzip.
+# Identical results; it only changes how the DG precompute scratch is sized.
+# Mesh::unzip_scatter allocates all_dg as (numTotalElements * dof * nPe) doubles
+# and std::vector value-initializes it -- a per-rank, DRAM-sized buffer that is
+# zero-filled on EVERY call and that the serial path never allocates at all
+# (it uses a dof*nPe element-local temporary). unzip_scatter_batch loops the
+# variables inside one parallel region and reuses a dof=1-sized all_dg, so the
+# scratch shrinks by dof x. Default OFF keeps the current path bit-for-bit.
+option(DENDRO_UNZIP_BATCH
+       "Use Mesh::unzip_scatter_batch in Ctx::unzip (dof x smaller DG scratch, one fork/join per batch; default OFF = unchanged)"
+       OFF)
 option(DENDRO_TENSOR_SIMD
        "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=7 for eO=6)"
        OFF)
@@ -217,9 +228,11 @@ set(DENDRO_SRC
     src/derivatives/derivs_compact.cpp
     src/derivatives/derivs_matrixonly.cpp
     src/derivatives/derivs_banded.cpp
+    src/derivatives/derivs_ccd.cpp
     src/derivatives/derivs_utils.cpp
     src/derivatives/impl_explicitmatrix.cpp
     src/derivatives/impl_byuderivs.cpp
+    src/derivatives/impl_ccd.cpp
     src/derivatives/impl_kimderivs.cpp
     src/derivatives/impl_jonathantyler.cpp
     src/derivatives/impl_bradylivescu.cpp
@@ -298,6 +311,16 @@ endif()
 if(DENDRO_UNZIP_OVERLAP)
   set(DENDRO_UNZIP_OMP_EFFECTIVE ON)
 endif()
+# unzip_scatter_batch has no blk_filter parameter, so it cannot express the
+# overlap path's interior/boundary block split. Combining them would silently
+# unzip every block in the "interior" pass -- reading ghost data that has not
+# arrived yet. Fail loudly instead.
+if(DENDRO_UNZIP_BATCH AND DENDRO_UNZIP_OVERLAP)
+  message(FATAL_ERROR
+          "DENDRO_UNZIP_BATCH and DENDRO_UNZIP_OVERLAP are mutually exclusive: "
+          "unzip_scatter_batch takes no blk_filter, so it cannot split interior "
+          "from boundary blocks. Enable one or the other.")
+endif()
 if(DENDRO_UNZIP_SPEEDUP OR DENDRO_UNZIP_OMP_EFFECTIVE)
   set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ON)
   set(DENDRO_TENSOR_SIMD_EFFECTIVE ON)
@@ -319,6 +342,7 @@ dendro_add_def(DENDRO_UNZIP_OMP_EFFECTIVE DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
 dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
+dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})
@@ -494,6 +518,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testAllDerivs test/src/testAllDerivs.cpp)
   dendro_add_deriv_test(testDerivConvergence test/src/testDerivConvergence.cpp)
   dendro_add_deriv_test(testBandedVsXSMM test/src/testBandedVsXSMM.cpp)
+  dendro_add_deriv_test(testCCD test/src/testCCD.cpp)
   dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)
   dendro_add_deriv_test(testRhsWorkflow test/src/testRhsWorkflow.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)

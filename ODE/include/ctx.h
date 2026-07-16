@@ -746,8 +746,29 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
             m_uiCtxpt[CTXPROFILE::UNZIP].start();
 #endif
 
+#ifdef DENDRO_UNZIP_BATCH
+            // Same work as Mesh::unzip below, but unzip_scatter_batch loops the
+            // variables INSIDE one parallel region against a dof=1-sized all_dg,
+            // instead of materializing a (numTotalElements * batch_sz * nPe)
+            // scratch and zero-filling it on every call (mesh.tcc:11295). The DG
+            // values, and therefore the results, are identical -- only the
+            // scratch size and the fork/join count change.
+            {
+                // batch_sz pointers (dof/async_k, so ~6): trivially small next
+                // to the per-element scratch this call avoids allocating.
+                std::vector<const T*> ins(batch_sz);
+                std::vector<T*> outs(batch_sz);
+                for (unsigned int v = 0; v < batch_sz; v++) {
+                    ins[v]  = in_ptr + (v_begin + v) * sz_per_dof_zip;
+                    outs[v] = out_ptr + (v_begin + v) * sz_per_dof_uzip;
+                }
+                m_uiMesh->unzip_scatter_batch(ins.data(), outs.data(),
+                                              batch_sz);
+            }
+#else
             m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
                             out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
+#endif
 
 #ifdef __PROFILE_CTX__
             m_uiCtxpt[CTXPROFILE::UNZIP].stop();
