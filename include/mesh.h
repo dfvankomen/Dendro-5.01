@@ -58,6 +58,37 @@ extern double t_e2n_g[3];
 extern double t_sm_g[3];
 extern double t_blk_g[3];
 
+// e2n sub-stage split -- see the definitions in mesh.cpp for why the aggregate
+// e2n number is not decision-grade on its own.
+extern double t_e2n_fix;
+extern double t_e2nC_loopA;
+extern double t_e2nC_sort;
+extern double t_e2nC_sortonly;
+extern double t_e2nC_tail;
+extern double t_e2n3_sortDG;
+extern double t_e2n3_sortCG;
+extern double t_e2nC_bc;
+extern double t_e2nC_sm;
+extern double t_e2n_map;
+extern double t_e2n_sm;
+extern double t_e2n_dginit;
+extern double t_e2n_hang;
+extern double t_e2n_sort;
+extern double t_e2n_fix_g[3];
+extern double t_e2nC_loopA_g[3];
+extern double t_e2nC_sort_g[3];
+extern double t_e2nC_sortonly_g[3];
+extern double t_e2nC_tail_g[3];
+extern double t_e2n3_sortDG_g[3];
+extern double t_e2n3_sortCG_g[3];
+extern double t_e2nC_bc_g[3];
+extern double t_e2nC_sm_g[3];
+extern double t_e2n_map_g[3];
+extern double t_e2n_sm_g[3];
+extern double t_e2n_dginit_g[3];
+extern double t_e2n_hang_g[3];
+extern double t_e2n_sort_g[3];
+
 #include "dendroProfileParams.h"
 #include "waveletRefEl.h"
 
@@ -99,6 +130,16 @@ enum NeighbourLevel { COARSE, SAME, REFINE };
 #define OCT_COARSE    2u
 
 namespace ot {
+
+/**@brief Threads OBSERVED INSIDE a threaded Mesh-ctor stage; 0 = none ran.
+ * Reset to 0 at ctor entry and written from inside the parallel region itself
+ * (omp_get_num_threads()), so it reports what actually executed rather than what
+ * the runtime could have supplied -- omp_get_max_threads() would read 4 at
+ * OMP_NUM_THREADS=4 even with zero pragmas, certifying nothing.
+ * Exists because the mesh digests cannot distinguish "threaded and correct" from
+ * "threading never happened": the latter matches at every T and reports PASS.
+ * Diagnostic only; never read by mesh logic.*/
+extern unsigned int mesh_ctor_omp_threads;
 
 /**@brief type of the scatter map, based on numerical computation method*/
 enum SM_TYPE {

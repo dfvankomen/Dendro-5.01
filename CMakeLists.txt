@@ -113,6 +113,17 @@ option(DENDRO_UNZIP_BATCH
 option(DENDRO_TENSOR_SIMD
        "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=7 for eO=6)"
        OFF)
+# Opt-in OpenMP threading INSIDE the Mesh constructor (src/mesh.cpp), which is
+# otherwise serial-per-rank -- so under DENDRO_HYBRID_OMP with T threads, T-1 sit
+# idle for the whole of createMesh/ReMesh (measured on production q12/16 nodes:
+# init 91 s at T=1 -> 241 s at T=4; it scales AGAINST T). A separate opt-in flag
+# rather than folding into DENDRO_HYBRID_OMP, mirroring DENDRO_UNZIP_BATCH: it
+# keeps a clean A/B and keeps the default path bit-for-bit unchanged.
+# Scope is deliberately narrow -- see the notes in src/mesh.cpp. buildE2EMap is a
+# multi-round MPI pipeline with data-dependent scatters and is NOT a target.
+option(DENDRO_MESH_OMP
+       "Thread the per-block loops in the Mesh ctor (default OFF = unchanged, serial)"
+       OFF)
 # Opt-in MPI comm/compute overlap in the unzip: post the ghost exchange, unzip
 # the interior (ghost-independent) blocks while messages are in flight, then
 # wait and unzip the boundary blocks. Default OFF = unchanged behavior. Implies
@@ -343,6 +354,7 @@ dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
 dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
 dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
+dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})
