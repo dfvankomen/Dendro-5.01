@@ -10,6 +10,8 @@
  */
 
 #pragma once
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 
 #include "device.h"
@@ -210,10 +212,83 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
         // thread's node (matters on 2-socket nodes). Overwritten by init/unzip.
         m_data_ptr = (T*)malloc(sizeof(T) * m_size);
         if (m_data_ptr != nullptr) {
-            const size_t n_   = m_size;
             T* __restrict__ p = m_data_ptr;
+            bool block_ft     = false;
+#if defined(_OPENMP)
+            // Block-major first-touch for the unzip I/O buffers: place each
+            // thread's contiguous block range on its own NUMA node so the RHS,
+            // which consumes the SAME cost-balanced partition, streams local
+            // (see the RHS NUMA Tax). The buffer is var-major -- [dof][NN] with
+            // NN doubles per variable -- and within a variable region blocks are
+            // laid out contiguously by offset, so a block-index partition maps to
+            // contiguous byte stripes in every variable region. Only when the
+            // BSSN layer explicitly asks for it and the layout is consistent;
+            // otherwise fall back to the flat static fill below. Zeroing is
+            // complete either way (boundaries span [0,NN]), so the result is
+            // bit-identical to the flat fill.
+            if (ot::g_padded_numa_first_touch &&
+                m_vec_type == DVEC_TYPE::OCT_LOCAL_WITH_PADDING && m_dof > 0 &&
+                (m_size % m_dof) == 0) {
+                const std::vector<ot::Block>& blk = pMesh->getLocalBlockList();
+                const unsigned int nb             = (unsigned int)blk.size();
+                const int nt                      = omp_get_max_threads();
+                if (nb > 0 && nt > 1) {
+                    const size_t NN = m_size / m_dof;  // doubles per variable
+                    std::vector<unsigned int> part(nt + 1);
+                    ot::computeBalancedBlockPartition(blk.data(), nb,
+                                                      (unsigned int)nt,
+                                                      part.data());
+                    // Per-variable byte boundaries with FULL coverage: [0..NN].
+                    // Interior boundary t = the offset of the first block thread
+                    // t owns; the ends are pinned to 0 and NN so no page is left
+                    // unfaulted even if the block layout has leading/trailing
+                    // padding not owned by any block.
+                    std::vector<size_t> bnd(nt + 1);
+                    bnd[0]  = 0;
+                    bnd[nt] = NN;
+                    bool okb = true;
+                    for (int t = 1; t < nt; t++) {
+                        const unsigned int fb = part[t];
+                        bnd[t] = (fb < nb) ? (size_t)blk[fb].getOffset() : NN;
+                    }
+                    for (int t = 1; t <= nt; t++)
+                        if (bnd[t] < bnd[t - 1] || bnd[t] > NN) okb = false;
+                    if (okb) {
+                        block_ft = true;
+                        // Opt-in, one-time canary proving the block-major
+                        // first-touch ran (BSSN_RHS_NUMA_VERBOSE=1).
+                        static bool s_ft_canary = false;
+                        if (!s_ft_canary &&
+                            std::getenv("BSSN_RHS_NUMA_VERBOSE") != nullptr) {
+                            s_ft_canary = true;
+                            int r_ = 0;
+                            MPI_Comm_rank(MPI_COMM_WORLD, &r_);
+                            if (r_ == 0)
+                                std::fprintf(
+                                    stderr,
+                                    "[dvec-numa] block-major first-touch ACTIVE: "
+                                    "dof=%u NN=%zu nt=%d\n",
+                                    m_dof, NN, nt);
+                        }
+#pragma omp parallel num_threads(nt)
+                        {
+                            const int t    = omp_get_thread_num();
+                            const size_t a = bnd[t];
+                            const size_t b = bnd[t + 1];
+                            for (unsigned int v = 0; v < m_dof; v++) {
+                                T* __restrict__ pv = p + (size_t)v * NN;
+                                for (size_t i = a; i < b; i++) pv[i] = T{};
+                            }
+                        }
+                    }
+                }
+            }
+#endif
+            if (!block_ft) {
+                const size_t n_ = m_size;
 #pragma omp parallel for
-            for (size_t i = 0; i < n_; i++) p[i] = T{};
+                for (size_t i = 0; i < n_; i++) p[i] = T{};
+            }
         }
 #elif defined(DVEC_ZERO_ALLOC)
         m_data_ptr = (T*)calloc(m_size, sizeof(T));

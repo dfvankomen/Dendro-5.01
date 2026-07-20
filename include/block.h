@@ -255,6 +255,74 @@ class Block {
     bool isBlockInternalEle(ot::TreeNode pNode) const;
 };
 
+/**@brief When true, the OCT_LOCAL_WITH_PADDING unzip buffers are first-touched
+ * block-major (each thread faults the pages of its own contiguous block range)
+ * instead of the default flat static fill, so the RHS -- which consumes the same
+ * cost-balanced partition -- streams NUMA-local on multi-socket nodes. Set by the
+ * BSSN layer (bssn::set_rhs_omp_schedule) from BSSN_HYBRID_RHS_SCHEDULE=="balanced"
+ * BEFORE the buffers are allocated. Default false => original behavior. Only
+ * consulted under DENDRO_HYBRID_OMP. See DVector::create_vector and the RHS NUMA
+ * Tax. */
+inline bool g_padded_numa_first_touch = false;
+
+/**@brief Cost-balanced CONTIGUOUS partition of the block index range
+ * [0,numBlocks) across `nthreads`, balancing the summed block allocation volume
+ * (SzX*SzY*SzZ, a cheap RHS-cost proxy). Writes nthreads+1 ascending block-index
+ * boundaries into out[] with out[0]=0 and out[nthreads]=numBlocks; thread t owns
+ * blocks [out[t], out[t+1]). Contiguous ranges keep each thread's unzip-buffer
+ * footprint contiguous, so a matching block-major first-touch lands its pages on
+ * the thread's node. Deterministic and side-effect-free: the first-touch
+ * (DVector::create_vector) and the consume (bssnRHS) call it on the SAME block
+ * list and therefore get the SAME partition -- the invariant that makes the two
+ * agree. `out` must have room for nthreads+1 entries. */
+inline void computeBalancedBlockPartition(const ot::Block* blkList,
+                                          unsigned int numBlocks,
+                                          unsigned int nthreads,
+                                          unsigned int* out) {
+    if (nthreads == 0) return;
+    out[0] = 0;
+    if (nthreads == 1) {
+        out[1] = numBlocks;
+        return;
+    }
+    // total cost proxy over all blocks
+    unsigned long long total = 0;
+    for (unsigned int b = 0; b < numBlocks; b++)
+        total += (unsigned long long)blkList[b].getAllocationSzX() *
+                 blkList[b].getAllocationSzY() * blkList[b].getAllocationSzZ();
+
+    if (numBlocks == 0 || total == 0) {
+        // degenerate: fall back to an even split by block COUNT
+        for (unsigned int t = 1; t < nthreads; t++)
+            out[t] = (unsigned int)(((unsigned long long)t * numBlocks) / nthreads);
+        out[nthreads] = numBlocks;
+        for (unsigned int t = 1; t <= nthreads; t++)
+            if (out[t] < out[t - 1]) out[t] = out[t - 1];
+        return;
+    }
+
+    // greedy contiguous split: advance the block cursor until the cumulative
+    // cost reaches each thread's proportional target.
+    unsigned long long cum = 0;
+    unsigned int b         = 0;
+    for (unsigned int t = 1; t < nthreads; t++) {
+        // target = total * t / nthreads (integer math, no overflow: total fits
+        // in u64 and t < nthreads)
+        const unsigned long long target = (total * t) / nthreads;
+        while (b < numBlocks && cum < target) {
+            cum += (unsigned long long)blkList[b].getAllocationSzX() *
+                   blkList[b].getAllocationSzY() * blkList[b].getAllocationSzZ();
+            b++;
+        }
+        out[t] = b;
+    }
+    out[nthreads] = numBlocks;
+    // enforce monotonic, non-decreasing boundaries (greedy already is, but keep
+    // the invariant explicit so empty ranges are well-defined, not reversed).
+    for (unsigned int t = 1; t <= nthreads; t++)
+        if (out[t] < out[t - 1]) out[t] = out[t - 1];
+}
+
 }  // end of namespace ot
 
 #endif  // SFCSORTBENCH_BLOCK_H
