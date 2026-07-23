@@ -239,11 +239,11 @@ set(DENDRO_SRC
     src/derivatives/derivs_compact.cpp
     src/derivatives/derivs_matrixonly.cpp
     src/derivatives/derivs_banded.cpp
-    src/derivatives/derivs_ccd.cpp
+    src/derivatives/derivs_ccfd.cpp
     src/derivatives/derivs_utils.cpp
     src/derivatives/impl_explicitmatrix.cpp
     src/derivatives/impl_byuderivs.cpp
-    src/derivatives/impl_ccd.cpp
+    src/derivatives/impl_ccfd.cpp
     src/derivatives/impl_kimderivs.cpp
     src/derivatives/impl_jonathantyler.cpp
     src/derivatives/impl_bradylivescu.cpp
@@ -535,7 +535,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testAllDerivs test/src/testAllDerivs.cpp)
   dendro_add_deriv_test(testDerivConvergence test/src/testDerivConvergence.cpp)
   dendro_add_deriv_test(testBandedVsXSMM test/src/testBandedVsXSMM.cpp)
-  dendro_add_deriv_test(testCCD test/src/testCCD.cpp)
+  dendro_add_deriv_test(testCCFD test/src/testCCFD.cpp)
   dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)
   dendro_add_deriv_test(testRhsWorkflow test/src/testRhsWorkflow.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)

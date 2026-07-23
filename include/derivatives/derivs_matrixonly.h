@@ -223,7 +223,7 @@ class MatrixCompactDerivs : public CompactDerivs {
 
         // first time seeing this size — create matrices. goes through the
         // virtual so a scheme with its own build (in-matrix filter, boris'
-        // per-side diagonals, CCD's coupled system) stays correct here and not
+        // per-side diagonals, CCFD's coupled system) stays correct here and not
         // just on the eager init() path.
         D_storage_map_.emplace(n, build_storage_for_size(n, false));
 
