@@ -15,6 +15,39 @@
 
 namespace dendrocompression {
 
+#ifdef DENDRO_COMPRESSION_OMP
+/**
+ * @brief Groups a thread needs before it is worth waking.
+ *
+ * Real per-peer payloads span roughly 43..2400 groups (measured on a distributed
+ * mesh -- see the scatter-map profile), so one run hits both the
+ * too-little-work and the plenty-of-work regime and the thread count has to
+ * follow the work. Uncapped, a 43-group peer peaks at 4 threads and loses ~15%
+ * of that going to 8; capped too aggressively it loses far more by dropping to
+ * serial.
+ *
+ * Swept 4 / 8 / 16 / 32 groups-per-thread against no cap (16-bit, compress,
+ * 8 threads): at 43 groups no-cap 14.9, gpt=4 16.8, gpt=8 18.0, gpt=16 15.1,
+ * gpt=32 9.8 GB/s (32 forces serial and throws away a 2x win -- it was a bad
+ * first guess). At 9600 groups all caps land ~75 vs 66 uncapped. 8 never loses
+ * to no-cap and is best at the small end, so: 8. Run-to-run spread is ~10%, so
+ * 4 and 8 are not meaningfully separable -- the point is that it is single
+ * digits, not tens.
+ *
+ * Capping threads here is safe in a way it would not be for the solver's block
+ * loops: this codec keeps no per-thread workspace and does no tid indexing, so
+ * there is no pool to stay pinned to, and the output is byte-identical at any
+ * thread count.
+ */
+constexpr unsigned int QUANT_GROUPS_PER_THREAD = 8u;
+
+inline int quant_nthreads(unsigned int ngroups) {
+    const int want = (int)(ngroups / QUANT_GROUPS_PER_THREAD);
+    const int have = omp_get_max_threads();
+    return want < 1 ? 1 : (want < have ? want : have);
+}
+#endif
+
 /**
  * @brief Fixed-point quantization against a per-(block,variable) absmax.
  *
@@ -89,7 +122,7 @@ class QuantizeCompressor : public Compression<T> {
             return (std::size_t)ngroups * gb;
         }
 #ifdef DENDRO_COMPRESSION_OMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(quant_nthreads(ngroups))
 #endif
         for (unsigned int g = 0; g < ngroups; ++g) {
             const T* src         = in + (std::size_t)g * npg;
@@ -141,7 +174,7 @@ class QuantizeCompressor : public Compression<T> {
             return (std::size_t)ngroups * gb;
         }
 #ifdef DENDRO_COMPRESSION_OMP
-#pragma omp parallel for
+#pragma omp parallel for num_threads(quant_nthreads(ngroups))
 #endif
         for (unsigned int g = 0; g < ngroups; ++g) {
             const unsigned char* src = in + (std::size_t)g * gb;
