@@ -585,6 +585,11 @@ if(BUILD_DENDRO_EXAMPLES)
     dendro_add_example(compressDecompress test/src/compressDecompressTest.cpp)
   endif()
 
+  # What a REAL ghost payload looks like: the scatter-map dimensional histogram
+  # and the compression ratio it implies. Needs a distributed mesh but NOT
+  # compression -- it bounds what any per-group codec can achieve.
+  dendro_add_example(ghostScatterMapProfile test/src/ghostScatterMapProfile.cpp)
+
 
   dendro_add_example(testLTSBlkVec ODE/examples/testLTSBlkVec.cpp)
   dendro_add_example(dgVecTest FEM/examples/src/dgVecTest.cpp)
