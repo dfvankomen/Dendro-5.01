@@ -86,8 +86,13 @@ class GateCtx : public ts::Ctx<GateCtx, DendroScalar, unsigned int> {
      * @brief Deterministic, per-variable, spatially varying initial data.
      *
      * Deliberately NOT smooth-and-tiny: the halo must contain values a codec can
-     * get wrong, and the per-variable amplitude spread (1 .. 10^(v)) is what
-     * exercises the per-group absmax scaling.
+     * get wrong, and a per-variable amplitude spread is what exercises the
+     * per-group absmax scaling.
+     *
+     * The spread is capped at 4 decades (10^(v mod 4)) rather than 10^v. An
+     * unbounded 10^v reached 1e23 at dof=24, which made GATE 2's max|diff| read
+     * 2.1e19 -- correct for the data but uninterpretable, and nothing like the
+     * ~3-4 decades a BSSN state actually spans.
      */
     void fill() {
         DendroScalar* p = m_evar.get_vec_ptr();
@@ -113,7 +118,7 @@ class GateCtx : public ts::Ctx<GateCtx, DendroScalar, unsigned int> {
                         const double z = pNodes[e].getZ() + k * sz / (double)eo;
                         const double L = (double)(1u << m_uiMaxDepth);
                         for (unsigned int v = 0; v < m_dof; ++v) {
-                            const double amp = std::pow(10.0, (double)v);
+                            const double amp = std::pow(10.0, (double)(v % 4));
                             p[v * nAll + nid] =
                                 amp * (std::sin(6.28318530718 * x / L) *
                                            std::cos(4.0 * y / L) +
@@ -124,6 +129,22 @@ class GateCtx : public ts::Ctx<GateCtx, DendroScalar, unsigned int> {
     }
 
     int initialize() { return 0; }
+
+    /**
+     * @brief The UNCOMPRESSED ghost exchange on its own, no unzip.
+     *
+     * Needed to say what fraction of an unzip the exchange even is -- a % of the
+     * whole unzip is meaningless otherwise, since compression cannot touch the
+     * interpolation. Deliberately does NOT use the t_compression_* timers to
+     * infer this: those nest (the Mesh-level start/stop sit inside the
+     * Ctx-level ones) and t_compression_compress additionally brackets the
+     * omp_par::scan calls, so their sum overcounts -- it read 274% of the unzip
+     * when tried, which is how the double-count was noticed.
+     */
+    void raw_exchange() {
+        m_uiMesh->readFromGhostBegin(m_mpi_ctx[0], m_evar.get_vec_ptr(), m_dof);
+        m_uiMesh->readFromGhostEnd(m_mpi_ctx[0], m_evar.get_vec_ptr(), m_dof);
+    }
 };
 
 /** @brief run one unzip and return the unzipped buffer. */
@@ -136,6 +157,28 @@ static std::vector<DendroScalar> run_unzip(ot::Mesh* mesh, unsigned int dof,
     ctx.unzip(ctx.m_evar, ctx.m_unz, ASYNC_K, use_compression);
     const DendroScalar* u = ctx.m_unz.get_vec_ptr();
     return std::vector<DendroScalar>(u, u + ctx.m_unz.get_size());
+}
+
+/**
+ * @brief Wall time per unzip, max over ranks, in ms.
+ *
+ * Interleaving matters more than rep count here (shared machine), so the caller
+ * alternates arms rather than running each to completion.
+ */
+static double time_unzip(ot::Mesh* mesh, unsigned int dof, bool use_compression,
+                         unsigned int reps, MPI_Comm comm) {
+    GateCtx ctx(mesh, dof);
+    ctx.fill();
+    for (unsigned int w = 0; w < 3; ++w)  // warm caches / first-touch
+        ctx.unzip(ctx.m_evar, ctx.m_unz, ASYNC_K, use_compression);
+    MPI_Barrier(comm);
+    const double t0 = MPI_Wtime();
+    for (unsigned int r = 0; r < reps; ++r)
+        ctx.unzip(ctx.m_evar, ctx.m_unz, ASYNC_K, use_compression);
+    const double local = (MPI_Wtime() - t0) / reps * 1e3;
+    double mx = 0.0;
+    MPI_Allreduce(&local, &mx, 1, MPI_DOUBLE, MPI_MAX, comm);
+    return mx;
 }
 
 struct Diff {
@@ -244,6 +287,115 @@ int main(int argc, char** argv) {
                     : "*** FAIL - lossy codec changed nothing: compression is "
                       "NOT engaging, so GATE 1 is vacuous ***");
             if (gd == 0) failures++;
+        }
+    }
+
+    // ---- COST FLOOR ------------------------------------------------------
+    // On one node MPI is shared-memory memcpy, so there is essentially NO wire
+    // time for compression to reclaim. Timing here therefore measures the pure
+    // OVERHEAD -- codec, extra buffers, the extract/unextract passes, and the
+    // count-exchange MPI_Waitall barrier -- with none of the benefit. That is
+    // the floor a real fabric has to beat, and unlike an arithmetic estimate it
+    // includes every cost actually present in the path.
+    {
+        const unsigned int reps = 30;
+        // interleave the arms: never compare runs taken minutes apart
+        double t_off = 0, t_dum = 0, t_qnt = 0;
+        for (unsigned int pass = 0; pass < 3; ++pass) {
+            dendro_compress::COMPRESSION_OPTION =
+                dendro_compress::CompressionType::NONE;
+            t_off += time_unzip(mesh, dof, false, reps, comm);
+
+            dendro_compress::setUpCompressor(
+                dendrocompression::CompressionType::COMP_DUMMY, {eOrder, dof});
+            t_dum += time_unzip(mesh, dof, true, reps, comm);
+
+            dendro_compress::setUpCompressor(
+                dendrocompression::CompressionType::COMP_QUANT,
+                {eOrder, dof, 16u});
+            t_qnt += time_unzip(mesh, dof, true, reps, comm);
+        }
+        t_off /= 3.0; t_dum /= 3.0; t_qnt /= 3.0;
+
+        // Bytes this rank sends per exchange: the scatter map's own send-buffer
+        // size, which is exactly what the exchange moves.
+        double send_bytes = 0.0;
+        if (mesh->isActive()) {
+            const unsigned int an = mesh->getMPICommSize();
+            send_bytes = (double)(mesh->getNodalSendOffsets()[an - 1] +
+                                  mesh->getNodalSendCounts()[an - 1]) *
+                         dof * sizeof(DendroScalar);
+        }
+        {
+            double mx = 0.0;
+            MPI_Allreduce(&send_bytes, &mx, 1, MPI_DOUBLE, MPI_MAX, comm);
+            send_bytes = mx;
+        }
+
+        // How much of an unzip is the EXCHANGE at all? Measured directly by
+        // running the uncompressed exchange on its own (see raw_exchange).
+        double exch_ms = 0.0;
+        {
+            dendro_compress::COMPRESSION_OPTION =
+                dendro_compress::CompressionType::NONE;
+            GateCtx ectx(mesh, dof);
+            ectx.fill();
+            for (unsigned int w = 0; w < 3; ++w) ectx.raw_exchange();
+            MPI_Barrier(comm);
+            const double e0 = MPI_Wtime();
+            for (unsigned int r = 0; r < reps; ++r) ectx.raw_exchange();
+            const double loc = (MPI_Wtime() - e0) / reps * 1e3;
+            MPI_Allreduce(&loc, &exch_ms, 1, MPI_DOUBLE, MPI_MAX, comm);
+        }
+
+        if (!rank) {
+            std::printf(
+                "\n  [COST FLOOR] wall ms per unzip (max over ranks, %u reps x 3"
+                " interleaved passes)\n"
+                "    compression OFF      : %8.3f ms\n"
+                "    DUMMY  (plumbing)    : %8.3f ms   %+7.1f%%\n"
+                "    quant16              : %8.3f ms   %+7.1f%%\n",
+                reps, t_off, t_dum, 100.0 * (t_dum - t_off) / t_off, t_qnt,
+                100.0 * (t_qnt - t_off) / t_off);
+            std::printf(
+                "\n    uncompressed EXCHANGE alone : %8.3f ms  (%.1f%% of the OFF\n"
+                "      unzip -- the rest is interpolation, which compression\n"
+                "      cannot touch, so THIS is the slice in play)\n"
+                "    overhead as a share of the exchange:  dummy %+.1f%%, "
+                "quant16 %+.1f%%\n",
+                exch_ms, 100.0 * exch_ms / t_off,
+                100.0 * (t_dum - t_off) / exch_ms,
+                100.0 * (t_qnt - t_off) / exch_ms);
+            // Bytes this rank puts on the wire per exchange, from the scatter map
+            // directly (rather than the unsigned-int byte counters, which wrap
+            // at 4 GB).
+            const double MB = send_bytes / 1048576.0;
+            const double saved_frac = 1.0 - 1.0 / 1.850;  // measured real-mix ratio
+            const double overhead_ms = t_qnt - t_off;
+            // fabric bandwidth at which saved wire time == measured overhead
+            const double be_gbs =
+                (send_bytes * saved_frac) / (overhead_ms * 1e-3) / 1e9;
+            std::printf(
+                "\n    per-rank send volume        : %8.3f MiB / exchange\n"
+                "    quant16 overhead            : %8.3f ms\n"
+                "    => break-even fabric bandwidth: %7.2f GB/s per rank\n",
+                MB, overhead_ms, be_gbs);
+            std::printf(
+                "\n    COST FLOOR, read carefully. On one node MPI is a\n"
+                "    shared-memory copy, so the deltas above are essentially all\n"
+                "    cost. The break-even figure says: compression pays only if a\n"
+                "    rank's share of fabric bandwidth is BELOW that number, since\n"
+                "    slower wire means more time saved per byte removed.\n"
+                "    Two caveats that matter more than the number:\n"
+                "      - dummy and quant16 overheads are not cleanly separable at\n"
+                "        this noise level (seen at +3.9%% and +7.0%% across runs).\n"
+                "      - it assumes exchange time is proportional to BYTES. Hybrid\n"
+                "        Parallelism measured the exchange is ~62%% MPI_Waitall,\n"
+                "        which is mostly neighbour IMBALANCE, not wire -- and\n"
+                "        imbalance does not shrink when bytes do. If only ~40%% of\n"
+                "        exchange time is byte-proportional, divide the saving\n"
+                "        accordingly.\n"
+                "    Settling that split needs a cluster; it cannot be done here.\n");
         }
     }
 
