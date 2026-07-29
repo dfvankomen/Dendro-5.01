@@ -1,3 +1,4 @@
+#include <mpi.h>
 #include "compression.h"
 
 #include <cmath>
@@ -3682,10 +3683,24 @@ void setUpCompressor(dendrocompression::CompressionType compressor_type,
     // had never once executed. Doing both here makes that state unreachable.
     COMPRESSION_OPTION = to_gate_type(compressor_type);
 
-    std::cout << "[compression] compressor = "
-              << (compressor_float ? compressor_float->to_string() : "<null>")
-              << ", gate = " << COMPRESSION_TYPE_NAMES[COMPRESSION_OPTION]
-              << std::endl;
+    // Announce once per actual configuration change, from one rank only. This is
+    // called from inside timing loops (and once per rank), so an unconditional
+    // print buries the output it is meant to annotate.
+    static int last_announced = -1;
+    if (last_announced != (int)COMPRESSION_OPTION) {
+        last_announced = (int)COMPRESSION_OPTION;
+        int flag = 0, rank = 0;
+        MPI_Initialized(&flag);
+        if (flag) MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+        if (rank == 0) {
+            std::cout << "[compression] compressor = "
+                      << (compressor_float ? compressor_float->to_string()
+                                           : "<null>")
+                      << ", gate = "
+                      << COMPRESSION_TYPE_NAMES[COMPRESSION_OPTION]
+                      << std::endl;
+        }
+    }
 }
 
 }  // namespace dendro_compress

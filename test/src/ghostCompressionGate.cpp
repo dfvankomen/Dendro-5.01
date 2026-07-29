@@ -263,7 +263,37 @@ int main(int argc, char** argv) {
         }
     }
 
-    // ---- ARM 2: a LOSSY codec MUST differ (proves the gate can fail) ----
+    // ---- ARM 2: a LOSSLESS codec must ALSO be bit identical --------------
+    // Strictly stronger than ARM 1: dummy is a memcpy and never exercises a real
+    // codec's framing, size accounting or fallback path. blosc does all three
+    // (and its raw fallback fires often on the small dimensionalities), while
+    // still being obliged to reproduce the input exactly.
+    {
+        dendro_compress::setUpCompressor(
+            dendrocompression::CompressionType::COMP_BLOSC, {eOrder, dof});
+        const std::vector<DendroScalar> got = run_unzip(mesh, dof, true);
+        Diff d = compare(ref, got);
+        unsigned long gd = 0;
+        double gm = 0.0;
+        MPI_Reduce(&d.ndiff, &gd, 1, MPI_UNSIGNED_LONG, MPI_SUM, 0, comm);
+        MPI_Reduce(&d.maxabs, &gm, 1, MPI_DOUBLE, MPI_MAX, 0, comm);
+        if (!rank) {
+            std::printf(
+                "\n  [GATE 2] BLOSC codec (lossless) vs compression OFF\n"
+                "           differing values : %lu\n"
+                "           max |diff|       : %.3e\n"
+                "           %s\n",
+                gd, gm,
+                gd == 0
+                    ? "PASS - a real codec round-trips bit-exactly through the "
+                      "exchange"
+                    : "*** FAIL - lossless codec lost data: framing, sizing or "
+                      "the raw fallback is wrong ***");
+            if (gd != 0) failures++;
+        }
+    }
+
+    // ---- ARM 3: a LOSSY codec MUST differ (proves the gate can fail) ----
     {
         dendro_compress::setUpCompressor(
             dendrocompression::CompressionType::COMP_QUANT,
@@ -276,7 +306,7 @@ int main(int argc, char** argv) {
         MPI_Reduce(&d.maxabs, &gm, 1, MPI_DOUBLE, MPI_MAX, 0, comm);
         if (!rank) {
             std::printf(
-                "\n  [GATE 2] quant16 (lossy) vs compression OFF"
+                "\n  [GATE 3] quant16 (lossy) vs compression OFF"
                 "  -- MUST differ\n"
                 "           differing values : %lu\n"
                 "           max |diff|       : %.3e\n"

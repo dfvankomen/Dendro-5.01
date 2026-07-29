@@ -14,6 +14,7 @@
 #include "compression/compressor_onnx.hpp"
 #include "compression/compressor_torchscript.hpp"
 #endif
+#include "compression/compressor_blosc.hpp"
 #include "compression/compressor_quantize.hpp"
 #include "compression/compressor_zfp.hpp"
 
@@ -242,6 +243,39 @@ void register_compressors() {
         dendrocompression::CompressionType::COMP_QUANT,
         [make_quant](const std::vector<std::any>& args) {
             return make_quant(double{}, args);
+        });
+
+    // Blosc Compressor Registration -- LOSSLESS, so it is the strongest arm for
+    // the exchange bit-identity gate. args: (ele_order, num_vars) or
+    // (ele_order, num_vars, codec, clevel, doshuffle).
+    auto make_blosc = [](auto tag, const std::vector<std::any>& args) {
+        using S = decltype(tag);
+        if (args.size() != 2 && args.size() != 5) {
+            throw std::runtime_error(
+                "Invalid number of inputs for setting up Blosc Compressor "
+                "(expected ele_order, num_vars[, codec, clevel, doshuffle])");
+        }
+        const unsigned int eo = std::any_cast<unsigned int>(args[0]);
+        const unsigned int nv = std::any_cast<unsigned int>(args[1]);
+        if (args.size() == 2) {
+            return std::unique_ptr<Compression<S>>(
+                new BloscCompressor<S>(eo, nv));
+        }
+        return std::unique_ptr<Compression<S>>(new BloscCompressor<S>(
+            eo, nv, std::any_cast<std::string>(args[2]),
+            std::any_cast<int>(args[3]), std::any_cast<int>(args[4])));
+    };
+
+    floatCompressor.register_compressor(
+        dendrocompression::CompressionType::COMP_BLOSC,
+        [make_blosc](const std::vector<std::any>& args) {
+            return make_blosc(float{}, args);
+        });
+
+    doubleCompressor.register_compressor(
+        dendrocompression::CompressionType::COMP_BLOSC,
+        [make_blosc](const std::vector<std::any>& args) {
+            return make_blosc(double{}, args);
         });
 
     // do all of the compression registering here...
