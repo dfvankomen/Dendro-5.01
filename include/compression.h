@@ -2599,16 +2599,31 @@ T calculate_min_error(T *absError, std::size_t total_pts) {
     return min_error;
 }
 
+/**
+ * @brief The RUNTIME GATE for the compressed exchange.
+ *
+ * Ctx::unzip tests this (`!= NONE`) to decide whether to take the compressed
+ * path at all; it is the kill switch that overrides the per-call flag. Note the
+ * legacy per-type dispatch that used to switch on it is `#if 0`'d out -- WHICH
+ * codec runs is decided by whichever object setUpCompressor built, so in
+ * practice this enum only has to be able to say "on, and nominally which".
+ *
+ * DUMMY and QUANT were added when their compressors were, so a solver can
+ * actually select them. Keep COMPRESSION_TYPE_NAMES in sync.
+ */
 enum CompressionType {
     NONE = 0,
     ZFP,
     CHEBYSHEV,
     BLOSC,
     TORCH_SCRIPT,
-    ONNX_MODEL
+    ONNX_MODEL,
+    DUMMY,
+    QUANT
 };
 static const char *COMPRESSION_TYPE_NAMES[] = {
-    "NONE", "ZFP", "CHEBYSHEV", "BLOSC", "TORCH_SCRIPT", "ONNX_MODEL"};
+    "NONE",        "ZFP",   "CHEBYSHEV", "BLOSC",
+    "TORCH_SCRIPT", "ONNX_MODEL", "DUMMY",     "QUANT"};
 
 enum FilterType { F_NONE = 0, F_GAUSSIAN, F_CHEBYSHEV };
 static const char *FILTER_TYPE_NAMES[] = {"F_NONE", "F_GAUSSIAN",

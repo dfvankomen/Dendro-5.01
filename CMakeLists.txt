@@ -276,6 +276,35 @@ if(DENDRO_ENABLE_GHOST_COMPRESSION)
   set(BUILD_SHARED_LIBS "${_dendro_saved_bsl}" CACHE BOOL "Build shared libraries" FORCE)
   unset(_dendro_saved_bsl)
   message(STATUS "=== Finished configuring zfp library")
+
+  # c-blosc. Kept even though COMP_BLOSC is unregistered in the compressor
+  # factory (so it is unreachable at runtime) for two reasons: the legacy
+  # blockwise_* dispatch in compression.cpp still references BLOSCAlgorithms from
+  # LIVE switch cases, so dropping the library breaks the link as soon as
+  # anything pulls in compression.cpp -- and more usefully, blosc is LOSSLESS,
+  # which makes it the strongest available arm for the exchange bit-identity gate
+  # (the dummy codec is only a memcpy and never exercises a real codec).
+  message(STATUS "=== Now configuring blosc library")
+  FetchContent_Declare(
+    blosc
+    GIT_REPOSITORY "https://github.com/Blosc/c-blosc"
+    GIT_TAG "v1.21.6"
+    CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release
+  )
+  # Same option-leak guard as zfp above.
+  set(_dendro_saved_bsl "${BUILD_SHARED_LIBS}")
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+  # c-blosc v1.21.6 declares cmake_minimum_required below 3.5, which CMake >= 4
+  # rejects outright (zfp only warns). Scope the compatibility floor to this
+  # fetch rather than relaxing policy for the whole project.
+  set(_dendro_saved_pvm "${CMAKE_POLICY_VERSION_MINIMUM}")
+  set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+  FetchContent_MakeAvailable(blosc)
+  set(CMAKE_POLICY_VERSION_MINIMUM "${_dendro_saved_pvm}")
+  unset(_dendro_saved_pvm)
+  set(BUILD_SHARED_LIBS "${_dendro_saved_bsl}" CACHE BOOL "Build shared libraries" FORCE)
+  unset(_dendro_saved_bsl)
+  message(STATUS "=== Finished configuring blosc library")
 endif()
 
 # ==========================
@@ -480,6 +509,8 @@ target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_C
 if(DENDRO_ENABLE_GHOST_COMPRESSION)
   target_include_directories(dendro5 PUBLIC ${zfp_SOURCE_DIR})
   target_link_libraries(dendro5 PUBLIC zfp)
+  target_include_directories(dendro5 PUBLIC ${blosc_SOURCE_DIR}/blosc)
+  target_link_libraries(dendro5 PUBLIC blosc_static)
 endif()
 
 if(WITH_BLAS_LAPACK)
@@ -583,6 +614,10 @@ if(BUILD_DENDRO_EXAMPLES)
   # not a test -- it has no assertions and always returns 0.
   if(DENDRO_ENABLE_GHOST_COMPRESSION)
     dendro_add_example(compressDecompress test/src/compressDecompressTest.cpp)
+    # The correctness gate for the compressed EXCHANGE (not just the codec):
+    # dummy codec must be bit-identical to compression OFF, and a lossy codec
+    # must differ (so the gate is provably able to fail).
+    dendro_add_example(ghostCompressionGate test/src/ghostCompressionGate.cpp)
   endif()
 
   # What a REAL ghost payload looks like: the scatter-map dimensional histogram

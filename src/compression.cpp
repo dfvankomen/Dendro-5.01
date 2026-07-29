@@ -3641,20 +3641,51 @@ template std::size_t blockwise_all_dof_decompression_class<double, double>(
 std::unique_ptr<dendrocompression::Compression<double>> compressor_double;
 std::unique_ptr<dendrocompression::Compression<float>> compressor_float;
 
+/**
+ * @brief Map the factory's compressor type onto the runtime gate's enum.
+ *
+ * Two enums exist for historical reasons (see the note on CompressionType):
+ * dendrocompression::CompressionType keys the factory, dendro_compress::
+ * CompressionType is what Ctx::unzip gates on. This is the single place they are
+ * reconciled.
+ */
+static CompressionType to_gate_type(dendrocompression::CompressionType t) {
+    switch (t) {
+        case dendrocompression::COMP_NONE: return NONE;
+        case dendrocompression::COMP_DUMMY: return DUMMY;
+        case dendrocompression::COMP_ZFP: return ZFP;
+        case dendrocompression::COMP_CHEBYSHEV: return CHEBYSHEV;
+        case dendrocompression::COMP_BLOSC: return BLOSC;
+        case dendrocompression::COMP_TORCH_SCRIPT: return TORCH_SCRIPT;
+        case dendrocompression::COMP_ONNX_MODEL: return ONNX_MODEL;
+        case dendrocompression::COMP_QUANT: return QUANT;
+        // COMP_INTERP has no legacy counterpart; it is still a real compressor,
+        // so gate it on rather than silently disabling the exchange.
+        default: return QUANT;
+    }
+}
+
 void setUpCompressor(dendrocompression::CompressionType compressor_type,
                      std::vector<std::any> compressor_parameters) {
-    // simple as just creating the compressor through the factory
-    // TODO: should adjust based on float/double compressor (and other
-    // potential types!)
-    std::cout << "COMPRESSOR TYPE: " << compressor_type << std::endl;
+    // Registration is idempotent, and forgetting it used to mean create() threw
+    // from an empty map. Do it here so a caller cannot get this wrong.
+    dendrocompression::register_compressors();
+
     compressor_double = dendrocompression::doubleCompressor.create(
         compressor_type, compressor_parameters);
-
-    std::cout << "Now building float: " << compressor_type << std::endl;
-    // TODO: this can be "smarter" based on the parameter that we want to use
-    // for setup
-    compressor_float = dendrocompression::floatCompressor.create(
+    compressor_float  = dendrocompression::floatCompressor.create(
         compressor_type, compressor_parameters);
+
+    // ARM THE GATE. Building the compressor objects without setting
+    // COMPRESSION_OPTION leaves the exchange taking the uncompressed path while
+    // everything *looks* configured -- which is exactly why the compressed path
+    // had never once executed. Doing both here makes that state unreachable.
+    COMPRESSION_OPTION = to_gate_type(compressor_type);
+
+    std::cout << "[compression] compressor = "
+              << (compressor_float ? compressor_float->to_string() : "<null>")
+              << ", gate = " << COMPRESSION_TYPE_NAMES[COMPRESSION_OPTION]
+              << std::endl;
 }
 
 }  // namespace dendro_compress

@@ -23,6 +23,12 @@ DendroCompression<float> floatCompressor;
 DendroCompression<double> doubleCompressor;
 
 void register_compressors() {
+    // Idempotent: setUpCompressor calls this so a consumer cannot forget it, and
+    // re-registering would otherwise rebuild every lambda on each call.
+    static bool already_registered = false;
+    if (already_registered) return;
+    already_registered = true;
+
     // ----
     // DummyCompressor Registration, used for testing
     floatCompressor.register_compressor(
