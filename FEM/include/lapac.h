@@ -48,6 +48,10 @@ extern "C" void dgemm_(char* transa, char* transb, int* m, int* n, int* k,
                        double* alpha, double* A, int* lda, double* B, int* ldb,
                        double* beta, double* C, int* ldc);
 
+extern "C" void sgemm_(char* transa, char* transb, int* m, int* n, int* k,
+                       float* alpha, float* A, int* lda, float* B, int* ldb,
+                       float* beta, float* C, int* ldc);
+
 // generic matrix vector multiplication.
 extern "C" void dgemv_(char* trans, int* m, int* n, double* alpha, double* A,
                        int* lda, double* x, int* incx, double* beta, double* y,
@@ -59,6 +63,10 @@ extern "C" void dgbsvx_(char* fact, char* trans, int* n, int* kl, int* ku,
                         double* c, double* b, int* ldb, double* x, int* ldx,
                         double* rcond, double* ferr, double* berr, double* work,
                         int* iwork, int* info);
+
+extern "C" void sgemv_(char* trans, int* m, int* n, float* alpha, float* A,
+                       int* lda, float* x, int* incx, float* beta, float* y,
+                       int* incy);
 
 namespace lapack {
 

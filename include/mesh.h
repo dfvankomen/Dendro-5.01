@@ -24,12 +24,15 @@
 #pragma once
 #include <fdCoefficient.h>
 
+#include <any>
 #include <memory>
 #include <vector>
 
 #include "TreeNode.h"
 #include "asyncExchangeContex.h"
 #include "block.h"
+#include "compression/compression_base.hpp"
+#include "compression/compression_factory.hpp"
 #include "dendro.h"
 #include "dendroProfileParams.h"  // only need to profile unzip_asyn for bssn. remove this header file later.
 #include "key.h"
@@ -40,6 +43,7 @@
 #include "octUtils.h"
 #include "point.h"
 #include "refel.h"
+#include "scattermapConfig.h"
 #include "sfcSearch.h"
 #include "sfcSort.h"
 #include "skey.h"
@@ -47,6 +51,24 @@
 #include "testUtils.h"
 #include "treenode2vtk.h"
 #include "wavelet.h"
+
+// Per-exchange reconstruction-error telemetry: on every compress call it
+// decompresses into scratch, computes MSE/RMSE/MAE/max/min (total and per
+// dimensionality class) and appends a CSV row -- PER PEER, PER EXCHANGE,
+// including an ofstream open/append/close.
+//
+// It was defined unconditionally on the compression branch, which means any
+// timing taken in a default build measured the error sweep rather than the
+// compression. It is opt-in now: configure with -DDENDRO_COMPRESSION_QUALITY=ON
+// (or define the macro by hand) when you want the error data, and leave it off
+// for anything you intend to time.
+#ifdef DENDRO_COMPRESSION_QUALITY
+#define __DENDRO_TEST_COMPRESSION_QUALITY__
+#endif
+
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+#include "compression.h"
+#endif
 
 extern double t_e2e;  // e2e map generation time
 extern double t_e2n;  // e2n map generation time
@@ -141,6 +163,9 @@ namespace ot {
  * Diagnostic only; never read by mesh logic.*/
 extern unsigned int mesh_ctor_omp_threads;
 
+extern size_t DENDRO_number_times_compress_called;
+extern std::string DENDRO_compression_file_prefix;
+
 /**@brief type of the scatter map, based on numerical computation method*/
 enum SM_TYPE {
     FDM = 0,  // Finite Difference Method
@@ -192,6 +217,7 @@ enum VEC_TYPE { CG_NODAL, DG_NODAL, ELEMENTAL };
 }  // namespace ot
 
 namespace ot {
+
 /** Structure to order the send recv nodes based on the (e,i,j,k ) ordering. */
 struct NodeTuple {
    private:
@@ -500,6 +526,21 @@ class Mesh {
 
     /** Scatter map for the actual nodes, recieving from other processors. */
     std::vector<unsigned int> m_uiScatterMapActualNodeRecv;
+
+    std::vector<sm_config::SMConfig> m_uiScatterMapConfigNodeSend;
+    std::vector<sm_config::SMConfig> m_uiScatterMapConfigNodeRecv;
+
+    std::vector<unsigned int> m_uiScatterMapConfigCountNodeSend;
+    std::vector<unsigned int> m_uiScatterMapConfigCountNodeRecv;
+
+    std::vector<unsigned int> m_uiScatterMapConfigOffsetNodeSend;
+    std::vector<unsigned int> m_uiScatterMapConfigOffsetNodeRecv;
+
+    // useful information for determining where batching things are
+    std::vector<std::array<unsigned int, 4>> m_uiScatterMapConfigDimCountsSend;
+    std::vector<std::array<unsigned int, 4>> m_uiScatterMapConfigDimCountsRecv;
+    std::vector<std::array<unsigned int, 4>> m_uiScatterMapConfigDimOffsetSend;
+    std::vector<std::array<unsigned int, 4>> m_uiScatterMapConfigDimOffsetRecv;
 
     // variables to manage loop access over elements.
     /**counter for the current element*/
@@ -1522,6 +1563,64 @@ class Mesh {
         return m_uiScatterMapActualNodeRecv;
     }
 
+    /**@brief return Scatter map configuration for node send*/
+    inline const std::vector<sm_config::SMConfig> &getSendNodeSMConfig() const {
+        return m_uiScatterMapConfigNodeSend;
+    }
+
+    /**@brief return Scatter map for node send*/
+    inline const std::vector<sm_config::SMConfig> &getRecvNodeSMConfig() const {
+        return m_uiScatterMapConfigNodeRecv;
+    }
+
+    /**@brief return Scatter map configuration for node send*/
+    inline const std::vector<unsigned int> &getSendNodeSMConfigCount() const {
+        return m_uiScatterMapConfigCountNodeSend;
+    }
+
+    /**@brief return Scatter map for node send*/
+    inline const std::vector<unsigned int> &getRecvNodeSMConfigCount() const {
+        return m_uiScatterMapConfigCountNodeRecv;
+    }
+
+    /**@brief return Scatter map configuration for node send*/
+    inline const std::vector<unsigned int> &getSendNodeSMConfigOffset() const {
+        return m_uiScatterMapConfigOffsetNodeSend;
+    }
+
+    /**@brief return Scatter map for node send*/
+    inline const std::vector<unsigned int> &getRecvNodeSMConfigOffset() const {
+        return m_uiScatterMapConfigOffsetNodeRecv;
+    }
+
+    /**@brief return Scatter map configuration counts for dimensionality, send
+     */
+    inline const std::vector<std::array<unsigned int, 4>> &
+    getSendNodeSMConfigDimCounts() const {
+        return m_uiScatterMapConfigDimCountsSend;
+    }
+
+    /**@brief return Scatter map configuration counts for dimensionality, recv
+     */
+    inline const std::vector<std::array<unsigned int, 4>> &
+    getRecvNodeSMConfigDimCounts() const {
+        return m_uiScatterMapConfigDimCountsRecv;
+    }
+
+    /**@brief return Scatter map configuration offsets for dimensionality, send
+     */
+    inline const std::vector<std::array<unsigned int, 4>> &
+    getSendNodeSMConfigDimOffset() const {
+        return m_uiScatterMapConfigDimOffsetSend;
+    }
+
+    /**@brief return Scatter map configuration offsets for dimensionality, recv
+     */
+    inline const std::vector<std::array<unsigned int, 4>> &
+    getRecvNodeSMConfigDimOffset() const {
+        return m_uiScatterMapConfigDimOffsetRecv;
+    }
+
     /**@brief returns the cell/element send counts*/
     inline const std::vector<unsigned int> &getElementSendCounts() const {
         return m_uiSendEleCount;
@@ -2316,6 +2415,86 @@ class Mesh {
     void ghostExchangeRecvSync(T *vec, T *recvNodeBuffer,
                                MPI_Request *recv_reqs, MPI_Status *recv_sts);
 
+    template <typename T>
+    void extractFullSingleProcess(AsyncExchangeContex &ctx, T *vec,
+                                  unsigned int dof, unsigned int proc_id);
+
+    template <typename T, typename U>
+    void extractAllDofSingleProcess(AsyncExchangeContex &ctx, T *vec,
+                                    unsigned int dof, unsigned int proc_id);
+
+    template <typename T>
+    void extractFullDataCombinedBlocks(AsyncExchangeContex &ctx, T *vec,
+                                       unsigned int dof);
+
+    template <typename T, typename U>
+    void unextractAllDofSingleProcess(AsyncExchangeContex &ctx, T *vec,
+                                      unsigned int dof, unsigned int proc_id);
+
+    template <typename T>
+    void unextractFullDataCombinedBlocks(AsyncExchangeContex &ctx, T *vec,
+                                         unsigned int dof);
+
+    template <typename T>
+    void extractFullData(AsyncExchangeContex &ctx, T *vec, unsigned int dof);
+
+    template <typename T>
+    void unextractFullData(AsyncExchangeContex &ctx, T *vec, unsigned int dof);
+
+    template <typename T>
+    void unextractSingleProcess(AsyncExchangeContex &ctx, T *vec,
+                                unsigned int dof, unsigned int recv_p);
+
+    template <typename T>
+    void compressSingleProcess(AsyncExchangeContex &ctx, T *vec,
+                               unsigned int dof, unsigned int proc_id,
+                               unsigned int &compressOffset);
+
+    template <typename T, typename U>
+    void compressSingleProcessAllDOF(AsyncExchangeContex &ctx, T *vec,
+                                     unsigned int dof, unsigned int proc_id,
+                                     unsigned int &compressOffset);
+
+    template <typename T>
+    void compressFullData(AsyncExchangeContex &ctx, T *vec, unsigned int dof);
+
+    // NOTE: this just puts the decompressed data into the receive buffer, it
+    // must be sent back to scatter map
+    template <typename T>
+    void decompressSingleProcess(AsyncExchangeContex &ctx, unsigned int dof,
+                                 unsigned int recv_p);
+
+    template <typename T, typename U>
+    void decompressSingleProcessAllDOF(AsyncExchangeContex &ctx,
+                                       unsigned int dof, unsigned int recv_p);
+
+    template <typename T>
+    void setUpSendRecvRequests(AsyncExchangeContex &ctx, unsigned int dof,
+                               std::vector<MPI_Request> &send_requests,
+                               std::vector<MPI_Request> &recv_requests,
+                               std::vector<unsigned int> &send_requests_ctx,
+                               std::vector<unsigned int> &recv_requests_ctx,
+                               unsigned int ctx_idx);
+
+    template <typename T>
+    void setUpSingleSendRequest(AsyncExchangeContex &ctx, unsigned int dof,
+                                std::vector<MPI_Request> &send_requests,
+                                std::vector<unsigned int> &send_requests_ctx,
+                                unsigned int ctx_idx, unsigned int proc_id);
+
+    template <typename T>
+    void setUpSingleRecvRequest(AsyncExchangeContex &ctx, unsigned int dof,
+                                std::vector<MPI_Request> &recv_requests,
+                                std::vector<unsigned int> &recv_requests_ctx,
+                                unsigned int ctx_idx, unsigned int proc_id);
+
+    template <typename T>
+    void setUpSendRecvCompressionRequests(
+        AsyncExchangeContex &ctx, std::vector<MPI_Request> &send_requests,
+        std::vector<MPI_Request> &recv_requests,
+        std::vector<unsigned int> &send_requests_ctx,
+        std::vector<unsigned int> &recv_requests_ctx, unsigned int ctx_idx);
+
     /**
      * @brief : ghost read begin.
      *
@@ -2459,7 +2638,8 @@ class Mesh {
 
     /**
      * @brief write out function values to a vtk file.
-     * @param[in] vec: variable vector that needs to be written as a vtk file.
+     * @param[in] vec: variable vector that needs to be written as a vtk
+     * file.
      * @param[in] fprefix: prefix of the output vtk file name.
      * */
     template <typename T>
@@ -2517,10 +2697,10 @@ class Mesh {
      * @param[in] coarsenIDs: element IDs need to be coarsened. (computed by
      * isReMesh function)
      * @param[in] ld_tol: tolerance value used for flexible partitioning
-     * @param[in] sfK: spliiter fix parameter (need to specify larger value when
-     * run in super large scale)
-     * @param[in] getWeight: function pointer which returns a uint weight values
-     * for an given octant
+     * @param[in] sfK: spliiter fix parameter (need to specify larger value
+     * when run in super large scale)
+     * @param[in] getWeight: function pointer which returns a uint weight
+     * values for an given octant
      * */
     ot::Mesh *ReMesh(unsigned int grainSz = DENDRO_DEFAULT_GRAIN_SZ,
                      double ld_tol        = DENDRO_DEFAULT_LB_TOL,
@@ -2531,18 +2711,19 @@ class Mesh {
 
     /**
      * @brief: Computes the all to all v communication parameters interms of
-     * element counts. Let M1 be the current mesh, M2 be the new mesh (pMesh),
-     * then we compute M2' auxiliary mesh, where, M2' is partitioned w.r.t
-     * splitters, of the M1. Computed communication parameters, tells us how to
-     * perform data transfers from, M2' to M2. Also note that the allocated
-     * send/recv counts parameters should be in global counts.
+     * element counts. Let M1 be the current mesh, M2 be the new mesh
+     * (pMesh), then we compute M2' auxiliary mesh, where, M2' is
+     * partitioned w.r.t splitters, of the M1. Computed communication
+     * parameters, tells us how to perform data transfers from, M2' to M2.
+     * Also note that the allocated send/recv counts parameters should be in
+     * global counts.
      * @param pMesh : new mesh M2.
      */
     void interGridTransferSendRecvCompute(const ot::Mesh *pMesh);
 
     /**
-     * @brief transfer a variable vector form old grid to new grid. Assumes the
-     * ghost is synchronized in the old vector
+     * @brief transfer a variable vector form old grid to new grid. Assumes
+     * the ghost is synchronized in the old vector
      * @param[in] vec: variable vector needs to be transfered.
      * @param[out] vec: transfered varaible vector
      * @param[in] pMesh: Mesh that we need to transfer the old varaible.
@@ -2553,8 +2734,8 @@ class Mesh {
         INTERGRID_TRANSFER_MODE mode = INTERGRID_TRANSFER_MODE::INJECTION);
 
     /**
-     * @brief transfer a variable vector form old grid to new grid. Assumes the
-     * ghost is synchronized in the old vector
+     * @brief transfer a variable vector form old grid to new grid. Assumes
+     * the ghost is synchronized in the old vector
      * @param[in] vec: variable vector needs to be transfered.
      * @param[out] vec: transfered varaible vector
      * @param[in] pMesh: Mesh that we need to transfer the old varaible.
@@ -2629,8 +2810,8 @@ class Mesh {
         INTERGRID_TRANSFER_MODE mode = INTERGRID_TRANSFER_MODE::CELLVEC_CPY);
 
     /**
-     *@brief : Returns the nodal values of a given element for a given variable
-     *vector.
+     *@brief : Returns the nodal values of a given element for a given
+     *variable vector.
      *@param[in] vec: variable vector that we want to get the nodal values.
      *@param[in] elementID: element ID that we need to get the nodal values.
      *@param[in] isDGVec: true if the vec is elemental dg vec.
@@ -2653,15 +2834,19 @@ class Mesh {
 
     /**
      * @assumption: input is the elemental nodal values.
-     * @brief: Computes the contribution of elemental nodal values to the parent
-     * elements if it is hanging. Note: internal nodes for the elements cannnot
-     * be hagging. Only the face edge nodes are possible for hanging.
+     * @brief: Computes the contribution of elemental nodal values to the
+     * parent elements if it is hanging. Note: internal nodes for the
+     * elements cannnot be hagging. Only the face edge nodes are possible
+     * for hanging.
      *
      * @param[in] vec: child var vector (nPe)
-     * @param[in] elementID: element ID of the current element (or child octant)
-     * @param[out] out: add the contributions to the current vector accordingly.
+     * @param[in] elementID: element ID of the current element (or child
+     * octant)
+     * @param[out] out: add the contributions to the current vector
+     * accordingly.
      *
-     * Usage: This is needed when performing matrix-free matvec for FEM method.
+     * Usage: This is needed when performing matrix-free matvec for FEM
+     * method.
      *
      * */
     template <typename T>
@@ -2670,28 +2855,30 @@ class Mesh {
 
     /**@brief computes the elementCoordinates (based on the nodal placement)
      * @param[in] eleID : element ID
-     * @param[in/out] coords: computed coords (note: assumes memory is allocated
-     * allocated) coords are stored by p0,p1,p2... each pi \in R^dim where pi
-     * are ordered in along x axis y axis and z coors size m_uiDim*m_uiNpE
+     * @param[in/out] coords: computed coords (note: assumes memory is
+     * allocated allocated) coords are stored by p0,p1,p2... each pi \in
+     * R^dim where pi are ordered in along x axis y axis and z coors size
+     * m_uiDim*m_uiNpE
      * */
 
     void getElementCoordinates(unsigned int eleID, double *coords) const;
 
     /**
-     * @brief computes the face neighbor points for additional computations for
-     * a specified direction.
+     * @brief computes the face neighbor points for additional computations
+     * for a specified direction.
      * @param [in] eleID: element ID
      * @param [in] in: inpute vector
-     * @param [out] out: output vector values are in the order of the x,y,z size
-     * : 4*NodesPerElement
+     * @param [out] out: output vector values are in the order of the x,y,z
+     * size : 4*NodesPerElement
      * @param [out] coords: get the corresponding coordinates size:
      * 4*NodesPerElement*m_uiDim;
      * @param [out] neighID: face neighbor octant IDs,
      * @param [in] face: face direction in
      * {OCT_DIR_LEFT,OCT_IDR_RIGHT,OCT_DIR_DOWN,
      * OCT_DIR_UP,OCT_DIR_BACK,OCT_DIR_FRONT}
-     * @param [out] level: the level of the neighbour octant with respect to the
-     * current octant. returns  the number of face neighbours 1/4 for 3D.
+     * @param [out] level: the level of the neighbour octant with respect to
+     * the current octant. returns  the number of face neighbours 1/4 for
+     * 3D.
      * */
     template <typename T>
     int getFaceNeighborValues(unsigned int eleID, const T *in, T *out,
@@ -2743,14 +2930,14 @@ class Mesh {
     std::vector<unsigned int> getAllRefinementFlags();
 
     /**
-     * @brief Set the Mesh Refinement flags, for the local portion of the mesh.
-     Note that coarsening happens if all the children are
-     * have the same parent and all the children should be in the same processor
-     as local elements.
-     * In this method, mesh class ignore the wavelet refinement, and trust the
-     user, and select the user specified refinement flags.
-     * To perform Intergrid-transfers and other operations it is important to
-     decide, refine and coarsening based on some proper,
+     * @brief Set the Mesh Refinement flags, for the local portion of the
+     mesh. Note that coarsening happens if all the children are
+     * have the same parent and all the children should be in the same
+     processor as local elements.
+     * In this method, mesh class ignore the wavelet refinement, and trust
+     the user, and select the user specified refinement flags.
+     * To perform Intergrid-transfers and other operations it is important
+     to decide, refine and coarsening based on some proper,
      * basis error capture crieteria, (look at the RefEl Class, to see how
      Dendro uses the basis representation)
 
@@ -2770,8 +2957,8 @@ class Mesh {
     void octCoordToDomainCoord(const Point &oct_pt, Point &domain_pt) const;
 
     /**
-     * @brief Perform linear coord. transformation from domain points to octree
-     * coords.
+     * @brief Perform linear coord. transformation from domain points to
+     * octree coords.
      * @param domain_pt : domain point.
      * @param oct_pt : octree point.
      */
@@ -2787,8 +2974,8 @@ class Mesh {
                                   int *ownerranks) const;
 
     /**
-     * @brief computes the element ids of padding elements in all directions for
-     * a given block id.
+     * @brief computes the element ids of padding elements in all directions
+     * for a given block id.
      *
      * @param blk block local id
      * @param eid : vector of element ids.
@@ -2907,8 +3094,8 @@ inline bool Mesh::computeOveralppingNodes(const ot::TreeNode &parent,
                                           int *idy, int *idz) {
     unsigned int Lp = 1u << (m_uiMaxDepth - parent.getLevel());
     unsigned int Lc = 1u << (m_uiMaxDepth - child.getLevel());
-    // intilize the mapping to -1. -1 denotes that mapping is not defined for
-    // given k value.
+    // intilize the mapping to -1. -1 denotes that mapping is not defined
+    // for given k value.
 
     unsigned int dp, dc;
     dp = (m_uiElementOrder);
@@ -2936,8 +3123,8 @@ inline bool Mesh::computeOveralppingNodes(const ot::TreeNode &parent,
     } else if (parent.isAncestor(child)) {
         /*if((((child.getX()-parent.getX())*m_uiElementOrder)%Lp) ||
            (((child.getY()-parent.getY())*m_uiElementOrder)%Lp) ||
-           (((child.getZ()-parent.getZ())*m_uiElementOrder)%Lp)) return false;
-            else*/
+           (((child.getZ()-parent.getZ())*m_uiElementOrder)%Lp)) return
+           false; else*/
         {
             unsigned int index[3];
             for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++) {

@@ -126,6 +126,21 @@ inline int Mpi_Alltoall(T *sendbuf, T *recvbuf, int count, MPI_Comm comm) {
 }
 
 template <typename T>
+inline int Mpi_IAlltoall(T *sendbuf, T *recvbuf, int count, MPI_Comm comm,
+                         MPI_Request *request) {
+#ifdef __PROFILE_WITH_BARRIER__
+    MPI_Barrier(comm);
+#endif
+    PROF_PAR_IALL2ALL_BEGIN
+
+    error_code =
+        MPI_Ialltoall(sendbuf, count, par::Mpi_datatype<T>::value(), recvbuf,
+                      count, par::Mpi_datatype<T>::value(), comm, request);
+
+    PROF_PAR_IALL2ALL_END
+}
+
+template <typename T>
 inline int Mpi_Alltoallv(T *sendbuf, int *sendcnts, int *sdispls, T *recvbuf,
                          int *recvcnts, int *rdispls, MPI_Comm comm) {
 #ifdef __PROFILE_WITH_BARRIER__

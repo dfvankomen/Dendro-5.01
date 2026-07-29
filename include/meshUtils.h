@@ -141,6 +141,17 @@ int slice_mesh(const ot::Mesh* pMesh, unsigned int s_val[3],
 Mesh* createSplitMesh(unsigned int eleOrder, unsigned int lmin,
                       unsigned int lmax, MPI_Comm comm);
 
+/**
+ * @brief Allocates the MPI Ctx objects, used for keeping track of send/recv
+ * data
+ *
+ * @param pMesh pointer to the mesh object
+ * @param ctx_list The list of AsyncExchangeContex objects
+ * @param dof The number of degrees of freedom (variables)
+ * @param async_k The number of asynchrounous k values, used for batching
+ * @param
+ * @tparam T the expected data type
+ */
 template <typename T>
 double computeElementIntegral(T* elementalVec, const ot::TreeNode& node,
                               const RefElement* refEl, T& elementIntegral,
@@ -259,7 +270,11 @@ T calculateL2FullMeshIntegration(ot::Mesh* mesh, T* in) {
 template <typename T>
 void alloc_mpi_ctx(const Mesh* pMesh,
                    std::vector<AsyncExchangeContex>& ctx_list, int dof,
-                   int async_k) {
+                   int async_k,
+                   CTXSendType sendType = SendTypeHelper<T>::value) {
+    // Resize BEFORE the early-out: Ctx::unzip indexes m_mpi_ctx[i] for every
+    // async_k batch unconditionally, so a serial or inactive rank still needs a
+    // correctly-sized (empty-buffer) list or it reads past the end.
     ctx_list.resize(async_k);
 
     if (pMesh->getMPICommSizeGlobal() == 1 || !pMesh->isActive()) return;
@@ -304,22 +319,71 @@ void alloc_mpi_ctx(const Mesh* pMesh,
         const unsigned int sendBSz = std::max(sendBSzCg, sendBSzDg);
         const unsigned int recvBSz = std::max(recvBSzCg, recvBSzDg);
 
-        ctx_list.resize(async_k);
+        const size_t dtypeSize     = getCTXSendTypeSize(sendType);
+
+        // (already resized above, before the serial/inactive early-out)
         for (unsigned int i = 0; i < async_k; i++) {
             const unsigned int v_begin  = ((i * dof) / async_k);
             const unsigned int v_end    = (((i + 1) * dof) / async_k);
             const unsigned int batch_sz = (v_end - v_begin);
 
-            if (sendBSz)
-                ctx_list[i].allocateSendBuffer(batch_sz * sendBSz * sizeof(T));
+            // make sure we set the comm dtype, because this will determine what
+            // kind of input data is used, and will be read elsewhere when doing
+            // communications
+            ctx_list[i].setCommDtype(sendType);
 
-            if (recvBSz)
-                ctx_list[i].allocateRecvBuffer(batch_sz * recvBSz * sizeof(T));
+            if (sendBSz) {
+                ctx_list[i].allocateSendBuffer(batch_sz * sendBSz * dtypeSize);
+
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+                // TODO: this should really only be done with ZFP, which can go
+                // "big"
+                unsigned int num_blocks = 0;
+                for (auto& blks : pMesh->getSendNodeSMConfigDimCounts()) {
+                    for (auto& b : blks) {
+                        num_blocks += b;
+                    }
+                }
+                ctx_list[i].allocateCompressSendBuffers(activeNpes);
+                ctx_list[i].allocateCompressSendBuffer(
+                    batch_sz * sendBSz * dtypeSize +
+                    sizeof(size_t) * num_blocks);
+#endif
+            }
+
+            if (recvBSz) {
+                ctx_list[i].allocateRecvBuffer(batch_sz * recvBSz * dtypeSize);
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+                // simple preallocation, both will be reallocated when needed
+                unsigned int num_blocks = 0;
+                for (auto& blks : pMesh->getRecvNodeSMConfigDimCounts()) {
+                    for (auto& b : blks) {
+                        num_blocks += b;
+                    }
+                }
+                ctx_list[i].allocateCompressRecvBuffer(
+                    batch_sz * recvBSz * dtypeSize +
+                    sizeof(size_t) * num_blocks);
+
+#endif
+            }
 
             ctx_list[i].m_send_req.resize(pMesh->getMPICommSize(),
                                           MPI_Request());
             ctx_list[i].m_recv_req.resize(pMesh->getMPICommSize(),
                                           MPI_Request());
+
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+            ctx_list[i].getSendCompressCounts().resize(pMesh->getMPICommSize(),
+                                                       0);
+            ctx_list[i].getReceiveCompressCounts().resize(
+                pMesh->getMPICommSize(), 0);
+
+            ctx_list[i].getSendCompressOffsets().resize(pMesh->getMPICommSize(),
+                                                        0);
+            ctx_list[i].getReceiveCompressOffsets().resize(
+                pMesh->getMPICommSize(), 0);
+#endif
         }
     }
 
@@ -330,6 +394,11 @@ template <typename T>
 void dealloc_mpi_ctx(const Mesh* pMesh,
                      std::vector<AsyncExchangeContex>& ctx_list, int dof,
                      int async_k) {
+    // TODO: there's a small memory bug here on deallocation/destruction of ctx
+    // objects where this is called after the mesh has actually been properly
+    // deleted. This should probably be called before the mesh is deleted.
+    // Perhaps the mesh deletion should exist inside the destrutor of the ctx
+    // objects.
     if (pMesh->getMPICommSizeGlobal() == 1 || !pMesh->isActive()) return;
 
     const std::vector<unsigned int>& nodeSendCount =
@@ -360,12 +429,31 @@ void dealloc_mpi_ctx(const Mesh* pMesh,
         const unsigned int v_end    = (((i + 1) * dof) / async_k);
         const unsigned int batch_sz = (v_end - v_begin);
 
-        if (sendBSz) ctx_list[i].deAllocateSendBuffer();
+        if (sendBSz) {
+            ctx_list[i].deAllocateSendBuffer();
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+            ctx_list[i].clearCompressSendBuffers();
+            ctx_list[i].deallocateCompressSendBuffer();
+#endif
+        }
 
-        if (recvBSz) ctx_list[i].deAllocateRecvBuffer();
+        if (recvBSz) {
+            ctx_list[i].deAllocateRecvBuffer();
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+            ctx_list[i].deallocateCompressRecvBuffer();
+#endif
+        }
 
         ctx_list[i].m_send_req.clear();
         ctx_list[i].m_recv_req.clear();
+
+#ifdef DENDRO_ENABLE_GHOST_COMPRESSION
+        ctx_list[i].getSendCompressCounts().clear();
+        ctx_list[i].getReceiveCompressCounts().clear();
+
+        ctx_list[i].getSendCompressOffsets().clear();
+        ctx_list[i].getReceiveCompressOffsets().clear();
+#endif
     }
 
     ctx_list.clear();

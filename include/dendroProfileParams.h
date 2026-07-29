@@ -49,6 +49,19 @@ extern profiler_t t_ghost_pack;
 extern profiler_t t_ghost_wait;
 extern profiler_t t_ghost_unpack;
 
+// Compressed-exchange timers. Declared unconditionally (a profiler_t costs
+// nothing unused) so ctx.h can reference them without a second gate, but they
+// are only ever started/stopped on the compressed path.
+// NOTE: these do NOT sum to the exchange time -- t_compression_compress also
+// brackets the omp_par::scan calls, so it double-counts.
+extern profiler_t t_compression_extraction;
+extern profiler_t t_compression_compress;
+extern profiler_t t_compression_begin_comms;
+extern profiler_t t_compression_wait_comms;
+extern profiler_t t_compression_decompress;
+extern profiler_t t_compression_unextract;
+extern profiler_t t_compression_uzip_post;
+
 }  // end of namespace timer.
 
 }  // end namespace dendro

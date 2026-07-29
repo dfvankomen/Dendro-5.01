@@ -138,16 +138,22 @@ void SFC_treeSearch(TKey* pKeys, TOctant* pNodes, DendroIntL nKeyBegin,
                     DendroIntL nKeyEnd, DendroIntL nNodeBegin,
                     DendroIntL nNodeEnd, unsigned int pMaxDepthBit,
                     unsigned int pMaxDepth, unsigned int rot_id) {
+    // calculate the current level of SFC tree
     unsigned int lev = pMaxDepth - pMaxDepthBit;
+
+    // if there are no keys at all, then we can just return
     if (nKeyEnd == nKeyBegin) return;
+
     // std::cout<<"call: "<<pMaxDepthBit<<": NBegin: "<<nNodeBegin<<" NEnd:
     // "<<nNodeEnd<<" KBegin: "<<nKeyBegin<<" KEnd: "<<nKeyEnd<<" NodeLev:
     // "<<pNodes[nNodeBegin].getLevel()<<" lev: "<<lev<< std::endl;
 
     // if( pMaxDepthBit && ((nNodeEnd-nNodeBegin)>=1) &&
     // (pNodes[nNodeBegin].getLevel()>lev))
+    // if the current node is not a leaf node and has multiple children...
     if (pMaxDepthBit && ((nNodeEnd - nNodeBegin) > 1) &&
         (pNodes[nNodeBegin].getLevel() > lev)) {
+        // split the keys and nodes based on their SFC values
         unsigned int hindex  = 0;
         unsigned int hindexN = 0;
         unsigned int index   = 0;
@@ -159,17 +165,23 @@ void SFC_treeSearch(TKey* pKeys, TOctant* pNodes, DendroIntL nKeyBegin,
         SFC::seqSort::SFC_bucketing(pNodes, lev, pMaxDepth, rot_id, nNodeBegin,
                                     nNodeEnd, splitterNodes);
 
+        // recursively search the children nodes
         for (int i = 0; i < NUM_CHILDREN; i++) {
+            // child indices are based on the rotation value
             hindex = (rotations[2 * NUM_CHILDREN * rot_id + i] - '0');
             if (i == (NUM_CHILDREN - 1))
                 hindexN = i + 1;
             else
                 hindexN = (rotations[2 * NUM_CHILDREN * rot_id + i + 1] - '0');
 
+            // the indices must be in the correct order!
             assert(splitterKeys[hindex] <= splitterKeys[hindexN]);
             assert(splitterNodes[hindex] <= splitterNodes[hindexN]);
 
             index = HILBERT_TABLE[NUM_CHILDREN * rot_id + hindex];
+
+            // begin the recursive search if the children nodes have different
+            // ranges
             if (splitterNodes[hindex] != splitterNodes[hindexN])
                 SFC_treeSearch(pKeys, pNodes, splitterKeys[hindex],
                                splitterKeys[hindexN], splitterNodes[hindex],
@@ -178,6 +190,7 @@ void SFC_treeSearch(TKey* pKeys, TOctant* pNodes, DendroIntL nKeyBegin,
         }
 
     } else {
+        // if the current node is a leaf node or has only one child...
         if (((nNodeEnd - nNodeBegin) == 1)) {
             // assert(pNodes[nNodeBegin].getLevel()>=lev); this assertion is not
             // always needs to be true. 08-29-2019 Milinda.
@@ -185,6 +198,9 @@ void SFC_treeSearch(TKey* pKeys, TOctant* pNodes, DendroIntL nKeyBegin,
                 // assert(((pNodes[nNodeBegin].isAncestor(pKeys[k]))||(pNodes[nNodeBegin]==pKeys[k])));
                 // // Note: Since we are sarching for the ghost elements we
                 // might not find a given key. Hence this should be disabled
+
+                // check if the key is an ancestor or equal to the node so that
+                // it can be marked as found and added to the search results
                 if ((pNodes[nNodeBegin].isAncestor(pKeys[k])) ||
                     (pNodes[nNodeBegin] == pKeys[k])) {
                     pKeys[k].setFlag((pKeys[k].getFlag() | OCT_FOUND));
@@ -214,6 +230,9 @@ void SFC_treeSearch(TKey* pKeys, TOctant* pNodes, DendroIntL nKeyBegin,
                 // assert(((pNodes[nNodeBegin].isAncestor(pKeys[k]))||(pNodes[nNodeBegin]==pKeys[k])));
                 // // Note: Since we are sarching for the ghost elements we
                 // might not find a given key. Hence this should be disabled
+
+                // if an ancestor node was found, mark the key as found and
+                // store the node index
                 if (nCnt < nNodeEnd) {
                     pKeys[k].setFlag((pKeys[k].getFlag() | OCT_FOUND));
                     // assert(pKeys[k].getFlag() & OCT_FOUND);  // Note: Since

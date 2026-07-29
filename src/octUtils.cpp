@@ -16,6 +16,7 @@ implementations are based on the previous implementation of dendro version 4.0
 
 #include "octUtils.h"
 
+#include "TreeNode.h"
 #include "logger.h"
 
 // This will add boundary nodes and will also embed the octree one level higher
@@ -558,6 +559,8 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
                     }
 
             for (unsigned int cnum = 0; cnum < NUM_CHILDREN; cnum++) {
+                if (elem.getLevel() == m_uiMaxDepth) continue;
+
                 pt_child =
                     Point((pt.x() + (((int)((bool)(cnum & 1u)))
                                      << (m_uiMaxDepth - elem.getLevel() - 1))),
@@ -719,7 +722,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
 
         numRegGridOcts     = 0;
         numIdealRegGridOct = (1u << (currRegGridLev - parent.getLevel()));
-        blockVolume        = 1u << ((maxDepth - parent.getLevel()) * 3);
+        blockVolume        = 1uLL << ((maxDepth - parent.getLevel()) * 3);
         (m_uiDim == 3)
             ? numIdealRegGridOct =
                   numIdealRegGridOct* numIdealRegGridOct* numIdealRegGridOct
@@ -740,7 +743,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                 if (tag[nBegin - localBegin] != tag[elem - localBegin])
                     isTagValid = false;
 
-                octVolume += 1u << (3 * (maxDepth - pNodes[elem].getLevel()));
+                octVolume += 1uLL << (3 * (maxDepth - pNodes[elem].getLevel()));
             }
 
         } else {
@@ -753,7 +756,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                     break;
                 }
 
-                octVolume += 1u << (3 * (maxDepth - pNodes[elem].getLevel()));
+                octVolume += 1uLL << (3 * (maxDepth - pNodes[elem].getLevel()));
             }
         }
 

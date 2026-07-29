@@ -28,6 +28,13 @@ profiler_t t_unzip_async_comm;
 profiler_t t_ghost_pack;
 profiler_t t_ghost_wait;
 profiler_t t_ghost_unpack;
+profiler_t t_compression_extraction;
+profiler_t t_compression_compress;
+profiler_t t_compression_begin_comms;
+profiler_t t_compression_wait_comms;
+profiler_t t_compression_decompress;
+profiler_t t_compression_unextract;
+profiler_t t_compression_uzip_post;
 
 }  // end of namespace timer
 

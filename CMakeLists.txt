@@ -1,4 +1,4 @@
-# ##############################################################################
+# -------------------
 # CMAKE CONFIGURATION FILE FOR DENDRO DIRECTORY
 #
 # This file in particular contains all of the options that apply specificially
@@ -140,6 +140,21 @@ option(DENDRO_HYBRID_OMP
        "Enable the hybrid OpenMP/MPI path (OpenMP threading on top of MPI; default OFF = MPI-first)"
        OFF)
 
+# Lossy/lossless compression of the MPI ghost payload. Default OFF: with it off
+# the exchange must be bit-for-bit the uncompressed path, so it is opt-in like
+# every other experimental flag here. Pulls in zfp when enabled.
+option(DENDRO_ENABLE_GHOST_COMPRESSION
+       "Compress the ghost-zone payload before the MPI exchange (opt-in; needs zfp)"
+       OFF)
+
+# Per-exchange reconstruction-error telemetry. This decompresses into scratch,
+# computes five error metrics and appends a CSV row PER PEER PER EXCHANGE -- it
+# is a correctness/diagnostic tool and it dominates any timing you take with it
+# on. Keep OFF for anything you intend to measure.
+option(DENDRO_COMPRESSION_QUALITY
+       "Emit per-exchange compression error metrics to CSV (diagnostic; ruins timings)"
+       OFF)
+
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
 set(OCT2BLK_COARSEST_LEV 0 CACHE STRING "Coarsest Level")
@@ -221,6 +236,37 @@ if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/GR")
 endif()
 
 # ==========================
+# ZFP (ghost compression)
+# ==========================
+# Only fetched when compression is enabled -- an OFF build must not need it.
+# NOTE: blosc and the ONNX/TorchScript backends are deliberately NOT wired up.
+# blosc is unreachable from the compressor factory (and its recorded verdict is
+# that 1-D/2-D scatter-map blocks are too small for it to pay for its header);
+# the learned backends were left on the ghost_compression branch along with
+# their onnxruntime/libtorch dependencies.
+if(DENDRO_ENABLE_GHOST_COMPRESSION)
+  message(STATUS "=== Now configuring zfp library")
+  include(FetchContent)
+  FetchContent_Declare(
+    zfp
+    GIT_REPOSITORY "https://github.com/LLNL/zfp"
+    GIT_TAG "1.0.1"
+    CMAKE_ARGS -DCMAKE_BUILD_TYPE=Release
+  )
+  # zfp declares BUILD_SHARED_LIBS as its own option (default ON). Because
+  # FetchContent adds it via add_subdirectory, that option lands in THIS
+  # project's cache and silently flips dendro5 from static to shared -- which
+  # then fails to link against the non-PIC spdlog static lib. Pin it across the
+  # fetch and restore whatever the caller asked for afterwards.
+  set(_dendro_saved_bsl "${BUILD_SHARED_LIBS}")
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libraries" FORCE)
+  FetchContent_MakeAvailable(zfp)
+  set(BUILD_SHARED_LIBS "${_dendro_saved_bsl}" CACHE BOOL "Build shared libraries" FORCE)
+  unset(_dendro_saved_bsl)
+  message(STATUS "=== Finished configuring zfp library")
+endif()
+
+# ==========================
 # SOURCE FILES
 # ==========================
 message(STATUS "Configuring Dendro Library...")
@@ -252,6 +298,14 @@ set(DENDRO_SRC
     src/derivatives/filt_kodiss_explicit.cpp
     src/derivatives/nova_derivs.cpp
 )
+
+# Compression sources only compile when the feature is on -- compression.cpp
+# includes zfp, which is only fetched under the same option.
+if(DENDRO_ENABLE_GHOST_COMPRESSION)
+  list(APPEND DENDRO_SRC
+       src/compression.cpp
+       src/compression/compression_factory.cpp)
+endif()
 
 # NOTE: generated derivative scheme files (src/derivatives/generated/*.cpp) are
 # NOT standalone compilation units -- they're #include'd into impl_*.cpp files.
@@ -332,6 +386,15 @@ if(DENDRO_UNZIP_BATCH AND DENDRO_UNZIP_OVERLAP)
           "unzip_scatter_batch takes no blk_filter, so it cannot split interior "
           "from boundary blocks. Enable one or the other.")
 endif()
+# The compressed exchange drains every request to completion before returning,
+# so there is no in-flight window for the overlap path to unzip interior blocks
+# in. (ctx.h carries the matching #error for anyone defining the macros by hand.)
+if(DENDRO_ENABLE_GHOST_COMPRESSION AND DENDRO_UNZIP_OVERLAP)
+  message(FATAL_ERROR
+          "DENDRO_ENABLE_GHOST_COMPRESSION and DENDRO_UNZIP_OVERLAP are mutually "
+          "exclusive: the compressed exchange completes before any unzip begins, "
+          "so there is nothing left to overlap. Enable one or the other.")
+endif()
 if(DENDRO_UNZIP_SPEEDUP OR DENDRO_UNZIP_OMP_EFFECTIVE)
   set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ON)
   set(DENDRO_TENSOR_SIMD_EFFECTIVE ON)
@@ -355,6 +418,8 @@ dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
 dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
 dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
 dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
+dendro_add_def(DENDRO_ENABLE_GHOST_COMPRESSION DENDRO_ENABLE_GHOST_COMPRESSION)
+dendro_add_def(DENDRO_COMPRESSION_QUALITY DENDRO_COMPRESSION_QUALITY)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})
@@ -398,6 +463,11 @@ target_include_directories(dendro_config INTERFACE
 )
 
 target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m)
+
+if(DENDRO_ENABLE_GHOST_COMPRESSION)
+  target_include_directories(dendro5 PUBLIC ${zfp_SOURCE_DIR})
+  target_link_libraries(dendro5 PUBLIC zfp)
+endif()
 
 if(WITH_BLAS_LAPACK)
   target_compile_definitions(dendro5 PUBLIC WITH_BLAS_LAPACK)
@@ -495,6 +565,12 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(benchUnzipGather test/src/benchUnzipGather.cpp)
   dendro_add_example(testStabilityEvolution test/src/testStabilityEvolution.cpp)
   dendro_add_example(testIsReMeshUnzip test/src/testIsReMeshUnzip.cpp)
+
+  # Codec benchmark: no MPI, no mesh, synthetic sine waves. It is a BENCHMARK,
+  # not a test -- it has no assertions and always returns 0.
+  if(DENDRO_ENABLE_GHOST_COMPRESSION)
+    dendro_add_example(compressDecompress test/src/compressDecompressTest.cpp)
+  endif()
 
   dendro_add_example(testLTSBlkVec ODE/examples/testLTSBlkVec.cpp)
   dendro_add_example(dgVecTest FEM/examples/src/dgVecTest.cpp)
