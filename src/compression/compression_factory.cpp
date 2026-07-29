@@ -14,6 +14,7 @@
 #include "compression/compressor_onnx.hpp"
 #include "compression/compressor_torchscript.hpp"
 #endif
+#include "compression/compressor_quantize.hpp"
 #include "compression/compressor_zfp.hpp"
 
 namespace dendrocompression {
@@ -199,6 +200,42 @@ void register_compressors() {
                 std::any_cast<unsigned int>(args[0]),
                 std::any_cast<unsigned int>(args[1]),
                 std::any_cast<unsigned int>(args[2]));
+        });
+
+    // Quantize Compressor Registration
+    // args: (ele_order, num_vars, bits) where bits is 8 or 16
+    auto make_quant = [](auto tag, const std::vector<std::any>& args) {
+        using S = decltype(tag);
+        if (args.size() != 3 || !args[0].has_value() || !args[1].has_value() ||
+            !args[2].has_value()) {
+            throw std::runtime_error(
+                "Invalid number of inputs for setting up Quantize Compressor "
+                "(expected ele_order, num_vars, bits)");
+        }
+        const unsigned int eo   = std::any_cast<unsigned int>(args[0]);
+        const unsigned int nv   = std::any_cast<unsigned int>(args[1]);
+        const unsigned int bits = std::any_cast<unsigned int>(args[2]);
+        std::unique_ptr<Compression<S>> out;
+        switch (bits) {
+            case 16: out = std::make_unique<Quantize16Compressor<S>>(eo, nv); break;
+            case 8:  out = std::make_unique<Quantize8Compressor<S>>(eo, nv);  break;
+            default:
+                throw std::runtime_error(
+                    "Quantize Compressor only supports bits = 8 or 16");
+        }
+        return out;
+    };
+
+    floatCompressor.register_compressor(
+        dendrocompression::CompressionType::COMP_QUANT,
+        [make_quant](const std::vector<std::any>& args) {
+            return make_quant(float{}, args);
+        });
+
+    doubleCompressor.register_compressor(
+        dendrocompression::CompressionType::COMP_QUANT,
+        [make_quant](const std::vector<std::any>& args) {
+            return make_quant(double{}, args);
         });
 
     // do all of the compression registering here...

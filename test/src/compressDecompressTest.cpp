@@ -10,7 +10,9 @@
 #include "compression.h"
 #include "compression/compression_base.hpp"
 #include "compression/compression_factory.hpp"
+#ifdef DENDRO_ENABLE_ML_LIBRARIES
 #include "compression/compressor_onnx.hpp"
+#endif
 #include "profiler.h"
 
 #define IDX(i, j, k) ((k) * y * z + (j) * y + (i))  // 3D to 1D indexing
@@ -396,31 +398,40 @@ int main() {
     std::size_t originalMatrixBytes = total_npts * sizeof(double);
     std::size_t originalSENDBytes   = total_npts * sizeof(COMPRESSOR_TYPE);
 
-    double zfp_param                = 10.;
-    std::string zfp_mode            = "precision";
+    // ZFP in the mode the solver would actually use: "accuracy" gives a real
+    // absolute error bound (the CompressionOptions default is 1e-6). This used
+    // to be hardcoded to "precision"/10, which has no error bound at all and is
+    // therefore not the configuration any result should be quoted from.
+    double zfp_param                = 1e-6;
+    std::string zfp_mode            = "accuracy";
 
+    unsigned int quant_bits_a        = 16u;
+    unsigned int quant_bits_b        = 8u;
+
+    // NOTE: params is index-aligned with comp_types below via test_idx++ --
+    // adding or removing one means doing the same in both.
     std::vector<std::vector<std::any>> params{
         // dummy params
         {eleorder, nvar},
-        // onnx model params
-        {eleorder, nvar, testcomp::compressor_path_onnx_3d,
-         testcomp::decompressor_path_onnx_3d, testcomp::compressor_path_onnx_2d,
-         testcomp::decompressor_path_onnx_2d, testcomp::compressor_path_onnx_1d,
-         testcomp::decompressor_path_onnx_1d, testcomp::compressor_path_onnx_0d,
-         testcomp::decompressor_path_onnx_0d,
-         dendrocompression::ExecutionProviderType::CUDA},
         // zfp params
         {eleorder, nvar, zfp_mode, zfp_param},
         // interp params
-        {eleorder, nvar, interp_stride}};
+        {eleorder, nvar, interp_stride},
+        // quantize params (16-bit, then 8-bit)
+        {eleorder, nvar, quant_bits_a},
+        {eleorder, nvar, quant_bits_b}};
 
     // NOTE: the torchscript implementation seems pretty slow
 
+    // COMP_ONNX_MODEL and COMP_TORCH_SCRIPT are not registered in this tree --
+    // the learned backends stayed on the ghost_compression branch. Requesting
+    // either throws from the factory.
     std::vector<dendrocompression::CompressionType> comp_types = {
         dendrocompression::CompressionType::COMP_DUMMY,
-        dendrocompression::CompressionType::COMP_ONNX_MODEL,
         dendrocompression::CompressionType::COMP_ZFP,
-        dendrocompression::CompressionType::COMP_INTERP};
+        dendrocompression::CompressionType::COMP_INTERP,
+        dendrocompression::CompressionType::COMP_QUANT,
+        dendrocompression::CompressionType::COMP_QUANT};
 
     unsigned int test_idx = 0;
     for (auto& comp_type : comp_types) {

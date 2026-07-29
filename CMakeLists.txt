@@ -155,6 +155,18 @@ option(DENDRO_COMPRESSION_QUALITY
        "Emit per-exchange compression error metrics to CSV (diagnostic; ruins timings)"
        OFF)
 
+# Thread the codec itself. Legal under FUNNELED: MPI stays on the master thread
+# and this is pure compute between MPI calls, so no MPI call moves off it.
+#
+# Bit-exactness: the quantize codec's groups are independent and (because its
+# output size is fixed) their output offsets are known in advance, so threads
+# write disjoint slices. There is no reduction and no ordering dependence, so
+# ON and OFF produce byte-identical output for any thread count. Codecs whose
+# output is variable-length (ZFP) are NOT threaded by this flag.
+option(DENDRO_COMPRESSION_OMP
+       "OpenMP-thread the compression codec over independent blocks (bit-exact)"
+       OFF)
+
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
 set(OCT2BLK_COARSEST_LEV 0 CACHE STRING "Coarsest Level")
@@ -420,6 +432,7 @@ dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
 dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
 dendro_add_def(DENDRO_ENABLE_GHOST_COMPRESSION DENDRO_ENABLE_GHOST_COMPRESSION)
 dendro_add_def(DENDRO_COMPRESSION_QUALITY DENDRO_COMPRESSION_QUALITY)
+dendro_add_def(DENDRO_COMPRESSION_OMP DENDRO_COMPRESSION_OMP)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})
@@ -571,6 +584,7 @@ if(BUILD_DENDRO_EXAMPLES)
   if(DENDRO_ENABLE_GHOST_COMPRESSION)
     dendro_add_example(compressDecompress test/src/compressDecompressTest.cpp)
   endif()
+
 
   dendro_add_example(testLTSBlkVec ODE/examples/testLTSBlkVec.cpp)
   dendro_add_example(dgVecTest FEM/examples/src/dgVecTest.cpp)

@@ -15,7 +15,10 @@ enum CompressionType {
     COMP_BLOSC,
     COMP_TORCH_SCRIPT,
     COMP_ONNX_MODEL,
-    COMP_INTERP
+    COMP_INTERP,
+    // fixed-point quantization against a per-(block,variable) absmax; the bit
+    // width is a factory argument (8 or 16)
+    COMP_QUANT
 };
 
 enum class ExecutionProviderType { CPU, CUDA, ROCM, OpenVINO, DirectML };
