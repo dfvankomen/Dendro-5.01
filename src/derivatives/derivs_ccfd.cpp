@@ -1,6 +1,8 @@
 #include "derivatives/derivs_ccfd.h"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdlib>
 #include <limits>
 #include <memory>
 #include <sstream>
@@ -84,6 +86,248 @@ std::vector<double> build_family(const std::vector<double>& interior,
     return createMatrix(bnd, bndLow, interior, n_fill, parity, 0, 0);
 }
 
+// ---------------------------------------------------------------------------
+// Canonicalization: undo the generator's septadiagonal padding.
+//
+// The collaborators' Mathematica header generator is written once, generically,
+// for a scheme that is septadiagonal (7-point) on both sides, and narrower
+// schemes are expressed by setting coefficients to zero. That works for the
+// INTERIOR vectors -- a zero coefficient contributes nothing -- but it does not
+// work for the closure rows, because the number of closure rows is structural,
+// not a coefficient. createMatrix treats rows [0, diag_boundary.size()) as
+// closure rows and starts the interior stencil only at row diag_boundary.size().
+//
+// So a pentadiagonal scheme emitted through the septadiagonal template carries
+// three closure rows per end, and its unused third row comes out as the
+// template's filler: a 1 on the pinned unknown's own node and zeros everywhere
+// else, in all three of that equation's matrices. That row does not say "use the
+// interior stencil here" -- it says
+//
+//     g_2 = 0        (eq1)          w_2 = 0        (eq2)
+//
+// i.e. it pins the derivative at node 2 (and, mirrored, at node n-3) to exactly
+// zero. Because D = A^-1 B is dense, that wrong constraint does not stay local:
+// rows 0..4 all reference g_2/w_2, so the contamination spreads across the whole
+// block and the operator loses convergence entirely.
+//
+// It is invisible to the rcond guard below, by construction -- a row of the
+// identity is perfectly well conditioned -- so it has to be caught structurally.
+// Detect the filler pattern exactly and drop those rows, which lets createMatrix
+// treat those nodes as interior, as the scheme intends.
+// ---------------------------------------------------------------------------
+
+// Largest offset from center carrying a nonzero coefficient, over ALL six
+// interior vectors jointly. It has to be joint: createMatrix derives ku
+// per-family from that family's own vector length, and two families of the same
+// equation placing their interior rows at different offsets would assemble a
+// row that mixes stencil widths.
+unsigned int effective_half_width(const CCFDDiagonalEntries* e) {
+    const std::vector<double>* const vecs[6] = {
+        &e->A1Interior, &e->B1Interior, &e->C1Interior,
+        &e->A2Interior, &e->B2Interior, &e->C2Interior};
+    unsigned int m = 0;
+    for (const auto* v : vecs) {
+        if (v->empty()) continue;
+        const int c = (static_cast<int>(v->size()) - 1) / 2;
+        for (int j = 0; j < static_cast<int>(v->size()); j++) {
+            if ((*v)[j] != 0.0) m = std::max(m, static_cast<unsigned int>(
+                                                    std::abs(j - c)));
+        }
+    }
+    return m;
+}
+
+// Is `row` of `eq` the template's filler -- the pinned unknown set to 1 on its
+// own node with every other coefficient in that equation identically zero?
+// eq1 pins g (A-family), eq2 pins w (B-family). Nothing a real scheme wants
+// looks like this: it is an equation with no data on its right-hand side.
+bool is_vacuous_pin(const CCFDDiagonalEntries* e, int eq, size_t row) {
+    const auto& A = (eq == 1) ? e->A1Boundary : e->A2Boundary;
+    const auto& B = (eq == 1) ? e->B1Boundary : e->B2Boundary;
+    const auto& C = (eq == 1) ? e->C1Boundary : e->C2Boundary;
+    if (row >= A.size() || row >= B.size() || row >= C.size()) return false;
+
+    const auto& pinned = (eq == 1) ? A[row] : B[row];
+    const auto& other  = (eq == 1) ? B[row] : A[row];
+
+    for (double v : C[row])
+        if (v != 0.0) return false;
+    for (double v : other)
+        if (v != 0.0) return false;
+    for (size_t j = 0; j < pinned.size(); j++) {
+        if (j == row) {
+            if (pinned[j] != 1.0) return false;
+        } else if (pinned[j] != 0.0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void trim_interior(std::vector<double>& v, unsigned int m, const char* name) {
+    const size_t want = 2u * m + 1u;
+    if (v.size() <= want) return;
+    const size_t c = (v.size() - 1) / 2;
+    for (size_t j = 0; j < v.size(); j++) {
+        const size_t off = (j > c) ? (j - c) : (c - j);
+        if (off > m && v[j] != 0.0) {
+            throw std::runtime_error(
+                std::string("CCFD: ") + name +
+                " has a nonzero coefficient outside the scheme's effective "
+                "half-width -- canonicalization would drop real data. This is "
+                "a bug in the coefficient header, not in the trim.");
+        }
+    }
+    v = std::vector<double>(v.begin() + (c - m), v.begin() + (c + m + 1));
+}
+
+void trim_boundary(std::vector<std::vector<double>>& b, size_t keep) {
+    if (b.size() > keep) b.resize(keep);
+}
+
+// Returns a copy with the padding removed. A scheme emitted at its true width
+// (CCFD6, say) is returned unchanged, so this is a no-op for anything that was
+// already correct.
+CCFDDiagonalEntries canonicalize(const CCFDDiagonalEntries* in) {
+    CCFDDiagonalEntries e = *in;
+    const unsigned int m  = effective_half_width(&e);
+
+    // eq1 and eq2 are separate rows of the coupled matrix (2i and 2i+1), so
+    // they may legitimately need different closure-row counts; trim each
+    // independently. Never trim below m, or the first interior row would reach
+    // outside the matrix (createMatrix now also guards this).
+    for (int eq = 1; eq <= 2; eq++) {
+        auto& A     = (eq == 1) ? e.A1Boundary : e.A2Boundary;
+        auto& B     = (eq == 1) ? e.B1Boundary : e.B2Boundary;
+        auto& C     = (eq == 1) ? e.C1Boundary : e.C2Boundary;
+        auto& AL    = (eq == 1) ? e.A1BoundaryLower : e.A2BoundaryLower;
+        auto& BL    = (eq == 1) ? e.B1BoundaryLower : e.B2BoundaryLower;
+        auto& CL    = (eq == 1) ? e.C1BoundaryLower : e.C2BoundaryLower;
+
+        size_t keep = A.size();
+        while (keep > 0 && is_vacuous_pin(in, eq, keep - 1)) keep--;
+        keep = std::max<size_t>(keep, m);
+        // only contiguous trailing filler is removed; a vacuous row wedged
+        // between two real closures means the header is malformed, and the
+        // consistency check below will say so.
+        trim_boundary(A, keep);
+        trim_boundary(B, keep);
+        trim_boundary(C, keep);
+        trim_boundary(AL, keep);
+        trim_boundary(BL, keep);
+        trim_boundary(CL, keep);
+    }
+
+    trim_interior(e.A1Interior, m, "A1Interior");
+    trim_interior(e.B1Interior, m, "B1Interior");
+    trim_interior(e.C1Interior, m, "C1Interior");
+    trim_interior(e.A2Interior, m, "A2Interior");
+    trim_interior(e.B2Interior, m, "B2Interior");
+    trim_interior(e.C2Interior, m, "C2Interior");
+    return e;
+}
+
+// ---------------------------------------------------------------------------
+// Build-time Taylor consistency check.
+//
+// Every row of the coupled system -- interior or closure -- is a linear relation
+//
+//     sum_j A_j g_j + sum_j B_j w_j - sum_j C_j f_j = 0
+//
+// which, at unit spacing with g = f' and w = f'', must annihilate f = x^p for
+// p = 0,1,2,... up to the row's design order. Failing at p <= 2 is not a
+// low-order closure, it is an INCONSISTENT one: the row cannot reproduce a
+// linear (eq1) or quadratic (eq2) function, so the operator does not converge at
+// any resolution. That is a property of the coefficients alone, so it is cheap
+// to check here and impossible to check later -- by the time it reaches
+// convergence testing it looks like a mysterious accuracy loss.
+//
+// The tolerance is relative to the row's coefficient magnitude and sits well
+// above double roundoff (a correct row lands at ~1e-15), so this fires on real
+// coefficient error, not on formatting.
+constexpr double kConsistencyTol = 1.0e-10;
+
+// residual of one row on f = x^p, evaluated about node 0 with x_j = j
+double row_residual(const std::vector<double>& A, const std::vector<double>& B,
+                    const std::vector<double>& C, int p) {
+    auto pw_ = [](double base, int ex) -> double {
+        if (ex < 0) return 0.0;
+        double r = 1.0;
+        for (int k = 0; k < ex; k++) r *= base;
+        return r;
+    };
+    double acc = 0.0;
+    for (size_t j = 0; j < A.size(); j++)
+        acc += A[j] * (p >= 1 ? p * pw_(static_cast<double>(j), p - 1) : 0.0);
+    for (size_t j = 0; j < B.size(); j++)
+        acc += B[j] *
+               (p >= 2 ? p * (p - 1) * pw_(static_cast<double>(j), p - 2) : 0.0);
+    for (size_t j = 0; j < C.size(); j++)
+        acc -= C[j] * pw_(static_cast<double>(j), p);
+    return acc;
+}
+
+double row_scale(const std::vector<double>& A, const std::vector<double>& B,
+                 const std::vector<double>& C) {
+    double s = 0.0;
+    for (double v : A) s += std::abs(v);
+    for (double v : B) s += std::abs(v);
+    for (double v : C) s += std::abs(v);
+    return (s > 0.0) ? s : 1.0;
+}
+
+void check_row_consistency(const std::vector<double>& A,
+                           const std::vector<double>& B,
+                           const std::vector<double>& C, int eq,
+                           const std::string& what) {
+    const double scale = row_scale(A, B, C);
+    const int pmin     = (eq == 1) ? 1 : 2;  // f' must get x^1, f'' must get x^2
+    for (int p = 0; p <= pmin; p++) {
+        const double r = std::abs(row_residual(A, B, C, p)) / scale;
+        if (r > kConsistencyTol) {
+            std::ostringstream oss;
+            oss << "CCFD: " << what << " is INCONSISTENT -- it does not "
+                << "annihilate f = x^" << p << " (relative residual " << r
+                << ", tolerance " << kConsistencyTol << "). An equation that "
+                << "cannot reproduce a "
+                << (eq == 1 ? "linear" : "quadratic")
+                << " function has order 0 and the operator will not converge "
+                << "at any resolution. Because D = A^-1 B is dense, one bad "
+                << "closure row degrades every point in the block, not just "
+                << "the boundary. Re-derive this row's coefficients.";
+            throw std::runtime_error(oss.str());
+        }
+    }
+}
+
+// centered interior vectors, re-indexed to the 0..2m absolute positions the
+// residual helper expects (the shift is exact: a relation that annihilates x^p
+// about one origin annihilates it about any other).
+void check_entries_consistency(const CCFDDiagonalEntries& e) {
+    check_row_consistency(e.A1Interior, e.B1Interior, e.C1Interior, 1,
+                          "interior row of equation 1 (f')");
+    check_row_consistency(e.A2Interior, e.B2Interior, e.C2Interior, 2,
+                          "interior row of equation 2 (f'')");
+    for (size_t r = 0; r < e.A1Boundary.size(); r++)
+        check_row_consistency(e.A1Boundary[r], e.B1Boundary[r], e.C1Boundary[r],
+                              1, "closure row " + std::to_string(r) +
+                                     " of equation 1 (f')");
+    for (size_t r = 0; r < e.A2Boundary.size(); r++)
+        check_row_consistency(e.A2Boundary[r], e.B2Boundary[r], e.C2Boundary[r],
+                              2, "closure row " + std::to_string(r) +
+                                     " of equation 2 (f'')");
+    for (size_t r = 0; r < e.A1BoundaryLower.size(); r++)
+        check_row_consistency(e.A1BoundaryLower[r], e.B1BoundaryLower[r],
+                              e.C1BoundaryLower[r], 1,
+                              "lower closure row " + std::to_string(r) +
+                                  " of equation 1 (f')");
+    for (size_t r = 0; r < e.A2BoundaryLower.size(); r++)
+        check_row_consistency(e.A2BoundaryLower[r], e.B2BoundaryLower[r],
+                              e.C2BoundaryLower[r], 2,
+                              "lower closure row " + std::to_string(r) +
+                                  " of equation 2 (f'')");
+}
+
 }  // namespace
 
 template <unsigned int DerivOrder>
@@ -100,6 +344,17 @@ std::unique_ptr<DerivMatrixStorage> createCCFDMatrixSystemForSingleSize(
     constexpr unsigned int row_off = (DerivOrder == 1) ? 0u : 1u;
 
     const size_t nsq               = static_cast<size_t>(n) * n;
+
+    // Strip the generator's septadiagonal padding before anything looks at the
+    // coefficients: drop the filler closure rows a narrower scheme leaves
+    // behind (which would otherwise pin g/w to zero at those nodes) and narrow
+    // the interior vectors to match. A scheme emitted at its true width comes
+    // back unchanged. Then verify every row is at least CONSISTENT -- the rcond
+    // guard further down cannot see either failure, since both leave a
+    // perfectly well-conditioned system.
+    const CCFDDiagonalEntries canonical = canonicalize(ccfdEntries);
+    check_entries_consistency(canonical);
+    ccfdEntries                    = &canonical;
 
     auto derivMatrixPtr            = std::make_unique<DerivMatrixStorage>();
     derivMatrixPtr->D_original     = std::vector<double>(nsq, 0.0);

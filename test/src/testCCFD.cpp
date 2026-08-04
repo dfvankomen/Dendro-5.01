@@ -87,11 +87,20 @@ static std::unique_ptr<Derivs> make_ccfd6(unsigned int order) {
 // exactly, so the plumbing is checked without registering a whole new scheme.
 // A real tunable scheme's generated header would reference D_coeffs[k] across
 // its coefficient section instead of this one perturbation.
+//
+// The knob is CONSISTENCY-PRESERVING: eq1 must annihilate f = x^1, i.e.
+// sum(A1) == sum_k C1_k * offset_k, so adding d to both A1 off-diagonals (+2d
+// on the left) is matched by adding d to both C1 off-diagonals (+2d on the
+// right). It lowers the formal order, which is all this test needs, without
+// producing an operator that fails to differentiate a straight line -- the
+// builder now rejects those, and rightly so.
 static CCFDDiagonalEntries *ccfd6_param(const std::vector<double> &c) {
     CCFDDiagonalEntries *e = createCCFD6Diagonals();
     const double d         = c.empty() ? 0.0 : c[0];
     e->A1Interior.front() += d;  // symmetric off-diagonals, so parity holds
     e->A1Interior.back() += d;
+    e->C1Interior.front() -= d;  // antisymmetric, so the sign flips on the left
+    e->C1Interior.back() += d;
     return e;
 }
 
@@ -377,6 +386,143 @@ static void check_parameterized() {
     report("coeffs={0.05} changes the operator", d_tuned > 1.0e-6, buf);
 }
 
+// ---------------------------------------------------------------------------
+// 5. septadiagonal-template padding must be undone
+//
+// The collaborators' Mathematica generator is written once, generically, for a
+// scheme that is septadiagonal on both sides; a narrower scheme is expressed by
+// zeroing coefficients. That is fine for the interior vectors but NOT for the
+// closure rows, whose count is structural: the template's three rows per end
+// mean a narrower scheme ships filler rows that read "pin g (or w) to zero at
+// this node". Those nodes then get an identically-zero row in D, and because
+// D = A^-1 B is dense the damage spreads across the whole block.
+//
+// Take CCFD6 (3-point, one closure row) and re-emit it exactly the way the
+// septadiagonal template would -- interiors zero-padded to 7, two filler closure
+// rows appended per equation -- and require the built operator to come back
+// BIT-IDENTICAL to the unpadded original.
+// ---------------------------------------------------------------------------
+
+static std::vector<double> pad_interior(const std::vector<double> &v,
+                                        size_t width) {
+    std::vector<double> out(width, 0.0);
+    const size_t off = (width - v.size()) / 2;
+    for (size_t i = 0; i < v.size(); i++) out[off + i] = v[i];
+    return out;
+}
+
+// the template's filler: 1 on the pinned unknown's own node, zeros elsewhere
+static std::vector<double> pin_row(size_t row, size_t width) {
+    std::vector<double> r(width, 0.0);
+    r[row] = 1.0;
+    return r;
+}
+
+static CCFDDiagonalEntries *ccfd6_as_septadiagonal_template() {
+    std::unique_ptr<CCFDDiagonalEntries> src(createCCFD6Diagonals());
+    const size_t W = 6;  // the template's closure-row width
+
+    auto bnd = [&](const std::vector<std::vector<double>> &b, int eq,
+                   bool is_pinned_family) {
+        std::vector<std::vector<double>> out;
+        out.push_back(b[0]);
+        for (size_t r = 1; r < 3; r++)
+            out.push_back(is_pinned_family ? pin_row(r, W)
+                                           : std::vector<double>(W, 0.0));
+        (void)eq;
+        return out;
+    };
+
+    return new CCFDDiagonalEntries(
+        pad_interior(src->A1Interior, 7), pad_interior(src->A2Interior, 7),
+        pad_interior(src->B1Interior, 7), pad_interior(src->B2Interior, 7),
+        pad_interior(src->C1Interior, 7), pad_interior(src->C2Interior, 7),
+        bnd(src->A1Boundary, 1, true), bnd(src->A2Boundary, 2, false),
+        bnd(src->B1Boundary, 1, false), bnd(src->B2Boundary, 2, true),
+        bnd(src->C1Boundary, 1, false), bnd(src->C2Boundary, 2, false));
+}
+
+static void check_template_padding() {
+    std::cout << "\n[5] septadiagonal-template padding is undone "
+                 "(narrow scheme emitted through the generic generator)\n";
+    const unsigned int N = 17;
+
+    std::unique_ptr<CCFDDiagonalEntries> plain(createCCFD6Diagonals());
+    std::unique_ptr<CCFDDiagonalEntries> padded(
+        ccfd6_as_septadiagonal_template());
+
+    for (unsigned int order = 1; order <= 2; order++) {
+        std::unique_ptr<DerivMatrixStorage> a, b;
+        std::string msg;
+        bool built = true;
+        try {
+            if (order == 1) {
+                a = createCCFDMatrixSystemForSingleSize<1>(PW, N, plain.get());
+                b = createCCFDMatrixSystemForSingleSize<1>(PW, N, padded.get());
+            } else {
+                a = createCCFDMatrixSystemForSingleSize<2>(PW, N, plain.get());
+                b = createCCFDMatrixSystemForSingleSize<2>(PW, N, padded.get());
+            }
+        } catch (const std::exception &e) {
+            built = false;
+            msg   = e.what();
+        }
+        if (!built) {
+            report("padded D" + std::to_string(order) + " builds", false, msg);
+            continue;
+        }
+        char buf[160];
+        double worst = 0.0;
+        for (const auto &v : {std::make_pair(&a->D_original, &b->D_original),
+                              std::make_pair(&a->D_left, &b->D_left),
+                              std::make_pair(&a->D_right, &b->D_right),
+                              std::make_pair(&a->D_leftright,
+                                             &b->D_leftright)}) {
+            worst = std::max(worst, max_abs_diff(*v.first, *v.second));
+        }
+        std::snprintf(buf, sizeof(buf),
+                      "max|padded - plain| = %.3e over all four bflag variants",
+                      worst);
+        report("D" + std::to_string(order) +
+                   " from the padded template equals the plain scheme",
+               worst == 0.0, buf);
+
+        // and the specific symptom: no identically-zero rows in D
+        int zero_rows = 0;
+        for (unsigned int i = 0; i < N; i++) {
+            bool allz = true;
+            for (unsigned int j = 0; j < N; j++)
+                if (b->D_original[i + N * j] != 0.0) allz = false;
+            if (allz) zero_rows++;
+        }
+        std::snprintf(buf, sizeof(buf), "identically-zero rows = %d",
+                      zero_rows);
+        report("D" + std::to_string(order) + " has no pinned-to-zero rows",
+               zero_rows == 0, buf);
+    }
+
+    // an inconsistent closure row (one that cannot differentiate a straight
+    // line) must be refused at build time -- it is invisible to rcond, since it
+    // leaves a perfectly well-conditioned system.
+    {
+        std::unique_ptr<CCFDDiagonalEntries> bad(createCCFD6Diagonals());
+        bad->C1Boundary[0][1] += 1.0e-3;  // breaks annihilation of f = x
+        bad->C1BoundaryLower = bad->C1Boundary;
+        bool threw           = false;
+        std::string what;
+        try {
+            auto st =
+                createCCFDMatrixSystemForSingleSize<1>(PW, N, bad.get(), true);
+        } catch (const std::exception &e) {
+            threw = true;
+            what  = e.what();
+        }
+        report("an inconsistent closure row throws", threw,
+               threw ? "(caught, as intended)"
+                     : "built silently — a non-convergent operator would ship");
+    }
+}
+
 int main(int argc, char **argv) {
     std::cout << "================================================\n"
               << "testCCFD — combined compact finite difference operators\n"
@@ -387,6 +533,7 @@ int main(int argc, char **argv) {
     check_convergence();
     check_degenerate_rejected();
     check_parameterized();
+    check_template_padding();
 
     std::cout << "\n------------------------------------------------\n";
     if (g_failures == 0) {

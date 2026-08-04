@@ -98,6 +98,29 @@ std::vector<double> createMatrix(
             "enough!");
     }
 
+    // The first interior row sits at index diag_boundary.size() and reaches
+    // ku = (interior_width - 1)/2 columns to its left, so a scheme with fewer
+    // closure rows than its interior half-width would index column
+    // (boundary_size - ku) < 0. `col` below is a size_t, so that wraps instead
+    // of going negative and the write lands far outside outmat -- silent heap
+    // corruption, not a crash. Catch it here. Same for the bottom rows.
+    {
+        const size_t ku_check = (diag_interior.size() - 1u) / 2u;
+        if (diag_boundary.size() < ku_check ||
+            diag_boundary_btm.size() < ku_check) {
+            throw std::runtime_error(
+                "Error: scheme has " + std::to_string(diag_boundary.size()) +
+                " top / " + std::to_string(diag_boundary_btm.size()) +
+                " bottom closure rows but an interior stencil of half-width " +
+                std::to_string(ku_check) +
+                ". Every scheme needs at least ku closure rows per end, or the "
+                "first interior row reaches outside the matrix. Either supply "
+                "more closure rows or trim the interior stencil -- an interior "
+                "vector padded with leading/trailing zeros to a wider template "
+                "still counts at its padded width.");
+        }
+    }
+
     std::vector<double> outmat(n_fill * n_fill, 0.0);
 
     // boundaries
