@@ -3299,6 +3299,15 @@ void Mesh::buildE2NWithSM() {
 #define IDXp(i, j, k) k *(eleOrder + 1) * (eleOrder + 1) + j *(eleOrder + 1) + i
 
     t_e2nC_loopA = MPI_Wtime();  // the ~295-line face/edge/vertex fixup
+    // Threaded under DENDRO_MESH_OMP: every one of the 27 writes in this body targets
+    // e2n_dg[e*nPe_3d + off] (element e's own block, disjoint across e); the RHS reads a
+    // neighbour ownerID's index arithmetically but never WRITES a neighbour slot, and
+    // m_uiE2NMapping_DG / e2n_cg are read-only here. So a parallel-for over e is race-free
+    // once the above-loop scratch is made private (f1/f2 are declared in-body -> already
+    // thread-local). Flag OFF -> the pragma vanishes and this is the serial loop.
+#ifdef DENDRO_MESH_OMP
+#pragma omp parallel for private(ownerID, ii_x, jj_y, kk_z)
+#endif
     for (unsigned int e = m_uiElementPreGhostBegin; e < m_uiElementPostGhostEnd;
          e++) {
         for (unsigned int n = 0; n < nPe_3d; n++)
@@ -3971,6 +3980,9 @@ void Mesh::buildE2NMap() {
     // of (e,k,j,i) -- the one genuinely threadable loop in e2n.
     t_e2n_dginit = MPI_Wtime();
     // initialize the DG mapping. // this order is mandotory.
+    // Deliberately NOT threaded: it is race-free (writes are disjoint per e), but
+    // measured 46 us serial -> 148 us at T=4 (3 reps, flat control) -- fork/join
+    // exceeds the work. Don't re-add the pragma without a bigger loop.
     for (unsigned int e = 0; e < (m_uiNumTotalElements); e++)
         for (unsigned int k = 0; k < (m_uiElementOrder + 1);
              k++)  // z coordinate
