@@ -162,6 +162,19 @@ struct CCFDDiagonalEntries {
 };
 
 /**
+ * @brief Severity of the build-time Taylor consistency check.
+ *
+ * An inconsistent row is order 0 at every resolution, which is worth reporting
+ * loudly but not worth refusing to build -- measuring how bad a suspect
+ * generated scheme is requires being able to run it. Default is one warning per
+ * bad row; strict restores the throw. Seeded from
+ * DENDRO_CCFD_STRICT_CONSISTENCY, and the setter is for tests, which need both
+ * branches in one process.
+ */
+bool ccfd_strict_consistency();
+void set_ccfd_strict_consistency(bool strict);
+
+/**
  * @brief Build the four bflag variants of a CCFD operator for one block size.
  *
  * `DerivOrder` selects which half of the coupled solution is kept: 1 -> D1
@@ -170,7 +183,8 @@ struct CCFDDiagonalEntries {
  * function in both the first- and second-order registries.
  *
  * @throws std::runtime_error if the assembled system is numerically singular
- * (almost always a degenerate closure pair -- see CCFDDiagonalEntries).
+ * (almost always a degenerate closure pair -- see CCFDDiagonalEntries), or if a
+ * row fails the Taylor consistency check AND ccfd_strict_consistency() is set.
  */
 template <unsigned int DerivOrder>
 std::unique_ptr<DerivMatrixStorage> createCCFDMatrixSystemForSingleSize(

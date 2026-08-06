@@ -31,6 +31,7 @@
 #include <cstdio>
 #include <iostream>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -81,19 +82,11 @@ static std::unique_ptr<Derivs> make_ccfd6(unsigned int order) {
     return it->second(ELEORDER, "none", {}, {}, 0);
 }
 
-// A minimal *parameterized* CCFD creator, used only to exercise the
-// coeffs-threading path (make_ccfd_coeffs / GenericCCFDDerivsWithCoeffs). c[0]
-// is an additive knob on the A1 interior off-diagonals; at c[0] = 0 it is CCFD6
-// exactly, so the plumbing is checked without registering a whole new scheme.
-// A real tunable scheme's generated header would reference D_coeffs[k] across
-// its coefficient section instead of this one perturbation.
-//
-// The knob is CONSISTENCY-PRESERVING: eq1 must annihilate f = x^1, i.e.
-// sum(A1) == sum_k C1_k * offset_k, so adding d to both A1 off-diagonals (+2d
-// on the left) is matched by adding d to both C1 off-diagonals (+2d on the
-// right). It lowers the formal order, which is all this test needs, without
-// producing an operator that fails to differentiate a straight line -- the
-// builder now rejects those, and rightly so.
+// Minimal parameterized CCFD creator, to exercise the coeffs-threading path
+// only; c[0] is an additive knob on the A1 interior off-diagonals and c[0] = 0
+// is CCFD6 exactly. The knob is consistency-preserving (eq1 still annihilates
+// f = x^1), so it lowers the formal order without making the operator
+// inconsistent, which is a different failure than the one being tested.
 static CCFDDiagonalEntries *ccfd6_param(const std::vector<double> &c) {
     CCFDDiagonalEntries *e = createCCFD6Diagonals();
     const double d         = c.empty() ? 0.0 : c[0];
@@ -389,19 +382,20 @@ static void check_parameterized() {
 // ---------------------------------------------------------------------------
 // 5. septadiagonal-template padding must be undone
 //
-// The collaborators' Mathematica generator is written once, generically, for a
-// scheme that is septadiagonal on both sides; a narrower scheme is expressed by
-// zeroing coefficients. That is fine for the interior vectors but NOT for the
-// closure rows, whose count is structural: the template's three rows per end
-// mean a narrower scheme ships filler rows that read "pin g (or w) to zero at
-// this node". Those nodes then get an identically-zero row in D, and because
-// D = A^-1 B is dense the damage spreads across the whole block.
-//
-// Take CCFD6 (3-point, one closure row) and re-emit it exactly the way the
-// septadiagonal template would -- interiors zero-padded to 7, two filler closure
-// rows appended per equation -- and require the built operator to come back
-// BIT-IDENTICAL to the unpadded original.
+// A narrower scheme emitted through the generic septadiagonal template ships
+// filler closure rows reading "pin g (or w) to zero here", and since D = A^-1 B
+// is dense that damage spreads across the whole block. Re-emit CCFD6 the way the
+// template would -- interiors zero-padded to 7, two filler rows per equation --
+// and require the result to be BIT-IDENTICAL to the unpadded original.
 // ---------------------------------------------------------------------------
+
+static size_t count_warnings(const std::string &s) {
+    size_t n = 0;
+    for (size_t p = s.find("CCFD WARNING"); p != std::string::npos;
+         p        = s.find("CCFD WARNING", p + 1))
+        n++;
+    return n;
+}
 
 static std::vector<double> pad_interior(const std::vector<double> &v,
                                         size_t width) {
@@ -501,15 +495,63 @@ static void check_template_padding() {
                zero_rows == 0, buf);
     }
 
-    // an inconsistent closure row (one that cannot differentiate a straight
-    // line) must be refused at build time -- it is invisible to rcond, since it
-    // leaves a perfectly well-conditioned system.
+    // An inconsistent closure row (one that cannot differentiate a straight
+    // line) is invisible to rcond, so it has to be caught here. It warns rather
+    // than throws by default: a suspect generated scheme has to be buildable to
+    // be measurable. Strict mode restores the refusal.
     {
         std::unique_ptr<CCFDDiagonalEntries> bad(createCCFD6Diagonals());
         bad->C1Boundary[0][1] += 1.0e-3;  // breaks annihilation of f = x
-        bad->C1BoundaryLower = bad->C1Boundary;
-        bool threw           = false;
+        bad->C1BoundaryLower  = bad->C1Boundary;
+
+        // Drive both modes explicitly so the result doesn't depend on whether
+        // the caller exported DENDRO_CCFD_STRICT_CONSISTENCY.
+        const bool saved_mode = ccfd_strict_consistency();
+        set_ccfd_strict_consistency(false);
+
+        // Capture stderr: the warning has to be deduplicated, since the builder
+        // runs per block size, per DerivOrder and per clone() on identical
+        // coefficients, and an un-deduplicated warning buries itself.
+        std::ostringstream captured;
+        std::streambuf *saved = std::cerr.rdbuf(captured.rdbuf());
+
+        bool built            = true;
         std::string what;
+        try {
+            auto st =
+                createCCFDMatrixSystemForSingleSize<1>(PW, N, bad.get(), true);
+        } catch (const std::exception &e) {
+            built = false;
+            what  = e.what();
+        }
+        const size_t first_pass = count_warnings(captured.str());
+
+        // same coefficients at other block sizes must add nothing
+        for (unsigned int n2 : {21u, 25u}) {
+            try {
+                auto st = createCCFDMatrixSystemForSingleSize<1>(PW, n2,
+                                                                 bad.get(), true);
+            } catch (const std::exception &) {
+            }
+        }
+        const size_t after_more_sizes = count_warnings(captured.str());
+        std::cerr.rdbuf(saved);
+        std::cerr << captured.str();
+
+        report("an inconsistent closure row still builds by default", built,
+               built ? "(warned, as intended — see the CCFD WARNING above)"
+                     : what);
+
+        char dbuf[128];
+        std::snprintf(dbuf, sizeof(dbuf),
+                      "%zu warning(s) at n=%u, still %zu after n=21 and n=25",
+                      first_pass, N, after_more_sizes);
+        report("the warning is deduplicated across block sizes",
+               first_pass > 0 && after_more_sizes == first_pass, dbuf);
+
+        set_ccfd_strict_consistency(true);
+        bool threw = false;
+        what.clear();
         try {
             auto st =
                 createCCFDMatrixSystemForSingleSize<1>(PW, N, bad.get(), true);
@@ -517,16 +559,26 @@ static void check_template_padding() {
             threw = true;
             what  = e.what();
         }
-        report("an inconsistent closure row throws", threw,
+        set_ccfd_strict_consistency(saved_mode);
+
+        report("strict mode restores the refusal", threw,
                threw ? "(caught, as intended)"
-                     : "built silently — a non-convergent operator would ship");
+                     : "built even under strict — the check is not firing");
+
+        // and it must still finger the row we actually broke
+        const bool named =
+            what.find("closure row 0 of equation 1") != std::string::npos;
+        report("the refusal names the offending row", named,
+               named ? "(closure row 0 of equation 1)" : what);
     }
 }
 
 int main(int argc, char **argv) {
     std::cout << "================================================\n"
               << "testCCFD — combined compact finite difference operators\n"
-              << "  ele_order = " << ELEORDER << ", pw = " << PW << "\n"
+              << "  ele_order = " << ELEORDER << ", pw = " << PW
+              << ", consistency = "
+              << (ccfd_strict_consistency() ? "strict" : "warn") << "\n"
               << "================================================\n";
 
     check_oracle();
