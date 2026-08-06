@@ -11,6 +11,12 @@
  */
 
 #pragma once
+#ifdef ETS_CHECK_GHOSTS
+// verification scaffolding only; flag defaults OFF
+#include <cstdio>
+#include <set>
+#endif
+
 #include "ctx.h"
 #include "dendro.h"
 #include "dvec.h"
@@ -469,6 +475,58 @@ void ETS<T, Ctx>::evolve() {
     const double current_t = m_uiTimeInfo._m_uiT;
     double current_t_adv   = current_t;
     const double dt        = m_uiTimeInfo._m_uiTh;
+
+#ifdef ETS_CHECK_GHOSTS
+    // ONE-SHOT PRECONDITION CHECK for the "fuse copy_data into axpy_multi" change.
+    //
+    // Dropping copy_data leaves tmp's GHOST nodes stale; the change is only safe if
+    // the ghost exchange overwrites every one of them before the RHS reads them.
+    // readFromGhostEnd writes exactly vec[recvNodeSM[k]] for k in each recv proc's
+    // [offset, offset+count) range (mesh.tcc:~857), and a comment there asserts
+    // "recvNodeSM is a permutation". This checks that claim instead of trusting it:
+    // it computes the WRITTEN index set and subtracts it from the actual ghost range.
+    // Any node in ghosts \ written would keep stale data => fusion changes results.
+    {
+        static bool _chk_done = false;
+        if (!_chk_done && pMesh->isActive()) {
+            _chk_done                  = true;
+            const auto& _recvNodeSM    = pMesh->getRecvNodeSM();
+            const auto& _recvCount     = pMesh->getNodalRecvCounts();
+            const auto& _recvOffset    = pMesh->getNodalRecvOffsets();
+            const auto& _recvProcList  = pMesh->getRecvProcList();
+
+            std::set<unsigned int> _W;
+            for (unsigned int _pi = 0; _pi < _recvProcList.size(); _pi++) {
+                const unsigned int _p = _recvProcList[_pi];
+                for (unsigned int _k = _recvOffset[_p];
+                     _k < _recvOffset[_p] + _recvCount[_p]; _k++)
+                    _W.insert(_recvNodeSM[_k]);
+            }
+            const unsigned int _preB  = pMesh->getNodePreGhostBegin();
+            const unsigned int _preE  = pMesh->getNodePreGhostEnd();
+            const unsigned int _postB = pMesh->getNodePostGhostBegin();
+            const unsigned int _postE = pMesh->getNodePostGhostEnd();
+            unsigned int _missing = 0, _outside = 0;
+            for (unsigned int _i = _preB; _i < _preE; _i++)
+                if (!_W.count(_i)) _missing++;
+            for (unsigned int _i = _postB; _i < _postE; _i++)
+                if (!_W.count(_i)) _missing++;
+            // written indices that are NOT ghosts would mean the exchange scribbles
+            // on local nodes -- also fatal to the reasoning, so count them too.
+            for (unsigned int _w : _W)
+                if (!((_w >= _preB && _w < _preE) || (_w >= _postB && _w < _postE)))
+                    _outside++;
+            const unsigned int _nghost = (_preE - _preB) + (_postE - _postB);
+            fprintf(stderr,
+                    "[ghostchk] rank=%d ghosts=%u written=%zu missing=%u "
+                    "written_outside_ghosts=%u  %s\n",
+                    pMesh->getMPIRank(), _nghost, _W.size(), _missing, _outside,
+                    (_missing == 0 && _outside == 0)
+                        ? "OK: recvNodeSM covers exactly the ghosts -> fusion SAFE"
+                        : "<<< PRECONDITION VIOLATED -> fusion UNSAFE");
+        }
+    }
+#endif
 
     m_uiAppCtx->pre_timestep(m_uiEVar);
 
