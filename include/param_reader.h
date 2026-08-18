@@ -15,6 +15,7 @@
 
 #include <cctype>
 #include <cstddef>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -118,11 +119,26 @@ bool try_read_array(const toml::value& root, const std::string& section,
             found = true;
         }
     }
-    if (found && vec.size() >= N) {
-        for (std::size_t i = 0; i < N; ++i) out[i] = vec[i];
-        return true;
+    if (!found) return false;
+
+    // Short array returns false (not a partial copy): the caller's "using
+    // default" path is the honest outcome, and it logs. Long array truncates.
+    if (vec.size() != N) {
+        std::cerr << "[param_reader] WARNING: array '" << key << "'";
+        if (!section.empty()) std::cerr << " in section [" << section << "]";
+        std::cerr << " has " << vec.size() << " element(s), expected " << N
+                  << ". ";
+        if (vec.size() < N) {
+            std::cerr << "Keeping compiled defaults for ALL " << N
+                      << " slots -- fix the par file." << std::endl;
+            return false;
+        }
+        std::cerr << "Using the first " << N << ", ignoring the rest."
+                  << std::endl;
     }
-    return found;
+
+    for (std::size_t i = 0; i < N; ++i) out[i] = vec[i];
+    return true;
 }
 
 }  // namespace dendro_params
