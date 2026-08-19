@@ -49,6 +49,7 @@
 #include <vector>
 
 #include "refel.h"
+#include "wideprolong.h"
 
 namespace {
 
@@ -257,6 +258,98 @@ TEST_CASE("RefElement ip_1D_* matches exact Lagrange weights") {
 
     CHECK(dbl(max0) < 1e-14);
     CHECK(dbl(max1) < 1e-14);
+}
+
+/* ------------------------------------------------------------------ */
+/* The wide operator                                                   */
+/* ------------------------------------------------------------------ */
+
+TEST_CASE("wide operator degenerates to the narrow one with no extension") {
+    RefElement refel(3, ELE_ORDER);
+    const unsigned nrp = ELE_ORDER + 1;
+    const double *ipT[2] = {refel.getIMTChild0(), refel.getIMTChild1()};
+
+    double worst = 0.0;
+    for (unsigned c = 0; c < 2; c++) {
+        std::vector<double> op;
+        unsigned n_in = 0;
+        // width is requested wide but clamps to the 7 nodes that exist, so
+        // this must land exactly on today's element-local operator.
+        dendro::wideprolong::build_1d(
+            ELE_ORDER, c, 0, 0, dendro::wideprolong::stencil_width(ELE_ORDER),
+            op, n_in);
+        REQUIRE(n_in == nrp);
+
+        for (unsigned i = 0; i < nrp; i++)
+            for (unsigned j = 0; j < nrp; j++) {
+                const double d =
+                    std::fabs(op[i * n_in + j] - ipT[c][i * nrp + j]);
+                if (d > worst) worst = d;
+            }
+    }
+    std::printf(
+        "\n=== wide operator with ext=0 vs RefElement ip_1D_* ===\n"
+        "max|build_1d - ip_1D| = %.3e\n", worst);
+    CHECK(worst < 1e-14);
+}
+
+TEST_CASE("wide operator is exact to its stencil degree") {
+    // Polynomial exactness is the definition of the interpolation order and
+    // does not depend on how the window is chosen, so this does not just
+    // restate the implementation.
+    struct Cfg { unsigned ext_lo, ext_hi; };
+    const std::vector<Cfg> cfgs = {{0, 0}, {3, 0}, {0, 3}, {6, 0}, {3, 3}};
+    const unsigned width_req = dendro::wideprolong::stencil_width(ELE_ORDER);
+
+    std::printf("\n=== wide operator polynomial exactness ===\n");
+    std::printf("%6s %6s %6s %6s %14s %14s\n", "ext_lo", "ext_hi", "n_in",
+                "width", "max err deg w-1", "err deg w");
+
+    for (const Cfg &cfg : cfgs) {
+        for (unsigned c = 0; c < 2; c++) {
+            std::vector<double> op;
+            unsigned n_in = 0;
+            dendro::wideprolong::build_1d(ELE_ORDER, c, cfg.ext_lo, cfg.ext_hi,
+                                          width_req, op, n_in);
+            const unsigned width = (width_req < n_in) ? width_req : n_in;
+
+            std::vector<real> xs(n_in);
+            for (unsigned j = 0; j < n_in; j++)
+                xs[j] = ((real)j - (real)cfg.ext_lo) / (real)ELE_ORDER;
+
+            real worst_ok = 0, err_over = 0;
+            for (unsigned d = 0; d <= width; d++) {
+                real worst = 0;
+                for (unsigned i = 0; i <= ELE_ORDER; i++) {
+                    const real xt = 0.5Q * (real)c +
+                                    (real)i / (real)(2 * ELE_ORDER);
+                    real acc = 0;
+                    for (unsigned j = 0; j < n_in; j++)
+                        acc += (real)op[i * n_in + j] * powq(xs[j], (real)d);
+                    const real e = fabsq(acc - powq(xt, (real)d));
+                    if (e > worst) worst = e;
+                }
+                if (d < width) {
+                    if (worst > worst_ok) worst_ok = worst;
+                } else {
+                    err_over = worst;
+                }
+            }
+
+            if (c == 0)
+                std::printf("%6u %6u %6u %6u %14.3e %14.3e\n", cfg.ext_lo,
+                            cfg.ext_hi, n_in, width, dbl(worst_ok),
+                            dbl(err_over));
+
+            CAPTURE(cfg.ext_lo);
+            CAPTURE(cfg.ext_hi);
+            CAPTURE(c);
+            // exact through degree width-1 ...
+            CHECK(dbl(worst_ok) < 1e-12);
+            // ... and genuinely not beyond, so `width` means what it says.
+            CHECK(dbl(err_over) > 1e-9);
+        }
+    }
 }
 
 /* ------------------------------------------------------------------ */

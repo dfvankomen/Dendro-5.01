@@ -71,6 +71,8 @@ option(RK_SOLVER_OVERLAP_COMM_AND_COMP "Enable RK solver comm/comp overlap" ON)
 option(WITH_CUDA "Build dendro with CUDA" OFF)
 option(BUILD_WITH_PETSC "Build dendro with PETSc" OFF)
 option(USE_FD_INTERP_FOR_UNZIP "Use FD style interpolation for unzip" OFF)
+option(DENDRO_WIDE_PROLONGATION
+  "Use a >1-element-wide stencil for parent->child prolongation at 2:1 interfaces" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "Allow MPI to be aware of CUDA support" OFF)
 # Default ON: matrix-form/compact derivs read the full block including the
 # never-filled boundary-ghost padding, so un-zeroed alloc -> NaN. Hybrid-OMP
@@ -262,6 +264,7 @@ set(DENDRO_SRC
 
 set(FEM_SRC
     FEM/examples/src/laplace.cpp FEM/src/basis.cpp FEM/src/refel.cpp
+    FEM/src/wideprolong.cpp
     FEM/src/tensor.cpp FEM/src/workspace.cpp)
 
 set(ODE_SRC
@@ -307,6 +310,13 @@ dendro_add_def(PROFILE_TREE_SORT PROFILE_TREE_SORT)
 dendro_add_def(ALLTOALL_SPARSE ALLTOALL_SPARSE)
 dendro_add_def(RK_SOLVER_OVERLAP_COMM_AND_COMP RK_SOLVER_OVERLAP_COMM_AND_COMP)
 dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
+dendro_add_def(DENDRO_WIDE_PROLONGATION DENDRO_WIDE_PROLONGATION)
+if(DENDRO_WIDE_PROLONGATION)
+  message(WARNING
+    "DENDRO_WIDE_PROLONGATION is ON but the unzip call sites are not wired to "
+    "it yet, so runtime behaviour is unchanged. The operator itself lives in "
+    "FEM/src/wideprolong.cpp and is covered by testProlongationOrder.")
+endif()
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 
 # Resolve the effective unzip/zip + threading flags. DENDRO_HYBRID_OMP is the
