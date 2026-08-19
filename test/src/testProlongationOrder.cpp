@@ -1317,6 +1317,37 @@ TEST_CASE("the wide stencil is input-limited, and centring is what fixes it") {
         CHECK(dbl(fabsq(out) / eps) == doctest::Approx(dbl(lam)).epsilon(1e-6));
     }
 
+    // Sharper still: in a straddle stencil only the COARSE nodes carry the
+    // hanging-node contamination. The fine-side nodes are block-interior real
+    // DOFs, which are exact. So the quantity that actually multiplies the
+    // input error is the weight on the coarse subset alone, not the total.
+    std::printf("\n=== weight carried by the CONTAMINATED (coarse) nodes ===\n");
+    std::printf("%-24s %10s %12s %12s\n", "scheme", "sum|w|", "coarse-only",
+                "vs narrow");
+    {
+        const real h2 = 1.0Q / 512, H2 = 2 * h2;
+        struct S2 { const char *name; int nc, nf; };
+        const std::vector<S2> zz = {{"narrow-elemlocal-7pt", 7, 0},
+                                    {"wide-coarse-10pt", 10, 0},
+                                    {"straddle-7c+2f-9pt", 7, 2},
+                                    {"straddle-7c+3f-10pt", 7, 3}};
+        double narrow_c = 0.0;
+        for (const S2 &z : zz) {
+            std::vector<real> xz, wz;
+            for (int i = 0; i < z.nc; i++) xz.push_back(X0 - (real)i * H2);
+            for (int i = 1; i <= z.nf; i++) xz.push_back(X0 + (real)i * h2);
+            lagrange_weights(xz, X0 - h2, wz);
+            real tot = 0, coarse = 0;
+            for (size_t i = 0; i < wz.size(); i++) {
+                tot += fabsq(wz[i]);
+                if ((int)i < z.nc) coarse += fabsq(wz[i]);
+            }
+            if (narrow_c == 0.0) narrow_c = dbl(coarse);
+            std::printf("%-24s %10.3f %12.3f %12.2fx\n", z.name, dbl(tot),
+                        dbl(coarse), narrow_c / dbl(coarse));
+        }
+    }
+
     // The centred straddle stencil amplifies LESS than today's narrow
     // operator while also interpolating far more accurately. That is the
     // combination the coarse-side-only schemes cannot reach.
@@ -1331,6 +1362,80 @@ TEST_CASE("the wide stencil is input-limited, and centring is what fixes it") {
     for (size_t i = 0; i < ws2.size(); i++) ls += fabsq(ws2[i]);
     MESSAGE("Lebesgue: narrow " << dbl(ln) << " straddle " << dbl(ls));
     CHECK(dbl(ls) < dbl(ln));
+}
+
+TEST_CASE("straddle prototype: D2 across the jump with contaminated inputs") {
+    // Prototype of the proposed change, under the conditions actually
+    // measured on the puncture mesh rather than idealised ones.
+    //
+    // The coarse nodes reach the stencil through getElementNodalValues and
+    // carry hanging-node error; on the puncture mesh that was 1.86e-07 with
+    // the inner fetch widened. The fine-side nodes are block-interior real
+    // DOFs and are exact. So the perturbation is applied to the coarse
+    // subset only, which is what makes straddle behave differently from a
+    // coarse-side stencil of the same width.
+    const real EPS = 1.862e-07Q;  // measured, puncture mesh, widened fetch
+
+    struct S { const char *name; int nc, nf; };
+    const std::vector<S> ss = {{"narrow-elemlocal-7pt", 7, 0},
+                               {"wide-coarse-10pt", 10, 0},
+                               {"straddle-7c+2f-9pt", 7, 2},
+                               {"straddle-7c+3f-10pt", 7, 3}};
+
+    const std::vector<real> &hs = h_sweep();
+
+    std::printf(
+        "\n=== D2 at dist=1 with coarse inputs perturbed by %.3e ===\n",
+        dbl(EPS));
+    std::printf("%-24s %13s %13s %10s\n", "scheme", "err(h=1/128)",
+                "err(h=1/2187)", "vs narrow");
+
+    double narrow_err = 0.0;
+    for (const S &sc : ss) {
+        std::vector<real> errs(hs.size());
+        for (size_t t = 0; t < hs.size(); t++) {
+            const real h = hs[t], H = 2 * h;
+
+            std::vector<real> xs;
+            for (int i = 0; i < sc.nc; i++) xs.push_back(X0 - (real)i * H);
+            for (int i = 1; i <= sc.nf; i++) xs.push_back(X0 + (real)i * h);
+
+            // pad values at the three positions the D2 stencil reaches
+            real pad[3];
+            std::vector<real> w;
+            for (int q = 0; q < 3; q++) {
+                lagrange_weights(xs, X0 - (real)(q + 1) * h, w);
+                real acc = 0;
+                for (size_t i = 0; i < xs.size(); i++) {
+                    real v = f(xs[i]);
+                    // coarse subset is dirty, fine subset is exact
+                    if ((int)i < sc.nc)
+                        v += (w[i] >= 0 ? EPS : -EPS);
+                    acc += w[i] * v;
+                }
+                pad[q] = acc;
+            }
+
+            real acc = 0;
+            for (int o = -D2_R; o <= D2_R; o++)
+                acc += D2_C[o + D2_R] *
+                       ((o >= 0) ? f(X0 + (real)o * h) : pad[-o - 1]);
+            acc /= (h * h);
+            errs[t] = fabsq(acc - d2f(X0));
+            add_row(sc.name, "d2_contaminated", h, errs[t]);
+        }
+
+        if (narrow_err == 0.0) narrow_err = dbl(errs.front());
+        std::printf("%-24s %13.4e %13.4e %10.2fx\n", sc.name,
+                    dbl(errs.front()), dbl(errs.back()),
+                    narrow_err / dbl(errs.front()));
+    }
+
+    // Under contamination the coarse-side wide stencil is WORSE than the
+    // narrow operator it replaces -- which is exactly the decimation
+    // regression -- while straddle is better than both.
+    std::printf(
+        "(coarse-side widening loses to narrow here; straddle does not)\n");
 }
 
 /* ------------------------------------------------------------------ */
