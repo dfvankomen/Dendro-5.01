@@ -67,6 +67,23 @@ void build_1d(unsigned int eleOrder, unsigned int child, unsigned int ext_lo,
               std::vector<double> &op, unsigned int &n_in);
 
 /**
+ * General form: build the 1D matrix from explicit node coordinates.
+ *
+ * @param[in] xs  extended node coordinates in parent-element units, where the
+ *                parent spans [0,1] and its own nodes sit at j/eleOrder.
+ *                Must be strictly increasing.
+ *
+ * build_1d is the special case of a uniformly spaced extension. This form
+ * exists because a neighbour at a different refinement level contributes
+ * nodes at a different spacing -- 2x for a coarser neighbour -- so the
+ * extended array is graded rather than uniform. Lagrange weights are
+ * indifferent to spacing; only the coordinates change.
+ */
+void build_1d_at(unsigned int eleOrder, unsigned int child,
+                 const std::vector<double> &xs, unsigned int width,
+                 std::vector<double> &op);
+
+/**
  * Apply a rectangular (n_out x n_in) operator along one axis of a 3D block.
  *
  * The existing DENDRO_TENSOR_*_APPLY_ELEM kernels take a single M and assume

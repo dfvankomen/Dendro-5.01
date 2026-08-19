@@ -11,6 +11,19 @@ void build_1d(unsigned int eleOrder, unsigned int child, unsigned int ext_lo,
     const unsigned int nrp = eleOrder + 1;
     n_in                   = nrp + ext_lo + ext_hi;
 
+    std::vector<double> xs(n_in);
+    for (unsigned int j = 0; j < n_in; j++)
+        xs[j] = ((double)j - (double)ext_lo) / (double)eleOrder;
+
+    build_1d_at(eleOrder, child, xs, width, op);
+}
+
+void build_1d_at(unsigned int eleOrder, unsigned int child,
+                 const std::vector<double> &xs, unsigned int width,
+                 std::vector<double> &op) {
+    const unsigned int nrp  = eleOrder + 1;
+    const unsigned int n_in = (unsigned int)xs.size();
+
     // clamp to what the caller could actually reach; with no extension this
     // degenerates to the full-element interpolant, i.e. the narrow operator.
     if (width > n_in) width = n_in;
@@ -18,20 +31,19 @@ void build_1d(unsigned int eleOrder, unsigned int child, unsigned int ext_lo,
 
     op.assign((size_t)nrp * (size_t)n_in, 0.0);
 
-    std::vector<double> xs(n_in);
-    for (unsigned int j = 0; j < n_in; j++)
-        xs[j] = ((double)j - (double)ext_lo) / (double)eleOrder;
-
     std::vector<double> w(width);
 
     for (unsigned int i = 0; i < nrp; i++) {
         const double xt =
             0.5 * (double)child + (double)i / (double)(2 * eleOrder);
 
-        // slide a contiguous window of `width` nodes as close to centred on
+        // Slide a contiguous window of `width` nodes as close to centred on
         // the target as the array allows; at the ends it goes one-sided.
-        int centre = (int)std::lround(xt * (double)eleOrder) + (int)ext_lo;
-        int s      = centre - (int)(width / 2);
+        // Chosen by coordinate rather than index so a graded array (a
+        // neighbour at another refinement level) is handled correctly.
+        int centre = 0;
+        while (centre + 1 < (int)n_in && xs[centre + 1] <= xt) centre++;
+        int s = centre - (int)(width / 2) + 1;
         if (s < 0) s = 0;
         if (s + (int)width > (int)n_in) s = (int)n_in - (int)width;
 

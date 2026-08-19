@@ -495,6 +495,60 @@ TEST_CASE("apply_3d is exact on tensor polynomials to its stencil degree") {
     CHECK(worst < 1e-11);
 }
 
+TEST_CASE("build_1d_at handles a graded (mixed-spacing) extension") {
+    // A coarser neighbour contributes nodes at twice the element's spacing,
+    // so the extended array is graded. Lagrange does not care, but the
+    // window selection has to be coordinate-based rather than index-based;
+    // this pins that.
+    const unsigned int p     = ELE_ORDER;
+    const unsigned int nrp   = p + 1;
+    const unsigned int width = dendro::wideprolong::stencil_width(p);
+
+    // parent spans [0,1] with nodes at j/p; a coarser low-side neighbour adds
+    // nodes at -2/p, -4/p, -6/p
+    std::vector<double> xs;
+    for (int e = 3; e >= 1; e--) xs.push_back(-2.0 * (double)e / (double)p);
+    for (unsigned int j = 0; j < nrp; j++) xs.push_back((double)j / (double)p);
+
+    for (unsigned int c = 0; c < 2; c++) {
+        std::vector<double> op;
+        dendro::wideprolong::build_1d_at(p, c, xs, width, op);
+        const unsigned int n_in = (unsigned int)xs.size();
+        REQUIRE(op.size() == (size_t)nrp * n_in);
+
+        real worst_ok = 0, err_over = 0;
+        for (unsigned int d = 0; d <= width; d++) {
+            real worst = 0;
+            for (unsigned int i = 0; i < nrp; i++) {
+                const real xt =
+                    0.5Q * (real)c + (real)i / (real)(2 * p);
+                real acc = 0;
+                for (unsigned int j = 0; j < n_in; j++)
+                    acc += (real)op[i * n_in + j] *
+                           powq((real)xs[j], (real)d);
+                const real e = fabsq(acc - powq(xt, (real)d));
+                if (e > worst) worst = e;
+            }
+            if (d < width) {
+                if (worst > worst_ok) worst_ok = worst;
+            } else {
+                err_over = worst;
+            }
+        }
+
+        if (c == 0)
+            std::printf(
+                "\n=== build_1d_at, graded extension (coarser neighbour) "
+                "===\nn_in=%u width=%u  max err deg<=%u = %.3e  err deg %u = "
+                "%.3e\n",
+                n_in, width, width - 1, dbl(worst_ok), width, dbl(err_over));
+
+        CAPTURE(c);
+        CHECK(dbl(worst_ok) < 1e-11);
+        CHECK(dbl(err_over) > 1e-9);
+    }
+}
+
 /* ------------------------------------------------------------------ */
 /* Test 1 -- prolongation order at the hanging node                    */
 /* ------------------------------------------------------------------ */
