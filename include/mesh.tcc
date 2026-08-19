@@ -3378,9 +3378,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_LEFT, OCT_DIR_DOWN, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++)
                 nodalValues[k * (m_uiElementOrder + 1) *
@@ -3412,9 +3416,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_LEFT, OCT_DIR_UP, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++)
                 nodalValues[k * (m_uiElementOrder + 1) *
@@ -3448,9 +3456,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_LEFT, OCT_DIR_BACK, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int j = 0; j < (m_uiElementOrder + 1); j++)
                 nodalValues[0 * (m_uiElementOrder + 1) *
@@ -3482,9 +3494,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_LEFT, OCT_DIR_FRONT, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int j = 0; j < (m_uiElementOrder + 1); j++)
                 nodalValues[m_uiElementOrder * (m_uiElementOrder + 1) *
@@ -3517,9 +3533,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_RIGHT, OCT_DIR_DOWN, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++)
                 nodalValues[k * (m_uiElementOrder + 1) *
@@ -3553,9 +3573,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_RIGHT, OCT_DIR_UP, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++)
                 nodalValues[k * (m_uiElementOrder + 1) *
@@ -3591,9 +3615,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_RIGHT, OCT_DIR_BACK, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int j = 0; j < (m_uiElementOrder + 1); j++)
                 nodalValues[0 * (m_uiElementOrder + 1) *
@@ -3627,9 +3655,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_RIGHT, OCT_DIR_FRONT, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int j = 0; j < (m_uiElementOrder + 1); j++)
                 nodalValues[m_uiElementOrder * (m_uiElementOrder + 1) *
@@ -3663,9 +3695,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_DOWN, OCT_DIR_BACK, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int i = 0; i < (m_uiElementOrder + 1); i++)
                 nodalValues[0 * (m_uiElementOrder + 1) *
@@ -3697,9 +3733,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_DOWN, OCT_DIR_FRONT, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int i = 0; i < (m_uiElementOrder + 1); i++)
                 nodalValues[m_uiElementOrder * (m_uiElementOrder + 1) *
@@ -3732,9 +3772,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_UP, OCT_DIR_BACK, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int i = 0; i < (m_uiElementOrder + 1); i++)
                 nodalValues[0 * (m_uiElementOrder + 1) *
@@ -3768,9 +3812,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             for (unsigned int index = 0; index < edgeIndex.size(); index++)
                 edgeInpIn[index] = vec[m_uiE2NMapping_CG[edgeIndex[index]]];
 
-            this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
-                                            &(*(edgeInpOut.begin())), cnum, 1,
-                                            im1, im2);
+            if (!(allowWide &&
+                  this->prolongateHangingEdgeWide(
+                      vec, elementID, OCT_DIR_UP, OCT_DIR_FRONT, cnum,
+                      &(*(edgeInpOut.begin())), im1, im2)))
+                this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
+                                                &(*(edgeInpOut.begin())),
+                                                cnum, 1, im1, im2);
 
             for (unsigned int i = 0; i < (m_uiElementOrder + 1); i++)
                 nodalValues[m_uiElementOrder * (m_uiElementOrder + 1) *
@@ -13322,6 +13370,180 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
             this->parent2ChildInterpolation(dgEle + v * dgSz,
                                             out + v * m_uiNpE, cnum, m_uiDim);
     }
+}
+
+/** Diagnostic counters for the wide edge path. */
+inline std::atomic<long> &wpxEdgeCalls() {
+    static std::atomic<long> c{0};
+    return c;
+}
+inline std::atomic<long> &wpxEdgeWins() {
+    static std::atomic<long> c{0};
+    return c;
+}
+
+inline unsigned int Mesh::wpxEdgeOwner(unsigned int ele, unsigned int d1,
+                                       unsigned int d2) const {
+    const ot::TreeNode &E  = m_uiAllElements[ele];
+    const unsigned int lev = E.getLevel();
+    if (lev == 0) return LOOK_UP_TABLE_DEFAULT;
+    const long S = 1l << (m_uiMaxDepth - lev);
+
+    const unsigned int order[2][2] = {{d1, d2}, {d2, d1}};
+    for (int t = 0; t < 2; t++) {
+        unsigned int cur = ele;
+        bool ok          = true;
+        for (int h = 0; h < 2 && ok; h++) {
+            const unsigned int nb =
+                m_uiE2EMapping[cur * m_uiNumDirections + order[t][h]];
+            if (nb == LOOK_UP_TABLE_DEFAULT || nb >= m_uiAllElements.size())
+                ok = false;
+            else
+                cur = nb;
+        }
+        if (!ok) continue;
+        if (m_uiAllElements[cur].getLevel() + 1 != lev) continue;
+        if (!m_uiIsNodalMapValid[cur]) continue;
+
+        // The owner is a diagonal NEIGHBOUR, so it contains the edge, not
+        // this element's volume. Check the edge segment: along the axis the
+        // edge runs, the owner must span it; on the other two axes the edge
+        // sits on the owner's boundary, so the test is inclusive.
+        const ot::TreeNode &Q = m_uiAllElements[cur];
+        const long Sq         = 1l << (m_uiMaxDepth - Q.getLevel());
+        const int a1          = (int)(d1 >> 1u), a2 = (int)(d2 >> 1u);
+        if (a1 == a2) continue;
+        const int ax = 3 - a1 - a2;
+
+        bool contains = true;
+        for (int a = 0; a < 3 && contains; a++) {
+            const long cq = (long)wpxCoord(Q, a);
+            if (a == ax) {
+                const long c = (long)wpxCoord(E, a);
+                if (c < cq || c + S > cq + Sq) contains = false;
+            } else {
+                long c = (long)wpxCoord(E, a);
+                if (d1 == (unsigned int)(2 * a + 1) ||
+                    d2 == (unsigned int)(2 * a + 1))
+                    c += S;  // edge on this element's high side
+                if (c < cq || c > cq + Sq) contains = false;
+            }
+        }
+        if (contains) return cur;
+    }
+    return LOOK_UP_TABLE_DEFAULT;
+}
+
+template <typename T>
+bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
+                                     unsigned int d1, unsigned int d2,
+                                     unsigned int cnum, T *out, double *im1,
+                                     double *im2) const {
+#ifndef DENDRO_WIDE_PROLONGATION
+    (void)vec; (void)elementID; (void)d1; (void)d2; (void)cnum; (void)out;
+    (void)im1; (void)im2;
+    return false;
+#else
+    const unsigned int p   = m_uiElementOrder;
+    const unsigned int nrp = p + 1;
+
+    wpxEdgeCalls()++;
+    const unsigned int owner = this->wpxEdgeOwner(elementID, d1, d2);
+    if (owner == LOOK_UP_TABLE_DEFAULT) return false;
+
+    // the edge runs along the axis neither direction names
+    const int a1 = (int)(d1 >> 1u), a2 = (int)(d2 >> 1u);
+    if (a1 == a2) return false;
+    const int ax = 3 - a1 - a2;
+
+    const unsigned int width = dendro::wideprolong::stencil_width(p);
+    const unsigned int want  = (width > nrp) ? (width - nrp) : 0u;
+
+    unsigned int ext[6];
+    unsigned char emode[6];
+    const unsigned int st =
+        this->probeCoarseExtension(owner, want, ext, WPX_LVL_SAME, emode);
+    if (st & WPX_CLIPPED_GHOST) {
+        std::cerr << "[wide prolongation] hanging edge of element "
+                  << elementID
+                  << " needs a round-2 ghost neighbour; the nodal ghost layer "
+                     "only covers round 1."
+                  << std::endl;
+        MPI_Abort(m_uiCommGlobal, 1);
+    }
+
+    // widen along the edge axis only
+    for (int a = 0; a < 3; a++)
+        if (a != ax) {
+            ext[2 * a] = 0;
+            ext[2 * a + 1] = 0;
+            emode[2 * a] = WPX_EXT_NONE;
+            emode[2 * a + 1] = WPX_EXT_NONE;
+        }
+    if (!(ext[2 * ax] || ext[2 * ax + 1])) {
+        wpxLogFallbackOnce("hanging edge", 0, want);
+        return false;
+    }
+
+    // where this element's edge sits on the owner
+    const ot::TreeNode &E = m_uiAllElements[elementID];
+    const ot::TreeNode &Q = m_uiAllElements[owner];
+    const long Sq         = 1l << (m_uiMaxDepth - Q.getLevel());
+    unsigned int loc[3]   = {0, 0, 0};
+    for (int a = 0; a < 3; a++) {
+        if (a == ax) continue;
+        long c = (long)wpxCoord(E, a) - (long)wpxCoord(Q, a);
+        if (d1 == (unsigned int)(2 * a + 1) || d2 == (unsigned int)(2 * a + 1))
+            c += (1l << (m_uiMaxDepth - E.getLevel()));  // high-side edge
+        loc[a] = (unsigned int)((c * (long)p) / Sq);
+        if (loc[a] > p) return false;
+    }
+
+    static thread_local std::vector<T> cube, eleScratch, line;
+    static thread_local std::vector<double> op, coords, im1_own, im2_own;
+
+    if (im1 == nullptr || im2 == nullptr) {
+        im1_own.resize(m_uiNpE);
+        im2_own.resize(m_uiNpE);
+    }
+    double *const g_im1 = (im1 != nullptr) ? im1 : im1_own.data();
+    double *const g_im2 = (im2 != nullptr) ? im2 : im2_own.data();
+
+    const unsigned int nx = nrp + ext[0] + ext[1];
+    const unsigned int ny = nrp + ext[2] + ext[3];
+    const unsigned int nz = nrp + ext[4] + ext[5];
+
+    cube.resize((size_t)nx * ny * nz);
+    eleScratch.resize((size_t)8 * m_uiNpE);
+
+    this->gatherExtendedCoarseNodesCG(vec, owner, ext, cube.data(),
+                                      eleScratch.data(), g_im1, g_im2, false,
+                                      emode);
+
+    const unsigned int n_in = nrp + ext[2 * ax] + ext[2 * ax + 1];
+    line.resize(n_in);
+    for (unsigned int t = 0; t < n_in; t++) {
+        unsigned int idx[3];
+        idx[0] = loc[0] + ext[0];
+        idx[1] = loc[1] + ext[2];
+        idx[2] = loc[2] + ext[4];
+        idx[ax] = t;
+        line[t] = cube[(size_t)(idx[2] * ny + idx[1]) * nx + idx[0]];
+    }
+
+    wpxAxisCoords(p, ext[2 * ax], emode[2 * ax], ext[2 * ax + 1],
+                  emode[2 * ax + 1], coords);
+    dendro::wideprolong::build_1d_at(p, cnum & 1u, coords, width, op);
+
+    for (unsigned int i = 0; i < nrp; i++) {
+        T acc = T(0);
+        for (unsigned int j = 0; j < n_in; j++)
+            acc += (T)op[(size_t)i * n_in + j] * line[j];
+        out[i] = acc;
+    }
+    wpxEdgeWins()++;
+    return true;
+#endif
 }
 
 template <typename T>

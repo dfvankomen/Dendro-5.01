@@ -1769,6 +1769,47 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                          : 1),
         ext_part, ext_none, worst, rms);
 
+    // How much work is even on the edge path? If hanging edges are rare, or
+    // their owners unreachable, widening them cannot move anything.
+    if (active) {
+        const unsigned int EDG[12] = {
+            OCT_DIR_LEFT_DOWN,  OCT_DIR_LEFT_UP,    OCT_DIR_LEFT_BACK,
+            OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
+            OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
+            OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK,    OCT_DIR_UP_FRONT};
+        const unsigned int FAC[6] = {OCT_DIR_LEFT, OCT_DIR_RIGHT,
+                                     OCT_DIR_DOWN, OCT_DIR_UP,
+                                     OCT_DIR_BACK, OCT_DIR_FRONT};
+        const unsigned int PR[12][2] = {
+            {OCT_DIR_LEFT, OCT_DIR_DOWN},  {OCT_DIR_LEFT, OCT_DIR_UP},
+            {OCT_DIR_LEFT, OCT_DIR_BACK},  {OCT_DIR_LEFT, OCT_DIR_FRONT},
+            {OCT_DIR_RIGHT, OCT_DIR_DOWN}, {OCT_DIR_RIGHT, OCT_DIR_UP},
+            {OCT_DIR_RIGHT, OCT_DIR_BACK}, {OCT_DIR_RIGHT, OCT_DIR_FRONT},
+            {OCT_DIR_DOWN, OCT_DIR_BACK},  {OCT_DIR_DOWN, OCT_DIR_FRONT},
+            {OCT_DIR_UP, OCT_DIR_BACK},    {OCT_DIR_UP, OCT_DIR_FRONT}};
+
+        long hf = 0, he = 0, he_owner = 0;
+        for (unsigned int e = mesh->getElementLocalBegin();
+             e < mesh->getElementLocalEnd(); e++) {
+            unsigned int cn;
+            for (int d = 0; d < 6; d++)
+                if (mesh->isFaceHanging(e, FAC[d], cn)) hf++;
+            for (int d = 0; d < 12; d++)
+                if (mesh->isEdgeHanging(e, EDG[d], cn)) {
+                    he++;
+                    if (mesh->wpxEdgeOwner(e, PR[d][0], PR[d][1]) !=
+                        LOOK_UP_TABLE_DEFAULT)
+                        he_owner++;
+                }
+        }
+        std::printf(
+            "hanging counts over local elements: faces %ld, edges %ld "
+            "(owner resolved %ld)\n",
+            hf, he, he_owner);
+        std::printf("wide edge path: %ld calls, %ld succeeded\n",
+                    ot::wpxEdgeCalls().load(), ot::wpxEdgeWins().load());
+    }
+
     // What would each extension mechanism actually unblock? Re-probing with
     // a wider level mask answers that including the corner rule, which a
     // tally of per-direction refusal reasons cannot.

@@ -2867,6 +2867,32 @@ class Mesh {
                                    double *im1, double *im2) const;
 
     /**
+     * @brief The coarse element owning a hanging edge of `ele`.
+     *
+     * An edge owner is two face hops away, and a hop chain cannot be trusted
+     * once an intermediate sits at another level, so both hop orders are
+     * tried and the candidate is accepted only if it is one level coarser AND
+     * geometrically contains the edge.
+     */
+    unsigned int wpxEdgeOwner(unsigned int ele, unsigned int d1,
+                              unsigned int d2) const;
+
+    /**
+     * @brief Rebuild a hanging edge with the wide stencil.
+     *
+     * The 1D analogue of prolongateHangingFaceWide: resolve the owner, gather
+     * its neighbourhood extended along the edge axis only, pull out the line
+     * the edge lies on, and interpolate along it.
+     *
+     * @return false when unavailable, so the caller falls back to narrow.
+     */
+    template <typename T>
+    bool prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
+                                   unsigned int d1, unsigned int d2,
+                                   unsigned int cnum, T *out, double *im1,
+                                   double *im2) const;
+
+    /**
      * @assumption: input is the elemental nodal values.
      * @brief: Computes the contribution of elemental nodal values to the parent
      * elements if it is hanging. Note: internal nodes for the elements cannnot
