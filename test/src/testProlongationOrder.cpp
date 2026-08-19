@@ -766,12 +766,36 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     const char *fp_env = std::getenv("PROLONG_FIELD");
     const bool poly    = (fp_env && std::string(fp_env) == "poly");
 
+    // a bump drives the wavelet refinement, which is what creates the jumps
+    const char *bp   = std::getenv("PROLONG_BUMP");
+    const char *wp   = std::getenv("PROLONG_WTOL");
+    const char *mp   = std::getenv("PROLONG_MESH");
+    const double bw  = bp ? std::atof(bp) : 0.03;
+    const double wt  = wp ? std::atof(wp) : 1e-4;
+    const bool punc  = (mp && std::string(mp) == "puncture");
+
+    // Schwarzschild-like option: Brill-Lindquist conformal factor on a
+    // domain-200 box, which is what drives refinement in the real runs. The
+    // refined region sits deep inside the domain, so unlike the bump case
+    // most 2:1 interfaces are far from a domain boundary -- that is exactly
+    // the difference being measured here.
+    const double DOM = 200.0;
+    auto phys = [L, DOM](double c) { return (c / L) * DOM - 0.5 * DOM; };
+    auto chi  = [phys](double x, double y, double z) {
+        const double px = phys(x), py = phys(y), pz = phys(z);
+        double r = std::sqrt(px * px + py * py + pz * pz);
+        if (r < 1e-2) r = 1e-2;  // the puncture itself is singular
+        const double psi = 1.0 + 0.5 / r;
+        return std::pow(psi, -4.0);
+    };
+
     // The polynomial option is the sharp diagnostic: a width-10 stencil is
     // exact to degree 9, so on a degree-7 field the wide path must reach
     // roundoff wherever its input is exact. Anything above roundoff means the
     // stencil is being fed values that are themselves interpolated.
     std::function<double(double, double, double)> fn =
-        [kw, L, poly](double x, double y, double z) {
+        [kw, L, poly, punc, chi](double x, double y, double z) {
+            if (punc && !poly) return chi(x, y, z);
             if (poly) {
                 const double u = x / L - 0.5;
                 return u * u * u * u * u * u * u;
@@ -779,14 +803,9 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
             return std::sin(kw * x) * std::cos(kw * y) * std::sin(kw * z);
         };
 
-    // a bump drives the wavelet refinement, which is what creates the jumps
-    const char *bp   = std::getenv("PROLONG_BUMP");
-    const char *wp   = std::getenv("PROLONG_WTOL");
-    const double bw  = bp ? std::atof(bp) : 0.03;
-    const double wt  = wp ? std::atof(wp) : 1e-4;
-
     std::function<double(double, double, double)> fr =
-        [L, bw](double x, double y, double z) {
+        [L, bw, punc, chi](double x, double y, double z) {
+            if (punc) return chi(x, y, z);
             const double dx = (x - 0.42 * L) / (bw * L);
             const double dy = (y - 0.55 * L) / (bw * L);
             const double dz = (z - 0.47 * L) / (bw * L);
@@ -804,8 +823,43 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     long count = 0, nblk = 0;
     unsigned int lmin = 0, lmax = 0;
 
+    long ext_full = 0, ext_part = 0, ext_none = 0;
+    long width_hist[4] = {0, 0, 0, 0};
+
     if (active) {
         mesh->computeMinMaxLevel(lmin, lmax);
+
+        // How often can the wide stencil actually reach its full width? This
+        // is a property of the mesh alone and is what decides whether the
+        // remaining widening work is worth doing.
+        {
+            const unsigned int want =
+                dendro::wideprolong::stencil_width(ELE_ORDER) - (ELE_ORDER + 1);
+            for (unsigned int e = mesh->getElementLocalBegin();
+                 e < mesh->getElementLocalEnd(); e++) {
+                unsigned int ex[6];
+                mesh->probeCoarseExtension(e, want, ex);
+                bool full = true, any = false;
+                for (int a = 0; a < 3; a++) {
+                    const unsigned int t = ex[2 * a] + ex[2 * a + 1];
+                    if (t < want) full = false;
+                    if (t > 0) any = true;
+                }
+                if (full) ext_full++;
+                else if (any) ext_part++;
+                else ext_none++;
+
+                // achieved 1D width is (p+1) + min over axes of the total
+                // extension, and the 1D study showed 9 vs 10 points is worth
+                // ~25x, so the distribution matters more than the mean
+                unsigned int mn = want;
+                for (int a = 0; a < 3; a++) {
+                    const unsigned int t = ex[2 * a] + ex[2 * a + 1];
+                    if (t < mn) mn = t;
+                }
+                if (mn <= 3) width_hist[mn]++;
+            }
+        }
 
         std::vector<double> cg;
         mesh->createVector(cg, fn);
@@ -871,14 +925,29 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     std::printf(
         "\n=== unzip vs analytic over interior blocks ===\n"
         "DENDRO_WIDE_PROLONGATION: %s\n"
-        "levels %u..%u, interior blocks %ld, pad points %ld\n"
+        "mesh=%s  levels %u..%u, interior blocks %ld, pad points %ld\n"
+        "stencil reach over local elements: full %ld (%.1f%%), partial %ld, "
+        "none %ld\n"
         "max err = %.6e   rms err = %.6e\n",
 #ifdef DENDRO_WIDE_PROLONGATION
         "ON",
 #else
         "OFF",
 #endif
-        lmin, lmax, nblk, count, worst, rms);
+        punc ? "puncture" : "bump",
+        lmin, lmax, nblk, count,
+        ext_full,
+        100.0 * (double)ext_full /
+            (double)((ext_full + ext_part + ext_none) > 0
+                         ? (ext_full + ext_part + ext_none)
+                         : 1),
+        ext_part, ext_none, worst, rms);
+
+    std::printf(
+        "achieved 1D stencil width over local elements: "
+        "%u pts %ld, %u pts %ld, %u pts %ld, %u pts %ld\n",
+        ELE_ORDER + 1 + 0, width_hist[0], ELE_ORDER + 1 + 1, width_hist[1],
+        ELE_ORDER + 1 + 2, width_hist[2], ELE_ORDER + 1 + 3, width_hist[3]);
 
     if (active) {
         CHECK(count > 0);
@@ -892,7 +961,10 @@ int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
 
     // octree globals: nothing under ot:: is usable before these are set
-    m_uiMaxDepth = 8;
+    {
+        const char *md = std::getenv("PROLONG_MAXDEPTH");
+        m_uiMaxDepth   = md ? (unsigned)std::atoi(md) : 8u;
+    }
     _InitializeHcurve(m_uiDim);
 
     doctest::Context ctx;
