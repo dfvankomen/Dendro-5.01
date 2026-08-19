@@ -312,10 +312,11 @@ dendro_add_def(RK_SOLVER_OVERLAP_COMM_AND_COMP RK_SOLVER_OVERLAP_COMM_AND_COMP)
 dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
 dendro_add_def(DENDRO_WIDE_PROLONGATION DENDRO_WIDE_PROLONGATION)
 if(DENDRO_WIDE_PROLONGATION)
-  message(WARNING
-    "DENDRO_WIDE_PROLONGATION is ON but the unzip call sites are not wired to "
-    "it yet, so runtime behaviour is unchanged. The operator itself lives in "
-    "FEM/src/wideprolong.cpp and is covered by testProlongationOrder.")
+  message(STATUS
+    "DENDRO_WIDE_PROLONGATION: unzip_scatter's coarse->fine path uses the wide "
+    "stencil. getElementNodalValues' hanging-node reconstruction is still "
+    "narrow, so the interface layer is only partly widened. Aborts if the "
+    "stencil would need a round-2 ghost.")
 endif()
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 

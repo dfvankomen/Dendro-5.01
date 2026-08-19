@@ -11464,11 +11464,9 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                         const unsigned int cnum =
                             childOct_tls[child].getMortonIndex();
                         if (!p2c_interp_valid_tls[cnum]) {
-                            for (unsigned int v = 0; v < dof; v++)
-                                this->parent2ChildInterpolation(
-                                    &dgWVec_t[v * dgSz],
-                                    p2cI_base_t + cnum * dof * nPe + v * nPe,
-                                    cnum, m_uiDim, im1_t, im2_t);
+                            this->prolongateChildNodes(
+                                in, cgSz, dgWVec_t, dgSz, ele, cnum, dof,
+                                p2cI_base_t + cnum * dof * nPe, im1_t, im2_t);
                             p2c_interp_valid_tls[cnum] = true;
                         }
 
@@ -11754,11 +11752,10 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 
                     const unsigned int cnum = childOct[child].getMortonIndex();
                     if (!p2c_interp_valid[cnum]) {
-                        for (unsigned int v = 0; v < dof; v++)
-                            this->parent2ChildInterpolation(
-                                &dgWVec[v * dgSz],
-                                p2cI_all.data() + cnum * dof * nPe + v * nPe,
-                                cnum, m_uiDim);
+                        this->prolongateChildNodes(
+                            in, cgSz, dgWVec, dgSz, ele, cnum, dof,
+                            p2cI_all.data() + cnum * dof * nPe, nullptr,
+                            nullptr);
 
                         p2c_interp_valid[cnum] = true;
                     }
@@ -12028,9 +12025,10 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
                             const unsigned int cnum =
                                 childOct_tls[child].getMortonIndex();
                             if (!p2c_interp_valid_tls[cnum]) {
-                                this->parent2ChildInterpolation(
-                                    dgWVec_t, p2cI_base_t + cnum * nPe, cnum,
-                                    m_uiDim, im1_t, im2_t);
+                                // batch path walks one variable at a time
+                                this->prolongateChildNodes(
+                                    in_v, cgSz, dgWVec_t, dgSz, ele, cnum, 1u,
+                                    p2cI_base_t + cnum * nPe, im1_t, im2_t);
                                 p2c_interp_valid_tls[cnum] = true;
                             }
                             const T* p2cI_base_child = p2cI_base_t + cnum * nPe;
@@ -12758,49 +12756,219 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
     return status;
 }
 
-template <typename T>
-void Mesh::gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
-                                     const unsigned int ext[6], T *out) const {
-    const unsigned int nrp = m_uiElementOrder + 1;
+/**
+ * Shared slab copy behind both gather wrappers. `fetch(e, buf)` must return a
+ * pointer to element e's m_uiNpE nodal values, using buf as scratch if it has
+ * to materialise them.
+ *
+ * Walks the (up to) 27 contributing elements and copies each one's slab,
+ * rather than resolving a neighbour per node, so an element's values are
+ * fetched at most once.
+ */
+template <typename T, typename FetchFn>
+void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
+                                    T *out, T *eleScratch,
+                                    FetchFn fetch) const {
     const unsigned int p   = m_uiElementOrder;
+    const unsigned int nrp = p + 1;
 
     const unsigned int nx  = nrp + ext[0] + ext[1];
     const unsigned int ny  = nrp + ext[2] + ext[3];
     const unsigned int nz  = nrp + ext[4] + ext[5];
 
-    // resolve the (up to) 27 contributing elements once
-    unsigned int nbr[3][3][3];
-    bool bg = false;
-    for (int oz = -1; oz <= 1; oz++)
-        for (int oy = -1; oy <= 1; oy++)
-            for (int ox = -1; ox <= 1; ox++)
-                nbr[oz + 1][oy + 1][ox + 1] =
-                    wpxNeighbour(ele, ox, oy, oz, bg);
+    for (int oz = -1; oz <= 1; oz++) {
+        int gz0, gz1;
+        if (oz < 0) {
+            if (!ext[4]) continue;
+            gz0 = -(int)ext[4]; gz1 = -1;
+        } else if (oz > 0) {
+            if (!ext[5]) continue;
+            gz0 = (int)p + 1; gz1 = (int)p + (int)ext[5];
+        } else {
+            gz0 = 0; gz1 = (int)p;
+        }
 
-    for (unsigned int k = 0; k < nz; k++) {
-        const int gz = (int)k - (int)ext[4];
-        const int oz = (gz < 0) ? -1 : ((gz > (int)p) ? 1 : 0);
-        const unsigned int lk =
-            (unsigned int)(gz - oz * (int)p);
+        for (int oy = -1; oy <= 1; oy++) {
+            int gy0, gy1;
+            if (oy < 0) {
+                if (!ext[2]) continue;
+                gy0 = -(int)ext[2]; gy1 = -1;
+            } else if (oy > 0) {
+                if (!ext[3]) continue;
+                gy0 = (int)p + 1; gy1 = (int)p + (int)ext[3];
+            } else {
+                gy0 = 0; gy1 = (int)p;
+            }
 
-        for (unsigned int j = 0; j < ny; j++) {
-            const int gy = (int)j - (int)ext[2];
-            const int oy = (gy < 0) ? -1 : ((gy > (int)p) ? 1 : 0);
-            const unsigned int lj = (unsigned int)(gy - oy * (int)p);
+            for (int ox = -1; ox <= 1; ox++) {
+                int gx0, gx1;
+                if (ox < 0) {
+                    if (!ext[0]) continue;
+                    gx0 = -(int)ext[0]; gx1 = -1;
+                } else if (ox > 0) {
+                    if (!ext[1]) continue;
+                    gx0 = (int)p + 1; gx1 = (int)p + (int)ext[1];
+                } else {
+                    gx0 = 0; gx1 = (int)p;
+                }
 
-            for (unsigned int i = 0; i < nx; i++) {
-                const int gx = (int)i - (int)ext[0];
-                const int ox = (gx < 0) ? -1 : ((gx > (int)p) ? 1 : 0);
-                const unsigned int li = (unsigned int)(gx - ox * (int)p);
+                bool bg              = false;
+                const unsigned int e = wpxNeighbour(ele, ox, oy, oz, bg);
+                if (e == LOOK_UP_TABLE_DEFAULT) continue;
 
-                const unsigned int e = nbr[oz + 1][oy + 1][ox + 1];
-                out[(size_t)(k * ny + j) * nx + i] =
-                    (e == LOOK_UP_TABLE_DEFAULT)
-                        ? T(0)
-                        : dgVec[(size_t)e * m_uiNpE +
-                                (size_t)(lk * nrp + lj) * nrp + li];
+                const T *src = fetch(e, eleScratch);
+
+                for (int gz = gz0; gz <= gz1; gz++) {
+                    const unsigned int lk = (unsigned int)(gz - oz * (int)p);
+                    for (int gy = gy0; gy <= gy1; gy++) {
+                        const unsigned int lj =
+                            (unsigned int)(gy - oy * (int)p);
+                        for (int gx = gx0; gx <= gx1; gx++) {
+                            const unsigned int li =
+                                (unsigned int)(gx - ox * (int)p);
+                            out[(size_t)((gz + (int)ext[4]) * ny +
+                                         (gy + (int)ext[2])) *
+                                    nx +
+                                (size_t)(gx + (int)ext[0])] =
+                                src[(size_t)(lk * nrp + lj) * nrp + li];
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+template <typename T>
+void Mesh::gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
+                                     const unsigned int ext[6], T *out) const {
+    gatherExtendedCoarseImpl<T>(
+        ele, ext, out, (T *)nullptr,
+        [&](unsigned int e, T *) { return dgVec + (size_t)e * m_uiNpE; });
+}
+
+template <typename T>
+void Mesh::gatherExtendedCoarseNodesDG(const T *dgVec, size_t ele_stride,
+                                       size_t var_offset, unsigned int ele,
+                                       const unsigned int ext[6],
+                                       T *out) const {
+    gatherExtendedCoarseImpl<T>(ele, ext, out, (T *)nullptr,
+                                [&](unsigned int e, T *) {
+                                    return dgVec + (size_t)e * ele_stride +
+                                           var_offset;
+                                });
+}
+
+template <typename T>
+void Mesh::gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
+                                       const unsigned int ext[6], T *out,
+                                       T *eleScratch, double *im1,
+                                       double *im2) const {
+    // NOTE: a neighbour with hanging faces has those faces filled by the
+    // narrow operator inside getElementNodalValues, so widening the pad does
+    // not by itself fix a neighbour's own hanging nodes. That is the separate
+    // getElementNodalValues work item.
+    gatherExtendedCoarseImpl<T>(ele, ext, out, eleScratch,
+                                [&](unsigned int e, T *buf) {
+                                    this->getElementNodalValues(cgVec, buf, e,
+                                                                false, im1,
+                                                                im2);
+                                    return (const T *)buf;
+                                });
+}
+
+/**
+ * Fill one child's (m_uiElementOrder+1)^3 nodes, for every dof, from coarse
+ * element `ele`.
+ *
+ * Without DENDRO_WIDE_PROLONGATION this is exactly today's call and nothing
+ * else runs. With it, the child is built from a stencil that reaches into the
+ * neighbouring coarse elements wherever they exist, and falls back to the
+ * narrow operator per axis where they do not.
+ *
+ * @param out per-dof child nodes, variable v at out + v*m_uiNpE.
+ */
+template <typename T>
+void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
+                                size_t dgSz, unsigned int ele,
+                                unsigned int cnum, unsigned int dof, T *out,
+                                double *im1, double *im2) const {
+#ifdef DENDRO_WIDE_PROLONGATION
+    const unsigned int nrp   = m_uiElementOrder + 1;
+    const unsigned int width = dendro::wideprolong::stencil_width(
+        m_uiElementOrder);
+    const unsigned int want  = (width > nrp) ? (width - nrp) : 0u;
+
+    unsigned int ext[6];
+    const unsigned int st = this->probeCoarseExtension(ele, want, ext);
+
+    if (st & WPX_CLIPPED_GHOST) {
+        // The stencil would have reached a round-2 ghost, so whether it is
+        // available depends on the partition. Degrading quietly here would
+        // make the answer a function of the rank count, so refuse instead.
+        std::cerr << "[wide prolongation] element " << ele
+                  << " needs a round-2 ghost neighbour; the nodal ghost layer "
+                     "only covers round 1, so the wide stencil is not "
+                     "available under this partition. Rebuild with "
+                     "DENDRO_WIDE_PROLONGATION=OFF or run on fewer ranks."
+                  << std::endl;
+        MPI_Abort(m_uiCommGlobal, 1);
+    }
+
+    if (ext[0] || ext[1] || ext[2] || ext[3] || ext[4] || ext[5]) {
+        static thread_local std::vector<double> opx, opy, opz;
+        static thread_local std::vector<T> cube, eleScratch;
+        static thread_local std::vector<double> w1, w2;
+
+        unsigned int nx_in = 0, ny_in = 0, nz_in = 0;
+        dendro::wideprolong::build_1d(m_uiElementOrder, (cnum >> 0u) & 1u,
+                                      ext[0], ext[1], width, opx, nx_in);
+        dendro::wideprolong::build_1d(m_uiElementOrder, (cnum >> 1u) & 1u,
+                                      ext[2], ext[3], width, opy, ny_in);
+        dendro::wideprolong::build_1d(m_uiElementOrder, (cnum >> 2u) & 1u,
+                                      ext[4], ext[5], width, opz, nz_in);
+
+        const size_t ss = dendro::wideprolong::scratch_size(
+            m_uiElementOrder, nx_in, ny_in, nz_in);
+        cube.resize((size_t)nx_in * ny_in * nz_in);
+        eleScratch.resize(m_uiNpE);
+        w1.resize(ss);
+        w2.resize(ss);
+
+        static thread_local std::vector<double> im1_own, im2_own;
+        if (im1 == nullptr || im2 == nullptr) {
+            im1_own.resize(m_uiNpE);
+            im2_own.resize(m_uiNpE);
+        }
+        double *const g_im1 = (im1 != nullptr) ? im1 : im1_own.data();
+        double *const g_im2 = (im2 != nullptr) ? im2 : im2_own.data();
+
+        for (unsigned int v = 0; v < dof; v++) {
+            this->gatherExtendedCoarseNodesCG(in + v * cgSz, ele, ext,
+                                              cube.data(), eleScratch.data(),
+                                              g_im1, g_im2);
+            dendro::wideprolong::apply_3d(m_uiElementOrder, opx.data(), nx_in,
+                                          opy.data(), ny_in, opz.data(), nz_in,
+                                          cube.data(), out + v * m_uiNpE,
+                                          w1.data(), w2.data());
+        }
+        return;
+    }
+#else
+    (void)in;
+    (void)cgSz;
+#endif
+
+    // A null scratch pair means the caller wants RefElement's shared
+    // im_vec1/im_vec2, as the serial path did before it routed through here.
+    for (unsigned int v = 0; v < dof; v++) {
+        if (im1 != nullptr && im2 != nullptr)
+            this->parent2ChildInterpolation(dgEle + v * dgSz,
+                                            out + v * m_uiNpE, cnum, m_uiDim,
+                                            im1, im2);
+        else
+            this->parent2ChildInterpolation(dgEle + v * dgSz,
+                                            out + v * m_uiNpE, cnum, m_uiDim);
     }
 }
 

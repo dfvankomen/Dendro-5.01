@@ -40,6 +40,7 @@
 #include "octUtils.h"
 #include "point.h"
 #include "refel.h"
+#include "wideprolong.h"
 #include "sfcSearch.h"
 #include "sfcSort.h"
 #include "skey.h"
@@ -2171,9 +2172,43 @@ class Mesh {
      * Neighbouring elements share their touching node plane, so a neighbour
      * contributes p new nodes rather than p+1.
      */
+    template <typename T, typename FetchFn>
+    void gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
+                                  T *out, T *eleScratch, FetchFn fetch) const;
+
     template <typename T>
     void gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
                                    const unsigned int ext[6], T *out) const;
+
+    /** As above, for a DG array with an arbitrary per-element stride, e.g.
+     *  unzip_scatter's all_dg which is laid out [ele][var][node]. */
+    template <typename T>
+    void gatherExtendedCoarseNodesDG(const T *dgVec, size_t ele_stride,
+                                     size_t var_offset, unsigned int ele,
+                                     const unsigned int ext[6], T *out) const;
+
+    /** As above, sourcing from a CG vector by regenerating each contributing
+     *  element's nodal values. Needed where only one element's DG values are
+     *  materialised at a time. */
+    /**
+     * @brief Fill one child's nodes for every dof from coarse element `ele`,
+     *        using the wide stencil when DENDRO_WIDE_PROLONGATION is on and
+     *        the neighbours it needs exist.
+     *
+     * With the flag off this is exactly the existing
+     * parent2ChildInterpolation call and no extra work runs.
+     */
+    template <typename T>
+    void prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
+                              size_t dgSz, unsigned int ele, unsigned int cnum,
+                              unsigned int dof, T *out, double *im1,
+                              double *im2) const;
+
+    template <typename T>
+    void gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
+                                     const unsigned int ext[6], T *out,
+                                     T *eleScratch, double *im1,
+                                     double *im2) const;
 
     /**
      * @brief performs the child to parent contribution (only from a single

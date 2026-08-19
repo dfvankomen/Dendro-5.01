@@ -53,6 +53,9 @@
 
 #include "mesh.h"
 #include "meshUtils.h"
+#include <functional>
+#include <string>
+
 #include "octUtils.h"
 #include "refel.h"
 #include "wideprolong.h"
@@ -693,6 +696,45 @@ TEST_CASE("extended coarse gather reproduces the node values it spans") {
     // fall back because a neighbour landed in a round-2 ghost, this total
     // would drop below 216 for some rank count and the wide operator would
     // silently become a function of the partition.
+    // The CG-sourced wrapper is what the unzip call sites use, so check it
+    // agrees bit-for-bit with the DG-sourced one on the same data. The
+    // pattern is index-based; only the plumbing is under test here.
+    double cg_worst = 0.0;
+    if (active) {
+        const unsigned int cgSz = mesh->getDegOfFreedom();
+        std::vector<double> cg(cgSz);
+        for (unsigned int i = 0; i < cgSz; i++)
+            cg[i] = 1.0 + std::sin(0.37 * (double)i);
+
+        std::vector<double> dg2((size_t)elems.size() * nPe, 0.0);
+        std::vector<double> im1(nPe), im2(nPe), scratch(nPe);
+        for (unsigned int e = 0; e < elems.size(); e++)
+            mesh->getElementNodalValues(cg.data(), dg2.data() + (size_t)e * nPe,
+                                        e, false, im1.data(), im2.data());
+
+        for (unsigned int e = e_begin; e < e_end; e++) {
+            unsigned int ext2[6];
+            mesh->probeCoarseExtension(e, want, ext2);
+            const unsigned int mx = nrp + ext2[0] + ext2[1];
+            const unsigned int my = nrp + ext2[2] + ext2[3];
+            const unsigned int mz = nrp + ext2[4] + ext2[5];
+
+            std::vector<double> a((size_t)mx * my * mz, 0.0);
+            std::vector<double> b((size_t)mx * my * mz, 0.0);
+            mesh->gatherExtendedCoarseNodes(dg2.data(), e, ext2, a.data());
+            mesh->gatherExtendedCoarseNodesCG(cg.data(), e, ext2, b.data(),
+                                              scratch.data(), im1.data(),
+                                              im2.data());
+            for (size_t t = 0; t < a.size(); t++) {
+                const double d = std::fabs(a[t] - b[t]);
+                if (d > cg_worst) cg_worst = d;
+            }
+        }
+        std::printf("CG-sourced vs DG-sourced gather: max diff = %.3e\n",
+                    cg_worst);
+    }
+    if (active) CHECK(cg_worst == 0.0);
+
     unsigned int full_global = 0;
     MPI_Allreduce(&full, &full_global, 1, MPI_UNSIGNED, MPI_SUM,
                   MPI_COMM_WORLD);
@@ -705,11 +747,152 @@ TEST_CASE("extended coarse gather reproduces the node values it spans") {
     delete mesh;
 }
 
+/* ------------------------------------------------------------------ */
+/* End to end -- unzip pad accuracy across real 2:1 interfaces         */
+/* ------------------------------------------------------------------ */
+
+TEST_CASE("unzip pad error across 2:1 interfaces") {
+    // Measures what the wired call sites actually buy. The CG values are the
+    // analytic field, so same-level copies and injections are exact by
+    // construction and every non-zero here comes from prolongation.
+    //
+    // Compiled one flag setting at a time, so the OFF/ON comparison is made
+    // across two builds; the number printed below is the result.
+    const double L = (double)(1u << m_uiMaxDepth);
+
+    // wavelength of a few elements, so the prolongation error is well clear
+    // of roundoff without the field being unrepresentable
+    const double kw = 2.0 * M_PI / L;
+    const char *fp_env = std::getenv("PROLONG_FIELD");
+    const bool poly    = (fp_env && std::string(fp_env) == "poly");
+
+    // The polynomial option is the sharp diagnostic: a width-10 stencil is
+    // exact to degree 9, so on a degree-7 field the wide path must reach
+    // roundoff wherever its input is exact. Anything above roundoff means the
+    // stencil is being fed values that are themselves interpolated.
+    std::function<double(double, double, double)> fn =
+        [kw, L, poly](double x, double y, double z) {
+            if (poly) {
+                const double u = x / L - 0.5;
+                return u * u * u * u * u * u * u;
+            }
+            return std::sin(kw * x) * std::cos(kw * y) * std::sin(kw * z);
+        };
+
+    // a bump drives the wavelet refinement, which is what creates the jumps
+    const char *bp   = std::getenv("PROLONG_BUMP");
+    const char *wp   = std::getenv("PROLONG_WTOL");
+    const double bw  = bp ? std::atof(bp) : 0.03;
+    const double wt  = wp ? std::atof(wp) : 1e-4;
+
+    std::function<double(double, double, double)> fr =
+        [L, bw](double x, double y, double z) {
+            const double dx = (x - 0.42 * L) / (bw * L);
+            const double dy = (y - 0.55 * L) / (bw * L);
+            const double dz = (z - 0.47 * L) / (bw * L);
+            return std::exp(-(dx * dx + dy * dy + dz * dz));
+        };
+
+    std::vector<ot::TreeNode> tmp;
+    function2Octree(fr, tmp, m_uiMaxDepth, wt, ELE_ORDER, MPI_COMM_WORLD);
+    ot::Mesh *mesh = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
+                                    MPI_COMM_WORLD, 0);
+    REQUIRE(mesh != nullptr);
+
+    const bool active = mesh->isActive();
+    double worst = 0.0, sum2 = 0.0;
+    long count = 0, nblk = 0;
+    unsigned int lmin = 0, lmax = 0;
+
+    if (active) {
+        mesh->computeMinMaxLevel(lmin, lmax);
+
+        std::vector<double> cg;
+        mesh->createVector(cg, fn);
+        std::vector<double> uz(mesh->getDegOfFreedomUnZip(), 0.0);
+        std::vector<double> errmap(mesh->getDegOfFreedomUnZip(), -1.0);
+
+        mesh->performGhostExchange(cg);
+        mesh->unzip(cg.data(), uz.data(), 1);
+
+
+
+        const std::vector<ot::Block> &blks = mesh->getLocalBlockList();
+        for (size_t b = 0; b < blks.size(); b++) {
+            // skip domain-boundary blocks: their pad is not a 2:1 prolongation
+            if (blks[b].getBlkNodeFlag()) continue;
+            nblk++;
+
+            const ot::TreeNode bn = blks[b].getBlockNode();
+            const unsigned int pW = blks[b].get1DPadWidth();
+            const unsigned int lx = blks[b].getAllocationSzX();
+            const unsigned int ly = blks[b].getAllocationSzY();
+            const unsigned int lz = blks[b].getAllocationSzZ();
+            const unsigned int of = blks[b].getOffset();
+            const double hx       = blks[b].computeGridDx();
+            const double hy       = blks[b].computeGridDy();
+            const double hz       = blks[b].computeGridDz();
+
+            const double x0 = (double)bn.minX() - pW * hx;
+            const double y0 = (double)bn.minY() - pW * hy;
+            const double z0 = (double)bn.minZ() - pW * hz;
+
+            for (unsigned int k = 0; k < lz; k++)
+                for (unsigned int j = 0; j < ly; j++)
+                    for (unsigned int i = 0; i < lx; i++) {
+                        // pad only: a block's own interior is a straight copy
+                        const bool pad = (i < pW || i >= lx - pW ||
+                                          j < pW || j >= ly - pW ||
+                                          k < pW || k >= lz - pW);
+                        if (!pad) continue;
+                        const size_t uidx = of + (size_t)(k * ly + j) * lx + i;
+                        const double e = std::fabs(
+                            uz[uidx] -
+                            fn(x0 + i * hx, y0 + j * hy, z0 + k * hz));
+                        errmap[uidx] = e;
+                        if (e > worst) worst = e;
+                        sum2 += e * e;
+                        count++;
+                    }
+        }
+
+        if (const char *dp = std::getenv("PROLONG_DUMP")) {
+            FILE *fp = std::fopen(dp, "wb");
+            if (fp) {
+                std::fwrite(uz.data(), sizeof(double), uz.size(), fp);
+                std::fwrite(errmap.data(), sizeof(double), errmap.size(), fp);
+                std::fclose(fp);
+            }
+        }
+    }
+
+    const double rms = (count > 0) ? std::sqrt(sum2 / (double)count) : 0.0;
+
+    std::printf(
+        "\n=== unzip vs analytic over interior blocks ===\n"
+        "DENDRO_WIDE_PROLONGATION: %s\n"
+        "levels %u..%u, interior blocks %ld, pad points %ld\n"
+        "max err = %.6e   rms err = %.6e\n",
+#ifdef DENDRO_WIDE_PROLONGATION
+        "ON",
+#else
+        "OFF",
+#endif
+        lmin, lmax, nblk, count, worst, rms);
+
+    if (active) {
+        CHECK(count > 0);
+        CHECK(std::isfinite(worst));
+    }
+
+    delete mesh;
+}
+
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
 
     // octree globals: nothing under ot:: is usable before these are set
-    m_uiMaxDepth = 5;
+    m_uiMaxDepth = 8;
     _InitializeHcurve(m_uiDim);
 
     doctest::Context ctx;
