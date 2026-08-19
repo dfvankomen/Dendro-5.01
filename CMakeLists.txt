@@ -152,6 +152,9 @@ set(NUM_NPES_THRESHOLD 2 CACHE STRING "NPES Threshold")
 # ==========================
 include(FetchContent)
 
+# ctest registration (only populated when BUILD_DENDRO_EXAMPLES is on)
+enable_testing()
+
 # OpenMP
 find_package(OpenMP REQUIRED)
 
@@ -540,6 +543,28 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testRhsWorkflow test/src/testRhsWorkflow.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
   dendro_add_deriv_test(testMeshTimeIntegrator test/src/testMeshTimeIntegrator.cpp)
+
+  # --- doctest-based unit tests (serial, registered with ctest) ---
+  # doctest over Catch2 here: these link dendro5, so the framework's own
+  # compile cost is the only part we control, and doctest is a single header.
+  if(NOT TARGET doctest::doctest)
+    FetchContent_Declare(
+        doctest
+        GIT_REPOSITORY https://github.com/doctest/doctest.git
+        GIT_TAG        v2.5.3
+    )
+    FetchContent_MakeAvailable(doctest)
+  endif()
+  list(APPEND CMAKE_MODULE_PATH ${doctest_SOURCE_DIR}/scripts/cmake)
+  include(doctest)
+
+  function(dendro_add_doctest TARGET_NAME)
+    add_executable(${TARGET_NAME} ${ARGN})
+    target_link_libraries(${TARGET_NAME} PRIVATE dendro5 MPI::MPI_CXX doctest::doctest quadmath m)
+    doctest_discover_tests(${TARGET_NAME})
+  endfunction()
+
+  dendro_add_doctest(testProlongationOrder test/src/testProlongationOrder.cpp)
 
   if(WITH_CUDA)
     # cuda GPU tests
