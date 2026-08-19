@@ -1198,8 +1198,11 @@ TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
     // getElementNodalValues, where a finer neighbour's own hanging faces are
     // filled by the NARROW operator. With a field that no low-degree
     // interpolant reproduces, any such value shows up as a mismatch.
-    double cg_worst = 0.0;
-    {
+    // Measured twice: with the inner fetch narrow, and with it widened. The
+    // gap between them says how much of the contamination the face widening
+    // already removes, and therefore whether the remainder is edges.
+    double cg_worst = 0.0, cg_worst_wide = 0.0;
+    for (int pass = 0; pass < 2; pass++) {
         auto tf = [](double x, double y, double z) {
             return std::exp(0.013 * x) * std::cos(0.011 * y) +
                    0.5 * std::sin(0.009 * z);
@@ -1222,7 +1225,7 @@ TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
             std::vector<double> cube((size_t)mx * my * mz, 0.0);
             mesh->gatherExtendedCoarseNodesCG(cg.data(), e, ext, cube.data(),
                                               scratch.data(), im1.data(),
-                                              im2.data());
+                                              im2.data(), pass == 1);
             const double szz =
                 (double)(1u << (m_uiMaxDepth - elems[e].getLevel()));
             const double HH = szz / (double)p;
@@ -1238,14 +1241,16 @@ TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
                                 HH * ((double)k - (double)ext[4]));
                         const double d = std::fabs(
                             cube[(size_t)(k * my + j) * mx + i] - wv);
-                        if (d > cg_worst) cg_worst = d;
+                        double &tgt = (pass == 0) ? cg_worst : cg_worst_wide;
+                        if (d > tgt) tgt = d;
                     }
         }
     }
     std::printf(
-        "CG-sourced gather vs analytic (exposes interpolated inputs): "
-        "max = %.3e\n",
-        cg_worst);
+        "CG-sourced gather vs analytic (exposes interpolated inputs):\n"
+        "  inner fetch narrow      max = %.3e\n"
+        "  inner fetch widened     max = %.3e   (faces already widened)\n",
+        cg_worst, cg_worst_wide);
 
     // The index map is exact; the CG path is not. That gap is narrow-operator
     // hanging-node values inside the finer neighbours, and it is why

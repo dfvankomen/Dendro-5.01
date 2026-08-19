@@ -13274,8 +13274,15 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
         dendro::wideprolong::stencil_width(p);
     const unsigned int want = (width > nrp) ? (width - nrp) : 0u;
 
+    // Same-level neighbours only here, regardless of the decimation
+    // setting. This path must gather with widening disabled (it is itself
+    // inside getElementNodalValues, so widening would recurse), which
+    // leaves its inputs carrying narrow hanging-node values -- measured at
+    // 1.1e-07, against 4.1e-10 when the inner fetch may widen. Reaching
+    // further on inputs that dirty amplifies them rather than helping.
     unsigned int ext[6];
-    const unsigned int st = this->probeCoarseExtension(owner, want, ext);
+    const unsigned int st =
+        this->probeCoarseExtension(owner, want, ext, WPX_LVL_SAME);
     if (st & WPX_CLIPPED_GHOST) {
         std::cerr << "[wide prolongation] hanging face of element "
                   << elementID
