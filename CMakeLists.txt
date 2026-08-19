@@ -73,6 +73,8 @@ option(BUILD_WITH_PETSC "Build dendro with PETSc" OFF)
 option(USE_FD_INTERP_FOR_UNZIP "Use FD style interpolation for unzip" OFF)
 option(DENDRO_WIDE_PROLONGATION
   "Use a >1-element-wide stencil for parent->child prolongation at 2:1 interfaces" OFF)
+option(DENDRO_WIDE_PROLONGATION_DECIMATE
+  "Also extend the wide stencil into finer neighbours by decimation (measured worse; see mesh.h)" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "Allow MPI to be aware of CUDA support" OFF)
 # Default ON: matrix-form/compact derivs read the full block including the
 # never-filled boundary-ghost padding, so un-zeroed alloc -> NaN. Hybrid-OMP
@@ -311,6 +313,7 @@ dendro_add_def(ALLTOALL_SPARSE ALLTOALL_SPARSE)
 dendro_add_def(RK_SOLVER_OVERLAP_COMM_AND_COMP RK_SOLVER_OVERLAP_COMM_AND_COMP)
 dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
 dendro_add_def(DENDRO_WIDE_PROLONGATION DENDRO_WIDE_PROLONGATION)
+dendro_add_def(DENDRO_WIDE_PROLONGATION_DECIMATE DENDRO_WIDE_PROLONGATION_DECIMATE)
 if(DENDRO_WIDE_PROLONGATION)
   message(STATUS
     "DENDRO_WIDE_PROLONGATION: unzip_scatter's coarse->fine path uses the wide "

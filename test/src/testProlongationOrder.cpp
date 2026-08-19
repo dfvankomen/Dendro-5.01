@@ -1086,6 +1086,180 @@ TEST_CASE("coarser-neighbour extension is limited by its transverse lattice") {
     CHECK(ord[2] == doctest::Approx(5.0).epsilon(0.05));
 }
 
+TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
+    // The uniform-mesh gather test never sees a level jump, so it cannot
+    // catch the decimation index map. This one runs on a refined mesh and
+    // checks every gathered value against the analytic field, which pins the
+    // sub-element selection and the p-2i / 2i local index mapping.
+    //
+    // A linear field is used deliberately: it is represented exactly on every
+    // level, so any mismatch is an indexing error rather than interpolation.
+    const double L = (double)(1u << m_uiMaxDepth);
+    std::function<double(double, double, double)> fr =
+        [L](double x, double y, double z) {
+            const double dx = (x - 0.42 * L) / (0.06 * L);
+            const double dy = (y - 0.55 * L) / (0.06 * L);
+            const double dz = (z - 0.47 * L) / (0.06 * L);
+            return std::exp(-(dx * dx + dy * dy + dz * dz));
+        };
+
+    std::vector<ot::TreeNode> tmp;
+    function2Octree(fr, tmp, m_uiMaxDepth, 1e-3, ELE_ORDER, MPI_COMM_WORLD);
+    ot::Mesh *mesh = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
+                                    MPI_COMM_WORLD, 0);
+    REQUIRE(mesh != nullptr);
+
+    if (!mesh->isActive()) {
+        delete mesh;
+        return;
+    }
+
+    const unsigned int p   = ELE_ORDER;
+    const unsigned int nrp = p + 1;
+    const unsigned int nPe = mesh->getNumNodesPerElement();
+    const unsigned int want =
+        dendro::wideprolong::stencil_width(ELE_ORDER) - nrp;
+
+    auto lin = [](double x, double y, double z) {
+        return 1.0 + 3.0 * x - 2.0 * y + 5.0 * z;
+    };
+
+    const std::vector<ot::TreeNode> &elems = mesh->getAllElements();
+    std::vector<double> dg((size_t)elems.size() * nPe, 0.0);
+    for (unsigned int e = 0; e < elems.size(); e++) {
+        const double sz =
+            (double)(1u << (m_uiMaxDepth - elems[e].getLevel()));
+        for (unsigned int k = 0; k < nrp; k++)
+            for (unsigned int j = 0; j < nrp; j++)
+                for (unsigned int i = 0; i < nrp; i++)
+                    dg[(size_t)e * nPe + (k * nrp + j) * nrp + i] = lin(
+                        (double)elems[e].getX() + sz * (double)i / (double)p,
+                        (double)elems[e].getY() + sz * (double)j / (double)p,
+                        (double)elems[e].getZ() + sz * (double)k / (double)p);
+    }
+
+    double worst = 0.0;
+    long with_finer = 0, checked = 0;
+
+    for (unsigned int e = mesh->getElementLocalBegin();
+         e < mesh->getElementLocalEnd(); e++) {
+        unsigned int ext[6];
+        mesh->probeCoarseExtension(e, want, ext,
+                                   ot::Mesh::WPX_LVL_SAME |
+                                       ot::Mesh::WPX_LVL_FINER);
+
+        // did any direction land on a finer neighbour?
+        bool uses_finer = false;
+        const std::vector<unsigned int> &e2e = mesh->getE2EMapping();
+        const unsigned int nd = mesh->getNumDirections();
+        for (unsigned int d = 0; d < 6; d++) {
+            if (!ext[d]) continue;
+            const unsigned int nb = e2e[e * nd + d];
+            if (nb != LOOK_UP_TABLE_DEFAULT && nb < elems.size() &&
+                elems[nb].getLevel() == elems[e].getLevel() + 1)
+                uses_finer = true;
+        }
+        if (uses_finer) with_finer++;
+
+        const unsigned int nx = nrp + ext[0] + ext[1];
+        const unsigned int ny = nrp + ext[2] + ext[3];
+        const unsigned int nz = nrp + ext[4] + ext[5];
+        std::vector<double> cube((size_t)nx * ny * nz, 0.0);
+        mesh->gatherExtendedCoarseNodes(dg.data(), e, ext, cube.data());
+
+        const double sz =
+            (double)(1u << (m_uiMaxDepth - elems[e].getLevel()));
+        const double H = sz / (double)p;
+        for (unsigned int k = 0; k < nz; k++)
+            for (unsigned int j = 0; j < ny; j++)
+                for (unsigned int i = 0; i < nx; i++) {
+                    const double want_v =
+                        lin((double)elems[e].getX() +
+                                H * ((double)i - (double)ext[0]),
+                            (double)elems[e].getY() +
+                                H * ((double)j - (double)ext[2]),
+                            (double)elems[e].getZ() +
+                                H * ((double)k - (double)ext[4]));
+                    const double d =
+                        std::fabs(cube[(size_t)(k * ny + j) * nx + i] - want_v);
+                    if (d > worst) worst = d;
+                    checked++;
+                }
+    }
+
+    std::printf(
+        "\n=== gather on a refined mesh (decimation path) ===\n"
+        "elements using a finer neighbour: %ld, values checked %ld\n"
+        "max |gathered - analytic| = %.3e\n",
+        with_finer, checked, worst);
+
+    // The check above fills the DG array analytically, so it validates the
+    // index map only. The real path sources from CG through
+    // getElementNodalValues, where a finer neighbour's own hanging faces are
+    // filled by the NARROW operator. With a field that no low-degree
+    // interpolant reproduces, any such value shows up as a mismatch.
+    double cg_worst = 0.0;
+    {
+        auto tf = [](double x, double y, double z) {
+            return std::exp(0.013 * x) * std::cos(0.011 * y) +
+                   0.5 * std::sin(0.009 * z);
+        };
+        std::function<double(double, double, double)> tfn = tf;
+        std::vector<double> cg;
+        mesh->createVector(cg, tfn);
+        std::vector<double> im1(nPe), im2(nPe),
+            scratch((size_t)8 * nPe);
+
+        for (unsigned int e = mesh->getElementLocalBegin();
+             e < mesh->getElementLocalEnd(); e++) {
+            unsigned int ext[6];
+            mesh->probeCoarseExtension(e, want, ext,
+                                       ot::Mesh::WPX_LVL_SAME |
+                                           ot::Mesh::WPX_LVL_FINER);
+            const unsigned int mx = nrp + ext[0] + ext[1];
+            const unsigned int my = nrp + ext[2] + ext[3];
+            const unsigned int mz = nrp + ext[4] + ext[5];
+            std::vector<double> cube((size_t)mx * my * mz, 0.0);
+            mesh->gatherExtendedCoarseNodesCG(cg.data(), e, ext, cube.data(),
+                                              scratch.data(), im1.data(),
+                                              im2.data());
+            const double szz =
+                (double)(1u << (m_uiMaxDepth - elems[e].getLevel()));
+            const double HH = szz / (double)p;
+            for (unsigned int k = 0; k < mz; k++)
+                for (unsigned int j = 0; j < my; j++)
+                    for (unsigned int i = 0; i < mx; i++) {
+                        const double wv = tf(
+                            (double)elems[e].getX() +
+                                HH * ((double)i - (double)ext[0]),
+                            (double)elems[e].getY() +
+                                HH * ((double)j - (double)ext[2]),
+                            (double)elems[e].getZ() +
+                                HH * ((double)k - (double)ext[4]));
+                        const double d = std::fabs(
+                            cube[(size_t)(k * my + j) * mx + i] - wv);
+                        if (d > cg_worst) cg_worst = d;
+                    }
+        }
+    }
+    std::printf(
+        "CG-sourced gather vs analytic (exposes interpolated inputs): "
+        "max = %.3e\n",
+        cg_worst);
+
+    // The index map is exact; the CG path is not. That gap is narrow-operator
+    // hanging-node values inside the finer neighbours, and it is why
+    // decimation is off by default -- see Mesh::WPX_LVL_DEFAULT.
+    CHECK(cg_worst > 1e-10);
+
+    // the decimation path must actually be exercised, or this proves nothing
+    CHECK(with_finer > 0);
+    // linear field is exact on every level, so this is pure index checking
+    CHECK(worst < 1e-6);
+
+    delete mesh;
+}
+
 /* ------------------------------------------------------------------ */
 /* End to end -- unzip pad accuracy across real 2:1 interfaces         */
 /* ------------------------------------------------------------------ */

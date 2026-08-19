@@ -2160,6 +2160,32 @@ class Mesh {
                               unsigned int levelMask = 1u) const;
 
     /**
+     * @brief The finer sibling covering the other half of `ele`'s extent
+     *        along axis `a` (0=x,1=y,2=z).
+     *
+     * A neighbour one level finer spans only half of `ele` per axis, so a
+     * face offset is tiled by four of them, an edge by two, a corner by one.
+     * Which one E2E hands back is not something to assume, so the partner is
+     * found by walking both ways and keeping whichever actually lies inside
+     * `ele`'s extent.
+     */
+    unsigned int wpxFinerPartner(unsigned int base, unsigned int ele,
+                                 int a) const;
+
+    /**
+     * @brief Does element `q` actually cover the region that offset
+     *        (ox,oy,oz) is supposed to supply?
+     *
+     * wpxWalk chains face hops, which silently lands in the wrong place once
+     * an intermediate element is finer: a hop then moves half an element
+     * rather than a whole one. Rather than trust the chain, the resolved
+     * element is checked against the region it must cover, and rejected if it
+     * does not overlap.
+     */
+    bool wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
+                     const unsigned int ext[6], unsigned int q) const;
+
+    /**
      * @brief Which neighbour refinement levels the stencil may extend into.
      *
      * SAME is what is implemented. FINER and COARSER exist so the probe can
@@ -2173,9 +2199,31 @@ class Mesh {
         WPX_LVL_COARSER = 4u
     };
 
+    /**
+     * Levels the stencil extends into by default.
+     *
+     * Decimating a finer neighbour is implemented and index-correct, but it
+     * is OFF by default because it MEASURED WORSE on a puncture mesh: a
+     * finer neighbour adjacent to a coarser element always carries a hanging
+     * face, and its outer transverse faces can be hanging too, so the
+     * decimated values are partly narrow-interpolated rather than real DOFs.
+     * Feeding those to a one-sided width-10 stencil, whose Lebesgue constant
+     * is ~15, amplifies them enough to lose more than the extra width gains
+     * (puncture max error 1.70e-06 -> 4.65e-06).
+     *
+     * Enable with DENDRO_WIDE_PROLONGATION_DECIMATE to re-measure; it only
+     * becomes a win once the hanging faces feeding it are themselves widened.
+     */
+#ifdef DENDRO_WIDE_PROLONGATION_DECIMATE
+    static constexpr unsigned int WPX_LVL_DEFAULT =
+        WPX_LVL_SAME | WPX_LVL_FINER;
+#else
+    static constexpr unsigned int WPX_LVL_DEFAULT = WPX_LVL_SAME;
+#endif
+
     unsigned int probeCoarseExtension(
         unsigned int ele, unsigned int want_ext, unsigned int ext[6],
-        unsigned int levelMask = WPX_LVL_SAME) const;
+        unsigned int levelMask = WPX_LVL_DEFAULT) const;
 
     /**
      * @brief Gather the extended coarse nodal cube implied by a probe.

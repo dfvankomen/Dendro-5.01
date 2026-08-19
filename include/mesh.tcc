@@ -12806,8 +12806,10 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                 for (int ox = -1; ox <= 1 && bad_dir < 0; ox++) {
                     if ((ox < 0 && !ext[0]) || (ox > 0 && !ext[1])) continue;
                     bool bg = false;
-                    if (wpxNeighbour(ele, ox, oy, oz, bg, levelMask) !=
-                        LOOK_UP_TABLE_DEFAULT)
+                    const unsigned int q =
+                        wpxNeighbour(ele, ox, oy, oz, bg, levelMask);
+                    if (q != LOOK_UP_TABLE_DEFAULT &&
+                        wpxOffsetOk(ele, ox, oy, oz, ext, q))
                         continue;
 
                     status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
@@ -12826,6 +12828,67 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
     }
 
     return status;
+}
+
+/** Coordinate of element e along axis a (0=x,1=y,2=z). */
+inline unsigned int wpxCoord(const ot::TreeNode &t, int a) {
+    return (a == 0) ? t.getX() : ((a == 1) ? t.getY() : t.getZ());
+}
+
+inline unsigned int Mesh::wpxFinerPartner(unsigned int base, unsigned int ele,
+                                          int a) const {
+    const ot::TreeNode &E = m_uiAllElements[ele];
+    const unsigned int S  = 1u << (m_uiMaxDepth - E.getLevel());
+    const unsigned int c0 = wpxCoord(E, a);
+    const unsigned int lv = m_uiAllElements[base].getLevel();
+
+    for (int sgn = 1; sgn >= -1; sgn -= 2) {
+        const unsigned int d  = (unsigned int)(2 * a + (sgn > 0 ? 1 : 0));
+        const unsigned int nb = m_uiE2EMapping[base * m_uiNumDirections + d];
+        if (nb == LOOK_UP_TABLE_DEFAULT || nb >= m_uiAllElements.size())
+            continue;
+        if (m_uiAllElements[nb].getLevel() != lv) continue;
+        if (!m_uiIsNodalMapValid[nb]) continue;
+        const unsigned int cn = wpxCoord(m_uiAllElements[nb], a);
+        if (cn >= c0 && cn < c0 + S) return nb;
+    }
+    return LOOK_UP_TABLE_DEFAULT;
+}
+
+inline bool Mesh::wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
+                              const unsigned int ext[6],
+                              unsigned int q) const {
+    if (q == LOOK_UP_TABLE_DEFAULT || q >= m_uiAllElements.size()) return false;
+
+    const ot::TreeNode &E = m_uiAllElements[ele];
+    const ot::TreeNode &Q = m_uiAllElements[q];
+    const long S  = 1l << (m_uiMaxDepth - E.getLevel());
+    const long Sq = 1l << (m_uiMaxDepth - Q.getLevel());
+    const int o[3] = {ox, oy, oz};
+
+    for (int a = 0; a < 3; a++) {
+        const long c0 = (long)wpxCoord(E, a);
+        const long cq = (long)wpxCoord(Q, a);
+
+        long lo, hi;  // region this offset must supply, on this axis
+        if (o[a] < 0) {
+            const long reach = (S * (long)ext[2 * a]) / (long)m_uiElementOrder;
+            lo = c0 - reach;
+            hi = c0;
+        } else if (o[a] > 0) {
+            const long reach =
+                (S * (long)ext[2 * a + 1]) / (long)m_uiElementOrder;
+            lo = c0 + S;
+            hi = c0 + S + reach;
+        } else {
+            lo = c0;
+            hi = c0 + S;
+        }
+        if (hi <= lo) return false;
+        // q must overlap the region, not merely be reachable by a hop chain
+        if (cq + Sq <= lo || cq >= hi) return false;
+    }
+    return true;
 }
 
 /**
@@ -12885,24 +12948,135 @@ void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                 }
 
                 bool bg              = false;
-                const unsigned int e = wpxNeighbour(ele, ox, oy, oz, bg);
+                const unsigned int e =
+                    // The gather resolves whatever the probe was willing to
+                    // grant; policy lives in the probe's level mask, not here.
+                    // Harmless when ext is zero for this direction, since the
+                    // offset is skipped above.
+                    wpxNeighbour(ele, ox, oy, oz, bg,
+                                 WPX_LVL_SAME | WPX_LVL_FINER);
                 if (e == LOOK_UP_TABLE_DEFAULT) continue;
+                if (!wpxOffsetOk(ele, ox, oy, oz, ext, e)) continue;
 
-                const T *src = fetch(e, eleScratch);
+                const unsigned int lev  = m_uiAllElements[ele].getLevel();
+                const bool finer = (m_uiAllElements[e].getLevel() == lev + 1);
+
+                if (!finer) {
+                    const T *src = fetch(e, eleScratch);
+                    for (int gz = gz0; gz <= gz1; gz++) {
+                        const unsigned int lk =
+                            (unsigned int)(gz - oz * (int)p);
+                        for (int gy = gy0; gy <= gy1; gy++) {
+                            const unsigned int lj =
+                                (unsigned int)(gy - oy * (int)p);
+                            for (int gx = gx0; gx <= gx1; gx++) {
+                                const unsigned int li =
+                                    (unsigned int)(gx - ox * (int)p);
+                                out[(size_t)((gz + (int)ext[4]) * ny +
+                                             (gy + (int)ext[2])) *
+                                        nx +
+                                    (size_t)(gx + (int)ext[0])] =
+                                    src[(size_t)(lk * nrp + lj) * nrp + li];
+                            }
+                        }
+                    }
+                    continue;
+                }
+
+                // Finer neighbour: its node p-2i (or 2i on the far side) sits
+                // exactly on this element's lattice position i*H, so the
+                // decimation is an index map and introduces no interpolation.
+                // It spans only half of this element per axis though, so the
+                // axes with a zero offset need a second sub-element each.
+                const int half = (int)p / 2;
+                unsigned int sub[2][2][2];
+                for (int a = 0; a < 8; a++)
+                    (&sub[0][0][0])[a] = LOOK_UP_TABLE_DEFAULT;
+
+                {
+                    // index the base by where it sits inside this element
+                    const ot::TreeNode &E = m_uiAllElements[ele];
+                    const unsigned int S =
+                        1u << (m_uiMaxDepth - E.getLevel());
+                    auto slot = [&](unsigned int q, int a) {
+                        if ((a == 0 && ox) || (a == 1 && oy) || (a == 2 && oz))
+                            return 0;
+                        return (wpxCoord(m_uiAllElements[q], a) >=
+                                wpxCoord(E, a) + S / 2)
+                                   ? 1
+                                   : 0;
+                    };
+
+                    std::vector<unsigned int> seeds;
+                    seeds.push_back(e);
+                    for (int a = 0; a < 3; a++) {
+                        if ((a == 0 && ox) || (a == 1 && oy) ||
+                            (a == 2 && oz))
+                            continue;
+                        const size_t n0 = seeds.size();
+                        for (size_t t = 0; t < n0; t++) {
+                            const unsigned int q =
+                                wpxFinerPartner(seeds[t], ele, a);
+                            if (q != LOOK_UP_TABLE_DEFAULT)
+                                seeds.push_back(q);
+                        }
+                    }
+                    for (unsigned int q : seeds)
+                        sub[slot(q, 2)][slot(q, 1)][slot(q, 0)] = q;
+                }
+
+                bool complete = true;
+                for (int sz = 0; sz <= (oz ? 0 : 1) && complete; sz++)
+                    for (int sy = 0; sy <= (oy ? 0 : 1) && complete; sy++)
+                        for (int sx = 0; sx <= (ox ? 0 : 1); sx++)
+                            if (sub[sz][sy][sx] == LOOK_UP_TABLE_DEFAULT)
+                                complete = false;
+                if (!complete) continue;
+
+                // materialise each sub-element once
+                const T *ssrc[2][2][2] = {};
+                {
+                    int slotn = 0;
+                    for (int sz = 0; sz <= (oz ? 0 : 1); sz++)
+                        for (int sy = 0; sy <= (oy ? 0 : 1); sy++)
+                            for (int sx = 0; sx <= (ox ? 0 : 1); sx++) {
+                                ssrc[sz][sy][sx] = fetch(
+                                    sub[sz][sy][sx],
+                                    eleScratch
+                                        ? eleScratch + (size_t)slotn * m_uiNpE
+                                        : (T *)nullptr);
+                                slotn++;
+                            }
+                }
+
+                // g -> (sub index, local index) on one axis
+                auto mapax = [&](int g, int o) {
+                    int si = 0, li = 0;
+                    if (o < 0)
+                        li = (int)p - 2 * (-g);
+                    else if (o > 0)
+                        li = 2 * (g - (int)p);
+                    else {
+                        si = (g > half) ? 1 : 0;
+                        li = 2 * (g - si * half);
+                    }
+                    return std::make_pair(si, li);
+                };
 
                 for (int gz = gz0; gz <= gz1; gz++) {
-                    const unsigned int lk = (unsigned int)(gz - oz * (int)p);
+                    const auto mz = mapax(gz, oz);
                     for (int gy = gy0; gy <= gy1; gy++) {
-                        const unsigned int lj =
-                            (unsigned int)(gy - oy * (int)p);
+                        const auto my = mapax(gy, oy);
                         for (int gx = gx0; gx <= gx1; gx++) {
-                            const unsigned int li =
-                                (unsigned int)(gx - ox * (int)p);
+                            const auto mx = mapax(gx, ox);
                             out[(size_t)((gz + (int)ext[4]) * ny +
                                          (gy + (int)ext[2])) *
                                     nx +
                                 (size_t)(gx + (int)ext[0])] =
-                                src[(size_t)(lk * nrp + lj) * nrp + li];
+                                ssrc[mz.first][my.first][mx.first]
+                                    [(size_t)(mz.second * nrp + my.second) *
+                                         nrp +
+                                     mx.second];
                         }
                     }
                 }
@@ -13012,7 +13186,7 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
         const size_t ss = dendro::wideprolong::scratch_size(
             m_uiElementOrder, nx_in, ny_in, nz_in);
         cube.resize((size_t)nx_in * ny_in * nz_in);
-        eleScratch.resize(m_uiNpE);
+        eleScratch.resize((size_t)8 * m_uiNpE);
         w1.resize(ss);
         w2.resize(ss);
 
@@ -13147,7 +13321,7 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
     double *const g_im2 = (im2 != nullptr) ? im2 : im2_own.data();
 
     cube.resize((size_t)nx * ny * (nrp + ext[4] + ext[5]));
-    eleScratch.resize(m_uiNpE);
+    eleScratch.resize((size_t)8 * m_uiNpE);
     plane.resize((size_t)na * nb);
     tmp2d.resize((size_t)nrp * nb);
 
