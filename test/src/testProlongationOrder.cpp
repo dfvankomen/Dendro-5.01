@@ -144,16 +144,39 @@ struct PadScheme {
     std::string name;
     int n_coarse;
     int n_fine;
+    /**
+     * Explicit node offsets in units of the FINE spacing h, negative into the
+     * coarse side. Empty means "derive from n_coarse/n_fine", i.e. uniform
+     * coarse spacing H = 2h. Non-empty is how the mixed-spacing case is
+     * expressed: extending into a coarser neighbour puts its nodes at 4h, so
+     * the same point count spans further and the error constant grows.
+     */
+    std::vector<double> offs;
 };
 
 const std::vector<PadScheme> &schemes() {
+    // element nodes sit at 0,-2,-4,...,-12 in units of h (coarse spacing 2h)
+    static const std::vector<double> ELEM = {0, -2, -4, -6, -8, -10, -12};
+    auto with = [](std::vector<double> extra) {
+        std::vector<double> v = ELEM;
+        for (double e : extra) v.push_back(e);
+        return v;
+    };
+
     static const std::vector<PadScheme> s = {
-        {"narrow-elemlocal-7pt", 7, 0},   // today's ip_1D_* path
-        {"wide-coarse-8pt", 8, 0},
-        {"wide-coarse-9pt", 9, 0},
-        {"wide-coarse-10pt", 10, 0},
-        {"straddle-7c+2f-9pt", 7, 2},
-        {"straddle-7c+3f-10pt", 7, 3},
+        {"narrow-elemlocal-7pt", 7, 0, {}},  // today's ip_1D_* path
+        {"wide-coarse-8pt", 8, 0, {}},
+        {"wide-coarse-9pt", 9, 0, {}},
+        {"wide-coarse-10pt", 10, 0, {}},
+        {"straddle-7c+2f-9pt", 7, 2, {}},
+        {"straddle-7c+3f-10pt", 7, 3, {}},
+        // cross-check that the explicit-offset form reproduces the derived one
+        {"unif-10pt-explicit", 0, 0, with({-14, -16, -18})},
+        // extension into a COARSER neighbour: its nodes are at 4h spacing, so
+        // the same point count spans 24h instead of 18h
+        {"mixed-8pt-coarsenbr", 0, 0, with({-16})},
+        {"mixed-9pt-coarsenbr", 0, 0, with({-16, -20})},
+        {"mixed-10pt-coarsenbr", 0, 0, with({-16, -20, -24})},
     };
     return s;
 }
@@ -163,9 +186,14 @@ void reconstruct_pad(const PadScheme &s, real h, real pad[3]) {
     const real H = 2 * h;
 
     std::vector<real> xs;
-    xs.reserve(s.n_coarse + s.n_fine);
-    for (int i = 0; i < s.n_coarse; i++) xs.push_back(X0 - (real)i * H);
-    for (int i = 1; i <= s.n_fine; i++) xs.push_back(X0 + (real)i * h);
+    if (!s.offs.empty()) {
+        xs.reserve(s.offs.size());
+        for (double o : s.offs) xs.push_back(X0 + (real)o * h);
+    } else {
+        xs.reserve(s.n_coarse + s.n_fine);
+        for (int i = 0; i < s.n_coarse; i++) xs.push_back(X0 - (real)i * H);
+        for (int i = 1; i <= s.n_fine; i++) xs.push_back(X0 + (real)i * h);
+    }
 
     std::vector<real> u(xs.size());
     for (size_t i = 0; i < xs.size(); i++) u[i] = f(xs[i]);
@@ -476,8 +504,8 @@ TEST_CASE("prolongation order at a 2:1 hanging node") {
 
     std::printf(
         "\n=== Test 1: prolongation error at hanging pad node X0-h ===\n");
-    std::printf("%-22s %8s %13s %13s %8s %6s\n", "scheme", "npts",
-                "err(h=1/128)", "err(h=1/2187)", "order", "nfit");
+    std::printf("%-22s %8s %13s %13s %8s %6s %9s\n", "scheme", "npts",
+                "err(h=1/128)", "err(h=1/2187)", "order", "nfit", "sum|w|");
 
     std::vector<double> orders;
     for (const PadScheme &s : schemes()) {
@@ -492,16 +520,39 @@ TEST_CASE("prolongation order at a 2:1 hanging node") {
         const double p = fit_order(hs, errs, n_used);
         orders.push_back(p);
 
-        std::printf("%-22s %8d %13.4e %13.4e %8.3f %6u\n", s.name.c_str(),
-                    s.n_coarse + s.n_fine, dbl(errs.front()), dbl(errs.back()),
-                    p, n_used);
+        // Lebesgue constant at the target: how much the stencil amplifies
+        // noise or roundoff in its inputs.
+        real lam = 0;
+        {
+            const real h0 = 1.0Q / 512, H0 = 2 * h0;
+            std::vector<real> xs;
+            if (!s.offs.empty())
+                for (double o : s.offs) xs.push_back(X0 + (real)o * h0);
+            else {
+                for (int i = 0; i < s.n_coarse; i++)
+                    xs.push_back(X0 - (real)i * H0);
+                for (int i = 1; i <= s.n_fine; i++)
+                    xs.push_back(X0 + (real)i * h0);
+            }
+            std::vector<real> w;
+            lagrange_weights(xs, X0 - h0, w);
+            for (size_t i = 0; i < w.size(); i++) lam += fabsq(w[i]);
+        }
+
+        const int npts = s.offs.empty() ? (s.n_coarse + s.n_fine)
+                                        : (int)s.offs.size();
+        std::printf("%-22s %8d %13.4e %13.4e %8.3f %6u %9.3f\n",
+                    s.name.c_str(), npts, dbl(errs.front()), dbl(errs.back()),
+                    p, n_used, dbl(lam));
     }
 
     // A stencil of n points is exact for degree n-1, so its interpolation
     // error must go like h^n.
     for (size_t i = 0; i < schemes().size(); i++) {
         const PadScheme &s = schemes()[i];
-        const double expected = s.n_coarse + s.n_fine;
+        const double expected =
+            s.offs.empty() ? (double)(s.n_coarse + s.n_fine)
+                           : (double)s.offs.size();
         CAPTURE(s.name);
         CAPTURE(expected);
         CHECK(orders[i] == doctest::Approx(expected).epsilon(0.03));
