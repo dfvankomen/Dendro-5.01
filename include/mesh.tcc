@@ -3046,7 +3046,8 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
 template <typename T>
 void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
                                  unsigned int elementID, bool isDGVec,
-                                 double* im1, double* im2) const {
+                                 double* im1, double* im2,
+                                 bool allowWide) const {
     if (!m_uiIsActive) return;
 
     // handles the element get nodal values if the vec is an element DG vector.
@@ -3107,9 +3108,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         for (unsigned int index = 0; index < faceIndex.size(); index++)
             faceInpIn[index] = vec[m_uiE2NMapping_CG[faceIndex[index]]];
 
-        this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
-                                        &(*(faceInpOut.begin())), cnum, 2, im1,
-                                        im2);
+        if (!(allowWide &&
+              this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_LEFT, cnum,
+                                              &(*(faceInpOut.begin())), im1,
+                                              im2)))
+            this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
+                                            &(*(faceInpOut.begin())), cnum, 2,
+                                            im1, im2);
 
         for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++)
             for (unsigned int j = 0; j < (m_uiElementOrder + 1); j++)
@@ -3147,9 +3152,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         for (unsigned int index = 0; index < faceIndex.size(); index++)
             faceInpIn[index] = vec[m_uiE2NMapping_CG[faceIndex[index]]];
 
-        this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
-                                        &(*(faceInpOut.begin())), cnum, 2, im1,
-                                        im2);
+        if (!(allowWide &&
+              this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_RIGHT, cnum,
+                                              &(*(faceInpOut.begin())), im1,
+                                              im2)))
+            this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
+                                            &(*(faceInpOut.begin())), cnum, 2,
+                                            im1, im2);
 
         for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++)
             for (unsigned int j = 0; j < (m_uiElementOrder + 1); j++)
@@ -3188,9 +3197,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         for (unsigned int index = 0; index < faceIndex.size(); index++)
             faceInpIn[index] = vec[m_uiE2NMapping_CG[faceIndex[index]]];
 
-        this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
-                                        &(*(faceInpOut.begin())), cnum, 2, im1,
-                                        im2);
+        if (!(allowWide &&
+              this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_DOWN, cnum,
+                                              &(*(faceInpOut.begin())), im1,
+                                              im2)))
+            this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
+                                            &(*(faceInpOut.begin())), cnum, 2,
+                                            im1, im2);
 
         for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++)
             for (unsigned int i = 0; i < (m_uiElementOrder + 1); i++)
@@ -3228,9 +3241,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         for (unsigned int index = 0; index < faceIndex.size(); index++)
             faceInpIn[index] = vec[m_uiE2NMapping_CG[faceIndex[index]]];
 
-        this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
-                                        &(*(faceInpOut.begin())), cnum, 2, im1,
-                                        im2);
+        if (!(allowWide &&
+              this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_UP, cnum,
+                                              &(*(faceInpOut.begin())), im1,
+                                              im2)))
+            this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
+                                            &(*(faceInpOut.begin())), cnum, 2,
+                                            im1, im2);
 
         for (unsigned int k = 0; k < (m_uiElementOrder + 1); k++)
             for (unsigned int i = 0; i < (m_uiElementOrder + 1); i++)
@@ -3269,9 +3286,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         for (unsigned int index = 0; index < faceIndex.size(); index++)
             faceInpIn[index] = vec[m_uiE2NMapping_CG[faceIndex[index]]];
 
-        this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
-                                        &(*(faceInpOut.begin())), cnum, 2, im1,
-                                        im2);
+        if (!(allowWide &&
+              this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_BACK, cnum,
+                                              &(*(faceInpOut.begin())), im1,
+                                              im2)))
+            this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
+                                            &(*(faceInpOut.begin())), cnum, 2,
+                                            im1, im2);
 
         for (unsigned int j = 0; j < (m_uiElementOrder + 1); j++)
             for (unsigned int i = 0; i < (m_uiElementOrder + 1); i++)
@@ -3309,9 +3330,13 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         for (unsigned int index = 0; index < faceIndex.size(); index++)
             faceInpIn[index] = vec[m_uiE2NMapping_CG[faceIndex[index]]];
 
-        this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
-                                        &(*(faceInpOut.begin())), cnum, 2, im1,
-                                        im2);
+        if (!(allowWide &&
+              this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_FRONT, cnum,
+                                              &(*(faceInpOut.begin())), im1,
+                                              im2)))
+            this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
+                                            &(*(faceInpOut.begin())), cnum, 2,
+                                            im1, im2);
 
         for (unsigned int j = 0; j < (m_uiElementOrder + 1); j++)
             for (unsigned int i = 0; i < (m_uiElementOrder + 1); i++)
@@ -11466,7 +11491,8 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                         if (!p2c_interp_valid_tls[cnum]) {
                             this->prolongateChildNodes(
                                 in, cgSz, dgWVec_t, dgSz, ele, cnum, dof,
-                                p2cI_base_t + cnum * dof * nPe, im1_t, im2_t);
+                                p2cI_base_t + cnum * dof * nPe, im1_t, im2_t,
+                                all_dg.data(), (size_t)dof * dgSz);
                             p2c_interp_valid_tls[cnum] = true;
                         }
 
@@ -12028,7 +12054,8 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
                                 // batch path walks one variable at a time
                                 this->prolongateChildNodes(
                                     in_v, cgSz, dgWVec_t, dgSz, ele, cnum, 1u,
-                                    p2cI_base_t + cnum * nPe, im1_t, im2_t);
+                                    p2cI_base_t + cnum * nPe, im1_t, im2_t,
+                                    all_dg.data(), (size_t)dgSz);
                                 p2c_interp_valid_tls[cnum] = true;
                             }
                             const T* p2cI_base_child = p2cI_base_t + cnum * nPe;
@@ -12654,6 +12681,25 @@ void Mesh::getUnzipElementalNodalValues(const T* uzipVec, unsigned int blkID,
 }
 
 /**
+ * Report the first narrow fallback and stay quiet after that. A fallback is
+ * legitimate -- there is simply no same-level coarse neighbour to widen into --
+ * but it must not be invisible, because those nodes keep the original order.
+ */
+inline void wpxLogFallbackOnce(const char *what, unsigned int got,
+                               unsigned int want) {
+    static std::atomic<bool> logged{false};
+    bool expected = false;
+    if (logged.compare_exchange_strong(expected, true))
+        std::cout << "[wide prolongation] stencil clipped at " << what
+                  << ": reached " << got << " of " << want
+                  << " extra coarse nodes on some axis, so those nodes use a "
+                     "narrower stencil and keep a lower order. This is "
+                     "expected at domain boundaries and level jumps. Logged "
+                     "once per run."
+                  << std::endl;
+}
+
+/**
  * Resolve the element `steps` face hops away from `ele`, requiring every
  * intermediate to be a usable same-level coarse element. Sets `bad_ghost`
  * when the walk is blocked by a round-2 ghost specifically, since that case
@@ -12862,8 +12908,8 @@ void Mesh::gatherExtendedCoarseNodesDG(const T *dgVec, size_t ele_stride,
 template <typename T>
 void Mesh::gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
                                        const unsigned int ext[6], T *out,
-                                       T *eleScratch, double *im1,
-                                       double *im2) const {
+                                       T *eleScratch, double *im1, double *im2,
+                                       bool allowWide) const {
     // NOTE: a neighbour with hanging faces has those faces filled by the
     // narrow operator inside getElementNodalValues, so widening the pad does
     // not by itself fix a neighbour's own hanging nodes. That is the separate
@@ -12872,7 +12918,7 @@ void Mesh::gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
                                 [&](unsigned int e, T *buf) {
                                     this->getElementNodalValues(cgVec, buf, e,
                                                                 false, im1,
-                                                                im2);
+                                                                im2, allowWide);
                                     return (const T *)buf;
                                 });
 }
@@ -12892,7 +12938,8 @@ template <typename T>
 void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                                 size_t dgSz, unsigned int ele,
                                 unsigned int cnum, unsigned int dof, T *out,
-                                double *im1, double *im2) const {
+                                double *im1, double *im2, const T *allDg,
+                                size_t allDgEleStride) const {
 #ifdef DENDRO_WIDE_PROLONGATION
     const unsigned int nrp   = m_uiElementOrder + 1;
     const unsigned int width = dendro::wideprolong::stencil_width(
@@ -12913,6 +12960,14 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                      "DENDRO_WIDE_PROLONGATION=OFF or run on fewer ranks."
                   << std::endl;
         MPI_Abort(m_uiCommGlobal, 1);
+    }
+
+    for (int a = 0; a < 3; a++) {
+        const unsigned int tot = ext[2 * a] + ext[2 * a + 1];
+        if (tot < want) {
+            wpxLogFallbackOnce("unzip coarse->fine", tot, want);
+            break;
+        }
     }
 
     if (ext[0] || ext[1] || ext[2] || ext[3] || ext[4] || ext[5]) {
@@ -12944,9 +12999,19 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
         double *const g_im2 = (im2 != nullptr) ? im2 : im2_own.data();
 
         for (unsigned int v = 0; v < dof; v++) {
-            this->gatherExtendedCoarseNodesCG(in + v * cgSz, ele, ext,
-                                              cube.data(), eleScratch.data(),
-                                              g_im1, g_im2);
+            // Prefer the caller's whole-mesh DG array: it was filled by
+            // getElementNodalValues with widening enabled, so its hanging
+            // faces are already corrected. Re-gathering from CG here would
+            // both redo that work and feed the stencil narrow face values.
+            if (allDg != nullptr)
+                this->gatherExtendedCoarseNodesDG(allDg, allDgEleStride,
+                                                  (size_t)v * dgSz, ele, ext,
+                                                  cube.data());
+            else
+                this->gatherExtendedCoarseNodesCG(in + v * cgSz, ele, ext,
+                                                  cube.data(),
+                                                  eleScratch.data(), g_im1,
+                                                  g_im2, true);
             dendro::wideprolong::apply_3d(m_uiElementOrder, opx.data(), nx_in,
                                           opy.data(), ny_in, opz.data(), nz_in,
                                           cube.data(), out + v * m_uiNpE,
@@ -12954,6 +13019,7 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
         }
         return;
     }
+    wpxLogFallbackOnce("unzip coarse->fine", 0, want);
 #else
     (void)in;
     (void)cgSz;
@@ -12970,6 +13036,123 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
             this->parent2ChildInterpolation(dgEle + v * dgSz,
                                             out + v * m_uiNpE, cnum, m_uiDim);
     }
+}
+
+template <typename T>
+bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
+                                     unsigned int dir, unsigned int cnum,
+                                     T *out, double *im1, double *im2) const {
+#ifndef DENDRO_WIDE_PROLONGATION
+    (void)vec; (void)elementID; (void)dir; (void)cnum; (void)out;
+    (void)im1; (void)im2;
+    return false;
+#else
+    const unsigned int p   = m_uiElementOrder;
+    const unsigned int nrp = p + 1;
+
+    const unsigned int owner =
+        m_uiE2EMapping[elementID * m_uiNumDirections + dir];
+    if (owner == LOOK_UP_TABLE_DEFAULT || owner >= m_uiAllElements.size())
+        return false;
+    if (!m_uiIsNodalMapValid[owner]) return false;
+    if (m_uiAllElements[owner].getLevel() + 1 !=
+        m_uiAllElements[elementID].getLevel())
+        return false;
+
+    // in-plane axes: normal axis carries no extension, we only widen
+    // tangentially within the owner's face plane
+    int axN, axA, axB;
+    if (dir == OCT_DIR_LEFT || dir == OCT_DIR_RIGHT) {
+        axN = 0; axA = 1; axB = 2;
+    } else if (dir == OCT_DIR_DOWN || dir == OCT_DIR_UP) {
+        axN = 1; axA = 0; axB = 2;
+    } else {
+        axN = 2; axA = 0; axB = 1;
+    }
+
+    const unsigned int width =
+        dendro::wideprolong::stencil_width(p);
+    const unsigned int want = (width > nrp) ? (width - nrp) : 0u;
+
+    unsigned int ext[6];
+    const unsigned int st = this->probeCoarseExtension(owner, want, ext);
+    if (st & WPX_CLIPPED_GHOST) {
+        std::cerr << "[wide prolongation] hanging face of element "
+                  << elementID
+                  << " needs a round-2 ghost neighbour; the nodal ghost layer "
+                     "only covers round 1. Rebuild with "
+                     "DENDRO_WIDE_PROLONGATION=OFF or run on fewer ranks."
+                  << std::endl;
+        MPI_Abort(m_uiCommGlobal, 1);
+    }
+
+    ext[2 * axN]     = 0;
+    ext[2 * axN + 1] = 0;
+
+    const unsigned int a_lo = ext[2 * axA], a_hi = ext[2 * axA + 1];
+    const unsigned int b_lo = ext[2 * axB], b_hi = ext[2 * axB + 1];
+    if (!(a_lo || a_hi || b_lo || b_hi)) {
+        wpxLogFallbackOnce("hanging face", 0, want);
+        return false;
+    }
+    if (a_lo + a_hi < want || b_lo + b_hi < want)
+        wpxLogFallbackOnce("hanging face",
+                           std::min(a_lo + a_hi, b_lo + b_hi), want);
+
+    const unsigned int na = nrp + a_lo + a_hi;
+    const unsigned int nb = nrp + b_lo + b_hi;
+    const unsigned int nx = nrp + ext[0] + ext[1];
+    const unsigned int ny = nrp + ext[2] + ext[3];
+
+    // our face `dir` abuts the owner's opposite face
+    const unsigned int nIdx =
+        (dir == OCT_DIR_LEFT || dir == OCT_DIR_DOWN || dir == OCT_DIR_BACK)
+            ? p
+            : 0u;
+
+    static thread_local std::vector<T> cube, eleScratch, plane, tmp2d;
+    static thread_local std::vector<double> opA, opB, im1_own, im2_own;
+
+    if (im1 == nullptr || im2 == nullptr) {
+        im1_own.resize(m_uiNpE);
+        im2_own.resize(m_uiNpE);
+    }
+    double *const g_im1 = (im1 != nullptr) ? im1 : im1_own.data();
+    double *const g_im2 = (im2 != nullptr) ? im2 : im2_own.data();
+
+    cube.resize((size_t)nx * ny * (nrp + ext[4] + ext[5]));
+    eleScratch.resize(m_uiNpE);
+    plane.resize((size_t)na * nb);
+    tmp2d.resize((size_t)nrp * nb);
+
+    // allowWide=false inside the gather: the inner fetches must not widen
+    // their own hanging faces or this recurses. Bounded at depth two.
+    this->gatherExtendedCoarseNodesCG(vec, owner, ext, cube.data(),
+                                      eleScratch.data(), g_im1, g_im2);
+
+    for (unsigned int ib = 0; ib < nb; ib++)
+        for (unsigned int ia = 0; ia < na; ia++) {
+            size_t c;
+            if (axN == 0)
+                c = (size_t)(ib * ny + ia) * nx + nIdx;
+            else if (axN == 1)
+                c = (size_t)(ib * ny + nIdx) * nx + ia;
+            else
+                c = (size_t)(nIdx * ny + ib) * nx + ia;
+            plane[(size_t)ib * na + ia] = cube[c];
+        }
+
+    unsigned int na_in = 0, nb_in = 0;
+    dendro::wideprolong::build_1d(p, cnum & 1u, a_lo, a_hi, width, opA, na_in);
+    dendro::wideprolong::build_1d(p, (cnum >> 1u) & 1u, b_lo, b_hi, width, opB,
+                                  nb_in);
+
+    dendro::wideprolong::apply_x(na_in, nrp, nb, 1, opA.data(), plane.data(),
+                                 tmp2d.data());
+    dendro::wideprolong::apply_y(nb_in, nrp, nrp, 1, opB.data(), tmp2d.data(),
+                                 out);
+    return true;
+#endif
 }
 
 template <typename T>

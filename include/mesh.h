@@ -39,6 +39,8 @@
 #include "node.h"
 #include "octUtils.h"
 #include "point.h"
+#include <atomic>
+
 #include "refel.h"
 #include "wideprolong.h"
 #include "sfcSearch.h"
@@ -2202,13 +2204,14 @@ class Mesh {
     void prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                               size_t dgSz, unsigned int ele, unsigned int cnum,
                               unsigned int dof, T *out, double *im1,
-                              double *im2) const;
+                              double *im2, const T *allDg = nullptr,
+                              size_t allDgEleStride = 0) const;
 
     template <typename T>
     void gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
                                      const unsigned int ext[6], T *out,
-                                     T *eleScratch, double *im1,
-                                     double *im2) const;
+                                     T *eleScratch, double *im1, double *im2,
+                                     bool allowWide = false) const;
 
     /**
      * @brief performs the child to parent contribution (only from a single
@@ -2750,7 +2753,26 @@ class Mesh {
     template <typename T>
     void getElementNodalValues(const T *vec, T *nodalValues,
                                unsigned int elementID, bool isDGVec,
-                               double *im1, double *im2) const;
+                               double *im1, double *im2,
+                               bool allowWide = true) const;
+
+    /**
+     * @brief Rebuild a hanging face with the wide stencil.
+     *
+     * The fine element's hanging-face e2n entries alias the coarse owner's
+     * face nodes, so the narrow path never learns which element the owner is.
+     * Here we resolve the owner through E2E, gather its neighbourhood, take
+     * the face plane our element abuts, and interpolate in-plane with a wide
+     * stencil on both tangential axes.
+     *
+     * @return false when the wide path is unavailable -- flag off, no usable
+     *         owner, or no tangential room -- and the caller must fall back to
+     *         the narrow operator.
+     */
+    template <typename T>
+    bool prolongateHangingFaceWide(const T *vec, unsigned int elementID,
+                                   unsigned int dir, unsigned int cnum, T *out,
+                                   double *im1, double *im2) const;
 
     /**
      * @assumption: input is the elemental nodal values.
