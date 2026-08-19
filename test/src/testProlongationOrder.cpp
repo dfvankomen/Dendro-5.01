@@ -825,6 +825,7 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
 
     long ext_full = 0, ext_part = 0, ext_none = 0;
     long width_hist[4] = {0, 0, 0, 0};
+    long refuse[4]     = {0, 0, 0, 0};
 
     if (active) {
         mesh->computeMinMaxLevel(lmin, lmax);
@@ -835,6 +836,9 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
         {
             const unsigned int want =
                 dendro::wideprolong::stencil_width(ELE_ORDER) - (ELE_ORDER + 1);
+            const std::vector<unsigned int> &e2e = mesh->getE2EMapping();
+            const std::vector<ot::TreeNode> &allE = mesh->getAllElements();
+            const unsigned int ndir = mesh->getNumDirections();
             for (unsigned int e = mesh->getElementLocalBegin();
                  e < mesh->getElementLocalEnd(); e++) {
                 unsigned int ex[6];
@@ -858,6 +862,25 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                     if (t < mn) mn = t;
                 }
                 if (mn <= 3) width_hist[mn]++;
+
+                // Why was a direction refused? This decides which extension
+                // mechanism is worth building: decimating a finer neighbour,
+                // or a non-uniform fit into a coarser one.
+                for (unsigned int d = 0; d < 6; d++) {
+                    if (ex[d]) continue;
+                    const unsigned int nb =
+                        e2e[e * ndir + d];
+                    if (nb == LOOK_UP_TABLE_DEFAULT ||
+                        nb >= allE.size()) {
+                        refuse[0]++;  // no neighbour: domain boundary
+                    } else if (allE[nb].getLevel() > allE[e].getLevel()) {
+                        refuse[1]++;  // neighbour finer  -> decimation
+                    } else if (allE[nb].getLevel() < allE[e].getLevel()) {
+                        refuse[2]++;  // neighbour coarser -> non-uniform
+                    } else {
+                        refuse[3]++;  // same level: dropped by the corner rule
+                    }
+                }
             }
         }
 
@@ -948,6 +971,16 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
         "%u pts %ld, %u pts %ld, %u pts %ld, %u pts %ld\n",
         ELE_ORDER + 1 + 0, width_hist[0], ELE_ORDER + 1 + 1, width_hist[1],
         ELE_ORDER + 1 + 2, width_hist[2], ELE_ORDER + 1 + 3, width_hist[3]);
+
+    const long rtot = refuse[0] + refuse[1] + refuse[2] + refuse[3];
+    std::printf(
+        "refused directions (%ld total): domain-bdy %ld (%.1f%%), "
+        "nbr-finer %ld (%.1f%%), nbr-coarser %ld (%.1f%%), "
+        "same-level-dropped-by-corner-rule %ld (%.1f%%)\n",
+        rtot, refuse[0], 100.0 * refuse[0] / (rtot ? rtot : 1), refuse[1],
+        100.0 * refuse[1] / (rtot ? rtot : 1), refuse[2],
+        100.0 * refuse[2] / (rtot ? rtot : 1), refuse[3],
+        100.0 * refuse[3] / (rtot ? rtot : 1));
 
     if (active) {
         CHECK(count > 0);

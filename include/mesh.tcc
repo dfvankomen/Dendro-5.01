@@ -12774,29 +12774,41 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
     }
 
     // Extending two or three axes at once also needs the edge and corner
-    // elements. Drop a whole axis at a time (z, then y, then x) until every
-    // implied element resolves, so the choice does not depend on traversal
-    // order.
-    for (int axis = 2; axis >= 0; axis--) {
-        bool ok = true;
-        for (int oz = -1; oz <= 1 && ok; oz++) {
+    // elements. When one is missing, give up only the single direction that
+    // corner depends on -- dropping the whole axis (both directions) throws
+    // away usable same-level neighbours, and measurement showed that
+    // accounted for a quarter of all refused directions.
+    //
+    // The offending direction is chosen highest-axis-first so the outcome
+    // does not depend on traversal order. At most six directions can be
+    // retired, hence the bound.
+    for (int guard = 0; guard < 6; guard++) {
+        int bad_dir = -1;
+
+        for (int oz = -1; oz <= 1 && bad_dir < 0; oz++) {
             if ((oz < 0 && !ext[4]) || (oz > 0 && !ext[5])) continue;
-            for (int oy = -1; oy <= 1 && ok; oy++) {
+            for (int oy = -1; oy <= 1 && bad_dir < 0; oy++) {
                 if ((oy < 0 && !ext[2]) || (oy > 0 && !ext[3])) continue;
-                for (int ox = -1; ox <= 1 && ok; ox++) {
+                for (int ox = -1; ox <= 1 && bad_dir < 0; ox++) {
                     if ((ox < 0 && !ext[0]) || (ox > 0 && !ext[1])) continue;
                     bool bg = false;
-                    if (wpxNeighbour(ele, ox, oy, oz, bg) ==
-                        LOOK_UP_TABLE_DEFAULT) {
-                        ok = false;
-                        status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
-                    }
+                    if (wpxNeighbour(ele, ox, oy, oz, bg) !=
+                        LOOK_UP_TABLE_DEFAULT)
+                        continue;
+
+                    status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
+                    if (oz != 0)
+                        bad_dir = (oz < 0) ? 4 : 5;
+                    else if (oy != 0)
+                        bad_dir = (oy < 0) ? 2 : 3;
+                    else if (ox != 0)
+                        bad_dir = (ox < 0) ? 0 : 1;
                 }
             }
         }
-        if (ok) break;
-        ext[2 * axis] = 0;
-        ext[2 * axis + 1] = 0;
+
+        if (bad_dir < 0) break;
+        ext[bad_dir] = 0;
     }
 
     return status;
