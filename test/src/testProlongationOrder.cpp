@@ -1265,6 +1265,74 @@ TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
     delete mesh;
 }
 
+TEST_CASE("the wide stencil is input-limited, and centring is what fixes it") {
+    // On a puncture mesh the values fed to the stencil are not exact: they
+    // come through getElementNodalValues, whose hanging nodes are themselves
+    // interpolated on elements that are clipped. Measured there:
+    //   narrow inner fetch  5.41e-06   (= the flag-OFF pad error)
+    //   widened inner fetch 1.86e-07
+    //
+    // So widening improves the INPUTS ~29x. What it gives back is
+    // amplification: a stencil reproduces its input error scaled by its
+    // Lebesgue constant, and the one-sided width-10 coarse stencil has
+    // Lebesgue 15.2 against the narrow operator's 4.3.
+    //
+    // This perturbs the inputs by a known epsilon and checks that the output
+    // error tracks Lebesgue * epsilon. If it does, chasing more coarse-side
+    // reach is chasing the wrong variable -- the lever is the constant, and
+    // centring the stencil is what lowers it.
+    const real eps = 1e-9Q;
+
+    struct S { const char *name; int nc, nf; };
+    const std::vector<S> ss = {{"narrow-elemlocal-7pt", 7, 0},
+                               {"wide-coarse-10pt", 10, 0},
+                               {"straddle-7c+3f-10pt", 7, 3}};
+
+    std::printf(
+        "\n=== response to a %.0e input perturbation ===\n", dbl(eps));
+    std::printf("%-24s %10s %13s %10s\n", "scheme", "sum|w|", "out err",
+                "ratio");
+
+    const real h = 1.0Q / 512, H = 2 * h;
+    for (const S &sc : ss) {
+        std::vector<real> xs;
+        for (int i = 0; i < sc.nc; i++) xs.push_back(X0 - (real)i * H);
+        for (int i = 1; i <= sc.nf; i++) xs.push_back(X0 + (real)i * h);
+
+        std::vector<real> w;
+        lagrange_weights(xs, X0 - h, w);
+
+        real lam = 0;
+        for (size_t i = 0; i < w.size(); i++) lam += fabsq(w[i]);
+
+        // worst-case perturbation: sign-aligned with the weights
+        real out = 0;
+        for (size_t i = 0; i < w.size(); i++)
+            out += w[i] * (w[i] >= 0 ? eps : -eps);
+
+        std::printf("%-24s %10.3f %13.4e %10.3f\n", sc.name, dbl(lam),
+                    dbl(fabsq(out)), dbl(fabsq(out) / eps));
+
+        // the response is exactly the Lebesgue constant, by construction
+        CHECK(dbl(fabsq(out) / eps) == doctest::Approx(dbl(lam)).epsilon(1e-6));
+    }
+
+    // The centred straddle stencil amplifies LESS than today's narrow
+    // operator while also interpolating far more accurately. That is the
+    // combination the coarse-side-only schemes cannot reach.
+    std::vector<real> xn, xs2, wn, ws2;
+    for (int i = 0; i < 7; i++) xn.push_back(X0 - (real)i * H);
+    for (int i = 0; i < 7; i++) xs2.push_back(X0 - (real)i * H);
+    for (int i = 1; i <= 3; i++) xs2.push_back(X0 + (real)i * h);
+    lagrange_weights(xn, X0 - h, wn);
+    lagrange_weights(xs2, X0 - h, ws2);
+    real ln = 0, ls = 0;
+    for (size_t i = 0; i < wn.size(); i++) ln += fabsq(wn[i]);
+    for (size_t i = 0; i < ws2.size(); i++) ls += fabsq(ws2[i]);
+    MESSAGE("Lebesgue: narrow " << dbl(ln) << " straddle " << dbl(ls));
+    CHECK(dbl(ls) < dbl(ln));
+}
+
 /* ------------------------------------------------------------------ */
 /* End to end -- unzip pad accuracy across real 2:1 interfaces         */
 /* ------------------------------------------------------------------ */
@@ -1342,6 +1410,7 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     unsigned int lmin = 0, lmax = 0;
 
     long ext_full = 0, ext_part = 0, ext_none = 0;
+    double contam_narrow = 0.0, contam_wide = 0.0;
     long width_hist[4] = {0, 0, 0, 0};
     long refuse[4]     = {0, 0, 0, 0};
 
@@ -1405,6 +1474,54 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
         std::vector<double> cg;
         mesh->createVector(cg, fn);
         std::vector<double> uz(mesh->getDegOfFreedomUnZip(), 0.0);
+
+        // Quality of the values the wide stencil is fed on THIS mesh, probing
+        // with finer neighbours allowed so the decimation inputs are included.
+        {
+            const unsigned int nrp2 = ELE_ORDER + 1;
+            const unsigned int nPe2 = mesh->getNumNodesPerElement();
+            const unsigned int want2 =
+                dendro::wideprolong::stencil_width(ELE_ORDER) - nrp2;
+            const std::vector<ot::TreeNode> &el2 = mesh->getAllElements();
+            std::vector<double> im1(nPe2), im2(nPe2),
+                scr((size_t)8 * nPe2);
+            for (int pass = 0; pass < 2; pass++) {
+                double w = 0.0;
+                for (unsigned int e = mesh->getElementLocalBegin();
+                     e < mesh->getElementLocalEnd(); e++) {
+                    unsigned int ex[6];
+                    mesh->probeCoarseExtension(e, want2, ex,
+                                               ot::Mesh::WPX_LVL_SAME |
+                                                   ot::Mesh::WPX_LVL_FINER);
+                    const unsigned int ax = nrp2 + ex[0] + ex[1];
+                    const unsigned int ay = nrp2 + ex[2] + ex[3];
+                    const unsigned int az = nrp2 + ex[4] + ex[5];
+                    std::vector<double> cb((size_t)ax * ay * az, 0.0);
+                    mesh->gatherExtendedCoarseNodesCG(cg.data(), e, ex,
+                                                      cb.data(), scr.data(),
+                                                      im1.data(), im2.data(),
+                                                      pass == 1);
+                    const double szz =
+                        (double)(1u << (m_uiMaxDepth - el2[e].getLevel()));
+                    const double HH = szz / (double)ELE_ORDER;
+                    for (unsigned int k = 0; k < az; k++)
+                        for (unsigned int j = 0; j < ay; j++)
+                            for (unsigned int i = 0; i < ax; i++) {
+                                const double wv =
+                                    fn((double)el2[e].getX() +
+                                           HH * ((double)i - (double)ex[0]),
+                                       (double)el2[e].getY() +
+                                           HH * ((double)j - (double)ex[2]),
+                                       (double)el2[e].getZ() +
+                                           HH * ((double)k - (double)ex[4]));
+                                const double dd = std::fabs(
+                                    cb[(size_t)(k * ay + j) * ax + i] - wv);
+                                if (dd > w) w = dd;
+                            }
+                }
+                if (pass == 0) contam_narrow = w; else contam_wide = w;
+            }
+        }
         std::vector<double> errmap(mesh->getDegOfFreedomUnZip(), -1.0);
 
         mesh->performGhostExchange(cg);
@@ -1518,6 +1635,10 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
         }
     }
 
+    std::printf(
+        "stencil input quality (max |gathered - analytic|): "
+        "narrow inner fetch %.3e, widened %.3e\n",
+        contam_narrow, contam_wide);
     std::printf(
         "achieved 1D stencil width over local elements: "
         "%u pts %ld, %u pts %ld, %u pts %ld, %u pts %ld\n",
