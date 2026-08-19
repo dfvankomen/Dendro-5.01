@@ -970,6 +970,122 @@ TEST_CASE("only the differentiated axis needs widening for a pure 2nd deriv") {
     CHECK(ord[3] > 6.0);
 }
 
+TEST_CASE("coarser-neighbour extension is limited by its transverse lattice") {
+    // The 1D study said a graded extension into a coarser neighbour costs
+    // only ~2x on the error constant. That study had no transverse dimension.
+    //
+    // In 3D the coarser neighbour has spacing 2H on EVERY axis, so it carries
+    // nodes at only every other transverse position of the element. The
+    // extension slab therefore cannot be filled at the element's transverse
+    // resolution from that neighbour alone: those values have to come from a
+    // 2H transverse fit, whose error is 2^(p+1) larger than the element's.
+    //
+    // This measures whether that transverse penalty survives the second
+    // derivative, i.e. whether the coarser-neighbour route is usable at all.
+    const real A = 2.0Q, B = 1.5Q, C = 1.2Q, D = 0.7Q, E = 0.5Q;
+    auto F = [&](real x, real y, real z) {
+        return expq(A * x + B * y + C * z + D * x * y + E * y * z);
+    };
+    auto Fxx = [&](real x, real y, real z) {
+        const real ax = A + D * y;
+        return ax * ax * F(x, y, z);
+    };
+    const real Y0 = 0.21Q, Z0 = 0.17Q;
+    const int m = 1, n = 1;
+
+    // transverse_h: spacing of the transverse lattice available at this
+    // x-node, in units of H. 1 = the element's own, 2 = a coarser neighbour's.
+    auto plane_val = [&](real xnode, real h, real tspace, unsigned wt) {
+        const real H = 2 * h;
+        const real ts = tspace * H;
+        std::vector<real> ys(wt), zs(wt), wy, wz;
+        for (unsigned j = 0; j < wt; j++)
+            ys[j] = Y0 + ((real)j - (real)(wt / 2)) * ts;
+        for (unsigned k = 0; k < wt; k++)
+            zs[k] = Z0 + ((real)k - (real)(wt / 2)) * ts;
+        lagrange_weights(ys, Y0 + (real)m * h, wy);
+        lagrange_weights(zs, Z0 + (real)n * h, wz);
+        real acc = 0;
+        for (unsigned k = 0; k < wt; k++)
+            for (unsigned j = 0; j < wt; j++)
+                acc += wy[j] * wz[k] * F(xnode, ys[j], zs[k]);
+        return acc;
+    };
+
+    // ext_tspace: transverse spacing available on the extension slab.
+    // 1 means we pretend the coarser neighbour had a fine transverse lattice
+    // (the 1D study's implicit assumption); 2 is the truth.
+    auto pad_value = [&](real h, int ox, double ext_tspace, unsigned wt) {
+        const real H = 2 * h;
+        std::vector<real> xs;
+        for (int i = 0; i <= 6; i++) xs.push_back(X0 - (real)i * H);
+        // coarser neighbour: high face shared at -6H, its own nodes at 2H
+        for (int e = 1; e <= 3; e++)
+            xs.push_back(X0 - (real)(6 + 2 * e) * H);
+
+        std::vector<real> wx;
+        lagrange_weights(xs, X0 + (real)ox * h, wx);
+
+        real acc = 0;
+        for (size_t i = 0; i < xs.size(); i++) {
+            const double ts = (i <= 6) ? 1.0 : ext_tspace;
+            acc += wx[i] * plane_val(xs[i], h, ts, wt);
+        }
+        return acc;
+    };
+
+    struct Cfg { const char *name; double ets; unsigned wt; };
+    const std::vector<Cfg> cfgs = {
+        {"coarser nbr, ideal transverse (H)", 1.0, 10},
+        {"coarser nbr, real transverse (2H)", 2.0, 10},
+        {"coarser nbr, real transverse, narrow", 2.0, 7},
+    };
+
+    const std::vector<real> &hs = h_sweep();
+    std::printf(
+        "\n=== coarser-neighbour extension: transverse lattice penalty ===\n");
+    std::printf("%-38s %13s %8s\n", "configuration", "err(h=1/128)", "order");
+
+    std::vector<double> ord;
+    for (const Cfg &c : cfgs) {
+        std::vector<real> errs(hs.size());
+        for (size_t t = 0; t < hs.size(); t++) {
+            const real h = hs[t];
+            real acc = 0;
+            for (int o = -D2_R; o <= D2_R; o++) {
+                const real v =
+                    (o >= 0) ? F(X0 + (real)o * h, Y0 + (real)m * h,
+                                 Z0 + (real)n * h)
+                             : pad_value(h, o, c.ets, c.wt);
+                acc += D2_C[o + D2_R] * v;
+            }
+            acc /= (h * h);
+            errs[t] = fabsq(acc - Fxx(X0, Y0 + (real)m * h, Z0 + (real)n * h));
+            add_row(c.name, "coarser_nbr_transverse", h, errs[t]);
+        }
+        unsigned nu = 0;
+        const double p = fit_order(hs, errs, nu);
+        ord.push_back(p);
+        std::printf("%-38s %13.4e %8.3f\n", c.name, dbl(errs.front()), p);
+    }
+
+    // MEASURED: the coarser neighbour's 2H transverse spacing costs almost
+    // nothing. A width-10 transverse stencil at 2H still gives O(2^10 H^10),
+    // which after division by h^2 is O(H^8) -- far below the O(H^6) target.
+    // So the geometric worry about the transverse lattice is real but
+    // quantitatively irrelevant.
+    CHECK(ord[0] > 6.0);
+    CHECK(ord[1] > 6.0);
+
+    // What does break it is transverse WIDTH. Dropping the transverse stencil
+    // to the element-local 7 points returns the whole thing to O(h^5),
+    // regardless of the x extension. So the extension slab must itself be
+    // transversally wide, which means the gather has to reach around the
+    // coarser neighbour too -- and that is what breaks the clean rectangular
+    // cube the tensor apply currently assumes.
+    CHECK(ord[2] == doctest::Approx(5.0).epsilon(0.05));
+}
+
 /* ------------------------------------------------------------------ */
 /* End to end -- unzip pad accuracy across real 2:1 interfaces         */
 /* ------------------------------------------------------------------ */
