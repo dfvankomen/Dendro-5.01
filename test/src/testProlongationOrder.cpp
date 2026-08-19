@@ -49,6 +49,11 @@
 #include <string>
 #include <vector>
 
+#include <mpi.h>
+
+#include "mesh.h"
+#include "meshUtils.h"
+#include "octUtils.h"
 #include "refel.h"
 #include "wideprolong.h"
 
@@ -574,10 +579,143 @@ TEST_CASE("2nd-derivative order across a 2:1 interface") {
     CHECK(narrow_d1 == doctest::Approx(5.0).epsilon(0.03));
 }
 
+/* ------------------------------------------------------------------ */
+/* Gather -- the extended coarse cube off a real mesh                  */
+/* ------------------------------------------------------------------ */
+
+TEST_CASE("extended coarse gather reproduces the node values it spans") {
+    // Uniform single-level octree: every neighbour is same level, so the
+    // probe should grant full extension on interior elements and the gathered
+    // cube must equal the analytic field at the coarse nodes it covers. This
+    // is what catches the element-offset and local-index arithmetic; the 2:1
+    // dispatch rides on top of it.
+    int npes = 1;
+    MPI_Comm_size(MPI_COMM_WORLD, &npes);
+
+    std::vector<ot::TreeNode> oct;
+    createRegularOctree(oct, 3, 3, m_uiMaxDepth, MPI_COMM_WORLD);
+    ot::Mesh *mesh = ot::createMesh(oct.data(), oct.size(), ELE_ORDER,
+                                    MPI_COMM_WORLD, 0);
+    REQUIRE(mesh != nullptr);
+
+    // NB: inactive ranks must not return early -- the MPI_Allreduce below is
+    // a collective over MPI_COMM_WORLD, so skipping it deadlocks.
+    const bool active       = mesh->isActive();
+
+    const unsigned int p    = ELE_ORDER;
+    const unsigned int nrp  = p + 1;
+    const unsigned int nPe  = mesh->getNumNodesPerElement();
+    const unsigned int want = 3;
+
+    // DG vector holding a trilinear-in-index field that is unique per node,
+    // so any mis-indexed fetch shows up immediately.
+    const std::vector<ot::TreeNode> &elems = mesh->getAllElements();
+    std::vector<double> dg((size_t)mesh->getAllElements().size() * nPe, 0.0);
+
+    auto node_key = [&](unsigned int e, unsigned int li, unsigned int lj,
+                        unsigned int lk) {
+        const double sz = (double)(1u << (m_uiMaxDepth - elems[e].getLevel()));
+        const double x  = (double)elems[e].getX() + sz * (double)li / (double)p;
+        const double y  = (double)elems[e].getY() + sz * (double)lj / (double)p;
+        const double z  = (double)elems[e].getZ() + sz * (double)lk / (double)p;
+        return 1.0 * x + 1024.0 * y + 1048576.0 * z;
+    };
+
+    for (unsigned int e = 0; e < elems.size(); e++)
+        for (unsigned int k = 0; k < nrp; k++)
+            for (unsigned int j = 0; j < nrp; j++)
+                for (unsigned int i = 0; i < nrp; i++)
+                    dg[(size_t)e * nPe + (k * nrp + j) * nrp + i] =
+                        node_key(e, i, j, k);
+
+    unsigned int full = 0, clipped = 0, ghost_clipped = 0;
+    double worst = 0.0;
+
+    const unsigned int e_begin = active ? mesh->getElementLocalBegin() : 0;
+    const unsigned int e_end   = active ? mesh->getElementLocalEnd() : 0;
+
+    for (unsigned int e = e_begin; e < e_end; e++) {
+        unsigned int ext[6];
+        const unsigned int st = mesh->probeCoarseExtension(e, want, ext);
+        if (st & ot::Mesh::WPX_CLIPPED_GHOST) ghost_clipped++;
+
+        const unsigned int nx = nrp + ext[0] + ext[1];
+        const unsigned int ny = nrp + ext[2] + ext[3];
+        const unsigned int nz = nrp + ext[4] + ext[5];
+        if (nx == nrp + 2 * want && ny == nrp + 2 * want &&
+            nz == nrp + 2 * want)
+            full++;
+        else
+            clipped++;
+
+        std::vector<double> cube((size_t)nx * ny * nz, 0.0);
+        mesh->gatherExtendedCoarseNodes(dg.data(), e, ext, cube.data());
+
+        // every gathered value must be the field at the node that slot
+        // represents, measured in the centre element's own coordinates
+        const double sz = (double)(1u << (m_uiMaxDepth - elems[e].getLevel()));
+        for (unsigned int k = 0; k < nz; k++)
+            for (unsigned int j = 0; j < ny; j++)
+                for (unsigned int i = 0; i < nx; i++) {
+                    const double x = (double)elems[e].getX() +
+                                     sz * ((double)i - (double)ext[0]) /
+                                         (double)p;
+                    const double y = (double)elems[e].getY() +
+                                     sz * ((double)j - (double)ext[2]) /
+                                         (double)p;
+                    const double z = (double)elems[e].getZ() +
+                                     sz * ((double)k - (double)ext[4]) /
+                                         (double)p;
+                    const double want_v =
+                        1.0 * x + 1024.0 * y + 1048576.0 * z;
+                    const double d = std::fabs(
+                        cube[(size_t)(k * ny + j) * nx + i] - want_v);
+                    if (d > worst) worst = d;
+                }
+    }
+
+    std::printf(
+        "\n=== extended coarse gather on a uniform level-3 mesh ===\n"
+        "npes=%d  elements with full ext=%u, clipped=%u, ghost-clipped=%u\n"
+        "max |gathered - analytic| = %.3e\n",
+        npes, full, clipped, ghost_clipped, worst);
+
+    // Node keys run to ~3e7, so double roundoff alone is ~3e-9. Distinct
+    // nodes differ by at least sz/p in x and 1024x / 1048576x that in y,z,
+    // so any mis-indexed fetch lands >= 0.6 off -- six orders above this
+    // bound. The tolerance is loose against roundoff and razor sharp against
+    // the bug it exists to catch.
+    if (active) CHECK(worst < 1e-6);
+
+    // A uniform 8^3 grid has exactly 6^3 interior elements, and every one of
+    // them must get full extension no matter how the domain was split. This
+    // summed form is the rank-independence check: if the probe ever had to
+    // fall back because a neighbour landed in a round-2 ghost, this total
+    // would drop below 216 for some rank count and the wide operator would
+    // silently become a function of the partition.
+    unsigned int full_global = 0;
+    MPI_Allreduce(&full, &full_global, 1, MPI_UNSIGNED, MPI_SUM,
+                  MPI_COMM_WORLD);
+    CHECK(full_global == 216);
+    if (active) CHECK(ghost_clipped == 0);
+    // On one rank there is no round-2 ghost anywhere, so any ghost clipping
+    // would mean the probe is misclassifying a legitimate boundary.
+    if (npes == 1) CHECK(ghost_clipped == 0);
+
+    delete mesh;
+}
+
 int main(int argc, char **argv) {
+    MPI_Init(&argc, &argv);
+
+    // octree globals: nothing under ot:: is usable before these are set
+    m_uiMaxDepth = 5;
+    _InitializeHcurve(m_uiDim);
+
     doctest::Context ctx;
     ctx.applyCommandLine(argc, argv);
     const int res = ctx.run();
     write_csv();
+    MPI_Finalize();
     return res;
 }

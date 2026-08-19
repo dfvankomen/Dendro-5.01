@@ -12655,6 +12655,155 @@ void Mesh::getUnzipElementalNodalValues(const T* uzipVec, unsigned int blkID,
     }
 }
 
+/**
+ * Resolve the element `steps` face hops away from `ele`, requiring every
+ * intermediate to be a usable same-level coarse element. Sets `bad_ghost`
+ * when the walk is blocked by a round-2 ghost specifically, since that case
+ * is rank dependent and must not be silently absorbed.
+ */
+inline unsigned int Mesh::wpxWalk(unsigned int ele, const unsigned int *dirs,
+                                  unsigned int steps, bool &bad_ghost) const {
+    unsigned int cur         = ele;
+    const unsigned int lev   = m_uiAllElements[ele].getLevel();
+
+    for (unsigned int s = 0; s < steps; s++) {
+        const unsigned int nxt =
+            m_uiE2EMapping[cur * m_uiNumDirections + dirs[s]];
+
+        if (nxt == LOOK_UP_TABLE_DEFAULT) return LOOK_UP_TABLE_DEFAULT;
+        if (nxt >= m_uiAllElements.size()) return LOOK_UP_TABLE_DEFAULT;
+        if (m_uiAllElements[nxt].getLevel() != lev)
+            return LOOK_UP_TABLE_DEFAULT;
+        if (!m_uiIsNodalMapValid[nxt]) {
+            bad_ghost = true;
+            return LOOK_UP_TABLE_DEFAULT;
+        }
+        cur = nxt;
+    }
+    return cur;
+}
+
+/** Element at signed element offset (ox,oy,oz) from `ele`, or default. */
+inline unsigned int Mesh::wpxNeighbour(unsigned int ele, int ox, int oy,
+                                       int oz, bool &bad_ghost) const {
+    unsigned int dirs[3];
+    unsigned int n = 0;
+    if (ox < 0)
+        dirs[n++] = OCT_DIR_LEFT;
+    else if (ox > 0)
+        dirs[n++] = OCT_DIR_RIGHT;
+    if (oy < 0)
+        dirs[n++] = OCT_DIR_DOWN;
+    else if (oy > 0)
+        dirs[n++] = OCT_DIR_UP;
+    if (oz < 0)
+        dirs[n++] = OCT_DIR_BACK;
+    else if (oz > 0)
+        dirs[n++] = OCT_DIR_FRONT;
+
+    return wpxWalk(ele, dirs, n, bad_ghost);
+}
+
+inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
+                                               unsigned int want_ext,
+                                               unsigned int ext[6]) const {
+    for (unsigned int d = 0; d < 6; d++) ext[d] = 0;
+    if (!m_uiIsActive || want_ext == 0) return WPX_OK;
+
+    // a neighbour shares its touching node plane, so it can only add p nodes
+    const unsigned int cap =
+        (want_ext < m_uiElementOrder) ? want_ext : m_uiElementOrder;
+
+    unsigned int status = WPX_OK;
+    bool bad_ghost      = false;
+
+    static const int off[6][3] = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0},
+                                  {0, 1, 0},  {0, 0, -1}, {0, 0, 1}};
+    for (unsigned int d = 0; d < 6; d++) {
+        bool bg = false;
+        if (wpxNeighbour(ele, off[d][0], off[d][1], off[d][2], bg) !=
+            LOOK_UP_TABLE_DEFAULT)
+            ext[d] = cap;
+        else
+            status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
+        bad_ghost = bad_ghost || bg;
+    }
+
+    // Extending two or three axes at once also needs the edge and corner
+    // elements. Drop a whole axis at a time (z, then y, then x) until every
+    // implied element resolves, so the choice does not depend on traversal
+    // order.
+    for (int axis = 2; axis >= 0; axis--) {
+        bool ok = true;
+        for (int oz = -1; oz <= 1 && ok; oz++) {
+            if ((oz < 0 && !ext[4]) || (oz > 0 && !ext[5])) continue;
+            for (int oy = -1; oy <= 1 && ok; oy++) {
+                if ((oy < 0 && !ext[2]) || (oy > 0 && !ext[3])) continue;
+                for (int ox = -1; ox <= 1 && ok; ox++) {
+                    if ((ox < 0 && !ext[0]) || (ox > 0 && !ext[1])) continue;
+                    bool bg = false;
+                    if (wpxNeighbour(ele, ox, oy, oz, bg) ==
+                        LOOK_UP_TABLE_DEFAULT) {
+                        ok = false;
+                        status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
+                    }
+                }
+            }
+        }
+        if (ok) break;
+        ext[2 * axis] = 0;
+        ext[2 * axis + 1] = 0;
+    }
+
+    return status;
+}
+
+template <typename T>
+void Mesh::gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
+                                     const unsigned int ext[6], T *out) const {
+    const unsigned int nrp = m_uiElementOrder + 1;
+    const unsigned int p   = m_uiElementOrder;
+
+    const unsigned int nx  = nrp + ext[0] + ext[1];
+    const unsigned int ny  = nrp + ext[2] + ext[3];
+    const unsigned int nz  = nrp + ext[4] + ext[5];
+
+    // resolve the (up to) 27 contributing elements once
+    unsigned int nbr[3][3][3];
+    bool bg = false;
+    for (int oz = -1; oz <= 1; oz++)
+        for (int oy = -1; oy <= 1; oy++)
+            for (int ox = -1; ox <= 1; ox++)
+                nbr[oz + 1][oy + 1][ox + 1] =
+                    wpxNeighbour(ele, ox, oy, oz, bg);
+
+    for (unsigned int k = 0; k < nz; k++) {
+        const int gz = (int)k - (int)ext[4];
+        const int oz = (gz < 0) ? -1 : ((gz > (int)p) ? 1 : 0);
+        const unsigned int lk =
+            (unsigned int)(gz - oz * (int)p);
+
+        for (unsigned int j = 0; j < ny; j++) {
+            const int gy = (int)j - (int)ext[2];
+            const int oy = (gy < 0) ? -1 : ((gy > (int)p) ? 1 : 0);
+            const unsigned int lj = (unsigned int)(gy - oy * (int)p);
+
+            for (unsigned int i = 0; i < nx; i++) {
+                const int gx = (int)i - (int)ext[0];
+                const int ox = (gx < 0) ? -1 : ((gx > (int)p) ? 1 : 0);
+                const unsigned int li = (unsigned int)(gx - ox * (int)p);
+
+                const unsigned int e = nbr[oz + 1][oy + 1][ox + 1];
+                out[(size_t)(k * ny + j) * nx + i] =
+                    (e == LOOK_UP_TABLE_DEFAULT)
+                        ? T(0)
+                        : dgVec[(size_t)e * m_uiNpE +
+                                (size_t)(lk * nrp + lj) * nrp + li];
+            }
+        }
+    }
+}
+
 template <typename T>
 void Mesh::getBlkBoundaryParentNodes(const T* zipVec, T* out, T* w1, T* w2,
                                      unsigned int lookUp,

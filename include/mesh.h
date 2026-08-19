@@ -2110,6 +2110,72 @@ class Mesh {
                                           unsigned int dim = 3) const;
 
     /**
+     * @brief Status bits returned by probeCoarseExtension.
+     *
+     * WPX_CLIPPED_GEOMETRY is benign and rank independent: the octree simply
+     * has no same-level coarse neighbour there (domain boundary, or a level
+     * jump we do not yet dispatch on), so that direction keeps the narrow
+     * operator.
+     *
+     * WPX_CLIPPED_GHOST is not benign. The neighbour exists but is a round-2
+     * ghost with no allocated nodal storage (m_uiIsNodalMapValid false), so
+     * whether the wide stencil is available depends on how the domain was
+     * partitioned. Silently falling back there would make the result a
+     * function of the rank count, which is precisely the claim this operator
+     * exists to support, so callers must treat this as fatal until the nodal
+     * ghost layer is extended to round 2.
+     */
+    enum : unsigned int {
+        WPX_OK               = 0u,
+        WPX_CLIPPED_GEOMETRY = 1u,
+        WPX_CLIPPED_GHOST    = 2u
+    };
+
+    /**
+     * @brief How far the wide prolongation stencil can reach from an element.
+     *
+     * @param[in]  ele      element to centre on.
+     * @param[in]  want_ext desired extra coarse nodes per side.
+     * @param[out] ext      achieved extension, indexed by OCT_DIR_LEFT,
+     *                      RIGHT, DOWN, UP, BACK, FRONT.
+     * @return bitwise OR of the WPX_* status bits.
+     *
+     * An axis is extended only when every element the resulting cube needs --
+     * including the edge and corner elements implied by extending two or
+     * three axes at once -- is present, same level and nodally valid. When a
+     * corner is missing the extension is dropped a whole axis at a time, z
+     * first then y then x, so the outcome is deterministic.
+     */
+    /** Walk `steps` face hops, requiring usable same-level coarse elements. */
+    unsigned int wpxWalk(unsigned int ele, const unsigned int *dirs,
+                         unsigned int steps, bool &bad_ghost) const;
+
+    /** Element at signed element offset (ox,oy,oz) from `ele`. */
+    unsigned int wpxNeighbour(unsigned int ele, int ox, int oy, int oz,
+                              bool &bad_ghost) const;
+
+    unsigned int probeCoarseExtension(unsigned int ele, unsigned int want_ext,
+                                      unsigned int ext[6]) const;
+
+    /**
+     * @brief Gather the extended coarse nodal cube implied by a probe.
+     *
+     * @param[in]  dgVec DG element vector, node n of element e at
+     *                   dgVec[e*m_uiNpE + n].
+     * @param[in]  ele   element the cube is centred on.
+     * @param[in]  ext   extension from probeCoarseExtension.
+     * @param[out] out   cube of
+     *                   (p+1+ext[0]+ext[1]) x (p+1+ext[2]+ext[3]) x
+     *                   (p+1+ext[4]+ext[5]) values, x contiguous.
+     *
+     * Neighbouring elements share their touching node plane, so a neighbour
+     * contributes p new nodes rather than p+1.
+     */
+    template <typename T>
+    void gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
+                                   const unsigned int ext[6], T *out) const;
+
+    /**
      * @brief performs the child to parent contribution (only from a single
      * child).
      * @param[in] in: child function values
