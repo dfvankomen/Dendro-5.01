@@ -43,6 +43,7 @@
 
 #include <quadmath.h>
 
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <string>
@@ -350,6 +351,112 @@ TEST_CASE("wide operator is exact to its stencil degree") {
             CHECK(dbl(err_over) > 1e-9);
         }
     }
+}
+
+TEST_CASE("apply_3d with no extension reproduces I3D_Parent2Child") {
+    // The flag-off acceptance bar, checked at the 3D operator rather than
+    // only on the 1D matrices: all 8 children, against the live library call.
+    RefElement refel(3, ELE_ORDER);
+    const unsigned nrp = ELE_ORDER + 1;
+    const unsigned np  = nrp * nrp * nrp;
+
+    std::vector<double> in(np);
+    for (unsigned i = 0; i < np; i++)
+        in[i] = std::sin(0.7 * (double)i) + 0.3 * std::cos(0.11 * (double)i);
+
+    std::vector<double> ref(np), got(np);
+    std::vector<double> im1(np), im2(np);
+
+    double worst = 0.0;
+    for (unsigned cnum = 0; cnum < 8; cnum++) {
+        refel.I3D_Parent2Child(in.data(), ref.data(), cnum, im1.data(),
+                               im2.data());
+
+        std::vector<double> opx, opy, opz;
+        unsigned nx_in = 0, ny_in = 0, nz_in = 0;
+        const unsigned w = dendro::wideprolong::stencil_width(ELE_ORDER);
+        dendro::wideprolong::build_1d(ELE_ORDER, (cnum >> 0) & 1u, 0, 0, w,
+                                      opx, nx_in);
+        dendro::wideprolong::build_1d(ELE_ORDER, (cnum >> 1) & 1u, 0, 0, w,
+                                      opy, ny_in);
+        dendro::wideprolong::build_1d(ELE_ORDER, (cnum >> 2) & 1u, 0, 0, w,
+                                      opz, nz_in);
+
+        const size_t ss =
+            dendro::wideprolong::scratch_size(ELE_ORDER, nx_in, ny_in, nz_in);
+        std::vector<double> s1(ss), s2(ss);
+
+        dendro::wideprolong::apply_3d(ELE_ORDER, opx.data(), nx_in, opy.data(),
+                                      ny_in, opz.data(), nz_in, in.data(),
+                                      got.data(), s1.data(), s2.data());
+
+        for (unsigned i = 0; i < np; i++) {
+            const double d = std::fabs(got[i] - ref[i]);
+            if (d > worst) worst = d;
+        }
+    }
+
+    std::printf(
+        "\n=== apply_3d(ext=0) vs RefElement::I3D_Parent2Child ===\n"
+        "max abs diff over all 8 children = %.3e\n", worst);
+    CHECK(worst < 1e-13);
+}
+
+TEST_CASE("apply_3d is exact on tensor polynomials to its stencil degree") {
+    const unsigned nrp   = ELE_ORDER + 1;
+    const unsigned width = dendro::wideprolong::stencil_width(ELE_ORDER);
+    const unsigned ext   = 3;
+
+    std::vector<double> opx, opy, opz;
+    unsigned nx_in = 0, ny_in = 0, nz_in = 0;
+    // extension away from the interface on each axis, as a coarse element
+    // abutting a fine block actually sees it.
+    dendro::wideprolong::build_1d(ELE_ORDER, 1, ext, 0, width, opx, nx_in);
+    dendro::wideprolong::build_1d(ELE_ORDER, 1, ext, 0, width, opy, ny_in);
+    dendro::wideprolong::build_1d(ELE_ORDER, 1, ext, 0, width, opz, nz_in);
+
+    std::vector<double> xs(nx_in);
+    for (unsigned j = 0; j < nx_in; j++)
+        xs[j] = ((double)j - (double)ext) / (double)ELE_ORDER;
+
+    // degrees chosen to sit just under the stencil width on every axis
+    const unsigned da = width - 1, db = 2, dc = 1;
+
+    std::vector<double> in((size_t)nx_in * ny_in * nz_in);
+    for (unsigned k = 0; k < nz_in; k++)
+        for (unsigned j = 0; j < ny_in; j++)
+            for (unsigned i = 0; i < nx_in; i++)
+                in[(size_t)(k * ny_in + j) * nx_in + i] =
+                    std::pow(xs[i], (double)da) * std::pow(xs[j], (double)db) *
+                    std::pow(xs[k], (double)dc);
+
+    const size_t ss =
+        dendro::wideprolong::scratch_size(ELE_ORDER, nx_in, ny_in, nz_in);
+    std::vector<double> s1(ss), s2(ss), out((size_t)nrp * nrp * nrp);
+
+    dendro::wideprolong::apply_3d(ELE_ORDER, opx.data(), nx_in, opy.data(),
+                                  ny_in, opz.data(), nz_in, in.data(),
+                                  out.data(), s1.data(), s2.data());
+
+    double worst = 0.0;
+    for (unsigned k = 0; k < nrp; k++)
+        for (unsigned j = 0; j < nrp; j++)
+            for (unsigned i = 0; i < nrp; i++) {
+                const double xt = 0.5 + (double)i / (double)(2 * ELE_ORDER);
+                const double yt = 0.5 + (double)j / (double)(2 * ELE_ORDER);
+                const double zt = 0.5 + (double)k / (double)(2 * ELE_ORDER);
+                const double want = std::pow(xt, (double)da) *
+                                    std::pow(yt, (double)db) *
+                                    std::pow(zt, (double)dc);
+                const double d = std::fabs(
+                    out[(size_t)(k * nrp + j) * nrp + i] - want);
+                if (d > worst) worst = d;
+            }
+
+    std::printf(
+        "=== apply_3d tensor-polynomial exactness (deg %u,%u,%u) ===\n"
+        "max abs err = %.3e\n", da, db, dc, worst);
+    CHECK(worst < 1e-11);
 }
 
 /* ------------------------------------------------------------------ */

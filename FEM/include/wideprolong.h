@@ -33,6 +33,7 @@
 #ifndef DENDRO_WIDEPROLONG_H
 #define DENDRO_WIDEPROLONG_H
 
+#include <cstddef>
 #include <vector>
 
 namespace dendro {
@@ -64,6 +65,43 @@ inline unsigned int stencil_width(unsigned int eleOrder) {
 void build_1d(unsigned int eleOrder, unsigned int child, unsigned int ext_lo,
               unsigned int ext_hi, unsigned int width,
               std::vector<double> &op, unsigned int &n_in);
+
+/**
+ * Apply a rectangular (n_out x n_in) operator along one axis of a 3D block.
+ *
+ * The existing DENDRO_TENSOR_*_APPLY_ELEM kernels take a single M and assume
+ * a square operator, which a widened stencil is not, so these are separate
+ * rather than a modification of those.
+ *
+ * A is row-major with A[o*n_in + i] weighting input i into output o. Block
+ * layout is x-contiguous throughout: idx = k*ny*nx + j*nx + i.
+ */
+void apply_x(unsigned int n_in, unsigned int n_out, unsigned int ny,
+             unsigned int nz, const double *A, const double *X, double *Y);
+void apply_y(unsigned int n_in, unsigned int n_out, unsigned int nx,
+             unsigned int nz, const double *A, const double *X, double *Y);
+void apply_z(unsigned int n_in, unsigned int n_out, unsigned int nx,
+             unsigned int ny, const double *A, const double *X, double *Y);
+
+/** Scratch elements needed for each of apply_3d's two work buffers. */
+size_t scratch_size(unsigned int eleOrder, unsigned int nx_in,
+                    unsigned int ny_in, unsigned int nz_in);
+
+/**
+ * Tensor-product wide prolongation: extended coarse cube -> one child's
+ * (eleOrder+1)^3 nodes. Sweeps x, then y, then z, mirroring
+ * RefElement::I3D_Parent2Child so the structure is unchanged and only the
+ * input extent widens.
+ *
+ * With every axis unextended this reproduces I3D_Parent2Child exactly, which
+ * is what makes the flag-off path defensible.
+ *
+ * @param w1,w2 caller-supplied scratch, each at least scratch_size() long.
+ */
+void apply_3d(unsigned int eleOrder, const double *opx, unsigned int nx_in,
+              const double *opy, unsigned int ny_in, const double *opz,
+              unsigned int nz_in, const double *in, double *out, double *w1,
+              double *w2);
 
 }  // namespace wideprolong
 }  // namespace dendro

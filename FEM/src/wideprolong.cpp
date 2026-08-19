@@ -49,5 +49,67 @@ void build_1d(unsigned int eleOrder, unsigned int child, unsigned int ext_lo,
     }
 }
 
+void apply_x(unsigned int n_in, unsigned int n_out, unsigned int ny,
+             unsigned int nz, const double *A, const double *X, double *Y) {
+    for (unsigned int k = 0; k < nz; k++)
+        for (unsigned int j = 0; j < ny; j++) {
+            const double *xrow = X + (size_t)(k * ny + j) * n_in;
+            double *yrow       = Y + (size_t)(k * ny + j) * n_out;
+            for (unsigned int o = 0; o < n_out; o++) {
+                double acc = 0.0;
+                for (unsigned int i = 0; i < n_in; i++)
+                    acc += A[(size_t)o * n_in + i] * xrow[i];
+                yrow[o] = acc;
+            }
+        }
+}
+
+void apply_y(unsigned int n_in, unsigned int n_out, unsigned int nx,
+             unsigned int nz, const double *A, const double *X, double *Y) {
+    for (unsigned int k = 0; k < nz; k++)
+        for (unsigned int o = 0; o < n_out; o++)
+            for (unsigned int i0 = 0; i0 < nx; i0++) {
+                double acc = 0.0;
+                for (unsigned int i = 0; i < n_in; i++)
+                    acc += A[(size_t)o * n_in + i] *
+                           X[(size_t)(k * n_in + i) * nx + i0];
+                Y[(size_t)(k * n_out + o) * nx + i0] = acc;
+            }
+}
+
+void apply_z(unsigned int n_in, unsigned int n_out, unsigned int nx,
+             unsigned int ny, const double *A, const double *X, double *Y) {
+    const size_t plane = (size_t)nx * ny;
+    for (unsigned int o = 0; o < n_out; o++)
+        for (size_t t = 0; t < plane; t++) {
+            double acc = 0.0;
+            for (unsigned int i = 0; i < n_in; i++)
+                acc += A[(size_t)o * n_in + i] * X[(size_t)i * plane + t];
+            Y[(size_t)o * plane + t] = acc;
+        }
+}
+
+size_t scratch_size(unsigned int eleOrder, unsigned int nx_in,
+                    unsigned int ny_in, unsigned int nz_in) {
+    const size_t m  = eleOrder + 1;
+    const size_t s1 = (size_t)nz_in * ny_in * m;  // after the x sweep
+    const size_t s2 = (size_t)nz_in * m * m;      // after the y sweep
+    return (s1 > s2) ? s1 : s2;
+}
+
+void apply_3d(unsigned int eleOrder, const double *opx, unsigned int nx_in,
+              const double *opy, unsigned int ny_in, const double *opz,
+              unsigned int nz_in, const double *in, double *out, double *w1,
+              double *w2) {
+    const unsigned int m = eleOrder + 1;
+
+    // x: [nz_in][ny_in][nx_in] -> [nz_in][ny_in][m]
+    apply_x(nx_in, m, ny_in, nz_in, opx, in, w1);
+    // y: [nz_in][ny_in][m] -> [nz_in][m][m]
+    apply_y(ny_in, m, m, nz_in, opy, w1, w2);
+    // z: [nz_in][m][m] -> [m][m][m]
+    apply_z(nz_in, m, m, m, opz, w2, out);
+}
+
 }  // namespace wideprolong
 }  // namespace dendro
