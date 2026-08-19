@@ -2202,28 +2202,51 @@ class Mesh {
     /**
      * Levels the stencil extends into by default.
      *
-     * Decimating a finer neighbour is implemented and index-correct, but it
-     * is OFF by default because it MEASURED WORSE on a puncture mesh: a
-     * finer neighbour adjacent to a coarser element always carries a hanging
-     * face, and its outer transverse faces can be hanging too, so the
-     * decimated values are partly narrow-interpolated rather than real DOFs.
-     * Feeding those to a one-sided width-10 stencil, whose Lebesgue constant
-     * is ~15, amplifies them enough to lose more than the extra width gains
-     * (puncture max error 1.70e-06 -> 4.65e-06).
+     * Same-level only. Both ways of using a finer neighbour were implemented
+     * and measured, and both lost to the coarse-side stencil on a puncture
+     * mesh (max error 1.70e-06):
      *
-     * Enable with DENDRO_WIDE_PROLONGATION_DECIMATE to re-measure; it only
-     * becomes a win once the hanging faces feeding it are themselves widened.
+     *   decimated onto the coarse lattice   4.65e-06
+     *   straddle at the finer spacing       5.41e-06
+     *
+     * The straddle form was predicted to win: in isolation it carries only
+     * 1.63 of weight on the contaminated subset against the narrow operator's
+     * 4.26, and 15.18 for the coarse-side stencil. That prediction assumed
+     * the fine-side nodes are clean block-interior DOFs. Evidently enough of
+     * them are not -- a finer neighbour's face toward this element is hanging
+     * by construction, and its transverse faces can be too -- so the
+     * advantage does not survive.
+     *
+     * Both paths are kept and tested; enable with
+     * DENDRO_WIDE_PROLONGATION_FINER to re-measure once the hanging faces
+     * feeding them are themselves widened.
      */
-#ifdef DENDRO_WIDE_PROLONGATION_DECIMATE
+#ifdef DENDRO_WIDE_PROLONGATION_FINER
     static constexpr unsigned int WPX_LVL_DEFAULT =
         WPX_LVL_SAME | WPX_LVL_FINER;
 #else
     static constexpr unsigned int WPX_LVL_DEFAULT = WPX_LVL_SAME;
 #endif
 
+    /** How a direction's extension nodes are spaced. */
+    enum : unsigned char {
+        WPX_EXT_NONE     = 0,  // no extension
+        WPX_EXT_COARSE   = 1,  // same-level neighbour, nodes at H
+        WPX_EXT_STRADDLE = 2   // finer neighbour, nodes at H/2 toward the fine
+                               // side; these are block-interior real DOFs, so
+                               // they are clean, and including them centres
+                               // the stencil
+    };
+
+    /**
+     * @param[out] mode optional per-direction WPX_EXT_* classification. The
+     *                  spacing differs between the two, so the coordinate
+     *                  array handed to build_1d_at depends on it.
+     */
     unsigned int probeCoarseExtension(
         unsigned int ele, unsigned int want_ext, unsigned int ext[6],
-        unsigned int levelMask = WPX_LVL_DEFAULT) const;
+        unsigned int levelMask = WPX_LVL_DEFAULT,
+        unsigned char *mode = nullptr) const;
 
     /**
      * @brief Gather the extended coarse nodal cube implied by a probe.
@@ -2241,18 +2264,21 @@ class Mesh {
      */
     template <typename T, typename FetchFn>
     void gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
-                                  T *out, T *eleScratch, FetchFn fetch) const;
+                                  T *out, T *eleScratch, FetchFn fetch,
+                                  const unsigned char *mode = nullptr) const;
 
     template <typename T>
     void gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
-                                   const unsigned int ext[6], T *out) const;
+                                   const unsigned int ext[6], T *out,
+                                   const unsigned char *mode = nullptr) const;
 
     /** As above, for a DG array with an arbitrary per-element stride, e.g.
      *  unzip_scatter's all_dg which is laid out [ele][var][node]. */
     template <typename T>
     void gatherExtendedCoarseNodesDG(const T *dgVec, size_t ele_stride,
                                      size_t var_offset, unsigned int ele,
-                                     const unsigned int ext[6], T *out) const;
+                                     const unsigned int ext[6], T *out,
+                                     const unsigned char *mode = nullptr) const;
 
     /** As above, sourcing from a CG vector by regenerating each contributing
      *  element's nodal values. Needed where only one element's DG values are
@@ -2276,7 +2302,8 @@ class Mesh {
     void gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
                                      const unsigned int ext[6], T *out,
                                      T *eleScratch, double *im1, double *im2,
-                                     bool allowWide = false) const;
+                                     bool allowWide = false,
+                                     const unsigned char *mode = nullptr) const;
 
     /**
      * @brief performs the child to parent contribution (only from a single

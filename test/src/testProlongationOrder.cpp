@@ -1193,6 +1193,69 @@ TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
         "max |gathered - analytic| = %.3e\n",
         with_finer, checked, worst);
 
+    // Same check again, but mode-aware: with a straddle the extension nodes
+    // sit at H/2 rather than H, so the expected coordinates differ. Without
+    // this the straddle index map is entirely untested.
+    double str_worst = 0.0;
+    long str_dirs = 0;
+    {
+        for (unsigned int e = mesh->getElementLocalBegin();
+             e < mesh->getElementLocalEnd(); e++) {
+            unsigned int ext[6];
+            unsigned char md[6];
+            mesh->probeCoarseExtension(e, want, ext,
+                                       ot::Mesh::WPX_LVL_SAME |
+                                           ot::Mesh::WPX_LVL_FINER,
+                                       md);
+            for (int d = 0; d < 6; d++)
+                if (ext[d] && md[d] == ot::Mesh::WPX_EXT_STRADDLE) str_dirs++;
+
+            const unsigned int mx = nrp + ext[0] + ext[1];
+            const unsigned int my = nrp + ext[2] + ext[3];
+            const unsigned int mz = nrp + ext[4] + ext[5];
+            std::vector<double> cb((size_t)mx * my * mz, 0.0);
+            mesh->gatherExtendedCoarseNodes(dg.data(), e, ext, cb.data(), md);
+
+            const double szz =
+                (double)(1u << (m_uiMaxDepth - elems[e].getLevel()));
+            const double H = szz / (double)p;
+
+            // coordinate of cube index i on one axis, honouring the mode
+            auto axpos = [&](unsigned int i, unsigned int lo, unsigned int hi,
+                             unsigned char mlo, unsigned char mhi, double c0) {
+                if (i < lo) {
+                    const double d =
+                        (mlo == ot::Mesh::WPX_EXT_STRADDLE) ? 0.5 : 1.0;
+                    return c0 - d * H * (double)(lo - i);
+                }
+                if (i <= lo + p) return c0 + H * (double)(i - lo);
+                const double d =
+                    (mhi == ot::Mesh::WPX_EXT_STRADDLE) ? 0.5 : 1.0;
+                return c0 + szz + d * H * (double)(i - lo - p);
+            };
+
+            for (unsigned int k = 0; k < mz; k++)
+                for (unsigned int j = 0; j < my; j++)
+                    for (unsigned int i = 0; i < mx; i++) {
+                        const double wv = lin(
+                            axpos(i, ext[0], ext[1], md[0], md[1],
+                                  (double)elems[e].getX()),
+                            axpos(j, ext[2], ext[3], md[2], md[3],
+                                  (double)elems[e].getY()),
+                            axpos(k, ext[4], ext[5], md[4], md[5],
+                                  (double)elems[e].getZ()));
+                        const double dd = std::fabs(
+                            cb[(size_t)(k * my + j) * mx + i] - wv);
+                        if (dd > str_worst) str_worst = dd;
+                    }
+        }
+    }
+    std::printf(
+        "straddle-mode gather: %ld straddle directions, max err = %.3e\n",
+        str_dirs, str_worst);
+    CHECK(str_dirs > 0);
+    CHECK(str_worst < 1e-6);
+
     // The check above fills the DG array analytically, so it validates the
     // index map only. The real path sources from CG through
     // getElementNodalValues, where a finer neighbour's own hanging faces are

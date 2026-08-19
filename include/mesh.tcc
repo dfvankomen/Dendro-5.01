@@ -12764,8 +12764,12 @@ inline unsigned int Mesh::wpxNeighbour(unsigned int ele, int ox, int oy,
 inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                                                unsigned int want_ext,
                                                unsigned int ext[6],
-                                               unsigned int levelMask) const {
-    for (unsigned int d = 0; d < 6; d++) ext[d] = 0;
+                                               unsigned int levelMask,
+                                               unsigned char *mode) const {
+    for (unsigned int d = 0; d < 6; d++) {
+        ext[d] = 0;
+        if (mode) mode[d] = WPX_EXT_NONE;
+    }
     if (!m_uiIsActive || want_ext == 0) return WPX_OK;
 
     // a neighbour shares its touching node plane, so it can only add p nodes
@@ -12777,13 +12781,20 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
 
     static const int off[6][3] = {{-1, 0, 0}, {1, 0, 0}, {0, -1, 0},
                                   {0, 1, 0},  {0, 0, -1}, {0, 0, 1}};
+    const unsigned int lev = m_uiAllElements[ele].getLevel();
     for (unsigned int d = 0; d < 6; d++) {
-        bool bg = false;
-        if (wpxNeighbour(ele, off[d][0], off[d][1], off[d][2], bg,
-                         levelMask) != LOOK_UP_TABLE_DEFAULT)
+        bool bg              = false;
+        const unsigned int q =
+            wpxNeighbour(ele, off[d][0], off[d][1], off[d][2], bg, levelMask);
+        if (q != LOOK_UP_TABLE_DEFAULT) {
             ext[d] = cap;
-        else
+            if (mode)
+                mode[d] = (m_uiAllElements[q].getLevel() == lev + 1)
+                              ? WPX_EXT_STRADDLE
+                              : WPX_EXT_COARSE;
+        } else {
             status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
+        }
         bad_ghost = bad_ghost || bg;
     }
 
@@ -12808,9 +12819,30 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                     bool bg = false;
                     const unsigned int q =
                         wpxNeighbour(ele, ox, oy, oz, bg, levelMask);
-                    if (q != LOOK_UP_TABLE_DEFAULT &&
-                        wpxOffsetOk(ele, ox, oy, oz, ext, q))
-                        continue;
+
+                    bool ok_here = (q != LOOK_UP_TABLE_DEFAULT) &&
+                                   wpxOffsetOk(ele, ox, oy, oz, ext, q);
+
+                    // A direction's mode is taken from its face neighbour,
+                    // but an edge or corner offset along the same direction
+                    // can land on an element at a different level. Reading it
+                    // at the wrong spacing puts inconsistent coordinates into
+                    // one cube, so require every offset a direction takes
+                    // part in to agree with that direction's mode.
+                    if (ok_here && mode) {
+                        const unsigned int ql = m_uiAllElements[q].getLevel();
+                        const int oo[3] = {ox, oy, oz};
+                        for (int a = 0; a < 3 && ok_here; a++) {
+                            if (oo[a] == 0) continue;
+                            const unsigned char md =
+                                mode[2 * a + (oo[a] > 0 ? 1 : 0)];
+                            if (md == WPX_EXT_STRADDLE && ql != lev + 1)
+                                ok_here = false;
+                            if (md == WPX_EXT_COARSE && ql != lev)
+                                ok_here = false;
+                        }
+                    }
+                    if (ok_here) continue;
 
                     status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
                     if (oz != 0)
@@ -12825,6 +12857,7 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
 
         if (bad_dir < 0) break;
         ext[bad_dir] = 0;
+        if (mode) mode[bad_dir] = WPX_EXT_NONE;
     }
 
     return status;
@@ -12902,8 +12935,8 @@ inline bool Mesh::wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
  */
 template <typename T, typename FetchFn>
 void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
-                                    T *out, T *eleScratch,
-                                    FetchFn fetch) const {
+                                    T *out, T *eleScratch, FetchFn fetch,
+                                    const unsigned char *mode) const {
     const unsigned int p   = m_uiElementOrder;
     const unsigned int nrp = p + 1;
 
@@ -13049,26 +13082,40 @@ void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                             }
                 }
 
-                // g -> (sub index, local index) on one axis
-                auto mapax = [&](int g, int o) {
+                // g -> (sub index, local index) on one axis.
+                //
+                // Along an extended axis the finer neighbour is read either
+                // decimated (every other node, landing on this element's
+                // lattice) or at its own fine spacing for a straddle, where
+                // the extra nodes sit at H/2 and centre the stencil. Across
+                // the transverse axes it is always decimated, which is what
+                // keeps the gathered cube rectangular.
+                auto mapax = [&](int g, int o, unsigned char md) {
                     int si = 0, li = 0;
+                    const int step = (md == WPX_EXT_STRADDLE) ? 1 : 2;
                     if (o < 0)
-                        li = (int)p - 2 * (-g);
+                        li = (int)p - step * (-g);
                     else if (o > 0)
-                        li = 2 * (g - (int)p);
+                        li = step * (g - (int)p);
                     else {
                         si = (g > half) ? 1 : 0;
                         li = 2 * (g - si * half);
                     }
                     return std::make_pair(si, li);
                 };
+                const unsigned char mdx =
+                    mode ? mode[ox < 0 ? 0 : 1] : WPX_EXT_COARSE;
+                const unsigned char mdy =
+                    mode ? mode[oy < 0 ? 2 : 3] : WPX_EXT_COARSE;
+                const unsigned char mdz =
+                    mode ? mode[oz < 0 ? 4 : 5] : WPX_EXT_COARSE;
 
                 for (int gz = gz0; gz <= gz1; gz++) {
-                    const auto mz = mapax(gz, oz);
+                    const auto mz = mapax(gz, oz, mdz);
                     for (int gy = gy0; gy <= gy1; gy++) {
-                        const auto my = mapax(gy, oy);
+                        const auto my = mapax(gy, oy, mdy);
                         for (int gx = gx0; gx <= gx1; gx++) {
-                            const auto mx = mapax(gx, ox);
+                            const auto mx = mapax(gx, ox, mdx);
                             out[(size_t)((gz + (int)ext[4]) * ny +
                                          (gy + (int)ext[2])) *
                                     nx +
@@ -13087,29 +13134,32 @@ void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
 
 template <typename T>
 void Mesh::gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
-                                     const unsigned int ext[6], T *out) const {
+                                     const unsigned int ext[6], T *out,
+                                     const unsigned char *mode) const {
     gatherExtendedCoarseImpl<T>(
         ele, ext, out, (T *)nullptr,
-        [&](unsigned int e, T *) { return dgVec + (size_t)e * m_uiNpE; });
+        [&](unsigned int e, T *) { return dgVec + (size_t)e * m_uiNpE; }, mode);
 }
 
 template <typename T>
 void Mesh::gatherExtendedCoarseNodesDG(const T *dgVec, size_t ele_stride,
                                        size_t var_offset, unsigned int ele,
-                                       const unsigned int ext[6],
-                                       T *out) const {
+                                       const unsigned int ext[6], T *out,
+                                       const unsigned char *mode) const {
     gatherExtendedCoarseImpl<T>(ele, ext, out, (T *)nullptr,
                                 [&](unsigned int e, T *) {
                                     return dgVec + (size_t)e * ele_stride +
                                            var_offset;
-                                });
+                                },
+                                mode);
 }
 
 template <typename T>
 void Mesh::gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
                                        const unsigned int ext[6], T *out,
                                        T *eleScratch, double *im1, double *im2,
-                                       bool allowWide) const {
+                                       bool allowWide,
+                                       const unsigned char *mode) const {
     // NOTE: a neighbour with hanging faces has those faces filled by the
     // narrow operator inside getElementNodalValues, so widening the pad does
     // not by itself fix a neighbour's own hanging nodes. That is the separate
@@ -13120,7 +13170,8 @@ void Mesh::gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
                                                                 false, im1,
                                                                 im2, allowWide);
                                     return (const T *)buf;
-                                });
+                                },
+                                mode);
 }
 
 /**
@@ -13134,6 +13185,31 @@ void Mesh::gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
  *
  * @param out per-dof child nodes, variable v at out + v*m_uiNpE.
  */
+/**
+ * Extended node coordinates for one axis, in parent-element units (the parent
+ * spans [0,1], its own nodes at j/p).
+ *
+ * A coarse extension adds nodes one element-spacing apart; a straddle adds
+ * them at half that, because they come from a finer neighbour. Mixing the two
+ * makes the array graded, which is exactly what build_1d_at exists for.
+ */
+inline void wpxAxisCoords(unsigned int p, unsigned int lo, unsigned char mlo,
+                          unsigned int hi, unsigned char mhi,
+                          std::vector<double> &xs) {
+    xs.clear();
+    const double dl =
+        (mlo == ot::Mesh::WPX_EXT_STRADDLE) ? 0.5 : 1.0;
+    const double dh =
+        (mhi == ot::Mesh::WPX_EXT_STRADDLE) ? 0.5 : 1.0;
+
+    for (int i = (int)lo; i >= 1; i--)
+        xs.push_back(-dl * (double)i / (double)p);
+    for (unsigned int j = 0; j <= p; j++)
+        xs.push_back((double)j / (double)p);
+    for (unsigned int i = 1; i <= hi; i++)
+        xs.push_back(1.0 + dh * (double)i / (double)p);
+}
+
 template <typename T>
 void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                                 size_t dgSz, unsigned int ele,
@@ -13147,7 +13223,9 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
     const unsigned int want  = (width > nrp) ? (width - nrp) : 0u;
 
     unsigned int ext[6];
-    const unsigned int st = this->probeCoarseExtension(ele, want, ext);
+    unsigned char emode[6];
+    const unsigned int st =
+        this->probeCoarseExtension(ele, want, ext, WPX_LVL_DEFAULT, emode);
 
     if (st & WPX_CLIPPED_GHOST) {
         // The stencil would have reached a round-2 ghost, so whether it is
@@ -13175,13 +13253,21 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
         static thread_local std::vector<T> cube, eleScratch;
         static thread_local std::vector<double> w1, w2;
 
-        unsigned int nx_in = 0, ny_in = 0, nz_in = 0;
-        dendro::wideprolong::build_1d(m_uiElementOrder, (cnum >> 0u) & 1u,
-                                      ext[0], ext[1], width, opx, nx_in);
-        dendro::wideprolong::build_1d(m_uiElementOrder, (cnum >> 1u) & 1u,
-                                      ext[2], ext[3], width, opy, ny_in);
-        dendro::wideprolong::build_1d(m_uiElementOrder, (cnum >> 2u) & 1u,
-                                      ext[4], ext[5], width, opz, nz_in);
+        static thread_local std::vector<double> cx, cy, cz;
+        wpxAxisCoords(m_uiElementOrder, ext[0], emode[0], ext[1], emode[1], cx);
+        wpxAxisCoords(m_uiElementOrder, ext[2], emode[2], ext[3], emode[3], cy);
+        wpxAxisCoords(m_uiElementOrder, ext[4], emode[4], ext[5], emode[5], cz);
+
+        const unsigned int nx_in = (unsigned int)cx.size();
+        const unsigned int ny_in = (unsigned int)cy.size();
+        const unsigned int nz_in = (unsigned int)cz.size();
+
+        dendro::wideprolong::build_1d_at(m_uiElementOrder, (cnum >> 0u) & 1u,
+                                         cx, width, opx);
+        dendro::wideprolong::build_1d_at(m_uiElementOrder, (cnum >> 1u) & 1u,
+                                         cy, width, opy);
+        dendro::wideprolong::build_1d_at(m_uiElementOrder, (cnum >> 2u) & 1u,
+                                         cz, width, opz);
 
         const size_t ss = dendro::wideprolong::scratch_size(
             m_uiElementOrder, nx_in, ny_in, nz_in);
@@ -13206,12 +13292,12 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
             if (allDg != nullptr)
                 this->gatherExtendedCoarseNodesDG(allDg, allDgEleStride,
                                                   (size_t)v * dgSz, ele, ext,
-                                                  cube.data());
+                                                  cube.data(), emode);
             else
                 this->gatherExtendedCoarseNodesCG(in + v * cgSz, ele, ext,
                                                   cube.data(),
                                                   eleScratch.data(), g_im1,
-                                                  g_im2, true);
+                                                  g_im2, true, emode);
             dendro::wideprolong::apply_3d(m_uiElementOrder, opx.data(), nx_in,
                                           opy.data(), ny_in, opz.data(), nz_in,
                                           cube.data(), out + v * m_uiNpE,
