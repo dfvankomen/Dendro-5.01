@@ -799,6 +799,124 @@ TEST_CASE("extended coarse gather reproduces the node values it spans") {
 }
 
 /* ------------------------------------------------------------------ */
+/* Which axes actually have to be widened                              */
+/* ------------------------------------------------------------------ */
+
+TEST_CASE("only the differentiated axis needs widening for a pure 2nd deriv") {
+    // The solver takes pure and mixed second derivatives, so no stencil reads
+    // the pad's 3D corner region. That raises a structural question: for a
+    // pure d2/dx2 reading the x pad slab, do the y and z interpolation errors
+    // matter at all?
+    //
+    // They should not. Along an x-line, y and z are fixed, so the transverse
+    // interpolation error is a smooth function of x on the scale of the
+    // solution, and the x-difference annihilates it. Only the x error
+    // oscillates node to node and gets amplified by 1/h^2.
+    //
+    // If that holds, widening the normal axis alone restores the order, no
+    // corner or edge elements are needed, and the whole corner-consistency
+    // problem disappears for pure second derivatives.
+    //
+    // Deliberately non-separable, so transverse errors cannot cancel by
+    // construction.
+    const real A = 2.0Q, B = 1.5Q, C = 1.2Q, D = 0.7Q, E = 0.5Q;
+    auto F = [&](real x, real y, real z) {
+        return expq(A * x + B * y + C * z + D * x * y + E * y * z);
+    };
+    auto Fxx = [&](real x, real y, real z) {
+        const real ax = A + D * y;
+        return ax * ax * F(x, y, z);
+    };
+
+    const real Y0 = 0.21Q, Z0 = 0.17Q;
+
+    // width per axis: 7 = today's element-local, 10 = wide
+    auto pad_value = [&](real h, int ox, int m, int n, unsigned wx,
+                         unsigned wy, unsigned wz) {
+        const real H = 2 * h;
+        std::vector<real> xs(wx), ys(wy), zs(wz), wxv, wyv, wzv;
+
+        // normal axis: one-sided into the coarse side, as at a real interface
+        for (unsigned i = 0; i < wx; i++) xs[i] = X0 - (real)i * H;
+        // transverse axes: centred, which is what a tangential neighbour gives
+        for (unsigned j = 0; j < wy; j++)
+            ys[j] = Y0 + ((real)j - (real)(wy / 2)) * H;
+        for (unsigned k = 0; k < wz; k++)
+            zs[k] = Z0 + ((real)k - (real)(wz / 2)) * H;
+
+        lagrange_weights(xs, X0 + (real)ox * h, wxv);
+        lagrange_weights(ys, Y0 + (real)m * h, wyv);
+        lagrange_weights(zs, Z0 + (real)n * h, wzv);
+
+        real acc = 0;
+        for (unsigned k = 0; k < wz; k++)
+            for (unsigned j = 0; j < wy; j++)
+                for (unsigned i = 0; i < wx; i++)
+                    acc += wxv[i] * wyv[j] * wzv[k] * F(xs[i], ys[j], zs[k]);
+        return acc;
+    };
+
+    struct Cfg { const char *name; unsigned wx, wy, wz; };
+    const std::vector<Cfg> cfgs = {
+        {"all narrow (7,7,7)", 7, 7, 7},
+        {"normal only (10,7,7)", 10, 7, 7},
+        {"normal+1 tang (10,10,7)", 10, 10, 7},
+        {"all wide (10,10,10)", 10, 10, 10},
+    };
+
+    const std::vector<real> &hs = h_sweep();
+    const int m = 1, n = 1;  // transverse half-points: the hardest case
+
+    std::printf(
+        "\n=== d2/dx2 at the first fine node past the jump, per-axis width "
+        "===\n");
+    std::printf("%-26s %13s %13s %8s\n", "widened axes", "err(h=1/128)",
+                "err(h=1/2187)", "order");
+
+    std::vector<double> ord;
+    for (const Cfg &c : cfgs) {
+        std::vector<real> errs(hs.size());
+        for (size_t t = 0; t < hs.size(); t++) {
+            const real h = hs[t];
+            real acc = 0;
+            for (int o = -D2_R; o <= D2_R; o++) {
+                const real v =
+                    (o >= 0) ? F(X0 + (real)o * h, Y0 + (real)m * h,
+                                 Z0 + (real)n * h)
+                             : pad_value(h, o, m, n, c.wx, c.wy, c.wz);
+                acc += D2_C[o + D2_R] * v;
+            }
+            acc /= (h * h);
+            errs[t] = fabsq(acc - Fxx(X0, Y0 + (real)m * h, Z0 + (real)n * h));
+            add_row(c.name, "d2dx2_axis_study", h, errs[t]);
+        }
+        unsigned nu = 0;
+        const double p = fit_order(hs, errs, nu);
+        ord.push_back(p);
+        std::printf("%-26s %13.4e %13.4e %8.3f\n", c.name, dbl(errs.front()),
+                    dbl(errs.back()), p);
+    }
+
+    // MEASURED, and it refutes the tempting simplification above: widening
+    // the differentiated axis alone changes nothing, and neither does two of
+    // three. All three axes are required.
+    //
+    // The reason the transverse errors are not annihilated: they are present
+    // only on the pad points (o < 0) and absent from the exact interior
+    // points (o >= 0). A one-sided patch of smooth O(h^7) error is not in the
+    // null space of the D2 stencil, so it survives division by h^2 and lands
+    // at O(h^5) just like the normal-axis error.
+    //
+    // Consequence: corner and edge elements really are needed by the gather,
+    // and the corner-consistency problem cannot be sidestepped by the fact
+    // that no solver stencil reads the pad's 3D corner region.
+    CHECK(ord[0] == doctest::Approx(5.0).epsilon(0.05));
+    CHECK(ord[1] == doctest::Approx(5.0).epsilon(0.05));
+    CHECK(ord[2] == doctest::Approx(5.0).epsilon(0.05));
+    CHECK(ord[3] > 6.0);
+}
+
+/* ------------------------------------------------------------------ */
 /* End to end -- unzip pad accuracy across real 2:1 interfaces         */
 /* ------------------------------------------------------------------ */
 
