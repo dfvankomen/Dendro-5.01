@@ -1305,6 +1305,40 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                          : 1),
         ext_part, ext_none, worst, rms);
 
+    // What would each extension mechanism actually unblock? Re-probing with
+    // a wider level mask answers that including the corner rule, which a
+    // tally of per-direction refusal reasons cannot.
+    if (active) {
+        const unsigned int want =
+            dendro::wideprolong::stencil_width(ELE_ORDER) - (ELE_ORDER + 1);
+        struct M { const char *name; unsigned int mask; };
+        const M masks[4] = {
+            {"same-level only (built today)", ot::Mesh::WPX_LVL_SAME},
+            {"+ decimate into finer", ot::Mesh::WPX_LVL_SAME |
+                                          ot::Mesh::WPX_LVL_FINER},
+            {"+ graded into coarser", ot::Mesh::WPX_LVL_SAME |
+                                          ot::Mesh::WPX_LVL_COARSER},
+            {"+ both", ot::Mesh::WPX_LVL_SAME | ot::Mesh::WPX_LVL_FINER |
+                           ot::Mesh::WPX_LVL_COARSER}};
+
+        std::printf("what each extension mechanism would unblock:\n");
+        for (const M &mm : masks) {
+            long full = 0, tot = 0;
+            for (unsigned int e = mesh->getElementLocalBegin();
+                 e < mesh->getElementLocalEnd(); e++) {
+                unsigned int ex[6];
+                mesh->probeCoarseExtension(e, want, ex, mm.mask);
+                bool f = true;
+                for (int a = 0; a < 3; a++)
+                    if (ex[2 * a] + ex[2 * a + 1] < want) f = false;
+                if (f) full++;
+                tot++;
+            }
+            std::printf("  %-32s full reach %5ld / %5ld  (%.1f%%)\n", mm.name,
+                        full, tot, 100.0 * (double)full / (double)(tot ? tot : 1));
+        }
+    }
+
     std::printf(
         "achieved 1D stencil width over local elements: "
         "%u pts %ld, %u pts %ld, %u pts %ld, %u pts %ld\n",

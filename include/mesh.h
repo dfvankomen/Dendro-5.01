@@ -2151,14 +2151,31 @@ class Mesh {
      */
     /** Walk `steps` face hops, requiring usable same-level coarse elements. */
     unsigned int wpxWalk(unsigned int ele, const unsigned int *dirs,
-                         unsigned int steps, bool &bad_ghost) const;
+                         unsigned int steps, bool &bad_ghost,
+                         unsigned int levelMask = 1u) const;
 
     /** Element at signed element offset (ox,oy,oz) from `ele`. */
     unsigned int wpxNeighbour(unsigned int ele, int ox, int oy, int oz,
-                              bool &bad_ghost) const;
+                              bool &bad_ghost,
+                              unsigned int levelMask = 1u) const;
 
-    unsigned int probeCoarseExtension(unsigned int ele, unsigned int want_ext,
-                                      unsigned int ext[6]) const;
+    /**
+     * @brief Which neighbour refinement levels the stencil may extend into.
+     *
+     * SAME is what is implemented. FINER and COARSER exist so the probe can
+     * be asked what a given extension mechanism would unblock, without
+     * building it first -- the answer includes the corner rule, which a
+     * hand tally of refusal reasons does not.
+     */
+    enum : unsigned int {
+        WPX_LVL_SAME    = 1u,
+        WPX_LVL_FINER   = 2u,
+        WPX_LVL_COARSER = 4u
+    };
+
+    unsigned int probeCoarseExtension(
+        unsigned int ele, unsigned int want_ext, unsigned int ext[6],
+        unsigned int levelMask = WPX_LVL_SAME) const;
 
     /**
      * @brief Gather the extended coarse nodal cube implied by a probe.

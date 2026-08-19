@@ -12706,7 +12706,8 @@ inline void wpxLogFallbackOnce(const char *what, unsigned int got,
  * is rank dependent and must not be silently absorbed.
  */
 inline unsigned int Mesh::wpxWalk(unsigned int ele, const unsigned int *dirs,
-                                  unsigned int steps, bool &bad_ghost) const {
+                                  unsigned int steps, bool &bad_ghost,
+                                  unsigned int levelMask) const {
     unsigned int cur         = ele;
     const unsigned int lev   = m_uiAllElements[ele].getLevel();
 
@@ -12716,8 +12717,19 @@ inline unsigned int Mesh::wpxWalk(unsigned int ele, const unsigned int *dirs,
 
         if (nxt == LOOK_UP_TABLE_DEFAULT) return LOOK_UP_TABLE_DEFAULT;
         if (nxt >= m_uiAllElements.size()) return LOOK_UP_TABLE_DEFAULT;
-        if (m_uiAllElements[nxt].getLevel() != lev)
-            return LOOK_UP_TABLE_DEFAULT;
+        {
+            const unsigned int nl = m_uiAllElements[nxt].getLevel();
+            unsigned int bit;
+            if (nl == lev)
+                bit = WPX_LVL_SAME;
+            else if (nl == lev + 1)
+                bit = WPX_LVL_FINER;
+            else if (nl + 1 == lev)
+                bit = WPX_LVL_COARSER;
+            else
+                return LOOK_UP_TABLE_DEFAULT;  // >1 level apart: not 2:1
+            if (!(levelMask & bit)) return LOOK_UP_TABLE_DEFAULT;
+        }
         if (!m_uiIsNodalMapValid[nxt]) {
             bad_ghost = true;
             return LOOK_UP_TABLE_DEFAULT;
@@ -12729,7 +12741,8 @@ inline unsigned int Mesh::wpxWalk(unsigned int ele, const unsigned int *dirs,
 
 /** Element at signed element offset (ox,oy,oz) from `ele`, or default. */
 inline unsigned int Mesh::wpxNeighbour(unsigned int ele, int ox, int oy,
-                                       int oz, bool &bad_ghost) const {
+                                       int oz, bool &bad_ghost,
+                                       unsigned int levelMask) const {
     unsigned int dirs[3];
     unsigned int n = 0;
     if (ox < 0)
@@ -12745,12 +12758,13 @@ inline unsigned int Mesh::wpxNeighbour(unsigned int ele, int ox, int oy,
     else if (oz > 0)
         dirs[n++] = OCT_DIR_FRONT;
 
-    return wpxWalk(ele, dirs, n, bad_ghost);
+    return wpxWalk(ele, dirs, n, bad_ghost, levelMask);
 }
 
 inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                                                unsigned int want_ext,
-                                               unsigned int ext[6]) const {
+                                               unsigned int ext[6],
+                                               unsigned int levelMask) const {
     for (unsigned int d = 0; d < 6; d++) ext[d] = 0;
     if (!m_uiIsActive || want_ext == 0) return WPX_OK;
 
@@ -12765,8 +12779,8 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                                   {0, 1, 0},  {0, 0, -1}, {0, 0, 1}};
     for (unsigned int d = 0; d < 6; d++) {
         bool bg = false;
-        if (wpxNeighbour(ele, off[d][0], off[d][1], off[d][2], bg) !=
-            LOOK_UP_TABLE_DEFAULT)
+        if (wpxNeighbour(ele, off[d][0], off[d][1], off[d][2], bg,
+                         levelMask) != LOOK_UP_TABLE_DEFAULT)
             ext[d] = cap;
         else
             status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
@@ -12792,7 +12806,7 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                 for (int ox = -1; ox <= 1 && bad_dir < 0; ox++) {
                     if ((ox < 0 && !ext[0]) || (ox > 0 && !ext[1])) continue;
                     bool bg = false;
-                    if (wpxNeighbour(ele, ox, oy, oz, bg) !=
+                    if (wpxNeighbour(ele, ox, oy, oz, bg, levelMask) !=
                         LOOK_UP_TABLE_DEFAULT)
                         continue;
 
