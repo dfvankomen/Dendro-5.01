@@ -1801,11 +1801,23 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                           MPI_COMM_WORLD);
             int rk_t = 0;
             MPI_Comm_rank(MPI_COMM_WORLD, &rk_t);
+            // The exchange scales with the GHOST shell, not the local count,
+            // so the ghost:local ratio is the number that decides whether a
+            // measured cost generalises. Report it alongside the time.
+            long nloc = (long)(mesh->getElementLocalEnd() -
+                               mesh->getElementLocalBegin());
+            long ngh  = (long)mesh->getAllElements().size() - nloc;
+            long gloc = nloc, ggh = ngh;
+            MPI_Allreduce(&nloc, &gloc, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
+            MPI_Allreduce(&ngh, &ggh, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
             if (rk_t == 0)
                 std::printf(
                     "\n[timing] unzip over %d iters: best %.3f ms, avg %.3f "
-                    "ms (slowest rank)\n",
-                    NIT, gbest * 1e3, gavg * 1e3);
+                    "ms (slowest rank) | elements local %ld ghost %ld "
+                    "(ghost:local %.3f) | blocks %zu\n",
+                    NIT, gbest * 1e3, gavg * 1e3, gloc, ggh,
+                    gloc ? (double)ggh / (double)gloc : 0.0,
+                    mesh->getLocalBlockList().size());
         }
 
         std::vector<double> errmap(mesh->getDegOfFreedomUnZip(), -1.0);
@@ -2539,6 +2551,102 @@ TEST_CASE("round-2 ghost demand of the wide stencil") {
         "           split -- main: local %ld ghost %ld | face: local %ld "
         "ghost %ld\n",
         tripMainLoc, tripMainGh, tripFaceLoc, tripFaceGh);
+
+    delete mesh;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Cost -- unzip timing on a production-shaped mesh, no diagnostics    */
+/* ------------------------------------------------------------------ */
+
+TEST_CASE("unzip cost") {
+    // The other tests carry O(N) diagnostics that dwarf the thing being
+    // timed. This one builds the mesh, unzips, and reports -- nothing else.
+    //
+    // The number that decides whether a cost generalises is the ghost:local
+    // element ratio: the wide path's ghost DG exchange scales with the ghost
+    // shell, so a small mesh (ratio ~0.9) is the worst case and says nothing
+    // about production (thin shell around many local elements).
+    const double L   = (double)(1u << m_uiMaxDepth);
+    const double DOM = 200.0;
+    auto phys = [L, DOM](double c) { return (c / L) * DOM - 0.5 * DOM; };
+    auto chi  = [phys](double x, double y, double z) {
+        const double px = phys(x), py = phys(y), pz = phys(z);
+        double r = std::sqrt(px * px + py * py + pz * pz);
+        if (r < 1e-2) r = 1e-2;
+        const double psi = 1.0 + 0.5 / r;
+        return std::pow(psi, -4.0);
+    };
+    const char *wp   = std::getenv("PROLONG_WTOL");
+    const double wt  = wp ? std::atof(wp) : 1e-3;
+    const char *dp   = std::getenv("PROLONG_DOF");
+    const unsigned int dofN = dp ? (unsigned)std::atoi(dp) : 1u;
+    const char *itp  = std::getenv("PROLONG_ITERS");
+    const int NIT    = itp ? std::atoi(itp) : 10;
+
+    std::function<double(double, double, double)> fr =
+        [chi](double x, double y, double z) { return chi(x, y, z); };
+
+    std::vector<ot::TreeNode> tmp;
+    const double tm0 = MPI_Wtime();
+    function2Octree(fr, tmp, m_uiMaxDepth, wt, ELE_ORDER, MPI_COMM_WORLD);
+    ot::Mesh *mesh = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
+                                    MPI_COMM_WORLD, 0);
+    const double tm1 = MPI_Wtime();
+    REQUIRE(mesh != nullptr);
+    if (!mesh->isActive()) { delete mesh; return; }
+
+    std::vector<double> cg;
+    mesh->createVector(cg, fr);
+    // dof copies of the same field: the exchange payload is per variable, so
+    // this is what tells us how the cost scales toward a GR-sized system
+    std::vector<double> cgN((size_t)dofN * cg.size());
+    for (unsigned int v = 0; v < dofN; v++)
+        std::copy(cg.begin(), cg.end(), cgN.begin() + (size_t)v * cg.size());
+    std::vector<double> uz((size_t)dofN * mesh->getDegOfFreedomUnZip(), 0.0);
+    for (unsigned int v = 0; v < dofN; v++)
+        mesh->performGhostExchange(cgN.data() + (size_t)v * cg.size());
+
+    double best = 1e30, tot = 0.0;
+    for (int it = 0; it < NIT; it++) {
+        MPI_Barrier(MPI_COMM_WORLD);
+        const double t0 = MPI_Wtime();
+        mesh->unzip(cgN.data(), uz.data(), dofN);
+        const double dt = MPI_Wtime() - t0;
+        if (dt < best) best = dt;
+        tot += dt;
+    }
+
+    long nloc = (long)(mesh->getElementLocalEnd() -
+                       mesh->getElementLocalBegin());
+    long ngh  = (long)mesh->getAllElements().size() - nloc;
+    long nblk = (long)mesh->getLocalBlockList().size();
+    double gb = best, ga = tot / NIT, gmesh = tm1 - tm0;
+    long gl = nloc, gg = ngh, gbk = nblk;
+    MPI_Allreduce(MPI_IN_PLACE, &gb, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE, &ga, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE, &gmesh, 1, MPI_DOUBLE, MPI_MAX,
+                  MPI_COMM_WORLD);
+    MPI_Allreduce(&nloc, &gl, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&ngh, &gg, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&nblk, &gbk, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
+
+    int rk = 0, np = 1;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+    MPI_Comm_size(MPI_COMM_WORLD, &np);
+    if (rk == 0)
+        std::printf(
+            "[cost] %s np=%d dof=%u | ele local %ld ghost %ld "
+            "(ghost:local %.3f) blocks %ld | mesh %.1f s | unzip best %.3f ms "
+            "avg %.3f ms\n",
+#ifdef DENDRO_WIDE_PROLONGATION
+            "ON ",
+#else
+            "OFF",
+#endif
+            np, dofN, gl, gg, gl ? (double)gg / (double)gl : 0.0, gbk, gmesh,
+            gb * 1e3, ga * 1e3);
 
     delete mesh;
 }
