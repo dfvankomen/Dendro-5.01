@@ -2065,6 +2065,262 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     delete mesh;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Acceptance test -- Hamiltonian constraint across 2:1 interfaces     */
+/* ------------------------------------------------------------------ */
+
+TEST_CASE("hamiltonian constraint across 2:1 interfaces") {
+    // The pad-error metric measures the prolongated values themselves. What a
+    // solver actually suffers is a SECOND derivative taken through them, which
+    // divides by h^2, so a modest pad improvement can be worth much more (or
+    // much less) here. This is the criterion the concept note wrote down and
+    // nobody ran.
+    //
+    // Brill-Lindquist at t=0 is the rare case with an exact ground truth.
+    // psi = 1 + M/(2r) is harmonic, and with chi = psi^-4,
+    //     lap psi = 0  <=>  lap chi = (5/4) |grad chi|^2 / chi
+    // so  H := 2 lap chi - (5/2) |grad chi|^2 / chi  is ZERO in the continuum.
+    // Anything reported below is pure discretisation error.
+    const double L   = (double)(1u << m_uiMaxDepth);
+    const double DOM = 200.0;
+    auto phys = [L, DOM](double c) { return (c / L) * DOM - 0.5 * DOM; };
+
+    // physical-space chi; the puncture itself is singular, so r is clamped
+    const double RCLAMP = 1e-2;
+    auto chi = [phys, RCLAMP](double x, double y, double z) {
+        const double px = phys(x), py = phys(y), pz = phys(z);
+        double r = std::sqrt(px * px + py * py + pz * pz);
+        if (r < RCLAMP) r = RCLAMP;
+        const double psi = 1.0 + 0.5 / r;
+        return std::pow(psi, -4.0);
+    };
+
+    const char *wp  = std::getenv("PROLONG_WTOL");
+    const double wt = wp ? std::atof(wp) : 1e-3;
+
+    std::function<double(double, double, double)> fr =
+        [chi](double x, double y, double z) { return chi(x, y, z); };
+
+    std::vector<ot::TreeNode> tmp;
+    function2Octree(fr, tmp, m_uiMaxDepth, wt, ELE_ORDER, MPI_COMM_WORLD);
+    ot::Mesh *mesh = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
+                                    MPI_COMM_WORLD, 0);
+    REQUIRE(mesh != nullptr);
+    if (!mesh->isActive()) { delete mesh; return; }
+
+    std::vector<double> cg;
+    mesh->createVector(cg, fr);
+    std::vector<double> uz(mesh->getDegOfFreedomUnZip(), 0.0);
+    mesh->performGhostExchange(cg);
+    mesh->unzip(cg.data(), uz.data(), 1);
+
+    // 6th-order central stencils, radius 3 -- exactly the pad width, so every
+    // block-interior point's stencil is legal and the ones within 3 nodes of a
+    // 2:1 face read prolongated values.
+    const double c1[7] = {-1.0 / 60, 3.0 / 20, -3.0 / 4, 0.0,
+                          3.0 / 4,   -3.0 / 20, 1.0 / 60};
+    const double c2[7] = {1.0 / 90, -3.0 / 20, 3.0 / 2, -49.0 / 18,
+                          3.0 / 2,  -3.0 / 20, 1.0 / 90};
+
+    const std::vector<ot::TreeNode> &AE = mesh->getAllElements();
+    // level of the element containing a point, or -1
+    auto locate = [&](double x, double y, double z) -> int {
+        for (size_t e = 0; e < AE.size(); e++) {
+            const double sz =
+                (double)(1u << (m_uiMaxDepth - AE[e].getLevel()));
+            if (x < (double)AE[e].getX() || x >= (double)AE[e].getX() + sz)
+                continue;
+            if (y < (double)AE[e].getY() || y >= (double)AE[e].getY() + sz)
+                continue;
+            if (z < (double)AE[e].getZ() || z >= (double)AE[e].getZ() + sz)
+                continue;
+            return (int)AE[e].getLevel();
+        }
+        return -1;
+    };
+
+    // Pooling levels makes the >=4 bin the bulk error of the COARSEST blocks,
+    // which swamps the interface excess we are trying to see. Stratify, so
+    // each level's dist-1 is compared against a background at its own
+    // resolution.
+    const int NB = 5;  // dist 1,2,3, >=4, and no-2:1-face
+    const int NL = 12;
+    static double s2L[NL][NB];
+    static double mxL[NL][NB];
+    static long   cnL[NL][NB];
+    for (int a = 0; a < NL; a++)
+        for (int t = 0; t < NB; t++) { s2L[a][t]=0; mxL[a][t]=0; cnL[a][t]=0; }
+    double s2[NB]  = {0, 0, 0, 0, 0};
+    double mx[NB]  = {0, 0, 0, 0, 0};
+    long   cnt[NB] = {0, 0, 0, 0, 0};
+    long   nskip = 0, njumpblk = 0;
+
+    const std::vector<ot::Block> &blks = mesh->getLocalBlockList();
+    for (size_t b = 0; b < blks.size(); b++) {
+        if (blks[b].getBlkNodeFlag()) continue;  // domain-boundary pad is unset
+
+        const ot::TreeNode bn = blks[b].getBlockNode();
+        const unsigned int pW = blks[b].get1DPadWidth();
+        const unsigned int lx = blks[b].getAllocationSzX();
+        const unsigned int ly = blks[b].getAllocationSzY();
+        const unsigned int lz = blks[b].getAllocationSzZ();
+        const unsigned int of = blks[b].getOffset();
+        const double hx = blks[b].computeGridDx();
+        if (lx < 2 * pW + 7 || ly < 2 * pW + 7 || lz < 2 * pW + 7) continue;
+
+        const double x0 = (double)bn.minX() - pW * hx;
+        const double y0 = (double)bn.minY() - pW * hx;
+        const double z0 = (double)bn.minZ() - pW * hx;
+
+        // Which faces sit on a 2:1 jump? Sample a pad point just outside each
+        // face and compare the containing element's node spacing to this
+        // block's. Coarser element => that pad was prolongated.
+        bool jump[6] = {false, false, false, false, false, false};
+        const double cxm = x0 + 0.5 * (lx - 1) * hx;
+        const double cym = y0 + 0.5 * (ly - 1) * hx;
+        const double czm = z0 + 0.5 * (lz - 1) * hx;
+        // One sample per face is not enough: a block face can border a
+        // same-level neighbour over part of its area and a coarser one over
+        // the rest, and misclassifying that leaks prolongated points into the
+        // dist>=4 control. Sample a grid and mark the face if ANY of it is
+        // coarse-filled, which is the conservative direction -- an ambiguous
+        // face moves points OUT of the control rather than into it.
+        (void)cxm; (void)cym; (void)czm;
+        for (int d = 0; d < 6; d++) {
+            const int ax = d / 2;
+            const double outer =
+                (d % 2 == 0)
+                    ? 0.5 * hx
+                    : ((ax == 0 ? (lx - 1.5) : (ax == 1 ? (ly - 1.5)
+                                                        : (lz - 1.5))) * hx);
+            for (int u = 1; u <= 5 && !jump[d]; u++)
+                for (int v = 1; v <= 5 && !jump[d]; v++) {
+                    const double fu = (double)u / 6.0, fv = (double)v / 6.0;
+                    double q[3];
+                    q[ax] = ((ax == 0) ? x0 : (ax == 1) ? y0 : z0) + outer;
+                    const int a1 = (ax + 1) % 3, a2 = (ax + 2) % 3;
+                    const double o1 = (a1 == 0) ? x0 : (a1 == 1) ? y0 : z0;
+                    const double o2 = (a2 == 0) ? x0 : (a2 == 1) ? y0 : z0;
+                    const double n1 = (a1 == 0) ? lx : (a1 == 1) ? ly : lz;
+                    const double n2 = (a2 == 0) ? lx : (a2 == 1) ? ly : lz;
+                    q[a1] = o1 + fu * (n1 - 1) * hx;
+                    q[a2] = o2 + fv * (n2 - 1) * hx;
+                    const int lv = locate(q[0], q[1], q[2]);
+                    if (lv < 0) continue;
+                    const double eh =
+                        (double)(1u << (m_uiMaxDepth - (unsigned)lv)) /
+                        ELE_ORDER;
+                    if (eh > 1.5 * hx) jump[d] = true;
+                }
+        }
+        bool any = false;
+        for (int d = 0; d < 6; d++) any = any || jump[d];
+        if (any) njumpblk++;
+
+        auto AT = [&](unsigned int i, unsigned int j, unsigned int k) {
+            return uz[of + (size_t)(k * ly + j) * lx + i];
+        };
+
+        for (unsigned int k = pW; k < lz - pW; k++)
+            for (unsigned int j = pW; j < ly - pW; j++)
+                for (unsigned int i = pW; i < lx - pW; i++) {
+                    const double px = x0 + i * hx, py = y0 + j * hx,
+                                 pz = z0 + k * hx;
+                    // the clamped puncture core is not the analytic solution
+                    const double rr = std::sqrt(phys(px) * phys(px) +
+                                                phys(py) * phys(py) +
+                                                phys(pz) * phys(pz));
+                    if (rr < 1.0) { nskip++; continue; }
+
+                    double dx = 0, dy = 0, dz = 0, dxx = 0, dyy = 0, dzz = 0;
+                    for (int t = -3; t <= 3; t++) {
+                        dx  += c1[t + 3] * AT(i + t, j, k);
+                        dy  += c1[t + 3] * AT(i, j + t, k);
+                        dz  += c1[t + 3] * AT(i, j, k + t);
+                        dxx += c2[t + 3] * AT(i + t, j, k);
+                        dyy += c2[t + 3] * AT(i, j + t, k);
+                        dzz += c2[t + 3] * AT(i, j, k + t);
+                    }
+                    // physical spacing: octree units -> domain
+                    const double hp = hx * DOM / L;
+                    dx /= hp; dy /= hp; dz /= hp;
+                    dxx /= hp * hp; dyy /= hp * hp; dzz /= hp * hp;
+
+                    const double c    = AT(i, j, k);
+                    const double lap  = dxx + dyy + dzz;
+                    const double g2   = dx * dx + dy * dy + dz * dz;
+                    const double H    = 2.0 * lap - 2.5 * g2 / c;
+
+                    // chebyshev distance, in nodes, to the nearest 2:1 face
+                    unsigned int dist = 1000;
+                    const unsigned int di[6] = {
+                        i - pW + 1, (lx - pW - 1) - i + 1,
+                        j - pW + 1, (ly - pW - 1) - j + 1,
+                        k - pW + 1, (lz - pW - 1) - k + 1};
+                    for (int d = 0; d < 6; d++)
+                        if (jump[d] && di[d] < dist) dist = di[d];
+
+                    const int bin = (dist == 1)   ? 0
+                                    : (dist == 2) ? 1
+                                    : (dist == 3) ? 2
+                                    : (dist < 1000) ? 3
+                                                    : 4;
+                    s2[bin] += H * H;
+                    if (std::fabs(H) > mx[bin]) mx[bin] = std::fabs(H);
+                    cnt[bin]++;
+                    const unsigned int bl = blks[b].getRegularGridLev();
+                    if (bl < NL) {
+                        s2L[bl][bin] += H * H;
+                        if (std::fabs(H) > mxL[bl][bin])
+                            mxL[bl][bin] = std::fabs(H);
+                        cnL[bl][bin]++;
+                    }
+                }
+    }
+
+    std::printf(
+        "\n=== Hamiltonian constraint at t=0 (exact ground truth H == 0) ===\n"
+        "DENDRO_WIDE_PROLONGATION: %s\n"
+        "blocks with a 2:1 face %ld,  puncture-core points skipped %ld\n",
+#ifdef DENDRO_WIDE_PROLONGATION
+        "ON",
+#else
+        "OFF",
+#endif
+        njumpblk, nskip);
+    const char *nm[NB] = {"dist 1", "dist 2", "dist 3", "dist >=4",
+                          "no 2:1 face (control)"};
+    std::printf("%-24s %10s  %-13s %-13s\n", "bin", "count", "rms |H|",
+                "max |H|");
+    for (int t = 0; t < NB; t++) {
+        if (!cnt[t]) continue;
+        std::printf("%-24s %10ld  %.6e  %.6e\n", nm[t], cnt[t],
+                    std::sqrt(s2[t] / (double)cnt[t]), mx[t]);
+    }
+    std::printf(
+        "control must be IDENTICAL across OFF/ON: those stencils never reach "
+        "a prolongated value.\n");
+
+    std::printf("\nper block level (interface excess against a background at "
+                "the SAME resolution):\n");
+    std::printf("%-6s %-10s %9s  %-13s %-13s\n", "lvl", "bin", "count",
+                "rms |H|", "max |H|");
+    for (int a = 0; a < NL; a++) {
+        bool anyl = false;
+        for (int t = 0; t < NB; t++) anyl = anyl || cnL[a][t];
+        if (!anyl) continue;
+        for (int t = 0; t < NB; t++) {
+            if (!cnL[a][t]) continue;
+            std::printf("%-6d %-10s %9ld  %.6e  %.6e\n", a, nm[t], cnL[a][t],
+                        std::sqrt(s2L[a][t] / (double)cnL[a][t]), mxL[a][t]);
+        }
+    }
+
+    CHECK(cnt[0] > 0);
+    delete mesh;
+}
+
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
 
