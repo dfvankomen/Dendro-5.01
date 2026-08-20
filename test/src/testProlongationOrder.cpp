@@ -1578,7 +1578,8 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     unsigned int lmin = 0, lmax = 0;
 
     long ext_full = 0, ext_part = 0, ext_none = 0;
-    double contam_narrow = 0.0, contam_wide = 0.0;
+    double contam_narrow = 0.0, contam_wide = 0.0,
+           contam_twopass = 0.0;
     long width_hist[4] = {0, 0, 0, 0};
     long refuse[4]     = {0, 0, 0, 0};
 
@@ -1653,7 +1654,23 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
             const std::vector<ot::TreeNode> &el2 = mesh->getAllElements();
             std::vector<double> im1(nPe2), im2(nPe2),
                 scr((size_t)8 * nPe2);
-            for (int pass = 0; pass < 2; pass++) {
+            // Pass 2 is the two-pass prototype: materialise every element's
+            // nodal values ONCE with widening enabled, then gather from that
+            // array instead of regenerating from CG. The gather's inputs then
+            // carry wide-filled hanging nodes rather than narrow ones, which
+            // is the thing prolongateHangingFaceWide cannot do for itself
+            // without recursing.
+            std::vector<double> dg_wide;
+            {
+                const std::vector<ot::TreeNode> &ael = mesh->getAllElements();
+                dg_wide.assign((size_t)ael.size() * nPe2, 0.0);
+                for (unsigned int e = 0; e < ael.size(); e++)
+                    mesh->getElementNodalValues(
+                        cg.data(), dg_wide.data() + (size_t)e * nPe2, e, false,
+                        im1.data(), im2.data(), true);
+            }
+
+            for (int pass = 0; pass < 3; pass++) {
                 double w = 0.0;
                 for (unsigned int e = mesh->getElementLocalBegin();
                      e < mesh->getElementLocalEnd(); e++) {
@@ -1665,10 +1682,13 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                     const unsigned int ay = nrp2 + ex[2] + ex[3];
                     const unsigned int az = nrp2 + ex[4] + ex[5];
                     std::vector<double> cb((size_t)ax * ay * az, 0.0);
-                    mesh->gatherExtendedCoarseNodesCG(cg.data(), e, ex,
-                                                      cb.data(), scr.data(),
-                                                      im1.data(), im2.data(),
-                                                      pass == 1);
+                    if (pass == 2)
+                        mesh->gatherExtendedCoarseNodesDG(
+                            dg_wide.data(), (size_t)nPe2, 0, e, ex, cb.data());
+                    else
+                        mesh->gatherExtendedCoarseNodesCG(
+                            cg.data(), e, ex, cb.data(), scr.data(),
+                            im1.data(), im2.data(), pass == 1);
                     const double szz =
                         (double)(1u << (m_uiMaxDepth - el2[e].getLevel()));
                     const double HH = szz / (double)ELE_ORDER;
@@ -1687,7 +1707,9 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                                 if (dd > w) w = dd;
                             }
                 }
-                if (pass == 0) contam_narrow = w; else contam_wide = w;
+                if (pass == 0) contam_narrow = w;
+                else if (pass == 1) contam_wide = w;
+                else contam_twopass = w;
             }
         }
         std::vector<double> errmap(mesh->getDegOfFreedomUnZip(), -1.0);
@@ -1806,8 +1828,14 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
             "hanging counts over local elements: faces %ld, edges %ld "
             "(owner resolved %ld)\n",
             hf, he, he_owner);
-        std::printf("wide edge path: %ld calls, %ld succeeded\n",
-                    ot::wpxEdgeCalls().load(), ot::wpxEdgeWins().load());
+        std::printf(
+            "wide face path: %ld calls, %ld succeeded (%.1f%%)\n"
+            "wide edge path: %ld calls, %ld succeeded\n",
+            ot::wpxFaceCalls().load(), ot::wpxFaceWins().load(),
+            100.0 * (double)ot::wpxFaceWins().load() /
+                (double)(ot::wpxFaceCalls().load() ? ot::wpxFaceCalls().load()
+                                                   : 1),
+            ot::wpxEdgeCalls().load(), ot::wpxEdgeWins().load());
     }
 
     // What would each extension mechanism actually unblock? Re-probing with
@@ -1845,9 +1873,11 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     }
 
     std::printf(
-        "stencil input quality (max |gathered - analytic|): "
-        "narrow inner fetch %.3e, widened %.3e\n",
-        contam_narrow, contam_wide);
+        "stencil input quality (max |gathered - analytic|):\n"
+        "  inner fetch narrow      %.3e\n"
+        "  inner fetch widened     %.3e\n"
+        "  two-pass (gather from a wide-filled DG array) %.3e\n",
+        contam_narrow, contam_wide, contam_twopass);
     std::printf(
         "achieved 1D stencil width over local elements: "
         "%u pts %ld, %u pts %ld, %u pts %ld, %u pts %ld\n",

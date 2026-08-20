@@ -13373,6 +13373,14 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
 }
 
 /** Diagnostic counters for the wide edge path. */
+inline std::atomic<long> &wpxFaceCalls() {
+    static std::atomic<long> c{0};
+    return c;
+}
+inline std::atomic<long> &wpxFaceWins() {
+    static std::atomic<long> c{0};
+    return c;
+}
 inline std::atomic<long> &wpxEdgeCalls() {
     static std::atomic<long> c{0};
     return c;
@@ -13558,6 +13566,7 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
     const unsigned int p   = m_uiElementOrder;
     const unsigned int nrp = p + 1;
 
+    wpxFaceCalls()++;
     const unsigned int owner =
         m_uiE2EMapping[elementID * m_uiNumDirections + dir];
     if (owner == LOOK_UP_TABLE_DEFAULT || owner >= m_uiAllElements.size())
@@ -13666,6 +13675,7 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
                                  tmp2d.data());
     dendro::wideprolong::apply_y(nb_in, nrp, nrp, 1, opB.data(), tmp2d.data(),
                                  out);
+    wpxFaceWins()++;
     return true;
 #endif
 }

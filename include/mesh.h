@@ -2228,6 +2228,22 @@ class Mesh {
     static constexpr unsigned int WPX_LVL_DEFAULT = WPX_LVL_SAME;
 #endif
 
+    /**
+     * Fixed-point iterations for the hanging-face reconstruction.
+     *
+     * 0 reproduces the original behaviour: hanging faces are rebuilt wide
+     * from neighbours whose own hanging faces are narrow. Each further step
+     * rebuilds from neighbours that were themselves rebuilt wide, at roughly
+     * a 27x cost per level, so this is only worth raising if the measurement
+     * says the input error is actually contracting.
+     */
+    static constexpr unsigned int WPX_FACE_ITERS =
+#ifdef DENDRO_WIDE_PROLONGATION_ITERS
+        DENDRO_WIDE_PROLONGATION_ITERS;
+#else
+        0u;
+#endif
+
     /** How a direction's extension nodes are spaced. */
     enum : unsigned char {
         WPX_EXT_NONE     = 0,  // no extension
