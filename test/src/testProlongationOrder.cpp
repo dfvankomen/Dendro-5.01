@@ -2682,6 +2682,205 @@ TEST_CASE("unzip cost") {
     delete mesh;
 }
 
+
+/* ------------------------------------------------------------------ */
+/* Why is a direction retired? Per-offset classification.              */
+/* ------------------------------------------------------------------ */
+
+TEST_CASE("corner rule failure modes") {
+    // probeCoarseExtension grants a direction, then retires it if any edge or
+    // corner offset it takes part in is unusable. The aggregate refusal tally
+    // says "same-level dropped by corner rule" but not WHY the corner failed.
+    // That distinction decides what a reach fix would have to do:
+    //   missing   -> nothing can fix it (outside the domain / not in the mesh)
+    //   coarser   -> the partner samples our lattice every OTHER node, so it
+    //                needs interpolation, which is itself degree p
+    //   finer     -> decimate by 2, already expressible
+    const double L   = (double)(1u << m_uiMaxDepth);
+    const double DOM = 200.0;
+    auto phys = [L, DOM](double c) { return (c / L) * DOM - 0.5 * DOM; };
+    auto chi  = [phys](double x, double y, double z) {
+        const double px = phys(x), py = phys(y), pz = phys(z);
+        double r = std::sqrt(px * px + py * py + pz * pz);
+        if (r < 1e-2) r = 1e-2;
+        const double psi = 1.0 + 0.5 / r;
+        return std::pow(psi, -4.0);
+    };
+    const char *wp  = std::getenv("PROLONG_WTOL");
+    const double wt = wp ? std::atof(wp) : 1e-3;
+    const char *mp  = std::getenv("PROLONG_MESH");
+    const bool punc = (mp && std::string(mp) == "puncture");
+    const char *bp  = std::getenv("PROLONG_BUMP");
+    const double bw = bp ? std::atof(bp) : 0.03;
+
+    std::function<double(double, double, double)> fr =
+        [chi, punc, L, bw](double x, double y, double z) {
+            if (punc) return chi(x, y, z);
+            const double dx = (x - 0.42 * L) / (bw * L);
+            const double dy = (y - 0.55 * L) / (bw * L);
+            const double dz = (z - 0.47 * L) / (bw * L);
+            return std::exp(-(dx * dx + dy * dy + dz * dz));
+        };
+
+    std::vector<ot::TreeNode> tmp;
+    function2Octree(fr, tmp, m_uiMaxDepth, wt, ELE_ORDER, MPI_COMM_WORLD);
+    ot::Mesh *mesh = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
+                                    MPI_COMM_WORLD, 0);
+    REQUIRE(mesh != nullptr);
+    if (!mesh->isActive()) { delete mesh; return; }
+
+    const unsigned int want =
+        dendro::wideprolong::stencil_width(ELE_ORDER) - (ELE_ORDER + 1);
+    const std::vector<ot::TreeNode> &AE = mesh->getAllElements();
+    const std::vector<unsigned int> &e2e = mesh->getE2EMapping();
+    const unsigned int nd = mesh->getNumDirections();
+
+    // face-neighbour class of every retired direction
+    long faceMissing = 0, faceFiner = 0, faceCoarser = 0, faceSame = 0;
+    // and the same, restricted to the COARSEST level present -- those are the
+    // elements that hold essentially all of the error (h^7 scaling), and by
+    // definition they have no coarser neighbours, so what blocks them may be
+    // fixable even when the global picture is dominated by coarser partners
+    unsigned int lmin_ = 0, lmax_ = 0;
+    mesh->computeMinMaxLevel(lmin_, lmax_);
+    long cfMissing = 0, cfFiner = 0, cfSame = 0, cfCoarser = 0;
+    long ccMissing = 0, ccCoarser = 0, ccFiner = 0, ccSame = 0, ccDirs = 0;
+    long coarsestEle = 0, coarsestFull = 0;
+    // for retired directions whose FACE neighbour is same-level (i.e. the
+    // direction was usable and the corner rule is what killed it), classify
+    // the offending offsets
+    long cMissing = 0, cCoarser = 0, cFiner = 0, cOther = 0, cSameDirs = 0;
+
+    for (unsigned int e = mesh->getElementLocalBegin();
+         e < mesh->getElementLocalEnd(); e++) {
+        unsigned int ext[6];
+        unsigned char em[6];
+        mesh->probeCoarseExtension(e, want, ext, ot::Mesh::WPX_LVL_DEFAULT, em);
+        const unsigned int lev = AE[e].getLevel();
+        const bool coarsest    = (lev == lmin_);
+        if (coarsest) {
+            coarsestEle++;
+            unsigned int mn = want;
+            for (int a = 0; a < 3; a++) {
+                const unsigned int t = ext[2 * a] + ext[2 * a + 1];
+                if (t < mn) mn = t;
+            }
+            if (mn >= want) coarsestFull++;
+        }
+        for (unsigned int d = 0; d < 6; d++) {
+            if (ext[d]) continue;
+            const unsigned int nb = e2e[e * nd + d];
+            if (nb == LOOK_UP_TABLE_DEFAULT || nb >= AE.size()) {
+                faceMissing++;
+                if (coarsest) cfMissing++;
+                continue;
+            }
+            if (coarsest && nb != LOOK_UP_TABLE_DEFAULT) {
+                if (AE[nb].getLevel() > lev) cfFiner++;
+                else if (AE[nb].getLevel() < lev) cfCoarser++;
+                else cfSame++;
+            }
+            if (AE[nb].getLevel() > lev) { faceFiner++; continue; }
+            if (AE[nb].getLevel() < lev) { faceCoarser++; continue; }
+            faceSame++;
+            cSameDirs++;
+            if (coarsest) ccDirs++;
+
+            // the direction's face neighbour was usable -- so an offset it
+            // takes part in must have failed. Find and classify them.
+            const int ax = (int)d / 2, sgn = (d % 2) ? 1 : -1;
+            for (int oz = -1; oz <= 1; oz++)
+                for (int oy = -1; oy <= 1; oy++)
+                    for (int ox = -1; ox <= 1; ox++) {
+                        const int oo[3] = {ox, oy, oz};
+                        if (oo[ax] != sgn) continue;
+                        if (!ox && !oy && !oz) continue;
+                        bool bg = false;
+                        const unsigned int q = mesh->wpxNeighbour(
+                            e, ox, oy, oz, bg,
+                            ot::Mesh::WPX_LVL_SAME | ot::Mesh::WPX_LVL_FINER |
+                                ot::Mesh::WPX_LVL_COARSER,
+                            true);
+                        if (q == LOOK_UP_TABLE_DEFAULT) {
+                            cMissing++;
+                            if (coarsest) ccMissing++;
+                            continue;
+                        }
+                        const unsigned int ql = AE[q].getLevel();
+                        if (ql < lev) { cCoarser++; if (coarsest) ccCoarser++; }
+                        else if (ql > lev) { cFiner++; if (coarsest) ccFiner++; }
+                        else { cOther++; if (coarsest) ccSame++; }
+                    }
+        }
+    }
+
+    std::printf(
+        "\n=== why directions are retired (%s mesh, wtol %g) ===\n"
+        "retired directions by FACE neighbour: missing %ld, finer %ld, "
+        "coarser %ld, same-level %ld\n",
+        punc ? "puncture" : "bump", wt, faceMissing, faceFiner, faceCoarser,
+        faceSame);
+    std::printf(
+        "of the %ld retired-but-usable (same-level face) directions, the "
+        "offsets they need are:\n"
+        "  missing entirely %ld | coarser %ld | finer %ld | same level %ld\n",
+        cSameDirs, cMissing, cCoarser, cFiner, cOther);
+    std::printf(
+        "  -> missing and coarser cannot be decimated onto our lattice; "
+        "finer can\n");
+    // per-level: where is reach actually blocked, and by what?
+    {
+        const int NL = 12;
+        long nEle[NL] = {0}, nFull[NL] = {0};
+        long rMiss[NL] = {0}, rFine[NL] = {0}, rCoar[NL] = {0}, rSame[NL] = {0};
+        for (unsigned int e = mesh->getElementLocalBegin();
+             e < mesh->getElementLocalEnd(); e++) {
+            unsigned int ex[6];
+            unsigned char me[6];
+            mesh->probeCoarseExtension(e, want, ex, ot::Mesh::WPX_LVL_DEFAULT,
+                                       me);
+            const unsigned int lv = AE[e].getLevel();
+            if (lv >= (unsigned)NL) continue;
+            nEle[lv]++;
+            unsigned int mn = want;
+            for (int a = 0; a < 3; a++) {
+                const unsigned int t = ex[2 * a] + ex[2 * a + 1];
+                if (t < mn) mn = t;
+            }
+            if (mn >= want) nFull[lv]++;
+            for (unsigned int d = 0; d < 6; d++) {
+                if (ex[d]) continue;
+                const unsigned int nb = e2e[e * nd + d];
+                if (nb == LOOK_UP_TABLE_DEFAULT || nb >= AE.size()) rMiss[lv]++;
+                else if (AE[nb].getLevel() > lv) rFine[lv]++;
+                else if (AE[nb].getLevel() < lv) rCoar[lv]++;
+                else rSame[lv]++;
+            }
+        }
+        std::printf(
+            "\nper level -- where reach is blocked:\n"
+            "%-5s %7s %9s   %8s %8s %8s %8s\n",
+            "lvl", "ele", "fullreach", "bdy", "finer", "coarser", "cornerRule");
+        for (int l = 0; l < NL; l++) {
+            if (!nEle[l]) continue;
+            std::printf("%-5d %7ld %9ld   %8ld %8ld %8ld %8ld\n", l, nEle[l],
+                        nFull[l], rMiss[l], rFine[l], rCoar[l], rSame[l]);
+        }
+    }
+
+    std::printf(
+        "\nCOARSEST level (%u): %ld elements, %ld already at full reach\n"
+        "  retired directions by face neighbour: missing %ld, finer %ld, "
+        "same %ld, coarser %ld\n"
+        "  corner offsets of its %ld retired-but-usable directions: "
+        "missing %ld, coarser %ld, finer %ld, same %ld\n",
+        lmin_, coarsestEle, coarsestFull,
+        cfMissing, cfFiner, cfSame, cfCoarser, ccDirs,
+        ccMissing, ccCoarser, ccFiner, ccSame);
+
+    delete mesh;
+}
+
 int main(int argc, char **argv) {
     MPI_Init(&argc, &argv);
 
