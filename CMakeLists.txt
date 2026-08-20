@@ -326,10 +326,13 @@ if(DEFINED DENDRO_WIDE_PROLONGATION_ITERS)
 endif()
 if(DENDRO_WIDE_PROLONGATION)
   message(STATUS
-    "DENDRO_WIDE_PROLONGATION: unzip_scatter's coarse->fine path uses the wide "
-    "stencil. getElementNodalValues' hanging-node reconstruction is still "
-    "narrow, so the interface layer is only partly widened. Aborts if the "
-    "stencil would need a round-2 ghost.")
+    "DENDRO_WIDE_PROLONGATION: unzip_scatter's coarse->fine path and the "
+    "hanging face/edge reconstruction both use the wide stencil. Works at any "
+    "rank count -- ghost element-nodal values are fetched from the ranks that "
+    "own them, so the result is independent of the partition (verified "
+    "bit-identical at np = 1, 2, 4, 8). Costs ~2-3x on unzip. The wavelet "
+    "criterion is NOT affected: it calls RefElement::I3D_Parent2Child, which "
+    "this side-channel operator leaves alone, so the mesh is unchanged.")
 endif()
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 
