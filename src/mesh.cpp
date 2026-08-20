@@ -14555,34 +14555,5 @@ void Mesh::buildWideProlongGhostMap() const {
     }
 }
 
-bool Mesh::wpxSelfContained(unsigned int ele) const {
-    if (m_uiWpxSelfC.empty()) {
-        const size_t n = m_uiAllElements.size();
-        m_uiWpxSelfC.assign(n, 0);
-        if (m_uiIsActive) {
-            for (unsigned int e = m_uiElementLocalBegin;
-                 e < m_uiElementLocalEnd; e++) {
-                bool safe = true;
-                for (int oz = -1; oz <= 1 && safe; oz++)
-                    for (int oy = -1; oy <= 1 && safe; oy++)
-                        for (int ox = -1; ox <= 1 && safe; ox++) {
-                            if (!ox && !oy && !oz) continue;
-                            bool bg = false;
-                            const unsigned int q = this->wpxNeighbour(
-                                e, ox, oy, oz, bg,
-                                WPX_LVL_SAME | WPX_LVL_FINER |
-                                    WPX_LVL_COARSER,
-                                true);
-                            if (q == LOOK_UP_TABLE_DEFAULT) continue;
-                            if (q < m_uiElementLocalBegin ||
-                                q >= m_uiElementLocalEnd)
-                                safe = false;
-                        }
-                m_uiWpxSelfC[e] = safe ? 1 : 0;
-            }
-        }
-    }
-    return (ele < m_uiWpxSelfC.size()) && (m_uiWpxSelfC[ele] != 0);
-}
 
 }  // namespace ot

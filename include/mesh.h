@@ -275,20 +275,20 @@ class Mesh {
     /**
      * Overlap state for the ghost DG exchange.
      *
-     * Buffers are raw bytes so one pair serves any value type. m_uiWpxSelfC
-     * marks elements whose scatter needs no ghost DG slice and can therefore
-     * run while the exchange is in flight: the extension is at most p/2 nodes,
-     * i.e. half an element, so the gather never reads past a +/-1 element
-     * neighbour -- which makes "all 26 neighbours are local" exact rather than
-     * conservative. Measured overlappable share: 29.5% at 400 local elements
-     * per rank, 50.7% at 1387, rising with partition size.
+     * Buffers are raw bytes so one pair serves any value type.
+     *
+     * The exchange overlaps the MATERIALISATION of local elements, not the
+     * scatter -- see exchangeWideProlongDGBegin/End. Overlapping the scatter
+     * was tried and reverted: m_uiAllElements is SFC-sorted, so sweeping it by
+     * index is SFC order at every rank count, which is exactly why the output
+     * is bit-identical across np. Reordering that sweep moved 384 pad points
+     * by up to 3.4e-08, because some pad points have more than one writer.
      */
     mutable std::vector<char> m_uiWpxSendBuf, m_uiWpxRecvBuf;
     mutable std::vector<int> m_uiWpxSendCntB, m_uiWpxSendOffB;
     mutable std::vector<int> m_uiWpxRecvCntB, m_uiWpxRecvOffB;
     mutable MPI_Request m_uiWpxReq      = MPI_REQUEST_NULL;
     mutable bool m_uiWpxInFlight        = false;
-    mutable std::vector<char> m_uiWpxSelfC;
     /** scratch marker: local element already materialised this unzip */
     mutable std::vector<char> m_uiWpxSendDone;
 
@@ -2552,13 +2552,7 @@ class Mesh {
     void exchangeWideProlongDGEnd(T *allDg, size_t eleStride, unsigned int dof,
                                   size_t dgSz) const;
 
-    /**
-     * @brief Can this element be scattered before the ghost DG exchange lands?
-     *
-     * True when the element is local and every neighbour its gather can reach
-     * is local too. Built once and cached.
-     */
-    bool wpxSelfContained(unsigned int ele) const;
+
 
     template <typename T>
     void gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
