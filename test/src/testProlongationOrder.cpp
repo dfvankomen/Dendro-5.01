@@ -2622,8 +2622,37 @@ TEST_CASE("unzip cost") {
                        mesh->getElementLocalBegin());
     long ngh  = (long)mesh->getAllElements().size() - nloc;
     long nblk = (long)mesh->getLocalBlockList().size();
+
+    // How much work could actually be overlapped with the ghost DG exchange?
+    // Only an element whose wide stencil stays entirely inside this rank can
+    // be scattered before the exchange lands -- the stencil reaches into
+    // neighbours, so a local element near the partition boundary still needs
+    // ghost slices. Conservative test: local, and all 26 neighbour offsets
+    // that exist are local too.
+    long nsafe = 0;
+    {
+        const unsigned int lb = mesh->getElementLocalBegin();
+        const unsigned int le = mesh->getElementLocalEnd();
+        for (unsigned int e = lb; e < le; e++) {
+            bool safe = true;
+            for (int oz = -1; oz <= 1 && safe; oz++)
+                for (int oy = -1; oy <= 1 && safe; oy++)
+                    for (int ox = -1; ox <= 1 && safe; ox++) {
+                        if (!ox && !oy && !oz) continue;
+                        bool bg          = false;
+                        const unsigned int q = mesh->wpxNeighbour(
+                            e, ox, oy, oz, bg,
+                            ot::Mesh::WPX_LVL_SAME | ot::Mesh::WPX_LVL_FINER |
+                                ot::Mesh::WPX_LVL_COARSER,
+                            true);
+                        if (q == LOOK_UP_TABLE_DEFAULT) continue;
+                        if (q < lb || q >= le) safe = false;
+                    }
+            if (safe) nsafe++;
+        }
+    }
     double gb = best, ga = tot / NIT, gmesh = tm1 - tm0;
-    long gl = nloc, gg = ngh, gbk = nblk;
+    long gl = nloc, gg = ngh, gbk = nblk, gsafe = nsafe;
     MPI_Allreduce(MPI_IN_PLACE, &gb, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
     MPI_Allreduce(MPI_IN_PLACE, &ga, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
     MPI_Allreduce(MPI_IN_PLACE, &gmesh, 1, MPI_DOUBLE, MPI_MAX,
@@ -2631,6 +2660,7 @@ TEST_CASE("unzip cost") {
     MPI_Allreduce(&nloc, &gl, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
     MPI_Allreduce(&ngh, &gg, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
     MPI_Allreduce(&nblk, &gbk, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&nsafe, &gsafe, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
 
     int rk = 0, np = 1;
     MPI_Comm_rank(MPI_COMM_WORLD, &rk);
@@ -2638,15 +2668,16 @@ TEST_CASE("unzip cost") {
     if (rk == 0)
         std::printf(
             "[cost] %s np=%d dof=%u | ele local %ld ghost %ld "
-            "(ghost:local %.3f) blocks %ld | mesh %.1f s | unzip best %.3f ms "
-            "avg %.3f ms\n",
+            "(ghost:local %.3f) blocks %ld | overlappable local %ld "
+            "(%.1f%%) | mesh %.1f s | unzip best %.3f ms avg %.3f ms\n",
 #ifdef DENDRO_WIDE_PROLONGATION
             "ON ",
 #else
             "OFF",
 #endif
-            np, dofN, gl, gg, gl ? (double)gg / (double)gl : 0.0, gbk, gmesh,
-            gb * 1e3, ga * 1e3);
+            np, dofN, gl, gg, gl ? (double)gg / (double)gl : 0.0, gbk, gsafe,
+            gl ? 100.0 * (double)gsafe / (double)gl : 0.0, gmesh, gb * 1e3,
+            ga * 1e3);
 
     delete mesh;
 }

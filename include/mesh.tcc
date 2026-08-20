@@ -11608,18 +11608,59 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     std::vector<T> all_dg_s((std::size_t)m_uiNumTotalElements * dof * dgSz);
     {
         std::vector<double> im1_s(nPe), im2_s(nPe);
-        for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd;
-             e++) {
-            // Deliberately no m_e2b_unzip_counts filter: a local element
-            // that feeds no block of ours may still be requested by another
-            // rank, and the exchange packs straight out of this array.
+        auto materialise = [&](unsigned int e) {
             T* base = all_dg_s.data() + (std::size_t)e * dof * dgSz;
             for (unsigned int v = 0; v < dof; v++)
                 this->getElementNodalValues(in + v * cgSz, base + v * dgSz, e,
                                             false, im1_s.data(), im2_s.data());
+        };
+
+        // Overlap on the MATERIALISATION, not on the scatter. The scatter
+        // sweep must keep its element order: m_uiAllElements is SFC-sorted, so
+        // sweeping by index is SFC order at every rank count, which is what
+        // makes the output bit-identical across np. Reordering it moved 384
+        // pad points by up to 3.4e-08 -- shared points written by more than
+        // one element, where the last writer changes. Materialisation has no
+        // such constraint, and it is the expensive half anyway (it carries the
+        // wide hanging-face reconstruction).
+        this->buildWideProlongGhostMap();
+        const bool wpx_prof = (std::getenv("DENDRO_WPX_PROFILE") != nullptr);
+        double t_a = 0, t_b = 0, t_c = 0, t_d = 0, t_e = 0;
+        if (wpx_prof) t_a = MPI_Wtime();
+
+        // 1. what other ranks are waiting on
+        for (size_t i = 0; i < m_uiWpxSendEle.size(); i++)
+            if (!m_uiWpxSendDone[m_uiWpxSendEle[i]]) {
+                materialise(m_uiWpxSendEle[i]);
+                m_uiWpxSendDone[m_uiWpxSendEle[i]] = 1;
+            }
+        if (wpx_prof) t_b = MPI_Wtime();
+
+        // 2. post, then keep working
+        this->exchangeWideProlongDGBegin(all_dg_s.data(),
+                                         (std::size_t)dof * dgSz, dof, dgSz);
+        if (wpx_prof) t_c = MPI_Wtime();
+
+        // 3. the rest of our locals, overlapping the exchange. No
+        // m_e2b_unzip_counts filter: a local element feeding no block of ours
+        // may still have been requested, and the pack reads this array.
+        for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd;
+             e++)
+            if (!m_uiWpxSendDone[e]) materialise(e);
+        if (wpx_prof) t_d = MPI_Wtime();
+
+        // 4. land it before anything reads a ghost slice
+        this->exchangeWideProlongDGEnd(all_dg_s.data(),
+                                       (std::size_t)dof * dgSz, dof, dgSz);
+        std::fill(m_uiWpxSendDone.begin(), m_uiWpxSendDone.end(), 0);
+        if (wpx_prof) {
+            t_e = MPI_Wtime();
+            std::printf(
+                "[wpx-prof rank %d] send-set materialise %.2f ms | post %.2f "
+                "ms | rest materialise %.2f ms | wait+unpack %.2f ms\n",
+                m_uiActiveRank, (t_b - t_a) * 1e3, (t_c - t_b) * 1e3,
+                (t_d - t_c) * 1e3, (t_e - t_d) * 1e3);
         }
-        this->exchangeWideProlongDG(in, cgSz, all_dg_s.data(),
-                                    (std::size_t)dof * dgSz, dof, dgSz);
     }
 #endif
 
@@ -13265,6 +13306,84 @@ void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                 }
             }
         }
+    }
+}
+
+template <typename T>
+void Mesh::exchangeWideProlongDGBegin(const T *allDg, size_t eleStride,
+                                      unsigned int dof, size_t dgSz) const {
+    this->buildWideProlongGhostMap();
+    m_uiWpxInFlight = false;
+    if (!m_uiIsActive || m_uiActiveNpes == 1) return;
+
+    const unsigned int npes = m_uiActiveNpes;
+    const size_t nPe        = m_uiNpE;
+    const size_t pay        = (size_t)dof * nPe;
+    const size_t esz        = sizeof(T);
+
+    m_uiWpxSendCntB.assign(npes, 0);
+    m_uiWpxSendOffB.assign(npes, 0);
+    m_uiWpxRecvCntB.assign(npes, 0);
+    m_uiWpxRecvOffB.assign(npes, 0);
+    for (unsigned int p = 0; p < npes; p++) {
+        m_uiWpxSendCntB[p] = (int)(m_uiWpxSendCount[p] * pay * esz);
+        m_uiWpxRecvCntB[p] = (int)(m_uiWpxRecvCount[p] * pay * esz);
+    }
+    for (unsigned int p = 1; p < npes; p++) {
+        m_uiWpxSendOffB[p] = m_uiWpxSendOffB[p - 1] + m_uiWpxSendCntB[p - 1];
+        m_uiWpxRecvOffB[p] = m_uiWpxRecvOffB[p - 1] + m_uiWpxRecvCntB[p - 1];
+    }
+
+    m_uiWpxSendBuf.resize(m_uiWpxSendEle.size() * pay * esz);
+    m_uiWpxRecvBuf.resize(m_uiWpxRecvEle.size() * pay * esz);
+
+    // pack out of allDg -- the caller has already materialised every local
+    // element, and that call (with its wide hanging-face reconstruction) is
+    // the expensive one
+    T *sb = reinterpret_cast<T *>(m_uiWpxSendBuf.data());
+#pragma omp parallel for schedule(static)
+    for (long i = 0; i < (long)m_uiWpxSendEle.size(); i++) {
+        T *dst       = sb + (size_t)i * pay;
+        const T *src = allDg + (size_t)m_uiWpxSendEle[i] * eleStride;
+        for (unsigned int v = 0; v < dof; v++)
+            for (size_t k = 0; k < nPe; k++)
+                dst[(size_t)v * nPe + k] = src[(size_t)v * dgSz + k];
+    }
+
+    const bool wpx_prof2 = (std::getenv("DENDRO_WPX_PROFILE") != nullptr);
+    const double tp0     = wpx_prof2 ? MPI_Wtime() : 0.0;
+    MPI_Ialltoallv(m_uiWpxSendBuf.empty() ? nullptr : m_uiWpxSendBuf.data(),
+                   m_uiWpxSendCntB.data(), m_uiWpxSendOffB.data(), MPI_BYTE,
+                   m_uiWpxRecvBuf.empty() ? nullptr : m_uiWpxRecvBuf.data(),
+                   m_uiWpxRecvCntB.data(), m_uiWpxRecvOffB.data(), MPI_BYTE,
+                   m_uiCommActive, &m_uiWpxReq);
+    m_uiWpxInFlight = true;
+    if (wpx_prof2)
+        std::printf(
+            "[wpx-prof rank %d]   pack: sendEle %zu (%.2f MiB) recvEle %zu | "
+            "MPI_Ialltoallv call %.2f ms\n",
+            m_uiActiveRank, m_uiWpxSendEle.size(),
+            (double)m_uiWpxSendBuf.size() / (1024.0 * 1024.0),
+            m_uiWpxRecvEle.size(), (MPI_Wtime() - tp0) * 1e3);
+}
+
+template <typename T>
+void Mesh::exchangeWideProlongDGEnd(T *allDg, size_t eleStride,
+                                    unsigned int dof, size_t dgSz) const {
+    if (!m_uiWpxInFlight) return;
+    MPI_Wait(&m_uiWpxReq, MPI_STATUS_IGNORE);
+    m_uiWpxInFlight = false;
+
+    const size_t nPe = m_uiNpE;
+    const size_t pay = (size_t)dof * nPe;
+    const T *rb      = reinterpret_cast<const T *>(m_uiWpxRecvBuf.data());
+#pragma omp parallel for schedule(static)
+    for (long i = 0; i < (long)m_uiWpxRecvEle.size(); i++) {
+        const T *src = rb + (size_t)i * pay;
+        T *dst       = allDg + (size_t)m_uiWpxRecvEle[i] * eleStride;
+        for (unsigned int v = 0; v < dof; v++)
+            for (size_t k = 0; k < nPe; k++)
+                dst[(size_t)v * dgSz + k] = src[(size_t)v * nPe + k];
     }
 }
 

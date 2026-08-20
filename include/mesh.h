@@ -272,6 +272,26 @@ class Mesh {
     mutable std::vector<int> m_uiWpxSendCount, m_uiWpxSendOffset;
     mutable bool m_uiWpxGhostMapBuilt = false;
 
+    /**
+     * Overlap state for the ghost DG exchange.
+     *
+     * Buffers are raw bytes so one pair serves any value type. m_uiWpxSelfC
+     * marks elements whose scatter needs no ghost DG slice and can therefore
+     * run while the exchange is in flight: the extension is at most p/2 nodes,
+     * i.e. half an element, so the gather never reads past a +/-1 element
+     * neighbour -- which makes "all 26 neighbours are local" exact rather than
+     * conservative. Measured overlappable share: 29.5% at 400 local elements
+     * per rank, 50.7% at 1387, rising with partition size.
+     */
+    mutable std::vector<char> m_uiWpxSendBuf, m_uiWpxRecvBuf;
+    mutable std::vector<int> m_uiWpxSendCntB, m_uiWpxSendOffB;
+    mutable std::vector<int> m_uiWpxRecvCntB, m_uiWpxRecvOffB;
+    mutable MPI_Request m_uiWpxReq      = MPI_REQUEST_NULL;
+    mutable bool m_uiWpxInFlight        = false;
+    mutable std::vector<char> m_uiWpxSelfC;
+    /** scratch marker: local element already materialised this unzip */
+    mutable std::vector<char> m_uiWpxSendDone;
+
     /** splitter element for each processor. */
     std::vector<ot::TreeNode>
         m_uiLocalSplitterElements;  // used to spit the keys to the correct
@@ -2427,6 +2447,29 @@ class Mesh {
     void exchangeWideProlongDG(const T *cg, size_t cgSz, T *allDg,
                                size_t eleStride, unsigned int dof,
                                size_t dgSz) const;
+
+    /**
+     * @brief Post the ghost DG exchange and return without waiting.
+     *
+     * Pairs with exchangeWideProlongDGEnd(). Between the two, only elements
+     * for which wpxSelfContained() is true may be scattered.
+     */
+    template <typename T>
+    void exchangeWideProlongDGBegin(const T *allDg, size_t eleStride,
+                                    unsigned int dof, size_t dgSz) const;
+
+    /** @brief Wait for the posted exchange and unpack it into allDg. */
+    template <typename T>
+    void exchangeWideProlongDGEnd(T *allDg, size_t eleStride, unsigned int dof,
+                                  size_t dgSz) const;
+
+    /**
+     * @brief Can this element be scattered before the ghost DG exchange lands?
+     *
+     * True when the element is local and every neighbour its gather can reach
+     * is local too. Built once and cached.
+     */
+    bool wpxSelfContained(unsigned int ele) const;
 
     template <typename T>
     void gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
