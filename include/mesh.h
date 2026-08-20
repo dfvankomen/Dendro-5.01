@@ -286,6 +286,29 @@ class Mesh {
      *
      * Reproduce: `mpirun -np 4 bssnSolver q1.tinytest.par.toml` from
      * dendrogr_dfvk with DENDRO_WIDE_PROLONGATION=ON.
+     *
+     * @note One fix was attempted and REVERTED (2026-08-20). The idea: build
+     * every local element twice -- pass 0 with narrow faces (round-1 data
+     * only, always succeeds), exchange to fill every ghost slice from its
+     * owner, then pass 1 redoing the faces wide while gathering the owner's
+     * neighbourhood out of that now-complete DG array, plus a second exchange.
+     * Widening was also made to REQUIRE a DG array, so the choice is a
+     * property of the call site rather than of what this rank happens to hold
+     * -- which keeps it rank-independent.
+     *
+     * It reproduced the unzip pad error exactly at np = 1, 2, 4, 8 on a
+     * puncture mesh and passed all 88 assertions, but it sent BSSN's
+     * initial-grid refinement into runaway on the q1 binary: mesh
+     * 1380 -> 9332 -> 43016 -> 230385 elements against a healthy
+     * 1380 -> 3452 -> 2640. **It does this at np=1 too**, so the two-pass
+     * construction is producing wrong values somewhere the pad harness does
+     * not see -- not an MPI problem. Snapshotting pass 0 before pass 1 (pass 1
+     * must not read the array it writes, or the answer depends on element
+     * visit order) was necessary but not sufficient.
+     *
+     * Anyone retrying: get a BSSN mesh-trajectory check into the loop first.
+     * The pad harness and the 88 assertions both pass while the refinement is
+     * diverging, so they cannot see this class of error at all.
      */
     mutable std::vector<unsigned int> m_uiWpxRecvEle;  // ghost ids I fill
     mutable std::vector<int> m_uiWpxRecvCount, m_uiWpxRecvOffset;
