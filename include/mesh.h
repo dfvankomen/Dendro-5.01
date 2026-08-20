@@ -2209,23 +2209,63 @@ class Mesh {
      *   decimated onto the coarse lattice   4.65e-06
      *   straddle at the finer spacing       5.41e-06
      *
-     * The straddle form was predicted to win: in isolation it carries only
-     * 1.63 of weight on the contaminated subset against the narrow operator's
-     * 4.26, and 15.18 for the coarse-side stencil. That prediction assumed
-     * the fine-side nodes are clean block-interior DOFs. Evidently enough of
-     * them are not -- a finer neighbour's face toward this element is hanging
-     * by construction, and its transverse faces can be too -- so the
-     * advantage does not survive.
+     * The "fine-side nodes are contaminated" explanation for this was
+     * measured and is WRONG. A mode-aware probe -- one that gathers the way
+     * prolongateChildNodes actually does, rather than with a null mode, which
+     * silently reads the decimated variant instead -- puts the straddle
+     * path's own inputs at 1.041e-17 on a field of degree 7 in every axis.
+     * The inputs are exact. A 10-point stencil is degree-9 exact on any
+     * distinct nodes, so on exact inputs this path cannot be inexact unless
+     * something is wrong with it, and it is: on that same field it gives
+     * 3.541325e-08 against 1.770663e-08 for same-level only. It also moves
+     * elements that do not straddle at all (1.770663e-08 -> 2.253600e-08),
+     * and shifts the hanging-face call count 13536 -> 12480, so the defect
+     * is not confined to the straddle geometry.
      *
-     * Both paths are kept and tested; enable with
-     * DENDRO_WIDE_PROLONGATION_FINER to re-measure once the hanging faces
-     * feeding them are themselves widened.
+     * Kept and tested; enable with DENDRO_WIDE_PROLONGATION_FINER. Its
+     * rejection rests on a measurement of defective code, so the "measured
+     * worse" verdict above should not be treated as a verdict on straddling
+     * as such. Any retry must first make a degree-7-per-axis field return
+     * roundoff, which is cheap and which no previous attempt checked.
      */
-#ifdef DENDRO_WIDE_PROLONGATION_FINER
+#if defined(DENDRO_WIDE_PROLONGATION_FINER) || \
+    defined(DENDRO_WIDE_PROLONGATION_DECIMATE)
     static constexpr unsigned int WPX_LVL_DEFAULT =
         WPX_LVL_SAME | WPX_LVL_FINER;
 #else
     static constexpr unsigned int WPX_LVL_DEFAULT = WPX_LVL_SAME;
+#endif
+
+    /**
+     * Read a finer neighbour decimated onto this element's lattice rather
+     * than straddled at its own spacing.
+     *
+     * Straddle gives a direction two different spacings, so every edge and
+     * corner partner along that direction has to sit at one uniform level or
+     * the gathered cube stops being rectangular. On a mesh whose coarsest
+     * elements are blocked by a domain boundary on one side and a finer
+     * neighbour on the other -- which is what sets the error, see below --
+     * that uniformity almost never holds, so straddle unblocks 441 -> 442 of
+     * 554 elements and buys nothing.
+     *
+     * Decimation puts a finer neighbour's nodes on the coarse lattice, so a
+     * decimated direction has the same spacing as a same-level one and
+     * mixed-level partners along one axis become expressible without leaving
+     * the rectangular cube.
+     *
+     * MEASURED, and it is not enough on its own: bump mesh, smooth
+     * non-polynomial field, full reach 441 -> 442 of 554, unzip pad max
+     * unchanged at 1.019405e-06 and rms 7.95e-08 against 7.90e-08 for
+     * same-level only. The corner rule still retires the direction, because
+     * the gather's step is 1 or 2 and so only spans levels lev and lev+1; a
+     * partner at lev+2 or coarser still refuses it. Generalising the gather
+     * to decimate a level lev+k partner by 2^k is what this needs next.
+     */
+    static constexpr bool WPX_DECIMATE_FINER =
+#ifdef DENDRO_WIDE_PROLONGATION_DECIMATE
+        true;
+#else
+        false;
 #endif
 
     /**

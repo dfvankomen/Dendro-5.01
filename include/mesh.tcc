@@ -12837,7 +12837,8 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
         if (q != LOOK_UP_TABLE_DEFAULT) {
             ext[d] = cap;
             if (mode)
-                mode[d] = (m_uiAllElements[q].getLevel() == lev + 1)
+                mode[d] = (m_uiAllElements[q].getLevel() == lev + 1 &&
+                           !WPX_DECIMATE_FINER)
                               ? WPX_EXT_STRADDLE
                               : WPX_EXT_COARSE;
         } else {
@@ -12886,8 +12887,19 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                                 mode[2 * a + (oo[a] > 0 ? 1 : 0)];
                             if (md == WPX_EXT_STRADDLE && ql != lev + 1)
                                 ok_here = false;
-                            if (md == WPX_EXT_COARSE && ql != lev)
-                                ok_here = false;
+                            // A decimated direction reads every partner onto
+                            // this element's lattice, so it does not care
+                            // whether the partner is same-level or one finer
+                            // -- both land on the same spacing. That is the
+                            // whole point of decimating rather than
+                            // straddling, and it is what lets a direction
+                            // survive partners at mixed levels.
+                            if (md == WPX_EXT_COARSE) {
+                                const bool okl =
+                                    (ql == lev) ||
+                                    (WPX_DECIMATE_FINER && ql == lev + 1);
+                                if (!okl) ok_here = false;
+                            }
                         }
                     }
                     if (ok_here) continue;
