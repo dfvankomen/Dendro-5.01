@@ -265,6 +265,27 @@ class Mesh {
      *
      * Built lazily and once; mutable so a const unzip can populate it. All
      * active ranks must reach it together -- it is collective.
+     *
+     * @warning INCOMPLETE. The survey behind this design ("every trip is on a
+     * GHOST element, none on local") was measured on a single-puncture mesh
+     * and DOES NOT GENERALISE. On a q1 binary mesh at np=4 two further trips
+     * appear and still MPI_Abort:
+     *
+     *   [wide prolongation] hanging edge of element 724 needs a round-2 ghost
+     *   [wide prolongation] rank 1: hanging face of element 246 (LOCAL, face
+     *                       owner 131 GHOST) needs a round-2 ghost
+     *
+     * A LOCAL element whose face OWNER is a ghost trips, because the face path
+     * probes that owner's neighbours -- two hops from us, round 2. And the
+     * hanging-EDGE path, which fires zero times on a puncture mesh, fires here.
+     *
+     * Fetching the owner's finished DG slice is not enough on its own: local
+     * elements with ghost face owners depend on the exchange that they
+     * themselves feed, so the materialise/exchange order has a genuine
+     * dependency to resolve. np=1 is unaffected.
+     *
+     * Reproduce: `mpirun -np 4 bssnSolver q1.tinytest.par.toml` from
+     * dendrogr_dfvk with DENDRO_WIDE_PROLONGATION=ON.
      */
     mutable std::vector<unsigned int> m_uiWpxRecvEle;  // ghost ids I fill
     mutable std::vector<int> m_uiWpxRecvCount, m_uiWpxRecvOffset;

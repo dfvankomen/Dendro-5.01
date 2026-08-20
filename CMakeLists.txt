@@ -327,10 +327,12 @@ endif()
 if(DENDRO_WIDE_PROLONGATION)
   message(STATUS
     "DENDRO_WIDE_PROLONGATION: unzip_scatter's coarse->fine path and the "
-    "hanging face/edge reconstruction both use the wide stencil. Works at any "
-    "rank count -- ghost element-nodal values are fetched from the ranks that "
-    "own them, so the result is independent of the partition (verified "
-    "bit-identical at np = 1, 2, 4, 8). Costs ~2-3x on unzip. The wavelet "
+    "hanging face/edge reconstruction both use the wide stencil. Ghost "
+    "element-nodal values are fetched from the ranks that own them, so the "
+    "result is partition-independent (bit-identical np = 1, 2, 4, 8) on a "
+    "single-puncture mesh -- but a BINARY mesh still aborts under MPI, see the "
+    "warning at Mesh::m_uiWpxRecvEle. np=1 is fine. Costs ~2-3x on unzip. The "
+    "wavelet "
     "criterion is NOT affected: it calls RefElement::I3D_Parent2Child, which "
     "this side-channel operator leaves alone, so the mesh is unchanged.")
 endif()
