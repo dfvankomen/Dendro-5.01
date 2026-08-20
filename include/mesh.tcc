@@ -12967,6 +12967,49 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
         bad_ghost = bad_ghost || bg;
     }
 
+    // Promote to GRADED any granted direction that needs coarse data
+    // anywhere in its neighbourhood.
+    //
+    // A direction is read at ONE spacing, so if any offset feeding it can only
+    // come from a coarser element, the whole direction has to be read at 2H --
+    // that is the only spacing a coarser element can land on. A same-level
+    // partner is perfectly happy read at 2H too (its nodes at S+2H, S+4H, S+6H
+    // are exact DOFs, just sparser), so promotion costs nothing where the
+    // neighbourhood is uniform and is what lets mixed-level neighbourhoods be
+    // expressed at all. Without it a graded direction could essentially never
+    // coexist with the same-level directions it shares offsets with, and the
+    // whole mechanism stayed inert.
+    if (mode && WPX_GRADE_COARSER) {
+        for (unsigned int d = 0; d < 6; d++) {
+            if (!ext[d] || mode[d] == WPX_EXT_GRADED) continue;
+            if (mode[d] != WPX_EXT_COARSE) continue;
+            const int ax = (int)d / 2, sgn = (d % 2) ? 1 : -1;
+            bool needsCoarse = false;
+            for (int oz = -1; oz <= 1 && !needsCoarse; oz++)
+                for (int oy = -1; oy <= 1 && !needsCoarse; oy++)
+                    for (int ox = -1; ox <= 1 && !needsCoarse; ox++) {
+                        const int oo[3] = {ox, oy, oz};
+                        if (oo[ax] != sgn) continue;
+                        bool skip = false;
+                        for (int a = 0; a < 3; a++) {
+                            if (!oo[a]) continue;
+                            const unsigned int dd =
+                                (unsigned int)(2 * a + (oo[a] > 0 ? 1 : 0));
+                            if (!ext[dd]) skip = true;
+                        }
+                        if (skip) continue;
+                        bool bg2             = false;
+                        const unsigned int q2 =
+                            wpxNeighbour(ele, ox, oy, oz, bg2, levelMask,
+                                         dgGhostOk);
+                        if (q2 == LOOK_UP_TABLE_DEFAULT) continue;
+                        if (m_uiAllElements[q2].getLevel() + 1 == lev)
+                            needsCoarse = true;
+                    }
+            if (needsCoarse) mode[d] = WPX_EXT_GRADED;
+        }
+    }
+
     // Extending two or three axes at once also needs the edge and corner
     // elements. When one is missing, give up only the single direction that
     // corner depends on -- dropping the whole axis (both directions) throws
@@ -13007,12 +13050,16 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                                 mode[2 * a + (oo[a] > 0 ? 1 : 0)];
                             if (md == WPX_EXT_STRADDLE && ql != lev + 1)
                                 ok_here = false;
-                            // A graded direction takes its values from coarse
-                            // elements' prolongated children, so every offset
-                            // it takes part in has to be coarse too -- a
-                            // same-level partner there would land on a
-                            // different lattice.
-                            if (md == WPX_EXT_GRADED && ql + 1 != lev)
+                            // A graded direction reads its axis at 2H. Both
+                            // a same-level partner (take every second node of
+                            // it) and a coarser one (take every second node of
+                            // its prolongated child) land on that lattice, so
+                            // either will do. Requiring coarse here was too
+                            // strict and retired directions the same-level
+                            // path would otherwise have granted -- it took
+                            // full reach 18.6% -> 8.1%.
+                            if (md == WPX_EXT_GRADED && ql != lev &&
+                                ql + 1 != lev)
                                 ok_here = false;
                             // A decimated direction reads every partner onto
                             // this element's lattice, so it does not care
@@ -13032,12 +13079,24 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                     if (ok_here) continue;
 
                     status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
-                    if (oz != 0)
-                        bad_dir = (oz < 0) ? 4 : 5;
-                    else if (oy != 0)
-                        bad_dir = (oy < 0) ? 2 : 3;
-                    else if (ox != 0)
-                        bad_dir = (ox < 0) ? 0 : 1;
+                    // Retire a GRADED direction before a same-level one.
+                    // Granting a coarser direction adds offsets to check, and
+                    // when one of those fails the cascade would otherwise drop
+                    // a same-level direction that was perfectly good -- which
+                    // made enabling coarser extension LOWER total reach
+                    // (18.6% -> 8.1%) rather than raise it. Preferring the
+                    // graded direction here keeps the same-level result as a
+                    // floor: coarser extension can only ever add.
+                    const int cand[3] = {oz != 0 ? (oz < 0 ? 4 : 5) : -1,
+                                         oy != 0 ? (oy < 0 ? 2 : 3) : -1,
+                                         ox != 0 ? (ox < 0 ? 0 : 1) : -1};
+                    if (mode)
+                        for (int c = 0; c < 3 && bad_dir < 0; c++)
+                            if (cand[c] >= 0 &&
+                                mode[cand[c]] == WPX_EXT_GRADED)
+                                bad_dir = cand[c];
+                    for (int c = 0; c < 3 && bad_dir < 0; c++)
+                        if (cand[c] >= 0) bad_dir = cand[c];
                 }
             }
         }
@@ -13086,6 +13145,14 @@ inline bool Mesh::wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
     const long Sq = 1l << (m_uiMaxDepth - Q.getLevel());
     const int o[3] = {ox, oy, oz};
 
+    // does this offset feed a graded axis at all?
+    bool graded_off = false;
+    if (mode)
+        for (int a = 0; a < 3; a++)
+            if (o[a] &&
+                mode[2 * a + (o[a] > 0 ? 1 : 0)] == WPX_EXT_GRADED)
+                graded_off = true;
+
     for (int a = 0; a < 3; a++) {
         const long c0 = (long)wpxCoord(E, a);
         const long cq = (long)wpxCoord(Q, a);
@@ -13115,10 +13182,12 @@ inline bool Mesh::wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
         if (hi <= lo) return false;
         // q must overlap the region, not merely be reachable by a hop chain
         if (cq + Sq <= lo || cq >= hi) return false;
-        // For a graded read we materialise a child of q covering the whole
-        // S-cube at this offset, so overlap is not enough -- q has to contain
-        // it. (Q is twice our size, so this holds about half the time.)
-        if (mode && Sq > S) {
+        // A graded read takes a whole S-cube from this offset -- either the
+        // partner's own nodes at stride 2, or its prolongated child's. Overlap
+        // is not enough there: q must CONTAIN that cube, on every axis. This
+        // is also what rejects a multi-hop walk that overshot, which is easy
+        // once a coarser intermediate makes a hop move 2S instead of S.
+        if (mode && graded_off) {
             const long cubeLo = c0 + (long)o[a] * S;
             if (cq > cubeLo || cq + Sq < cubeLo + S) return false;
         }
@@ -13648,59 +13717,125 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
         // directly; its own child lands ON our lattice, and taking every
         // second node of that child gives the graded 2H extension. The nested
         // call is given a mask WITHOUT COARSER, so it cannot recurse.
-        static thread_local std::vector<T> gslab;
-        static thread_local std::vector<unsigned char> gvalid;
+        // Per-call, NOT thread_local: the graded path calls this function
+        // recursively (once per coarse partner, to prolongate its child), and
+        // a shared buffer would let the nested call stomp the outer one's
+        // slabs. It did exactly that -- the nested call, which never has a
+        // graded direction, ran the clear below and emptied the outer gvalid,
+        // so the gather saw no slabs and left the extension unfilled.
+        std::vector<T> gslab;
+        std::vector<unsigned char> gvalid;
         bool anyGraded = false;
         for (int d = 0; d < 6; d++)
             if (ext[d] && emode[d] == WPX_EXT_GRADED) anyGraded = true;
+
+        // Clear it when this element has no graded direction. gslab/gvalid are
+        // thread_local and reused, so leaving a previous element's flags set
+        // makes the gather below read ITS slabs -- which is exactly what broke
+        // the linear-field control (1.03e-01 at a coarsest-level element that
+        // cannot have a graded direction at all).
+        if (!(anyGraded && allDg != nullptr)) gvalid.clear();
 
         if (anyGraded && allDg != nullptr) {
             gslab.assign((size_t)27 * m_uiNpE, T(0));
             gvalid.assign(27, 0);
             const ot::TreeNode &E = m_uiAllElements[ele];
             const long S = 1l << (m_uiMaxDepth - E.getLevel());
-            static thread_local std::vector<T> childBuf;
-            childBuf.resize(m_uiNpE);
+            std::vector<T> childBuf(m_uiNpE);
             for (int oz = -1; oz <= 1; oz++)
                 for (int oy = -1; oy <= 1; oy++)
                     for (int ox = -1; ox <= 1; ox++) {
                         if (!ox && !oy && !oz) continue;
+                        // An offset needs this path as soon as ANY axis it
+                        // feeds is graded: that axis is read at stride 2, and
+                        // the normal gather only knows stride 1.
                         const int oo[3] = {ox, oy, oz};
-                        bool need       = true;
-                        for (int a = 0; a < 3 && need; a++) {
+                        bool need = false, ok = true;
+                        for (int a = 0; a < 3 && ok; a++) {
                             if (!oo[a]) continue;
                             const unsigned int d =
                                 (unsigned int)(2 * a + (oo[a] > 0 ? 1 : 0));
-                            if (!ext[d] || emode[d] != WPX_EXT_GRADED)
-                                need = false;
+                            if (!ext[d]) ok = false;
+                            else if (emode[d] == WPX_EXT_GRADED) need = true;
                         }
-                        if (!need) continue;
+                        if (!ok || !need) continue;
                         bool bg = false;
                         const unsigned int q = wpxNeighbour(
                             ele, ox, oy, oz, bg, lvlMask, dgGhostOk);
-                        if (q == LOOK_UP_TABLE_DEFAULT) continue;
-                        if (m_uiAllElements[q].getLevel() + 1 !=
-                            E.getLevel())
+                        const bool gdbg =
+                            (std::getenv("DENDRO_WPX_HOLES") != nullptr);
+                        if (q == LOOK_UP_TABLE_DEFAULT) {
+                            if (gdbg)
+                                std::printf("[gmat] ele %u off(%d,%d,%d): "
+                                            "neighbour unresolved\n",
+                                            ele, ox, oy, oz);
                             continue;
-                        // which child of q covers this offset's S-cube?
+                        }
+
+                        // The S-cube this offset must supply, on our lattice.
                         const ot::TreeNode &Q = m_uiAllElements[q];
-                        unsigned int cn       = 0;
-                        bool inside           = true;
+                        long cube[3];
+                        for (int a = 0; a < 3; a++)
+                            cube[a] = (long)wpxCoord(E, a) + (long)oo[a] * S;
+
+                        const unsigned int ql = Q.getLevel();
+                        const int sidx =
+                            (oz + 1) * 9 + (oy + 1) * 3 + (ox + 1);
+
+                        if (ql == E.getLevel()) {
+                            // Same level: the partner IS that cube, so its own
+                            // nodes are already on our lattice and the stride-2
+                            // read happens in the gather. Verify geometrically
+                            // -- a multi-hop walk through a coarser
+                            // intermediate moves 2S per hop and overshoots.
+                            bool aligned = true;
+                            for (int a = 0; a < 3; a++)
+                                if ((long)wpxCoord(Q, a) != cube[a])
+                                    aligned = false;
+                            if (!aligned) continue;
+                            const T *src =
+                                allDg + (size_t)q * allDgEleStride;
+                            std::copy(src, src + m_uiNpE,
+                                      gslab.begin() + (size_t)sidx * m_uiNpE);
+                            gvalid[sidx] = 1;
+                            continue;
+                        }
+
+                        if (ql + 1 != E.getLevel()) {
+                            if (gdbg)
+                                std::printf("[gmat] ele %u off(%d,%d,%d): "
+                                            "partner lvl %u vs ours %u\n",
+                                            ele, ox, oy, oz, ql,
+                                            E.getLevel());
+                            continue;
+                        }
+
+                        // Coarser: its nodes sample our lattice every OTHER
+                        // node, so read its prolongated child instead -- that
+                        // lands on our lattice, and every second node of it is
+                        // the graded 2H extension.
+                        unsigned int cn = 0;
+                        bool inside     = true;
                         for (int a = 0; a < 3; a++) {
-                            const long cube =
-                                (long)wpxCoord(E, a) + (long)oo[a] * S;
-                            const long rel = cube - (long)wpxCoord(Q, a);
+                            const long rel = cube[a] - (long)wpxCoord(Q, a);
                             if (rel != 0 && rel != S) { inside = false; break; }
                             if (rel == S) cn |= (1u << a);
                         }
-                        if (!inside) continue;
+                        if (!inside) {
+                            if (gdbg)
+                                std::printf("[gmat] ele %u off(%d,%d,%d): cube "
+                                            "not a child of q (E %u,%u,%u S %ld"
+                                            " | Q %u,%u,%u)\n",
+                                            ele, ox, oy, oz, E.getX(), E.getY(),
+                                            E.getZ(), S, Q.getX(), Q.getY(),
+                                            Q.getZ());
+                            continue;
+                        }
                         this->prolongateChildNodes(
                             in, cgSz, allDg + (size_t)q * allDgEleStride, dgSz,
                             q, cn, 1u, childBuf.data(), im1, im2, allDg,
                             allDgEleStride,
                             lvlMask & ~(unsigned int)WPX_LVL_COARSER);
-                        const int sidx =
-                            (oz + 1) * 9 + (oy + 1) * 3 + (ox + 1);
                         std::copy(childBuf.begin(), childBuf.end(),
                                   gslab.begin() + (size_t)sidx * m_uiNpE);
                         gvalid[sidx] = 1;
@@ -13817,11 +13952,12 @@ if (anyGraded && std::getenv("DENDRO_WPX_DEBUG_GRADED")) {
                         reported++;
                         std::printf("[graded] ele %u: %ld of %zu cube entries "
                                     "UNFILLED (ext %u %u %u %u %u %u, mode "
-                                    "%u %u %u %u %u %u)\n",
+                                    "%u %u %u %u %u %u) allDg=%s gvalid=%zu\n",
                                     ele, holes, cube.size(), ext[0], ext[1],
                                     ext[2], ext[3], ext[4], ext[5], emode[0],
                                     emode[1], emode[2], emode[3], emode[4],
-                                    emode[5]);
+                                    emode[5],
+                                    allDg ? "yes" : "NULL", gvalid.size());
                     }
                 }
             }

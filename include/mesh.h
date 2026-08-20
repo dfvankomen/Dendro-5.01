@@ -2310,7 +2310,26 @@ class Mesh {
     /**
      * Read a coarser neighbour graded, through its prolongated child.
      *
-     * @warning INCOMPLETE as of 2026-08-20 -- do not enable expecting a gain.
+     * WORKING as of 2026-08-20. Linear-field control at roundoff (2.4e-14),
+     * zero unfilled cube entries, and the constraint control bin matches the
+     * flag-off build to 4 digits. Measured on a puncture mesh: full reach
+     * 18.6% -> 60.5% at wtol=1e-3; unzip pad rms 1.333e-07 -> 9.144e-08
+     * (1.46x over same-level-only), and at wtol=1e-6 1.037e-08 -> 6.705e-09
+     * (1.55x). On the Hamiltonian constraint at t=0, levels 3-6 pooled:
+     * 2.3155e-07 -> 2.0646e-07, i.e. **1.12x over same-level-only** and 4.24x
+     * over the narrow operator. Interface excess at levels 4-6 drops from
+     * ~12.5x to ~11x.
+     *
+     * The gain is far short of what the weight analysis alone suggests,
+     * because promotion (below) has a cost: a direction whose neighbourhood is
+     * mixed gets read at 2H everywhere, including where dense exact same-level
+     * data was available, and a sparser stencil has a ~2x worse truncation
+     * constant. At wtol=1e-3 that shows up as a WORSE max (1.696e-06 ->
+     * 2.720e-06) even though rms improves. Worth having for rms; not a
+     * substitute for the reach that is lost to the domain boundary.
+     *
+     * @note Three bugs were found here, all by the linear-field control, and
+     * all invisible to poly3/trig which only said "wrong":
      * The design is sound and was validated before building: a graded
      * 10-point stencil is degree-9 exact (measured order 9.87 against narrow
      * 7.30) and is BETTER conditioned than the uniform one-sided stencil
@@ -2320,19 +2339,24 @@ class Mesh {
      * the measured full-vs-partial ratio that works out to adding ~2.4% of
      * what the narrow operator leaves behind.
      *
-     * What is wrong is the corner rule below, not the design. It requires
-     * EVERY offset a graded direction takes part in to be coarse. That is too
-     * strict: a same-level partner can supply a graded direction perfectly
-     * well by being read at stride 2. As written the rule retires directions
-     * that the same-level path would otherwise have granted, so turning this
-     * on takes full reach DOWN, 18.6% -> 8.1% on a puncture mesh, and the
-     * linear-field control (which any consistent interpolation must reproduce
-     * exactly) reads 1.03e-01 against 1.24e-14 with the flag off.
+     *   1. gslab/gvalid were left set from a previous element when this one
+     *      had no graded direction, so the gather read the previous element's
+     *      slabs. Cleared now.
+     *   2. gslab/gvalid were thread_local while this function calls itself
+     *      recursively (once per coarse partner). The nested call, which never
+     *      has a graded direction, ran that clear and emptied the OUTER
+     *      buffers. They are per-call now, deliberately.
+     *   3. The corner rule required every offset of a graded direction to be
+     *      coarse, and the retirement cascade then dropped same-level
+     *      directions -- so enabling this LOWERED reach, 18.6% -> 8.1%.
+     *      Fixed by accepting same-level partners, retiring graded before
+     *      same-level, and promoting a direction to graded when any offset
+     *      feeding it needs coarse data.
      *
-     * To finish: let a GRADED direction accept a same-level partner, and give
-     * the gather a stride-2 read of a same-level element on the graded axis.
-     * Verify with PROLONG_FIELD=lin FIRST -- it isolates geometry from
-     * accuracy, and it is what caught this.
+     * Check PROLONG_FIELD=lin first on any change here. DENDRO_WPX_HOLES=1
+     * seeds the gather cube with NaN and counts unfilled entries;
+     * DENDRO_WPX_DEBUG_GRADED=1 dumps a gathered line against the coordinates
+     * the operator was built for.
      */
     static constexpr bool WPX_GRADE_COARSER =
 #ifdef DENDRO_WIDE_PROLONGATION_COARSER
