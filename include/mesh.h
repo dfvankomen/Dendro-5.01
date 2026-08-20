@@ -2250,7 +2250,8 @@ class Mesh {
      * does not overlap.
      */
     bool wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
-                     const unsigned int ext[6], unsigned int q) const;
+                     const unsigned int ext[6], unsigned int q,
+                     const unsigned char *mode = nullptr) const;
 
     /**
      * @brief Which neighbour refinement levels the stencil may extend into.
@@ -2295,12 +2296,49 @@ class Mesh {
      * as such. Any retry must first make a degree-7-per-axis field return
      * roundoff, which is cheap and which no previous attempt checked.
      */
+    static constexpr unsigned int WPX_LVL_DEFAULT =
+        WPX_LVL_SAME
 #if defined(DENDRO_WIDE_PROLONGATION_FINER) || \
     defined(DENDRO_WIDE_PROLONGATION_DECIMATE)
-    static constexpr unsigned int WPX_LVL_DEFAULT =
-        WPX_LVL_SAME | WPX_LVL_FINER;
+        | WPX_LVL_FINER
+#endif
+#ifdef DENDRO_WIDE_PROLONGATION_COARSER
+        | WPX_LVL_COARSER
+#endif
+        ;
+
+    /**
+     * Read a coarser neighbour graded, through its prolongated child.
+     *
+     * @warning INCOMPLETE as of 2026-08-20 -- do not enable expecting a gain.
+     * The design is sound and was validated before building: a graded
+     * 10-point stencil is degree-9 exact (measured order 9.87 against narrow
+     * 7.30) and is BETTER conditioned than the uniform one-sided stencil
+     * (Lebesgue 9.68 vs 15.18), and its extension nodes carry only 0.031 of
+     * the weight against 0.636 uniform -- which matters because those values
+     * carry the coarse side's own truncation, ~2^10 larger than ours. Against
+     * the measured full-vs-partial ratio that works out to adding ~2.4% of
+     * what the narrow operator leaves behind.
+     *
+     * What is wrong is the corner rule below, not the design. It requires
+     * EVERY offset a graded direction takes part in to be coarse. That is too
+     * strict: a same-level partner can supply a graded direction perfectly
+     * well by being read at stride 2. As written the rule retires directions
+     * that the same-level path would otherwise have granted, so turning this
+     * on takes full reach DOWN, 18.6% -> 8.1% on a puncture mesh, and the
+     * linear-field control (which any consistent interpolation must reproduce
+     * exactly) reads 1.03e-01 against 1.24e-14 with the flag off.
+     *
+     * To finish: let a GRADED direction accept a same-level partner, and give
+     * the gather a stride-2 read of a same-level element on the graded axis.
+     * Verify with PROLONG_FIELD=lin FIRST -- it isolates geometry from
+     * accuracy, and it is what caught this.
+     */
+    static constexpr bool WPX_GRADE_COARSER =
+#ifdef DENDRO_WIDE_PROLONGATION_COARSER
+        true;
 #else
-    static constexpr unsigned int WPX_LVL_DEFAULT = WPX_LVL_SAME;
+        false;
 #endif
 
     /**
@@ -2355,7 +2393,28 @@ class Mesh {
     enum : unsigned char {
         WPX_EXT_NONE     = 0,  // no extension
         WPX_EXT_COARSE   = 1,  // same-level neighbour, nodes at H
-        WPX_EXT_STRADDLE = 2   // finer neighbour, nodes at H/2 toward the fine
+        WPX_EXT_STRADDLE = 2,  // finer neighbour, nodes at H/2 toward the fine
+        /**
+         * Coarser neighbour, nodes taken at 2H (graded).
+         *
+         * A coarser neighbour samples our lattice every OTHER node, so it
+         * cannot be read directly. Its values arrive instead through its own
+         * prolongated child, which lands on our lattice; we then take every
+         * second node of that child, putting the extension at 2H.
+         *
+         * Graded rather than uniform on purpose. Both are 10-point and both
+         * are degree-9 exact (exactness depends on node count, not spacing --
+         * measured order 9.87 graded vs 10.07 uniform, against 7.30 narrow),
+         * but the extension nodes sit further out, so the weight they carry
+         * drops from 0.636 to 0.031. That matters because those values are the
+         * only inexact inputs in the stencil: they carry the coarse element's
+         * own truncation, ~2^10 larger than ours. Amplified by 0.031 instead
+         * of 0.636, the error they add is ~2.4% of what the narrow operator
+         * leaves behind rather than ~50%. Graded's truncation constant is
+         * ~2x worse than uniform's, which is a cheap price for 20x less
+         * amplification.
+         */
+        WPX_EXT_GRADED   = 3
                                // side; these are block-interior real DOFs, so
                                // they are clean, and including them centres
                                // the stencil
@@ -2389,7 +2448,9 @@ class Mesh {
     void gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                                   T *out, T *eleScratch, FetchFn fetch,
                                   const unsigned char *mode = nullptr,
-                                  bool dgGhostOk            = false) const;
+                                  bool dgGhostOk            = false,
+                                  const T *gslab            = nullptr,
+                                  const unsigned char *gvalid = nullptr) const;
 
     template <typename T>
     void gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
@@ -2402,7 +2463,10 @@ class Mesh {
     void gatherExtendedCoarseNodesDG(const T *dgVec, size_t ele_stride,
                                      size_t var_offset, unsigned int ele,
                                      const unsigned int ext[6], T *out,
-                                     const unsigned char *mode = nullptr) const;
+                                     const unsigned char *mode   = nullptr,
+                                     const T *gslab              = nullptr,
+                                     const unsigned char *gvalid = nullptr)
+        const;
 
     /** As above, sourcing from a CG vector by regenerating each contributing
      *  element's nodal values. Needed where only one element's DG values are
@@ -2420,7 +2484,8 @@ class Mesh {
                               size_t dgSz, unsigned int ele, unsigned int cnum,
                               unsigned int dof, T *out, double *im1,
                               double *im2, const T *allDg = nullptr,
-                              size_t allDgEleStride = 0) const;
+                              size_t allDgEleStride = 0,
+                              unsigned int lvlMask = WPX_LVL_DEFAULT) const;
 
     /**
      * @brief Build the map that lets a rank receive finished element-nodal

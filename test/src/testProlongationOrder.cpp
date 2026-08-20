@@ -1530,6 +1530,12 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     // near-singularity, so a coarse element is not automatically
     // under-resolved.
     const bool trig    = (fp_env && std::string(fp_env) == "trig");
+    // A LINEAR field validates indexing and geometry only -- any consistent
+    // interpolation reproduces it exactly, whatever its order or node
+    // spacing. That makes it the right probe for a new gather path: if this
+    // is not at roundoff, the operator is being fed values from the wrong
+    // places, and no accuracy argument matters yet.
+    const bool lin     = (fp_env && std::string(fp_env) == "lin");
 
     // a bump drives the wavelet refinement, which is what creates the jumps
     const char *bp   = std::getenv("PROLONG_BUMP");
@@ -1559,7 +1565,9 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     // roundoff wherever its input is exact. Anything above roundoff means the
     // stencil is being fed values that are themselves interpolated.
     std::function<double(double, double, double)> fn =
-        [kw, L, poly, poly3, trig, punc, chi](double x, double y, double z) {
+        [kw, L, poly, poly3, trig, lin, punc, chi](double x, double y,
+                                                    double z) {
+            if (lin) return 1.0 + x / L + 2.0 * y / L + 3.0 * z / L;
             if (trig)
                 return std::sin(kw * x) * std::cos(kw * y) *
                        std::sin(kw * z);
@@ -1622,7 +1630,15 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
             for (unsigned int e = mesh->getElementLocalBegin();
                  e < mesh->getElementLocalEnd(); e++) {
                 unsigned int ex[6];
-                mesh->probeCoarseExtension(e, want, ex);
+                // Pass a mode array. Without one the probe SKIPS its
+                // corner-rule level checks entirely (they are guarded by
+                // `if (ok_here && mode)`), so a mode-less call reports the
+                // reach of a more permissive operator than the one that
+                // actually runs. Every reach number taken without it is an
+                // over-estimate.
+                unsigned char exm[6];
+                mesh->probeCoarseExtension(e, want, ex,
+                                           ot::Mesh::WPX_LVL_DEFAULT, exm);
                 bool full = true, any = false;
                 for (int a = 0; a < 3; a++) {
                     const unsigned int t = ex[2 * a] + ex[2 * a + 1];
@@ -2866,6 +2882,55 @@ TEST_CASE("corner rule failure modes") {
             std::printf("%-5d %7ld %9ld   %8ld %8ld %8ld %8ld\n", l, nEle[l],
                         nFull[l], rMiss[l], rFine[l], rCoar[l], rSame[l]);
         }
+    }
+
+    // For a direction whose face neighbour is COARSER: do all the offsets it
+    // takes part in resolve to that SAME coarse element? If so the gather only
+    // ever has to materialise children of one neighbour, which is a far
+    // simpler implementation than chasing a different element per offset.
+    {
+        long dirs = 0, sameQ = 0, otherCoarse = 0, notCoarse = 0, missing = 0;
+        for (unsigned int e = mesh->getElementLocalBegin();
+             e < mesh->getElementLocalEnd(); e++) {
+            const unsigned int lev = AE[e].getLevel();
+            for (unsigned int d = 0; d < 6; d++) {
+                const unsigned int nb = e2e[e * nd + d];
+                if (nb == LOOK_UP_TABLE_DEFAULT || nb >= AE.size()) continue;
+                if (AE[nb].getLevel() >= lev) continue;  // want coarser only
+                dirs++;
+                const int ax = (int)d / 2, sgn = (d % 2) ? 1 : -1;
+                bool all = true;
+                for (int oz = -1; oz <= 1; oz++)
+                    for (int oy = -1; oy <= 1; oy++)
+                        for (int ox = -1; ox <= 1; ox++) {
+                            const int oo[3] = {ox, oy, oz};
+                            if (oo[ax] != sgn) continue;
+                            if (ox == 0 && oy == 0 && oz == 0) continue;
+                            bool bg = false;
+                            const unsigned int q = mesh->wpxNeighbour(
+                                e, ox, oy, oz, bg,
+                                ot::Mesh::WPX_LVL_SAME |
+                                    ot::Mesh::WPX_LVL_FINER |
+                                    ot::Mesh::WPX_LVL_COARSER,
+                                true);
+                            if (q == LOOK_UP_TABLE_DEFAULT) {
+                                missing++; all = false; continue;
+                            }
+                            if (q == nb) continue;
+                            all = false;
+                            if (AE[q].getLevel() < lev) otherCoarse++;
+                            else notCoarse++;
+                        }
+                if (all) sameQ++;
+            }
+        }
+        std::printf(
+            "\ncoarser-face directions: %ld total, %ld (%.1f%%) have EVERY "
+            "offset resolving to that same coarse element\n"
+            "  offsets that go elsewhere: missing %ld, a different coarse "
+            "element %ld, not coarse %ld\n",
+            dirs, sameQ, dirs ? 100.0 * sameQ / dirs : 0.0, missing,
+            otherCoarse, notCoarse);
     }
 
     std::printf(

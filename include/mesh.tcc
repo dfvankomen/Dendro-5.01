@@ -12952,11 +12952,15 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                          dgGhostOk);
         if (q != LOOK_UP_TABLE_DEFAULT) {
             ext[d] = cap;
-            if (mode)
-                mode[d] = (m_uiAllElements[q].getLevel() == lev + 1 &&
-                           !WPX_DECIMATE_FINER)
-                              ? WPX_EXT_STRADDLE
-                              : WPX_EXT_COARSE;
+            if (mode) {
+                const unsigned int ql = m_uiAllElements[q].getLevel();
+                if (ql + 1 == lev)
+                    mode[d] = WPX_EXT_GRADED;  // coarser: read at 2H
+                else if (ql == lev + 1 && !WPX_DECIMATE_FINER)
+                    mode[d] = WPX_EXT_STRADDLE;
+                else
+                    mode[d] = WPX_EXT_COARSE;
+            }
         } else {
             status |= bg ? WPX_CLIPPED_GHOST : WPX_CLIPPED_GEOMETRY;
         }
@@ -12986,7 +12990,7 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                         wpxNeighbour(ele, ox, oy, oz, bg, levelMask, dgGhostOk);
 
                     bool ok_here = (q != LOOK_UP_TABLE_DEFAULT) &&
-                                   wpxOffsetOk(ele, ox, oy, oz, ext, q);
+                                   wpxOffsetOk(ele, ox, oy, oz, ext, q, mode);
 
                     // A direction's mode is taken from its face neighbour,
                     // but an edge or corner offset along the same direction
@@ -13002,6 +13006,13 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                             const unsigned char md =
                                 mode[2 * a + (oo[a] > 0 ? 1 : 0)];
                             if (md == WPX_EXT_STRADDLE && ql != lev + 1)
+                                ok_here = false;
+                            // A graded direction takes its values from coarse
+                            // elements' prolongated children, so every offset
+                            // it takes part in has to be coarse too -- a
+                            // same-level partner there would land on a
+                            // different lattice.
+                            if (md == WPX_EXT_GRADED && ql + 1 != lev)
                                 ok_here = false;
                             // A decimated direction reads every partner onto
                             // this element's lattice, so it does not care
@@ -13065,8 +13076,8 @@ inline unsigned int Mesh::wpxFinerPartner(unsigned int base, unsigned int ele,
 }
 
 inline bool Mesh::wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
-                              const unsigned int ext[6],
-                              unsigned int q) const {
+                              const unsigned int ext[6], unsigned int q,
+                              const unsigned char *mode) const {
     if (q == LOOK_UP_TABLE_DEFAULT || q >= m_uiAllElements.size()) return false;
 
     const ot::TreeNode &E = m_uiAllElements[ele];
@@ -13079,14 +13090,22 @@ inline bool Mesh::wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
         const long c0 = (long)wpxCoord(E, a);
         const long cq = (long)wpxCoord(Q, a);
 
+        // a graded direction reads its neighbour at 2H, so it reaches twice
+        // as far for the same node count
+        const long gl =
+            (mode && mode[2 * a] == WPX_EXT_GRADED) ? 2l : 1l;
+        const long gh =
+            (mode && mode[2 * a + 1] == WPX_EXT_GRADED) ? 2l : 1l;
+
         long lo, hi;  // region this offset must supply, on this axis
         if (o[a] < 0) {
-            const long reach = (S * (long)ext[2 * a]) / (long)m_uiElementOrder;
+            const long reach =
+                (gl * S * (long)ext[2 * a]) / (long)m_uiElementOrder;
             lo = c0 - reach;
             hi = c0;
         } else if (o[a] > 0) {
             const long reach =
-                (S * (long)ext[2 * a + 1]) / (long)m_uiElementOrder;
+                (gh * S * (long)ext[2 * a + 1]) / (long)m_uiElementOrder;
             lo = c0 + S;
             hi = c0 + S + reach;
         } else {
@@ -13096,6 +13115,13 @@ inline bool Mesh::wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
         if (hi <= lo) return false;
         // q must overlap the region, not merely be reachable by a hop chain
         if (cq + Sq <= lo || cq >= hi) return false;
+        // For a graded read we materialise a child of q covering the whole
+        // S-cube at this offset, so overlap is not enough -- q has to contain
+        // it. (Q is twice our size, so this holds about half the time.)
+        if (mode && Sq > S) {
+            const long cubeLo = c0 + (long)o[a] * S;
+            if (cq > cubeLo || cq + Sq < cubeLo + S) return false;
+        }
     }
     return true;
 }
@@ -13112,8 +13138,9 @@ inline bool Mesh::wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
 template <typename T, typename FetchFn>
 void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                                     T *out, T *eleScratch, FetchFn fetch,
-                                    const unsigned char *mode,
-                                    bool dgGhostOk) const {
+                                    const unsigned char *mode, bool dgGhostOk,
+                                    const T *gslab,
+                                    const unsigned char *gvalid) const {
     const unsigned int p   = m_uiElementOrder;
     const unsigned int nrp = p + 1;
 
@@ -13157,6 +13184,43 @@ void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                     gx0 = 0; gx1 = (int)p;
                 }
 
+                // A coarser partner cannot be read directly -- it samples
+                // our lattice every other node. Its contribution arrives
+                // pre-materialised as its own prolongated child, on our
+                // lattice, and we take every second node of that (stride 2),
+                // which is what puts the extension at 2H.
+                const int sidx = (oz + 1) * 9 + (oy + 1) * 3 + (ox + 1);
+                if (gslab && gvalid && gvalid[sidx]) {
+                    const T *src = gslab + (size_t)sidx * m_uiNpE;
+                    auto gmap    = [&](int g, int o, unsigned char md) {
+                        const int st = (md == WPX_EXT_GRADED) ? 2 : 1;
+                        if (o < 0) return (int)p + st * g;
+                        if (o > 0) return st * (g - (int)p);
+                        return g;
+                    };
+                    const unsigned char mdx =
+                        mode ? mode[ox < 0 ? 0 : 1] : WPX_EXT_COARSE;
+                    const unsigned char mdy =
+                        mode ? mode[oy < 0 ? 2 : 3] : WPX_EXT_COARSE;
+                    const unsigned char mdz =
+                        mode ? mode[oz < 0 ? 4 : 5] : WPX_EXT_COARSE;
+                    for (int gz = gz0; gz <= gz1; gz++) {
+                        const int lk = gmap(gz, oz, mdz);
+                        for (int gy = gy0; gy <= gy1; gy++) {
+                            const int lj = gmap(gy, oy, mdy);
+                            for (int gx = gx0; gx <= gx1; gx++) {
+                                const int li = gmap(gx, ox, mdx);
+                                out[(size_t)((gz + (int)ext[4]) * ny +
+                                             (gy + (int)ext[2])) *
+                                        nx +
+                                    (size_t)(gx + (int)ext[0])] =
+                                    src[(size_t)(lk * nrp + lj) * nrp + li];
+                            }
+                        }
+                    }
+                    continue;
+                }
+
                 bool bg              = false;
                 const unsigned int e =
                     // The gather resolves whatever the probe was willing to
@@ -13166,7 +13230,7 @@ void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                     wpxNeighbour(ele, ox, oy, oz, bg,
                                  WPX_LVL_SAME | WPX_LVL_FINER, dgGhostOk);
                 if (e == LOOK_UP_TABLE_DEFAULT) continue;
-                if (!wpxOffsetOk(ele, ox, oy, oz, ext, e)) continue;
+                if (!wpxOffsetOk(ele, ox, oy, oz, ext, e, mode)) continue;
 
                 const unsigned int lev  = m_uiAllElements[ele].getLevel();
                 const bool finer = (m_uiAllElements[e].getLevel() == lev + 1);
@@ -13458,13 +13522,15 @@ template <typename T>
 void Mesh::gatherExtendedCoarseNodesDG(const T *dgVec, size_t ele_stride,
                                        size_t var_offset, unsigned int ele,
                                        const unsigned int ext[6], T *out,
-                                       const unsigned char *mode) const {
+                                       const unsigned char *mode,
+                                       const T *gslab,
+                                       const unsigned char *gvalid) const {
     gatherExtendedCoarseImpl<T>(ele, ext, out, (T *)nullptr,
                                 [&](unsigned int e, T *) {
                                     return dgVec + (size_t)e * ele_stride +
                                            var_offset;
                                 },
-                                mode, /*dgGhostOk=*/true);
+                                mode, /*dgGhostOk=*/true, gslab, gvalid);
 }
 
 template <typename T>
@@ -13510,10 +13576,17 @@ inline void wpxAxisCoords(unsigned int p, unsigned int lo, unsigned char mlo,
                           unsigned int hi, unsigned char mhi,
                           std::vector<double> &xs) {
     xs.clear();
-    const double dl =
-        (mlo == ot::Mesh::WPX_EXT_STRADDLE) ? 0.5 : 1.0;
-    const double dh =
-        (mhi == ot::Mesh::WPX_EXT_STRADDLE) ? 0.5 : 1.0;
+    // A finer neighbour is read at half our spacing (straddle); a coarser one
+    // is read at twice it (graded, every second node of its prolongated
+    // child). See the WPX_EXT_GRADED comment for why graded beats uniform
+    // here even though both are degree-9 exact.
+    auto spacing = [](unsigned char m) {
+        if (m == ot::Mesh::WPX_EXT_STRADDLE) return 0.5;
+        if (m == ot::Mesh::WPX_EXT_GRADED) return 2.0;
+        return 1.0;
+    };
+    const double dl = spacing(mlo);
+    const double dh = spacing(mhi);
 
     for (int i = (int)lo; i >= 1; i--)
         xs.push_back(-dl * (double)i / (double)p);
@@ -13528,7 +13601,8 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                                 size_t dgSz, unsigned int ele,
                                 unsigned int cnum, unsigned int dof, T *out,
                                 double *im1, double *im2, const T *allDg,
-                                size_t allDgEleStride) const {
+                                size_t allDgEleStride,
+                                unsigned int lvlMask) const {
 #ifdef DENDRO_WIDE_PROLONGATION
     const unsigned int nrp   = m_uiElementOrder + 1;
     const unsigned int width = dendro::wideprolong::stencil_width(
@@ -13541,7 +13615,7 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
     // map is still readable -- its slice came from the rank that owns it.
     const bool dgGhostOk = (allDg != nullptr);
     const unsigned int st = this->probeCoarseExtension(
-        ele, want, ext, WPX_LVL_DEFAULT, emode, dgGhostOk);
+        ele, want, ext, lvlMask, emode, dgGhostOk);
 
     if (st & WPX_CLIPPED_GHOST) {
         // The stencil would have reached a round-2 ghost, so whether it is
@@ -13569,6 +13643,70 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
         static thread_local std::vector<T> cube, eleScratch;
         static thread_local std::vector<double> w1, w2;
 
+        // Materialise the coarse partners' prolongated children. A coarser
+        // element samples our lattice every other node, so it cannot be read
+        // directly; its own child lands ON our lattice, and taking every
+        // second node of that child gives the graded 2H extension. The nested
+        // call is given a mask WITHOUT COARSER, so it cannot recurse.
+        static thread_local std::vector<T> gslab;
+        static thread_local std::vector<unsigned char> gvalid;
+        bool anyGraded = false;
+        for (int d = 0; d < 6; d++)
+            if (ext[d] && emode[d] == WPX_EXT_GRADED) anyGraded = true;
+
+        if (anyGraded && allDg != nullptr) {
+            gslab.assign((size_t)27 * m_uiNpE, T(0));
+            gvalid.assign(27, 0);
+            const ot::TreeNode &E = m_uiAllElements[ele];
+            const long S = 1l << (m_uiMaxDepth - E.getLevel());
+            static thread_local std::vector<T> childBuf;
+            childBuf.resize(m_uiNpE);
+            for (int oz = -1; oz <= 1; oz++)
+                for (int oy = -1; oy <= 1; oy++)
+                    for (int ox = -1; ox <= 1; ox++) {
+                        if (!ox && !oy && !oz) continue;
+                        const int oo[3] = {ox, oy, oz};
+                        bool need       = true;
+                        for (int a = 0; a < 3 && need; a++) {
+                            if (!oo[a]) continue;
+                            const unsigned int d =
+                                (unsigned int)(2 * a + (oo[a] > 0 ? 1 : 0));
+                            if (!ext[d] || emode[d] != WPX_EXT_GRADED)
+                                need = false;
+                        }
+                        if (!need) continue;
+                        bool bg = false;
+                        const unsigned int q = wpxNeighbour(
+                            ele, ox, oy, oz, bg, lvlMask, dgGhostOk);
+                        if (q == LOOK_UP_TABLE_DEFAULT) continue;
+                        if (m_uiAllElements[q].getLevel() + 1 !=
+                            E.getLevel())
+                            continue;
+                        // which child of q covers this offset's S-cube?
+                        const ot::TreeNode &Q = m_uiAllElements[q];
+                        unsigned int cn       = 0;
+                        bool inside           = true;
+                        for (int a = 0; a < 3; a++) {
+                            const long cube =
+                                (long)wpxCoord(E, a) + (long)oo[a] * S;
+                            const long rel = cube - (long)wpxCoord(Q, a);
+                            if (rel != 0 && rel != S) { inside = false; break; }
+                            if (rel == S) cn |= (1u << a);
+                        }
+                        if (!inside) continue;
+                        this->prolongateChildNodes(
+                            in, cgSz, allDg + (size_t)q * allDgEleStride, dgSz,
+                            q, cn, 1u, childBuf.data(), im1, im2, allDg,
+                            allDgEleStride,
+                            lvlMask & ~(unsigned int)WPX_LVL_COARSER);
+                        const int sidx =
+                            (oz + 1) * 9 + (oy + 1) * 3 + (ox + 1);
+                        std::copy(childBuf.begin(), childBuf.end(),
+                                  gslab.begin() + (size_t)sidx * m_uiNpE);
+                        gvalid[sidx] = 1;
+                    }
+        }
+
         static thread_local std::vector<double> cx, cy, cz;
         wpxAxisCoords(m_uiElementOrder, ext[0], emode[0], ext[1], emode[1], cx);
         wpxAxisCoords(m_uiElementOrder, ext[2], emode[2], ext[3], emode[3], cy);
@@ -13587,7 +13725,14 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
 
         const size_t ss = dendro::wideprolong::scratch_size(
             m_uiElementOrder, nx_in, ny_in, nz_in);
-        cube.resize((size_t)nx_in * ny_in * nz_in);
+        // Zeroed, not merely resized: this buffer is thread_local and reused
+        // across calls, so any region the gather cannot fill would otherwise
+        // be read as stale data from a previous element. A hole is a bug in
+        // the probe, but it must not present as plausible garbage.
+        cube.assign((size_t)nx_in * ny_in * nz_in,
+                    std::getenv("DENDRO_WPX_HOLES")
+                        ? std::numeric_limits<T>::quiet_NaN()
+                        : T(0));
         eleScratch.resize((size_t)8 * m_uiNpE);
         w1.resize(ss);
         w2.resize(ss);
@@ -13606,15 +13751,82 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
             // faces are already corrected. Re-gathering from CG here would
             // both redo that work and feed the stencil narrow face values.
             if (allDg != nullptr)
-                this->gatherExtendedCoarseNodesDG(allDg, allDgEleStride,
-                                                  (size_t)v * dgSz, ele, ext,
-                                                  cube.data(), emode);
+                this->gatherExtendedCoarseNodesDG(
+                    allDg, allDgEleStride, (size_t)v * dgSz, ele, ext,
+                    cube.data(), emode,
+                    gvalid.empty() ? nullptr : gslab.data(),
+                    gvalid.empty() ? nullptr : gvalid.data());
             else
                 this->gatherExtendedCoarseNodesCG(in + v * cgSz, ele, ext,
                                                   cube.data(),
                                                   eleScratch.data(), g_im1,
                                                   g_im2, true, emode);
-            dendro::wideprolong::apply_3d(m_uiElementOrder, opx.data(), nx_in,
+if (anyGraded && std::getenv("DENDRO_WPX_DEBUG_GRADED")) {
+                static thread_local int shown = 0;
+                int axesExt = 0;
+                    for (int a = 0; a < 3; a++)
+                        if (ext[2*a] || ext[2*a+1]) axesExt++;
+                    if (shown < 2 && axesExt >= 2) {
+                    shown++;
+                    const ot::TreeNode &E = m_uiAllElements[ele];
+                    const double Sd =
+                        (double)(1u << (m_uiMaxDepth - E.getLevel()));
+                    std::printf("[graded dbg] ele %u lvl %u S %.0f at (%u,%u,%u)\n",
+                                ele, E.getLevel(), Sd, E.getX(), E.getY(),
+                                E.getZ());
+                    std::printf("  ext [%u %u %u %u %u %u] mode [%u %u %u %u %u %u]\n",
+                                ext[0], ext[1], ext[2], ext[3], ext[4], ext[5],
+                                emode[0], emode[1], emode[2], emode[3], emode[4],
+                                emode[5]);
+                    std::printf("  cx (n=%zu):", cx.size());
+                    for (size_t t = 0; t < cx.size(); t++)
+                        std::printf(" %.4f", cx[t]);
+                    std::printf("\n  x-line of the gathered cube at the element's"
+                                " own transverse origin:\n   ");
+                    const unsigned int jj = ext[2], kk = ext[4];
+                    for (unsigned int t = 0; t < nx_in; t++)
+                        std::printf(" %.6f",
+                                    (double)cube[(size_t)(kk * ny_in + jj) *
+                                                     nx_in + t]);
+                    std::printf("\n  implied x coords (octree units):");
+                    for (size_t t = 0; t < cx.size(); t++)
+                        std::printf(" %.1f", (double)E.getX() + cx[t] * Sd);
+                    std::printf("\n  cy:");
+                    for (size_t t = 0; t < cy.size(); t++)
+                        std::printf(" %.4f", cy[t]);
+                    std::printf("\n  y-line:");
+                    for (unsigned int t = 0; t < ny_in; t++)
+                        std::printf(" %.6f", (double)cube[(size_t)(kk*ny_in+t)*nx_in + ext[0]]);
+                    std::printf("\n  implied y:");
+                    for (size_t t = 0; t < cy.size(); t++)
+                        std::printf(" %.1f", (double)E.getY() + cy[t]*Sd);
+                    std::printf("\n");
+                }
+            }
+
+            // Holes are the failure mode to rule out first: if the probe
+            // granted a direction the gather cannot fill, the cube keeps
+            // whatever it was seeded with. Seed with NaN and count.
+            if (anyGraded && std::getenv("DENDRO_WPX_HOLES")) {
+                long holes = 0;
+                for (size_t t = 0; t < cube.size(); t++)
+                    if (cube[t] != cube[t]) holes++;
+                if (holes) {
+                    static thread_local long reported = 0;
+                    if (reported < 5) {
+                        reported++;
+                        std::printf("[graded] ele %u: %ld of %zu cube entries "
+                                    "UNFILLED (ext %u %u %u %u %u %u, mode "
+                                    "%u %u %u %u %u %u)\n",
+                                    ele, holes, cube.size(), ext[0], ext[1],
+                                    ext[2], ext[3], ext[4], ext[5], emode[0],
+                                    emode[1], emode[2], emode[3], emode[4],
+                                    emode[5]);
+                    }
+                }
+            }
+
+                        dendro::wideprolong::apply_3d(m_uiElementOrder, opx.data(), nx_in,
                                           opy.data(), ny_in, opz.data(), nz_in,
                                           cube.data(), out + v * m_uiNpE,
                                           w1.data(), w2.data());
