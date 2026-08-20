@@ -1519,6 +1519,17 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     const double kw = 2.0 * M_PI / L;
     const char *fp_env = std::getenv("PROLONG_FIELD");
     const bool poly    = (fp_env && std::string(fp_env) == "poly");
+    // poly is degree 7 in x ONLY, so it cannot see a stencil that is clipped
+    // in y or z -- same class of blind spot as a linear field, one dimension
+    // up. poly3 is degree 7 in each axis separately, which is exactly what
+    // separates a 7-point (degree 6) axis from a 10-point one.
+    const bool poly3   = (fp_env && std::string(fp_env) == "poly3");
+    // A smooth NON-polynomial field, available on any mesh. poly3 is exact
+    // for a full-reach stencil, which makes "full reach" and "zero error"
+    // indistinguishable; trig separates them, and unlike chi it has no
+    // near-singularity, so a coarse element is not automatically
+    // under-resolved.
+    const bool trig    = (fp_env && std::string(fp_env) == "trig");
 
     // a bump drives the wavelet refinement, which is what creates the jumps
     const char *bp   = std::getenv("PROLONG_BUMP");
@@ -1548,7 +1559,19 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
     // roundoff wherever its input is exact. Anything above roundoff means the
     // stencil is being fed values that are themselves interpolated.
     std::function<double(double, double, double)> fn =
-        [kw, L, poly, punc, chi](double x, double y, double z) {
+        [kw, L, poly, poly3, trig, punc, chi](double x, double y, double z) {
+            if (trig)
+                return std::sin(kw * x) * std::cos(kw * y) *
+                       std::sin(kw * z);
+            if (poly3) {
+                const double u = x / L - 0.5, v = y / L - 0.5,
+                             w = z / L - 0.5;
+                auto p7 = [](double t) {
+                    const double t2 = t * t;
+                    return t2 * t2 * t2 * t;
+                };
+                return p7(u) + p7(v) + p7(w);
+            }
             if (punc && !poly) return chi(x, y, z);
             if (poly) {
                 const double u = x / L - 0.5;
@@ -1574,12 +1597,13 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
 
     const bool active = mesh->isActive();
     double worst = 0.0, sum2 = 0.0;
+    double wx = 0.0, wy = 0.0, wz = 0.0;  // octree coords of the worst pad pt
     long count = 0, nblk = 0;
     unsigned int lmin = 0, lmax = 0;
 
     long ext_full = 0, ext_part = 0, ext_none = 0;
     double contam_narrow = 0.0, contam_wide = 0.0,
-           contam_twopass = 0.0;
+           contam_twopass = 0.0, contam_mode = 0.0;
     long width_hist[4] = {0, 0, 0, 0};
     long refuse[4]     = {0, 0, 0, 0};
 
@@ -1670,14 +1694,23 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                         im1.data(), im2.data(), true);
             }
 
-            for (int pass = 0; pass < 3; pass++) {
+            // Pass 3 probes WITH the mode array, which is what
+            // prolongateChildNodes actually passes. Without it the gather
+            // reads a finer neighbour decimated (step 2) and the comparison
+            // below places every extension node at the coarse spacing; with
+            // it, a finer neighbour is read straddled (step 1) at half that.
+            // Passes 0-2 therefore never measured the inputs the straddle
+            // path consumes -- they measured the decimated variant.
+            for (int pass = 0; pass < 4; pass++) {
                 double w = 0.0;
                 for (unsigned int e = mesh->getElementLocalBegin();
                      e < mesh->getElementLocalEnd(); e++) {
                     unsigned int ex[6];
-                    mesh->probeCoarseExtension(e, want2, ex,
-                                               ot::Mesh::WPX_LVL_SAME |
-                                                   ot::Mesh::WPX_LVL_FINER);
+                    unsigned char emd[6];
+                    mesh->probeCoarseExtension(
+                        e, want2, ex,
+                        ot::Mesh::WPX_LVL_SAME | ot::Mesh::WPX_LVL_FINER,
+                        pass == 3 ? emd : nullptr);
                     const unsigned int ax = nrp2 + ex[0] + ex[1];
                     const unsigned int ay = nrp2 + ex[2] + ex[3];
                     const unsigned int az = nrp2 + ex[4] + ex[5];
@@ -1688,20 +1721,40 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                     else
                         mesh->gatherExtendedCoarseNodesCG(
                             cg.data(), e, ex, cb.data(), scr.data(),
-                            im1.data(), im2.data(), pass == 1);
+                            im1.data(), im2.data(), pass != 0,
+                            pass == 3 ? emd : nullptr);
                     const double szz =
                         (double)(1u << (m_uiMaxDepth - el2[e].getLevel()));
                     const double HH = szz / (double)ELE_ORDER;
                     for (unsigned int k = 0; k < az; k++)
                         for (unsigned int j = 0; j < ay; j++)
                             for (unsigned int i = 0; i < ax; i++) {
+                                auto axc = [&](unsigned int idx,
+                                               unsigned int lo, int a) {
+                                    const double d = (double)idx - (double)lo;
+                                    if (pass != 3) return HH * d;
+                                    // below the element: lo nodes at the
+                                    // spacing that direction was granted
+                                    if (d < 0.0)
+                                        return HH * d *
+                                               ((emd[2 * a] ==
+                                                 ot::Mesh::WPX_EXT_STRADDLE)
+                                                    ? 0.5
+                                                    : 1.0);
+                                    if (d > (double)ELE_ORDER)
+                                        return HH * ((double)ELE_ORDER +
+                                                     (d - (double)ELE_ORDER) *
+                                                         ((emd[2 * a + 1] ==
+                                                           ot::Mesh::
+                                                               WPX_EXT_STRADDLE)
+                                                              ? 0.5
+                                                              : 1.0));
+                                    return HH * d;
+                                };
                                 const double wv =
-                                    fn((double)el2[e].getX() +
-                                           HH * ((double)i - (double)ex[0]),
-                                       (double)el2[e].getY() +
-                                           HH * ((double)j - (double)ex[2]),
-                                       (double)el2[e].getZ() +
-                                           HH * ((double)k - (double)ex[4]));
+                                    fn((double)el2[e].getX() + axc(i, ex[0], 0),
+                                       (double)el2[e].getY() + axc(j, ex[2], 1),
+                                       (double)el2[e].getZ() + axc(k, ex[4], 2));
                                 const double dd = std::fabs(
                                     cb[(size_t)(k * ay + j) * ax + i] - wv);
                                 if (dd > w) w = dd;
@@ -1709,10 +1762,16 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                 }
                 if (pass == 0) contam_narrow = w;
                 else if (pass == 1) contam_wide = w;
-                else contam_twopass = w;
+                else if (pass == 2) contam_twopass = w;
+                else contam_mode = w;
             }
         }
         std::vector<double> errmap(mesh->getDegOfFreedomUnZip(), -1.0);
+    // physical coordinates per pad point, so an OFF/ON diff can be attributed
+    // geometrically (distance to the puncture, which axis, which block)
+    std::vector<double> cmx(mesh->getDegOfFreedomUnZip(), 0.0);
+    std::vector<double> cmy(mesh->getDegOfFreedomUnZip(), 0.0);
+    std::vector<double> cmz(mesh->getDegOfFreedomUnZip(), 0.0);
 
         mesh->performGhostExchange(cg);
         mesh->unzip(cg.data(), uz.data(), 1);
@@ -1752,10 +1811,110 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                             uz[uidx] -
                             fn(x0 + i * hx, y0 + j * hy, z0 + k * hz));
                         errmap[uidx] = e;
-                        if (e > worst) worst = e;
+                        cmx[uidx] = x0 + i * hx;
+                        cmy[uidx] = y0 + j * hy;
+                        cmz[uidx] = z0 + k * hz;
+                        if (e > worst) {
+                            worst = e;
+                            wx = x0 + i * hx;
+                            wy = y0 + j * hy;
+                            wz = z0 + k * hz;
+                        }
                         sum2 += e * e;
                         count++;
                     }
+        }
+
+        // Who fills the worst pad point, and what did the probe allow there?
+        // The max is the number the whole result is quoted on, so knowing
+        // which element supplies it -- and which direction it was refused --
+        // is what decides whether the ceiling is reach or operator.
+        {
+            const std::vector<ot::TreeNode> &AE = mesh->getAllElements();
+            const unsigned int want3 =
+                dendro::wideprolong::stencil_width(ELE_ORDER) - (ELE_ORDER + 1);
+            std::printf("\n=== who fills the worst pad point ===\n");
+            std::printf("worst %.6e at octree (%.3f, %.3f, %.3f)\n",
+                        worst, wx, wy, wz);
+            const char *dn[6] = {"-x", "+x", "-y", "+y", "-z", "+z"};
+            int shown = 0;
+            for (unsigned int e = 0; e < AE.size() && shown < 6; e++) {
+                const double sz =
+                    (double)(1u << (m_uiMaxDepth - AE[e].getLevel()));
+                const double ex0 = (double)AE[e].getX(),
+                             ey0 = (double)AE[e].getY(),
+                             ez0 = (double)AE[e].getZ();
+                // element whose closure contains the point
+                if (wx < ex0 - 1e-9 || wx > ex0 + sz + 1e-9) continue;
+                if (wy < ey0 - 1e-9 || wy > ey0 + sz + 1e-9) continue;
+                if (wz < ez0 - 1e-9 || wz > ez0 + sz + 1e-9) continue;
+                unsigned int ex[6];
+                unsigned char em[6];
+                mesh->probeCoarseExtension(e, want3, ex,
+                                           ot::Mesh::WPX_LVL_DEFAULT, em);
+                const bool loc = (e >= mesh->getElementLocalBegin() &&
+                                  e < mesh->getElementLocalEnd());
+                std::printf("  ele %6u lvl %u sz %6.1f %s  ext = [", e,
+                            AE[e].getLevel(), sz, loc ? "local" : "GHOST");
+                for (int d = 0; d < 6; d++)
+                    std::printf("%u%s", ex[d], d < 5 ? " " : "");
+                std::printf("]\n");
+                // why each refused direction was refused
+                const std::vector<unsigned int> &e2e = mesh->getE2EMapping();
+                const unsigned int nd = mesh->getNumDirections();
+                for (unsigned int d = 0; d < 6; d++) {
+                    if (ex[d]) continue;
+                    const unsigned int nb = e2e[e * nd + d];
+                    const char *why;
+                    if (nb == LOOK_UP_TABLE_DEFAULT || nb >= AE.size())
+                        why = "domain boundary / no neighbour";
+                    else if (AE[nb].getLevel() > AE[e].getLevel())
+                        why = "neighbour FINER";
+                    else if (AE[nb].getLevel() < AE[e].getLevel())
+                        why = "neighbour COARSER";
+                    else
+                        why = "same level, dropped by corner rule";
+                    std::printf("      %s refused: %s\n", dn[d], why);
+                }
+                shown++;
+            }
+        }
+
+        // Element boxes, so an offline diff can locate the source element of
+        // each pad point and bin the gain by its level.
+        if (const char *ep = std::getenv("PROLONG_ELEDUMP")) {
+            FILE *fp = std::fopen(ep, "wb");
+            if (fp) {
+                const std::vector<ot::TreeNode> &AE = mesh->getAllElements();
+                const long ne = (long)AE.size();
+                std::fwrite(&ne, sizeof(long), 1, fp);
+                const unsigned int wantE =
+                    dendro::wideprolong::stencil_width(ELE_ORDER) -
+                    (ELE_ORDER + 1);
+                for (long e = 0; e < ne; e++) {
+                    unsigned int xe[6];
+                    unsigned char me[6];
+                    mesh->probeCoarseExtension(e, wantE, xe,
+                                               ot::Mesh::WPX_LVL_DEFAULT, me);
+                    double mn = 1e9;
+                    for (int a = 0; a < 3; a++) {
+                        const double t = (double)(xe[2 * a] + xe[2 * a + 1]);
+                        if (t < mn) mn = t;
+                    }
+                    const double v[17] = {(double)AE[e].getX(),
+                                          (double)AE[e].getY(),
+                                          (double)AE[e].getZ(),
+                                          (double)AE[e].getLevel(),
+                                          (double)xe[0], (double)xe[1],
+                                          (double)xe[2], (double)xe[3],
+                                          (double)xe[4], (double)xe[5], mn,
+                                          (double)me[0], (double)me[1],
+                                          (double)me[2], (double)me[3],
+                                          (double)me[4], (double)me[5]};
+                    std::fwrite(v, sizeof(double), 17, fp);
+                }
+                std::fclose(fp);
+            }
         }
 
         if (const char *dp = std::getenv("PROLONG_DUMP")) {
@@ -1763,6 +1922,9 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
             if (fp) {
                 std::fwrite(uz.data(), sizeof(double), uz.size(), fp);
                 std::fwrite(errmap.data(), sizeof(double), errmap.size(), fp);
+                std::fwrite(cmx.data(), sizeof(double), cmx.size(), fp);
+                std::fwrite(cmy.data(), sizeof(double), cmy.size(), fp);
+                std::fwrite(cmz.data(), sizeof(double), cmz.size(), fp);
                 std::fclose(fp);
             }
         }
@@ -1876,8 +2038,9 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
         "stencil input quality (max |gathered - analytic|):\n"
         "  inner fetch narrow      %.3e\n"
         "  inner fetch widened     %.3e\n"
-        "  two-pass (gather from a wide-filled DG array) %.3e\n",
-        contam_narrow, contam_wide, contam_twopass);
+        "  two-pass (gather from a wide-filled DG array) %.3e\n"
+        "  mode-aware (what the straddle path really reads)  %.3e\n",
+        contam_narrow, contam_wide, contam_twopass, contam_mode);
     std::printf(
         "achieved 1D stencil width over local elements: "
         "%u pts %ld, %u pts %ld, %u pts %ld, %u pts %ld\n",
