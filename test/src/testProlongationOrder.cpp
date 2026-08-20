@@ -1670,7 +1670,16 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
 
         // Quality of the values the wide stencil is fed on THIS mesh, probing
         // with finer neighbours allowed so the decimation inputs are included.
-        {
+        //
+        // np=1 only: this probe gathers through CG, whose fetch re-materialises
+        // each neighbour with getElementNodalValues. At np>1 a neighbour can
+        // be a ghost, whose hanging faces need round-2 data this rank does not
+        // have. The library's own path avoids that by gathering from a DG
+        // array whose ghost slices come from their owners; this diagnostic has
+        // no such array, so it simply does not run in parallel.
+        int np_probe = 1;
+        MPI_Comm_size(MPI_COMM_WORLD, &np_probe);
+        if (np_probe == 1) {
             const unsigned int nrp2 = ELE_ORDER + 1;
             const unsigned int nPe2 = mesh->getNumNodesPerElement();
             const unsigned int want2 =
@@ -1688,7 +1697,11 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
             {
                 const std::vector<ot::TreeNode> &ael = mesh->getAllElements();
                 dg_wide.assign((size_t)ael.size() * nPe2, 0.0);
-                for (unsigned int e = 0; e < ael.size(); e++)
+                // Ghost elements are the owner's job -- their hanging-face
+                // reconstruction needs round-2 data this rank does not have.
+                // Mirrors what unzip now does.
+                for (unsigned int e = mesh->getElementLocalBegin();
+                     e < mesh->getElementLocalEnd(); e++)
                     mesh->getElementNodalValues(
                         cg.data(), dg_wide.data() + (size_t)e * nPe2, e, false,
                         im1.data(), im2.data(), true);
@@ -1766,12 +1779,45 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                 else contam_mode = w;
             }
         }
+        // What does the flag cost? With it on, unzip additionally exchanges
+        // finished element-nodal values for every ghost element and runs a
+        // wider tensor apply. Timed here so the accuracy gain can be weighed
+        // against it rather than assumed free.
+        if (std::getenv("PROLONG_TIME")) {
+            mesh->performGhostExchange(cg);
+            const int NIT = 20;
+            double best   = 1e30, tot = 0.0;
+            for (int it = 0; it < NIT; it++) {
+                MPI_Barrier(MPI_COMM_WORLD);
+                const double t0 = MPI_Wtime();
+                mesh->unzip(cg.data(), uz.data(), 1);
+                const double dt = MPI_Wtime() - t0;
+                if (dt < best) best = dt;
+                tot += dt;
+            }
+            double gbest = best, gavg = tot / NIT;
+            MPI_Allreduce(&best, &gbest, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+            MPI_Allreduce(MPI_IN_PLACE, &gavg, 1, MPI_DOUBLE, MPI_MAX,
+                          MPI_COMM_WORLD);
+            int rk_t = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rk_t);
+            if (rk_t == 0)
+                std::printf(
+                    "\n[timing] unzip over %d iters: best %.3f ms, avg %.3f "
+                    "ms (slowest rank)\n",
+                    NIT, gbest * 1e3, gavg * 1e3);
+        }
+
         std::vector<double> errmap(mesh->getDegOfFreedomUnZip(), -1.0);
     // physical coordinates per pad point, so an OFF/ON diff can be attributed
     // geometrically (distance to the puncture, which axis, which block)
     std::vector<double> cmx(mesh->getDegOfFreedomUnZip(), 0.0);
     std::vector<double> cmy(mesh->getDegOfFreedomUnZip(), 0.0);
     std::vector<double> cmz(mesh->getDegOfFreedomUnZip(), 0.0);
+    // a point can be pad of a level-5 block under one partition and a level-6
+    // block under another; those are different grids, so the value is only
+    // comparable across partitions once the block level is part of the key
+    std::vector<double> cmlv(mesh->getDegOfFreedomUnZip(), -1.0);
 
         mesh->performGhostExchange(cg);
         mesh->unzip(cg.data(), uz.data(), 1);
@@ -1811,6 +1857,7 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
                             uz[uidx] -
                             fn(x0 + i * hx, y0 + j * hy, z0 + k * hz));
                         errmap[uidx] = e;
+                        cmlv[uidx] = (double)blks[b].getRegularGridLev();
                         cmx[uidx] = x0 + i * hx;
                         cmy[uidx] = y0 + j * hy;
                         cmz[uidx] = z0 + k * hz;
@@ -1883,7 +1930,11 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
         // Element boxes, so an offline diff can locate the source element of
         // each pad point and bin the gain by its level.
         if (const char *ep = std::getenv("PROLONG_ELEDUMP")) {
-            FILE *fp = std::fopen(ep, "wb");
+            int rk_e = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rk_e);
+            char epath[512];
+            std::snprintf(epath, sizeof(epath), "%s.%d", ep, rk_e);
+            FILE *fp = std::fopen(epath, "wb");
             if (fp) {
                 const std::vector<ot::TreeNode> &AE = mesh->getAllElements();
                 const long ne = (long)AE.size();
@@ -1918,15 +1969,56 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
         }
 
         if (const char *dp = std::getenv("PROLONG_DUMP")) {
-            FILE *fp = std::fopen(dp, "wb");
+            int rk_d = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rk_d);
+            char dpath[512];
+            std::snprintf(dpath, sizeof(dpath), "%s.%d", dp, rk_d);
+            FILE *fp = std::fopen(dpath, "wb");
             if (fp) {
                 std::fwrite(uz.data(), sizeof(double), uz.size(), fp);
                 std::fwrite(errmap.data(), sizeof(double), errmap.size(), fp);
                 std::fwrite(cmx.data(), sizeof(double), cmx.size(), fp);
                 std::fwrite(cmy.data(), sizeof(double), cmy.size(), fp);
                 std::fwrite(cmz.data(), sizeof(double), cmz.size(), fp);
+                std::fwrite(cmlv.data(), sizeof(double), cmlv.size(), fp);
                 std::fclose(fp);
             }
+        }
+    }
+
+    // Reduce across ranks: a per-rank max/rms is a function of the partition
+    // and so cannot be compared between np values. This global pair can.
+    {
+        double gworst = worst, gsum2 = sum2;
+        long gcount = count;
+        MPI_Allreduce(&worst, &gworst, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+        MPI_Allreduce(&sum2, &gsum2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(&count, &gcount, 1, MPI_LONG, MPI_SUM, MPI_COMM_WORLD);
+        int rk_g = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rk_g);
+        if (rk_g == 0)
+            std::printf(
+                "\nGLOBAL (reduced over ranks): pad points %ld  max err = "
+                "%.6e  rms err = %.6e\n",
+                gcount, gworst,
+                gcount ? std::sqrt(gsum2 / (double)gcount) : 0.0);
+
+        // Rank-independence, pinned. The wide stencil reaches past the round-1
+        // nodal ghost layer, so its answer could easily become a function of
+        // the rank count; the ghost DG exchange exists to stop that. Running
+        // this one configuration at np = 1, 2, 4, 8 must give the same three
+        // numbers -- measured bit-identical over all 138612 distinct
+        // (coordinate, block level) pad points.
+        const bool golden_cfg =
+            punc && m_uiMaxDepth == 9u && std::fabs(wt - 1e-3) < 1e-12 &&
+            !poly && !poly3 && !trig;
+        if (golden_cfg) {
+            CHECK(gcount == 452592);
+#ifdef DENDRO_WIDE_PROLONGATION
+            CHECK(gworst == doctest::Approx(1.695617e-06).epsilon(1e-6));
+#else
+            CHECK(gworst == doctest::Approx(5.413102e-06).epsilon(1e-6));
+#endif
         }
     }
 
@@ -2318,6 +2410,136 @@ TEST_CASE("hamiltonian constraint across 2:1 interfaces") {
     }
 
     CHECK(cnt[0] > 0);
+    delete mesh;
+}
+
+
+/* ------------------------------------------------------------------ */
+/* Survey -- how much round-2 nodal data does the wide stencil need?   */
+/* ------------------------------------------------------------------ */
+
+TEST_CASE("round-2 ghost demand of the wide stencil") {
+    // The wide path refuses (aborts) when it would read an element whose
+    // nodal map is invalid -- a round-2 ghost. Refusing is deliberate: a
+    // silent fallback would make the answer depend on the rank count. To
+    // remove the abort we have to SUPPLY the data, so first measure how much
+    // there is. probeCoarseExtension reports the status without aborting, so
+    // this survey is read-only and safe to run at any np.
+    const double L   = (double)(1u << m_uiMaxDepth);
+    const double DOM = 200.0;
+    auto phys = [L, DOM](double c) { return (c / L) * DOM - 0.5 * DOM; };
+    auto chi  = [phys](double x, double y, double z) {
+        const double px = phys(x), py = phys(y), pz = phys(z);
+        double r = std::sqrt(px * px + py * py + pz * pz);
+        if (r < 1e-2) r = 1e-2;
+        const double psi = 1.0 + 0.5 / r;
+        return std::pow(psi, -4.0);
+    };
+    const char *wp  = std::getenv("PROLONG_WTOL");
+    const double wt = wp ? std::atof(wp) : 1e-3;
+    std::function<double(double, double, double)> fr =
+        [chi](double x, double y, double z) { return chi(x, y, z); };
+
+    std::vector<ot::TreeNode> tmp;
+    function2Octree(fr, tmp, m_uiMaxDepth, wt, ELE_ORDER, MPI_COMM_WORLD);
+    ot::Mesh *mesh = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
+                                    MPI_COMM_WORLD, 0);
+    REQUIRE(mesh != nullptr);
+    if (!mesh->isActive()) { delete mesh; return; }
+
+    const unsigned int want =
+        dendro::wideprolong::stencil_width(ELE_ORDER) - (ELE_ORDER + 1);
+    const std::vector<ot::TreeNode> &AE = mesh->getAllElements();
+
+    long tripMain = 0, tripFace = 0, okMain = 0;
+    long nLocal = 0, nGhost = 0, nInvalid = 0;
+
+    for (unsigned int e = 0; e < AE.size(); e++) {
+        const bool loc = (e >= mesh->getElementLocalBegin() &&
+                          e < mesh->getElementLocalEnd());
+        if (loc) nLocal++; else nGhost++;
+        if (!mesh->isNodalMapValid(e)) nInvalid++;
+    }
+
+    long tripMainLoc = 0, tripMainGh = 0, tripFaceLoc = 0, tripFaceGh = 0;
+    auto isLoc = [&](unsigned int e) {
+        return e >= mesh->getElementLocalBegin() &&
+               e < mesh->getElementLocalEnd();
+    };
+
+    // main path: every element that unzip may prolongate from
+    for (unsigned int e = 0; e < AE.size(); e++) {
+        unsigned int ext[6];
+        unsigned char em[6];
+        const unsigned int st = mesh->probeCoarseExtension(
+            e, want, ext, ot::Mesh::WPX_LVL_DEFAULT, em);
+        if (st & ot::Mesh::WPX_CLIPPED_GHOST) {
+            tripMain++;
+            if (isLoc(e)) tripMainLoc++; else tripMainGh++;
+        } else okMain++;
+    }
+
+    // face path: probes the OWNER of a hanging face, same-level only
+    const std::vector<unsigned int> &e2e = mesh->getE2EMapping();
+    const unsigned int nd = mesh->getNumDirections();
+    for (unsigned int e = 0; e < AE.size(); e++)
+        for (unsigned int d = 0; d < 6; d++) {
+            const unsigned int owner = e2e[e * nd + d];
+            if (owner == LOOK_UP_TABLE_DEFAULT || owner >= AE.size()) continue;
+            if (!mesh->isNodalMapValid(owner)) continue;
+            if (AE[owner].getLevel() + 1 != AE[e].getLevel()) continue;
+            unsigned int ext[6];
+            const unsigned int st = mesh->probeCoarseExtension(
+                owner, want, ext, ot::Mesh::WPX_LVL_SAME);
+            if (st & ot::Mesh::WPX_CLIPPED_GHOST) {
+                tripFace++;
+                if (isLoc(e)) tripFaceLoc++; else tripFaceGh++;
+            }
+        }
+
+    int rk = 0, np = 1;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+    MPI_Comm_size(MPI_COMM_WORLD, &np);
+
+    // Per-LOCAL-element reach record, keyed geometrically so the same element
+    // can be matched across partitions. Rank-independence is the property that
+    // actually matters: if a local element's achieved ext depends on how many
+    // ranks there are, the answer is a function of the partition.
+    if (const char *rp = std::getenv("PROLONG_REACHDUMP")) {
+        char fn[512];
+        std::snprintf(fn, sizeof(fn), "%s.%d", rp, rk);
+        FILE *fp = std::fopen(fn, "w");
+        if (fp) {
+            for (unsigned int e = mesh->getElementLocalBegin();
+                 e < mesh->getElementLocalEnd(); e++) {
+                unsigned int ext[6];
+                unsigned char em[6];
+                const unsigned int st = mesh->probeCoarseExtension(
+                    e, want, ext, ot::Mesh::WPX_LVL_DEFAULT, em);
+                std::fprintf(fp, "%u %u %u %u  %u %u %u %u %u %u  %u\n",
+                             AE[e].getX(), AE[e].getY(), AE[e].getZ(),
+                             AE[e].getLevel(), ext[0], ext[1], ext[2], ext[3],
+                             ext[4], ext[5], st);
+            }
+            std::fclose(fp);
+        }
+    }
+    const size_t nPe = mesh->getNumNodesPerElement();
+    std::printf(
+        "[rank %d/%d] elements local %ld ghost %ld, of which nodal-map "
+        "INVALID (round 2) %ld\n"
+        "           main-path probes tripping round-2: %ld (of %ld)\n"
+        "           face-path probes tripping round-2: %ld\n"
+        "           supplying every invalid element costs %ld doubles "
+        "= %.1f KiB per rank\n",
+        rk, np, nLocal, nGhost, nInvalid, tripMain, tripMain + okMain,
+        tripFace, (long)(nInvalid * nPe),
+        (double)(nInvalid * nPe * sizeof(double)) / 1024.0);
+    std::printf(
+        "           split -- main: local %ld ghost %ld | face: local %ld "
+        "ghost %ld\n",
+        tripMainLoc, tripMainGh, tripFaceLoc, tripFaceGh);
+
     delete mesh;
 }
 
