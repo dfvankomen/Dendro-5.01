@@ -14455,3 +14455,100 @@ void Mesh::blkUnzipElementIDs(unsigned int blk,
 }
 
 }  // namespace ot
+
+namespace ot {
+
+void Mesh::buildWideProlongGhostMap() const {
+    if (m_uiWpxGhostMapBuilt) return;
+    m_uiWpxGhostMapBuilt = true;
+
+    if (!m_uiIsActive || m_uiActiveNpes == 1) return;
+
+    const unsigned int npes = m_uiActiveNpes;
+    m_uiWpxRecvCount.assign(npes, 0);
+    m_uiWpxSendCount.assign(npes, 0);
+    m_uiWpxRecvOffset.assign(npes, 0);
+    m_uiWpxSendOffset.assign(npes, 0);
+    m_uiWpxRecvEle.clear();
+    m_uiWpxSendEle.clear();
+
+    if (m_uiLocalSplitterElements.size() < 2 * (size_t)npes) {
+        std::cerr << "[wide prolongation] splitter table is missing; cannot "
+                     "resolve ghost-element owners."
+                  << std::endl;
+        MPI_Abort(m_uiCommActive, 1);
+    }
+
+    // Which rank owns this octant? Splitters hold each rank's [min,max] local
+    // element in SFC order, so a rank owns t iff it is inside that range.
+    auto ownerOf = [&](const ot::TreeNode &t) -> int {
+        for (unsigned int p = 0; p < npes; p++) {
+            const ot::TreeNode &lo = m_uiLocalSplitterElements[2 * p];
+            const ot::TreeNode &hi = m_uiLocalSplitterElements[2 * p + 1];
+            if (!(t < lo) && !(hi < t)) return (int)p;
+        }
+        return -1;
+    };
+
+    std::vector<std::vector<unsigned int> > per(npes);
+    auto collect = [&](unsigned int b, unsigned int e) {
+        for (unsigned int i = b; i < e; i++) {
+            const int own = ownerOf(m_uiAllElements[i]);
+            if (own < 0 || (unsigned int)own == m_uiActiveRank) continue;
+            per[own].push_back(i);
+        }
+    };
+    collect(m_uiElementPreGhostBegin, m_uiElementPreGhostEnd);
+    collect(m_uiElementPostGhostBegin, m_uiElementPostGhostEnd);
+
+    for (unsigned int p = 0; p < npes; p++) {
+        m_uiWpxRecvCount[p] = (int)per[p].size();
+        m_uiWpxRecvEle.insert(m_uiWpxRecvEle.end(), per[p].begin(),
+                              per[p].end());
+    }
+    for (unsigned int p = 1; p < npes; p++)
+        m_uiWpxRecvOffset[p] =
+            m_uiWpxRecvOffset[p - 1] + m_uiWpxRecvCount[p - 1];
+
+    // tell each owner which of its elements we want
+    par::Mpi_Alltoall(m_uiWpxRecvCount.data(), m_uiWpxSendCount.data(), 1,
+                      m_uiCommActive);
+    for (unsigned int p = 1; p < npes; p++)
+        m_uiWpxSendOffset[p] =
+            m_uiWpxSendOffset[p - 1] + m_uiWpxSendCount[p - 1];
+
+    const size_t nReq =
+        (size_t)m_uiWpxSendOffset[npes - 1] + m_uiWpxSendCount[npes - 1];
+    std::vector<ot::TreeNode> reqOut(m_uiWpxRecvEle.size());
+    for (size_t i = 0; i < m_uiWpxRecvEle.size(); i++)
+        reqOut[i] = m_uiAllElements[m_uiWpxRecvEle[i]];
+    std::vector<ot::TreeNode> reqIn(nReq);
+
+    par::Mpi_Alltoallv(reqOut.empty() ? nullptr : reqOut.data(),
+                       m_uiWpxRecvCount.data(), m_uiWpxRecvOffset.data(),
+                       reqIn.empty() ? nullptr : reqIn.data(),
+                       m_uiWpxSendCount.data(), m_uiWpxSendOffset.data(),
+                       m_uiCommActive);
+
+    // resolve each request against our own local elements
+    m_uiWpxSendEle.resize(nReq);
+    const std::vector<ot::TreeNode>::const_iterator lb =
+        m_uiAllElements.begin() + m_uiElementLocalBegin;
+    const std::vector<ot::TreeNode>::const_iterator le =
+        m_uiAllElements.begin() + m_uiElementLocalEnd;
+    for (size_t i = 0; i < nReq; i++) {
+        std::vector<ot::TreeNode>::const_iterator it =
+            std::lower_bound(lb, le, reqIn[i]);
+        if (it == le || !(*it == reqIn[i])) {
+            std::cerr << "[wide prolongation] rank " << m_uiActiveRank
+                      << " was asked for an element it does not own; the "
+                         "splitter-based owner resolution is inconsistent "
+                         "with the active communicator."
+                      << std::endl;
+            MPI_Abort(m_uiCommActive, 1);
+        }
+        m_uiWpxSendEle[i] = (unsigned int)(it - m_uiAllElements.begin());
+    }
+}
+
+}  // namespace ot

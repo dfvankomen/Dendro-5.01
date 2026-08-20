@@ -11395,6 +11395,16 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
         double* const im2_p = im2_pre.data();
 #pragma omp for schedule(dynamic, 16)
         for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+#ifdef DENDRO_WIDE_PROLONGATION
+            // Ghost slices come from the rank that owns them: a ghost's
+            // hanging-face reconstruction probes a neighbour's neighbours,
+            // i.e. round 2, which this rank does not have. Locals are ALL
+            // materialised -- no e2b or block filter -- because another rank
+            // may request any of them and exchangeWideProlongDG packs
+            // straight out of this array.
+            if (ele < m_uiElementLocalBegin || ele >= m_uiElementLocalEnd)
+                continue;
+#else
             if (m_e2b_unzip_counts[ele] == 0) continue;
             if (blk_filter >= 0) {
                 // Overlap path: precompute DG only for elements that feed a
@@ -11413,12 +11423,17 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                     }
                 if (!feeds) continue;
             }
+#endif
             T* base = all_dg.data() + (std::size_t)ele * dof * dgSz;
             for (unsigned int v = 0; v < dof; v++)
                 this->getElementNodalValues(in + v * cgSz, base + v * dgSz, ele,
                                             false, im1_p, im2_p);
         }
     }
+#ifdef DENDRO_WIDE_PROLONGATION
+    this->exchangeWideProlongDG(in, cgSz, all_dg.data(),
+                                (size_t)dof * dgSz, dof, dgSz);
+#endif
 
 #pragma omp parallel
     {
@@ -11582,6 +11597,32 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 
     T* dgWVec = dg_ele_vec.data();
 
+#ifdef DENDRO_WIDE_PROLONGATION
+    // Same contract as the OMP path above: a whole-mesh DG array whose ghost
+    // slices are supplied by the ranks that own those elements. Two reasons it
+    // has to be whole-mesh here rather than one element at a time: a ghost
+    // element's hanging faces cannot be reconstructed on this rank (they need
+    // round 2), and prolongateChildNodes must be handed a DG array or it falls
+    // back to gathering through CG, which re-materialises neighbour elements --
+    // ghosts included -- and hits the same wall.
+    std::vector<T> all_dg_s((std::size_t)m_uiNumTotalElements * dof * dgSz);
+    {
+        std::vector<double> im1_s(nPe), im2_s(nPe);
+        for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd;
+             e++) {
+            // Deliberately no m_e2b_unzip_counts filter: a local element
+            // that feeds no block of ours may still be requested by another
+            // rank, and the exchange packs straight out of this array.
+            T* base = all_dg_s.data() + (std::size_t)e * dof * dgSz;
+            for (unsigned int v = 0; v < dof; v++)
+                this->getElementNodalValues(in + v * cgSz, base + v * dgSz, e,
+                                            false, im1_s.data(), im2_s.data());
+        }
+        this->exchangeWideProlongDG(in, cgSz, all_dg_s.data(),
+                                    (std::size_t)dof * dgSz, dof, dgSz);
+    }
+#endif
+
     std::vector<T> p2cI_all;
     p2cI_all.resize(NUM_CHILDREN * dof * nPe);
     bool p2c_interp_valid[NUM_CHILDREN];
@@ -11596,9 +11637,13 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
             p2c_interp_valid[ii] = false;
 
         // get the elemental_local(dg) values
+#ifdef DENDRO_WIDE_PROLONGATION
+        dgWVec = all_dg_s.data() + (std::size_t)ele * dof * dgSz;
+#else
         for (unsigned int v = 0; v < dof; v++)
             this->getElementNodalValues(in + v * cgSz, dgWVec + v * dgSz, ele,
                                         false);
+#endif
 
         for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++) {
             const unsigned int e2b_offset = m_e2b_unzip_offset[ele];
@@ -11829,7 +11874,12 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                         this->prolongateChildNodes(
                             in, cgSz, dgWVec, dgSz, ele, cnum, dof,
                             p2cI_all.data() + cnum * dof * nPe, nullptr,
-                            nullptr);
+                            nullptr
+#ifdef DENDRO_WIDE_PROLONGATION
+                            ,
+                            all_dg_s.data(), (std::size_t)dof * dgSz
+#endif
+                        );
 
                         p2c_interp_valid[cnum] = true;
                     }
@@ -11994,11 +12044,24 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
 #pragma omp for schedule(static)
             for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
                 if (m_e2b_unzip_counts[ele] == 0) continue;
+#ifdef DENDRO_WIDE_PROLONGATION
+                // see the note in unzip_scatter: ghost slices come from the
+                // owning rank, not from a local recompute
+                if (ele < m_uiElementLocalBegin || ele >= m_uiElementLocalEnd)
+                    continue;
+#endif
                 this->getElementNodalValues(
                     in_v, all_dg.data() + (std::size_t)ele * dgSz, ele, false,
                     pre_im1_t, pre_im2_t);
             }
 // implicit barrier at end of `omp for`
+#ifdef DENDRO_WIDE_PROLONGATION
+#pragma omp single
+            {
+                this->exchangeWideProlongDG(in_v, (size_t)0,
+                                            all_dg.data(), dgSz, 1u, dgSz);
+            }
+#endif
 
 // PARALLEL scatter — reuse the same logic as the OMP path in
 // unzip_scatter, but with dof=1 fixed.
@@ -12143,7 +12206,15 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
 
 template <typename T>
 void Mesh::unzip(const T* in, T* out, unsigned int dof, int blk_filter) {
+#ifdef DENDRO_WIDE_PROLONGATION
+    // Do NOT skip a rank that happens to own no blocks: unzip_scatter now
+    // performs a collective DG ghost exchange, and dropping out here would
+    // hang the ranks that do have blocks. With no blocks every
+    // m_e2b_unzip_counts entry is zero, so the rest of the routine is a no-op.
+    if (!m_uiIsActive) return;
+#else
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
+#endif
     this->unzip_scatter(in, out, dof, blk_filter);
 }
 
@@ -12755,7 +12826,8 @@ inline void wpxLogFallbackOnce(const char *what, unsigned int got,
  */
 inline unsigned int Mesh::wpxWalk(unsigned int ele, const unsigned int *dirs,
                                   unsigned int steps, bool &bad_ghost,
-                                  unsigned int levelMask) const {
+                                  unsigned int levelMask,
+                                  bool dgGhostOk) const {
     unsigned int cur         = ele;
     const unsigned int lev   = m_uiAllElements[ele].getLevel();
 
@@ -12778,7 +12850,7 @@ inline unsigned int Mesh::wpxWalk(unsigned int ele, const unsigned int *dirs,
                 return LOOK_UP_TABLE_DEFAULT;  // >1 level apart: not 2:1
             if (!(levelMask & bit)) return LOOK_UP_TABLE_DEFAULT;
         }
-        if (!m_uiIsNodalMapValid[nxt]) {
+        if (!m_uiIsNodalMapValid[nxt] && !dgGhostOk) {
             bad_ghost = true;
             return LOOK_UP_TABLE_DEFAULT;
         }
@@ -12790,7 +12862,8 @@ inline unsigned int Mesh::wpxWalk(unsigned int ele, const unsigned int *dirs,
 /** Element at signed element offset (ox,oy,oz) from `ele`, or default. */
 inline unsigned int Mesh::wpxNeighbour(unsigned int ele, int ox, int oy,
                                        int oz, bool &bad_ghost,
-                                       unsigned int levelMask) const {
+                                       unsigned int levelMask,
+                                       bool dgGhostOk) const {
     unsigned int dirs[3];
     unsigned int n = 0;
     if (ox < 0)
@@ -12806,14 +12879,15 @@ inline unsigned int Mesh::wpxNeighbour(unsigned int ele, int ox, int oy,
     else if (oz > 0)
         dirs[n++] = OCT_DIR_FRONT;
 
-    return wpxWalk(ele, dirs, n, bad_ghost, levelMask);
+    return wpxWalk(ele, dirs, n, bad_ghost, levelMask, dgGhostOk);
 }
 
 inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                                                unsigned int want_ext,
                                                unsigned int ext[6],
                                                unsigned int levelMask,
-                                               unsigned char *mode) const {
+                                               unsigned char *mode,
+                                               bool dgGhostOk) const {
     for (unsigned int d = 0; d < 6; d++) {
         ext[d] = 0;
         if (mode) mode[d] = WPX_EXT_NONE;
@@ -12833,7 +12907,8 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
     for (unsigned int d = 0; d < 6; d++) {
         bool bg              = false;
         const unsigned int q =
-            wpxNeighbour(ele, off[d][0], off[d][1], off[d][2], bg, levelMask);
+            wpxNeighbour(ele, off[d][0], off[d][1], off[d][2], bg, levelMask,
+                         dgGhostOk);
         if (q != LOOK_UP_TABLE_DEFAULT) {
             ext[d] = cap;
             if (mode)
@@ -12867,7 +12942,7 @@ inline unsigned int Mesh::probeCoarseExtension(unsigned int ele,
                     if ((ox < 0 && !ext[0]) || (ox > 0 && !ext[1])) continue;
                     bool bg = false;
                     const unsigned int q =
-                        wpxNeighbour(ele, ox, oy, oz, bg, levelMask);
+                        wpxNeighbour(ele, ox, oy, oz, bg, levelMask, dgGhostOk);
 
                     bool ok_here = (q != LOOK_UP_TABLE_DEFAULT) &&
                                    wpxOffsetOk(ele, ox, oy, oz, ext, q);
@@ -12996,7 +13071,8 @@ inline bool Mesh::wpxOffsetOk(unsigned int ele, int ox, int oy, int oz,
 template <typename T, typename FetchFn>
 void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                                     T *out, T *eleScratch, FetchFn fetch,
-                                    const unsigned char *mode) const {
+                                    const unsigned char *mode,
+                                    bool dgGhostOk) const {
     const unsigned int p   = m_uiElementOrder;
     const unsigned int nrp = p + 1;
 
@@ -13047,7 +13123,7 @@ void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                     // Harmless when ext is zero for this direction, since the
                     // offset is skipped above.
                     wpxNeighbour(ele, ox, oy, oz, bg,
-                                 WPX_LVL_SAME | WPX_LVL_FINER);
+                                 WPX_LVL_SAME | WPX_LVL_FINER, dgGhostOk);
                 if (e == LOOK_UP_TABLE_DEFAULT) continue;
                 if (!wpxOffsetOk(ele, ox, oy, oz, ext, e)) continue;
 
@@ -13193,6 +13269,64 @@ void Mesh::gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
 }
 
 template <typename T>
+void Mesh::exchangeWideProlongDG(const T *cg, size_t cgSz, T *allDg,
+                                 size_t eleStride, unsigned int dof,
+                                 size_t dgSz) const {
+    this->buildWideProlongGhostMap();
+    if (!m_uiIsActive || m_uiActiveNpes == 1) return;
+
+    const unsigned int npes = m_uiActiveNpes;
+    const size_t nPe        = m_uiNpE;
+    const size_t pay        = (size_t)dof * nPe;  // doubles per element
+
+    std::vector<int> sc(npes), so(npes), rc(npes), ro(npes);
+    for (unsigned int p = 0; p < npes; p++) {
+        sc[p] = (int)(m_uiWpxSendCount[p] * pay);
+        rc[p] = (int)(m_uiWpxRecvCount[p] * pay);
+    }
+    so[0] = 0;
+    ro[0] = 0;
+    for (unsigned int p = 1; p < npes; p++) {
+        so[p] = so[p - 1] + sc[p - 1];
+        ro[p] = ro[p - 1] + rc[p - 1];
+    }
+
+    std::vector<T> sbuf((size_t)m_uiWpxSendEle.size() * pay);
+    std::vector<T> rbuf((size_t)m_uiWpxRecvEle.size() * pay);
+
+    // Pack on the owner, where the element is LOCAL and so the wide
+    // hanging-face reconstruction has everything it needs -- that is why the
+    // exchange terminates rather than needing round 3.
+    //
+    // Copy out of allDg rather than recomputing: the caller has already run
+    // getElementNodalValues over every local element, and that call is the
+    // expensive one (it does the wide hanging-face reconstruction). Packing
+    // by recomputation doubled the work for nothing.
+    (void)cg;
+    (void)cgSz;
+#pragma omp parallel for schedule(static)
+    for (long i = 0; i < (long)m_uiWpxSendEle.size(); i++) {
+        T *dst       = sbuf.data() + (size_t)i * pay;
+        const T *src = allDg + (size_t)m_uiWpxSendEle[i] * eleStride;
+        for (unsigned int v = 0; v < dof; v++)
+            for (size_t k = 0; k < nPe; k++)
+                dst[(size_t)v * nPe + k] = src[(size_t)v * dgSz + k];
+    }
+
+    par::Mpi_Alltoallv(sbuf.empty() ? nullptr : sbuf.data(), sc.data(),
+                       so.data(), rbuf.empty() ? nullptr : rbuf.data(),
+                       rc.data(), ro.data(), m_uiCommActive);
+
+    for (size_t i = 0; i < m_uiWpxRecvEle.size(); i++) {
+        const T *src = rbuf.data() + i * pay;
+        T *dst       = allDg + (size_t)m_uiWpxRecvEle[i] * eleStride;
+        for (unsigned int v = 0; v < dof; v++)
+            for (size_t k = 0; k < nPe; k++)
+                dst[(size_t)v * dgSz + k] = src[(size_t)v * nPe + k];
+    }
+}
+
+template <typename T>
 void Mesh::gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
                                      const unsigned int ext[6], T *out,
                                      const unsigned char *mode) const {
@@ -13211,7 +13345,7 @@ void Mesh::gatherExtendedCoarseNodesDG(const T *dgVec, size_t ele_stride,
                                     return dgVec + (size_t)e * ele_stride +
                                            var_offset;
                                 },
-                                mode);
+                                mode, /*dgGhostOk=*/true);
 }
 
 template <typename T>
@@ -13284,8 +13418,11 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
 
     unsigned int ext[6];
     unsigned char emode[6];
-    const unsigned int st =
-        this->probeCoarseExtension(ele, want, ext, WPX_LVL_DEFAULT, emode);
+    // With a whole-mesh DG array in hand, an element without a valid nodal
+    // map is still readable -- its slice came from the rank that owns it.
+    const bool dgGhostOk = (allDg != nullptr);
+    const unsigned int st = this->probeCoarseExtension(
+        ele, want, ext, WPX_LVL_DEFAULT, emode, dgGhostOk);
 
     if (st & WPX_CLIPPED_GHOST) {
         // The stencil would have reached a round-2 ghost, so whether it is
@@ -13613,11 +13750,19 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
     const unsigned int st =
         this->probeCoarseExtension(owner, want, ext, WPX_LVL_SAME);
     if (st & WPX_CLIPPED_GHOST) {
-        std::cerr << "[wide prolongation] hanging face of element "
-                  << elementID
-                  << " needs a round-2 ghost neighbour; the nodal ghost layer "
-                     "only covers round 1. Rebuild with "
-                     "DENDRO_WIDE_PROLONGATION=OFF or run on fewer ranks."
+        std::cerr << "[wide prolongation] rank " << m_uiActiveRank
+                  << ": hanging face of element " << elementID << " ("
+                  << ((elementID >= m_uiElementLocalBegin &&
+                       elementID < m_uiElementLocalEnd)
+                          ? "LOCAL"
+                          : "GHOST")
+                  << ", face owner " << owner << " "
+                  << ((owner >= m_uiElementLocalBegin &&
+                       owner < m_uiElementLocalEnd)
+                          ? "LOCAL"
+                          : "GHOST")
+                  << ") needs a round-2 ghost neighbour; the nodal ghost "
+                     "layer only covers round 1."
                   << std::endl;
         MPI_Abort(m_uiCommGlobal, 1);
     }

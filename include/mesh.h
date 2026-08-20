@@ -247,6 +247,31 @@ class Mesh {
     /** dg to cg mapping*/
     std::vector<unsigned int> m_uiDG2CG;
 
+    /**
+     * Wide-prolongation ghost DG halo.
+     *
+     * The wide stencil never needs round-2 data for a LOCAL element -- measured
+     * at np=1 vs np=2, every local element's achieved reach is identical and
+     * none report WPX_CLIPPED_GHOST. Every trip is on a GHOST element, because
+     * the unzip DG precompute runs getElementNodalValues over ghost elements
+     * too and their hanging-face reconstruction probes a neighbour's
+     * neighbours, which is round 2.
+     *
+     * Each of those ghost elements is LOCAL on exactly one rank, where the
+     * same computation succeeds. So rather than widen the ghost layer, receive
+     * the finished element-nodal values from the owner. That terminates (no
+     * round-3 recursion) and makes the result rank-independent by
+     * construction rather than by assertion.
+     *
+     * Built lazily and once; mutable so a const unzip can populate it. All
+     * active ranks must reach it together -- it is collective.
+     */
+    mutable std::vector<unsigned int> m_uiWpxRecvEle;  // ghost ids I fill
+    mutable std::vector<int> m_uiWpxRecvCount, m_uiWpxRecvOffset;
+    mutable std::vector<unsigned int> m_uiWpxSendEle;  // local ids I supply
+    mutable std::vector<int> m_uiWpxSendCount, m_uiWpxSendOffset;
+    mutable bool m_uiWpxGhostMapBuilt = false;
+
     /** splitter element for each processor. */
     std::vector<ot::TreeNode>
         m_uiLocalSplitterElements;  // used to spit the keys to the correct
@@ -1566,6 +1591,19 @@ class Mesh {
         return m_uiGhostElementRound1Index;
     }
 
+    /**
+     * @brief Does element e have allocated nodal (CG) storage?
+     *
+     * False for a round-2 ghost: the element octant is present but
+     * computeNodalScatterMap4 only builds e2n out to round 1, so reading its
+     * nodal values is invalid. The wide prolongation stencil refuses rather
+     * than degrade when it would touch one -- see WPX_CLIPPED_GHOST.
+     */
+    inline bool isNodalMapValid(unsigned int e) const {
+        return (e < m_uiIsNodalMapValid.size()) ? (bool)m_uiIsNodalMapValid[e]
+                                                : false;
+    }
+
     /**@brief: set the min and max bounds to the domain. */
     void setDomainBounds(Point dmin, Point dmax) {
         m_uiDMinPt = Point(dmin.x(), dmin.y(), dmin.z());
@@ -2150,14 +2188,23 @@ class Mesh {
      * first then y then x, so the outcome is deterministic.
      */
     /** Walk `steps` face hops, requiring usable same-level coarse elements. */
+    /**
+     * @param dgGhostOk the caller will read values from a whole-mesh DG array
+     *                  whose ghost slices were supplied by their owners, so an
+     *                  element without a valid nodal map is still readable.
+     *                  Only pass true when that array actually exists -- the
+     *                  CG-gather paths re-materialise elements through
+     *                  getElementNodalValues and cannot use it.
+     */
     unsigned int wpxWalk(unsigned int ele, const unsigned int *dirs,
                          unsigned int steps, bool &bad_ghost,
-                         unsigned int levelMask = 1u) const;
+                         unsigned int levelMask = 1u,
+                         bool dgGhostOk         = false) const;
 
     /** Element at signed element offset (ox,oy,oz) from `ele`. */
     unsigned int wpxNeighbour(unsigned int ele, int ox, int oy, int oz,
-                              bool &bad_ghost,
-                              unsigned int levelMask = 1u) const;
+                              bool &bad_ghost, unsigned int levelMask = 1u,
+                              bool dgGhostOk = false) const;
 
     /**
      * @brief The finer sibling covering the other half of `ele`'s extent
@@ -2302,7 +2349,7 @@ class Mesh {
     unsigned int probeCoarseExtension(
         unsigned int ele, unsigned int want_ext, unsigned int ext[6],
         unsigned int levelMask = WPX_LVL_DEFAULT,
-        unsigned char *mode = nullptr) const;
+        unsigned char *mode = nullptr, bool dgGhostOk = false) const;
 
     /**
      * @brief Gather the extended coarse nodal cube implied by a probe.
@@ -2321,7 +2368,8 @@ class Mesh {
     template <typename T, typename FetchFn>
     void gatherExtendedCoarseImpl(unsigned int ele, const unsigned int ext[6],
                                   T *out, T *eleScratch, FetchFn fetch,
-                                  const unsigned char *mode = nullptr) const;
+                                  const unsigned char *mode = nullptr,
+                                  bool dgGhostOk            = false) const;
 
     template <typename T>
     void gatherExtendedCoarseNodes(const T *dgVec, unsigned int ele,
@@ -2353,6 +2401,32 @@ class Mesh {
                               unsigned int dof, T *out, double *im1,
                               double *im2, const T *allDg = nullptr,
                               size_t allDgEleStride = 0) const;
+
+    /**
+     * @brief Build the map that lets a rank receive finished element-nodal
+     * values for its ghost elements from the ranks that own them.
+     *
+     * Collective on the active comm. Idempotent. Owner resolution goes through
+     * m_uiLocalSplitterElements (built inside buildE2EMap, i.e. after the
+     * comm switch, so it matches m_uiCommActive). A request that the receiving
+     * rank cannot resolve locally is a hard error, not a silent skip.
+     */
+    void buildWideProlongGhostMap() const;
+
+    /**
+     * @brief Fill the ghost slices of a whole-mesh DG array from their owners.
+     *
+     * @param cg        CG vector, already ghost-exchanged.
+     * @param cgSz      per-dof stride of cg.
+     * @param allDg     whole-mesh DG array, indexed element-major.
+     * @param eleStride per-element stride of allDg (dof * dgSz).
+     * @param dof       number of variables.
+     * @param dgSz      per-dof stride within an element slice.
+     */
+    template <typename T>
+    void exchangeWideProlongDG(const T *cg, size_t cgSz, T *allDg,
+                               size_t eleStride, unsigned int dof,
+                               size_t dgSz) const;
 
     template <typename T>
     void gatherExtendedCoarseNodesCG(const T *cgVec, unsigned int ele,
