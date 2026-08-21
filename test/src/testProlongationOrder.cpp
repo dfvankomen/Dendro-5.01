@@ -65,7 +65,11 @@ namespace {
 
 using real = __float128;
 
-constexpr unsigned ELE_ORDER = 6;
+/** Element order under test. Runtime, not constexpr, so one binary can sweep
+ *  p: `PROLONG_ELE_ORDER=4`. The mesh-level goldens below were taken at p=6
+ *  and are guarded on it; the operator-level tests are parameterised by p and
+ *  run at any order. */
+unsigned ELE_ORDER = 6;
 
 #ifdef DENDRO_WIDE_PROLONGATION
 constexpr bool WPX_COMPILED_IN = true;
@@ -1294,7 +1298,9 @@ TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
     std::printf(
         "straddle-mode gather: %ld straddle directions, max err = %.3e\n",
         str_dirs, str_worst);
-    CHECK(str_dirs > 0);
+    // Below p=6 a finer neighbour is too narrow to decimate from at all
+    // (see the guard in wpxWalk), so there is nothing to exercise.
+    if (ELE_ORDER >= 6u) CHECK(str_dirs > 0);
     CHECK(str_worst < 1e-6);
 
     // The check above fills the DG array analytically, so it validates the
@@ -1378,7 +1384,7 @@ TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
     CHECK(cg_worst > 1e-10);
 
     // the decimation path must actually be exercised, or this proves nothing
-    CHECK(with_finer > 0);
+    if (ELE_ORDER >= 6u) CHECK(with_finer > 0);
     // linear field is exact on every level, so this is pure index checking
     CHECK(worst < 1e-6);
 
@@ -2096,7 +2102,7 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
         // (coordinate, block level) pad points.
         const bool golden_cfg =
             punc && m_uiMaxDepth == 9u && std::fabs(wt - 1e-3) < 1e-12 &&
-            !poly && !poly3 && !trig;
+            !poly && !poly3 && !trig && ELE_ORDER == 6u;
         if (golden_cfg) {
             CHECK(gcount == 452592);
 #ifdef DENDRO_WIDE_PROLONGATION
@@ -2291,6 +2297,18 @@ TEST_CASE("hamiltonian constraint across 2:1 interfaces") {
     std::vector<double> uz(mesh->getDegOfFreedomUnZip(), 0.0);
     mesh->performGhostExchange(cg);
     mesh->unzip(cg.data(), uz.data(), 1);
+
+    // The radius-3 stencils below assume a pad width of 3, which is p/2 and
+    // so holds only at p >= 6. At p=4 the pad is 2 and every stencil reads
+    // off the end of its block.
+    if (ELE_ORDER < 6u) {
+        std::printf(
+            "\n=== hamiltonian constraint: skipped at ele order %u "
+            "(needs pad width >= 3, i.e. p >= 6) ===\n",
+            ELE_ORDER);
+        delete mesh;
+        return;
+    }
 
     // 6th-order central stencils, radius 3 -- exactly the pad width, so every
     // block-interior point's stencil is legal and the ones within 3 nodes of a
@@ -3100,14 +3118,15 @@ TEST_CASE("the wavelet criterion can be held on the narrow operator") {
         "compiled with DENDRO_WIDE_PROLONGATION: %s\n",
         m_uiMaxDepth, fp_on, fp_off, WPX_COMPILED_IN ? "yes" : "no");
 
-    if (uzdof != WPX_FINGERPRINT_UNZIP_DOF) {
+    if (uzdof != WPX_FINGERPRINT_UNZIP_DOF || ELE_ORDER != 6u) {
         // A different rank count blocks the mesh differently, so the array is
         // not the same set of points and neither golden applies. Say so
         // rather than checking something that only looks like the same thing.
         std::printf(
-            "  unzip dof %lld != %lld, so this rank count blocks the mesh "
-            "differently; goldens not applicable\n",
-            (long long)uzdof, (long long)WPX_FINGERPRINT_UNZIP_DOF);
+            "  unzip dof %lld vs golden %lld, ele order %u vs golden 6: "
+            "goldens not applicable to this configuration\n",
+            (long long)uzdof, (long long)WPX_FINGERPRINT_UNZIP_DOF,
+            ELE_ORDER);
         delete mesh;
         return;
     }
@@ -3140,6 +3159,8 @@ int main(int argc, char **argv) {
     {
         const char *md = std::getenv("PROLONG_MAXDEPTH");
         m_uiMaxDepth   = md ? (unsigned)std::atoi(md) : 8u;
+        const char *eo = std::getenv("PROLONG_ELE_ORDER");
+        if (eo) ELE_ORDER = (unsigned)std::atoi(eo);
     }
     _InitializeHcurve(m_uiDim);
 
