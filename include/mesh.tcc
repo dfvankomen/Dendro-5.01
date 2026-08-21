@@ -13666,6 +13666,23 @@ inline void wpxAxisCoords(unsigned int p, unsigned int lo, unsigned char mlo,
 }
 
 template <typename T>
+void Mesh::prolongateChildNodesNarrow(const T *dgEle, size_t dgSz,
+                                      unsigned int cnum, unsigned int dof,
+                                      T *out, double *im1, double *im2) const {
+    // A null scratch pair means the caller wants RefElement's shared
+    // im_vec1/im_vec2, as the serial path did before it routed through here.
+    for (unsigned int v = 0; v < dof; v++) {
+        if (im1 != nullptr && im2 != nullptr)
+            this->parent2ChildInterpolation(dgEle + v * dgSz,
+                                            out + v * m_uiNpE, cnum, m_uiDim,
+                                            im1, im2);
+        else
+            this->parent2ChildInterpolation(dgEle + v * dgSz,
+                                            out + v * m_uiNpE, cnum, m_uiDim);
+    }
+}
+
+template <typename T>
 void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                                 size_t dgSz, unsigned int ele,
                                 unsigned int cnum, unsigned int dof, T *out,
@@ -13673,6 +13690,10 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                                 size_t allDgEleStride,
                                 unsigned int lvlMask) const {
 #ifdef DENDRO_WIDE_PROLONGATION
+    if (!m_uiWpxRuntimeEnabled) {
+        this->prolongateChildNodesNarrow(dgEle, dgSz, cnum, dof, out, im1, im2);
+        return;
+    }
     const unsigned int nrp   = m_uiElementOrder + 1;
     const unsigned int width = dendro::wideprolong::stencil_width(
         m_uiElementOrder);
@@ -13975,17 +13996,7 @@ if (anyGraded && std::getenv("DENDRO_WPX_DEBUG_GRADED")) {
     (void)cgSz;
 #endif
 
-    // A null scratch pair means the caller wants RefElement's shared
-    // im_vec1/im_vec2, as the serial path did before it routed through here.
-    for (unsigned int v = 0; v < dof; v++) {
-        if (im1 != nullptr && im2 != nullptr)
-            this->parent2ChildInterpolation(dgEle + v * dgSz,
-                                            out + v * m_uiNpE, cnum, m_uiDim,
-                                            im1, im2);
-        else
-            this->parent2ChildInterpolation(dgEle + v * dgSz,
-                                            out + v * m_uiNpE, cnum, m_uiDim);
-    }
+    this->prolongateChildNodesNarrow(dgEle, dgSz, cnum, dof, out, im1, im2);
 }
 
 /** Diagnostic counters for the wide edge path. */
@@ -14068,6 +14079,9 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
     (void)im1; (void)im2;
     return false;
 #else
+    // Checked before the counter so the call counts report actual wide work.
+    if (!m_uiWpxRuntimeEnabled) return false;
+
     const unsigned int p   = m_uiElementOrder;
     const unsigned int nrp = p + 1;
 
@@ -14179,6 +14193,9 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
     (void)im1; (void)im2;
     return false;
 #else
+    // Checked before the counter so the call counts report actual wide work.
+    if (!m_uiWpxRuntimeEnabled) return false;
+
     const unsigned int p   = m_uiElementOrder;
     const unsigned int nrp = p + 1;
 

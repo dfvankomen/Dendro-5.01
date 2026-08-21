@@ -79,6 +79,8 @@ option(DENDRO_WIDE_PROLONGATION_COARSER
   "Extend the wide stencil into COARSER neighbours: take their nodes at 2H (graded), transverse values from their prolongated child" OFF)
 option(DENDRO_WIDE_PROLONGATION_DECIMATE
   "Extend into finer neighbours by decimating them onto the coarse lattice, which keeps one spacing per axis and so admits mixed-level partners" OFF)
+option(DENDRO_WIDE_PROLONGATION_WAVELET
+  "Let the wavelet refinement criterion see wide-prolongated unzip output. OFF keeps the criterion on the narrow operator, so the MESH does not depend on DENDRO_WIDE_PROLONGATION" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "Allow MPI to be aware of CUDA support" OFF)
 # Default ON: matrix-form/compact derivs read the full block including the
 # never-filled boundary-ghost padding, so un-zeroed alloc -> NaN. Hybrid-OMP
@@ -320,6 +322,7 @@ dendro_add_def(DENDRO_WIDE_PROLONGATION DENDRO_WIDE_PROLONGATION)
 dendro_add_def(DENDRO_WIDE_PROLONGATION_FINER DENDRO_WIDE_PROLONGATION_FINER)
 dendro_add_def(DENDRO_WIDE_PROLONGATION_DECIMATE DENDRO_WIDE_PROLONGATION_DECIMATE)
 dendro_add_def(DENDRO_WIDE_PROLONGATION_COARSER DENDRO_WIDE_PROLONGATION_COARSER)
+dendro_add_def(DENDRO_WIDE_PROLONGATION_WAVELET DENDRO_WIDE_PROLONGATION_WAVELET)
 if(DEFINED DENDRO_WIDE_PROLONGATION_ITERS)
   target_compile_definitions(dendro_config INTERFACE
     DENDRO_WIDE_PROLONGATION_ITERS=${DENDRO_WIDE_PROLONGATION_ITERS})
@@ -331,10 +334,20 @@ if(DENDRO_WIDE_PROLONGATION)
     "element-nodal values are fetched from the ranks that own them, so the "
     "result is partition-independent (bit-identical np = 1, 2, 4, 8) on a "
     "single-puncture mesh -- but a BINARY mesh still aborts under MPI, see the "
-    "warning at Mesh::m_uiWpxRecvEle. np=1 is fine. Costs ~2-3x on unzip. The "
-    "wavelet "
-    "criterion is NOT affected: it calls RefElement::I3D_Parent2Child, which "
-    "this side-channel operator leaves alone, so the mesh is unchanged.")
+    "warning at Mesh::m_uiWpxRecvEle. np=1 is fine. Costs ~2-3x on unzip.")
+  if(DENDRO_WIDE_PROLONGATION_WAVELET)
+    message(STATUS
+      "DENDRO_WIDE_PROLONGATION_WAVELET: the wavelet refinement criterion "
+      "reads wide-prolongated unzip output, so THE MESH DEPENDS ON THE FLAG "
+      "and an OFF/ON comparison compares two different grids. Measured at "
+      "np=1 on a q1 binary: initial-grid trajectory 3452 -> 2640 narrow vs "
+      "3452 -> 2745 -> 3410 wide.")
+  else()
+    message(STATUS
+      "DENDRO_WIDE_PROLONGATION_WAVELET=OFF: the refinement criterion is held "
+      "on the narrow operator, so the mesh is identical to a "
+      "DENDRO_WIDE_PROLONGATION=OFF build and OFF/ON compares like with like.")
+  endif()
 endif()
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 

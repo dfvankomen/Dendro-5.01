@@ -317,6 +317,29 @@ class Mesh {
     mutable bool m_uiWpxGhostMapBuilt = false;
 
     /**
+     * Runtime kill-switch for the wide stencil, honoured only in a build that
+     * compiled it in.
+     *
+     * The wavelet refinement criterion runs on unzipped data (BSSNCtx feeds
+     * the array straight from Mesh::unzip into isReMeshWAMR), so widening the
+     * prolongation changes which elements get refined. Measured at np=1 on a
+     * q1 binary: the initial-grid trajectory goes 3452 -> 2640 narrow and
+     * 3452 -> 2745 -> 3410 wide. A single-puncture mesh happens to be
+     * unaffected, which is why an earlier survey concluded -- wrongly -- that
+     * the operator could not reach the mesh at all.
+     *
+     * With this off the widening funnels fall back to the narrow operator, so
+     * the VALUES match a DENDRO_WIDE_PROLONGATION=OFF build bit-for-bit. The
+     * unzip STRUCTURE does not change: locals are still all materialised and
+     * the ghost DG exchange still runs, because both are collective and
+     * skipping them per-call would deadlock. Toggling therefore costs the wide
+     * path's communication without buying its accuracy -- fine for the
+     * criterion, which is a small fraction of unzips, and not a mode to
+     * evolve in.
+     */
+    bool m_uiWpxRuntimeEnabled = true;
+
+    /**
      * Overlap state for the ghost DG exchange.
      *
      * Buffers are raw bytes so one pair serves any value type.
@@ -2539,13 +2562,20 @@ class Mesh {
     /** As above, sourcing from a CG vector by regenerating each contributing
      *  element's nodal values. Needed where only one element's DG values are
      *  materialised at a time. */
+    /** The element-local degree-p operator: today's parent2ChildInterpolation,
+     *  per dof. A null scratch pair means use RefElement's shared im_vec1/2. */
+    template <typename T>
+    void prolongateChildNodesNarrow(const T *dgEle, size_t dgSz,
+                                    unsigned int cnum, unsigned int dof, T *out,
+                                    double *im1, double *im2) const;
+
     /**
      * @brief Fill one child's nodes for every dof from coarse element `ele`,
      *        using the wide stencil when DENDRO_WIDE_PROLONGATION is on and
      *        the neighbours it needs exist.
      *
-     * With the flag off this is exactly the existing
-     * parent2ChildInterpolation call and no extra work runs.
+     * With the flag off -- or with the runtime toggle off -- this is exactly
+     * the existing parent2ChildInterpolation call and no extra work runs.
      */
     template <typename T>
     void prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
@@ -2650,6 +2680,29 @@ class Mesh {
      * the DENDRO_UNZIP_OVERLAP comm/compute-overlap path to unzip interior
      * (ghost-independent) blocks while the ghost exchange is in flight.
      */
+    /**
+     * @brief Is the wide prolongation stencil active right now?
+     *
+     * Always false in a build without DENDRO_WIDE_PROLONGATION.
+     */
+    inline bool isWideProlongEnabled() const {
+#ifdef DENDRO_WIDE_PROLONGATION
+        return m_uiWpxRuntimeEnabled;
+#else
+        return false;
+#endif
+    }
+
+    /**
+     * @brief Turn the wide stencil off (or back on) for subsequent unzips.
+     *
+     * Prefer WideProlongNarrowScope over calling this directly. All ranks must
+     * agree -- the setting decides values, not structure, so a rank that
+     * disagrees produces a partition-dependent answer rather than a hang.
+     * See m_uiWpxRuntimeEnabled for what it does and does not change.
+     */
+    inline void setWideProlongEnabled(bool v) { m_uiWpxRuntimeEnabled = v; }
+
     template <typename T>
     void unzip(const T *in, T *out, unsigned int dof = 1, int blk_filter = -1);
 
@@ -3336,6 +3389,42 @@ class Mesh {
      */
     void blkUnzipElementIDs(unsigned int blk,
                             std::vector<unsigned int> &eid) const;
+};
+
+/**
+ * @brief Hold the wide prolongation stencil off for the lifetime of the scope.
+ *
+ * Wrap the unzip that feeds a refinement criterion. The criterion decides the
+ * MESH, and a mesh that depends on a build flag makes every OFF/ON comparison
+ * a comparison of two different grids -- see Mesh::m_uiWpxRuntimeEnabled for
+ * the measurement that forced this.
+ *
+ * No-op in a build without DENDRO_WIDE_PROLONGATION, and no-op with
+ * DENDRO_WIDE_PROLONGATION_WAVELET on, which is the opt-in that lets the
+ * criterion see the wide values. Restores the previous setting rather than
+ * unconditionally re-enabling, so nesting is safe.
+ */
+class WideProlongNarrowScope {
+   public:
+    explicit WideProlongNarrowScope(Mesh *m)
+#ifdef DENDRO_WIDE_PROLONGATION_WAVELET
+        : m_mesh(nullptr), m_prev(false) {
+        (void)m;
+    }
+#else
+        : m_mesh(m), m_prev(m ? m->isWideProlongEnabled() : false) {
+        if (m_mesh) m_mesh->setWideProlongEnabled(false);
+    }
+#endif
+    ~WideProlongNarrowScope() {
+        if (m_mesh) m_mesh->setWideProlongEnabled(m_prev);
+    }
+    WideProlongNarrowScope(const WideProlongNarrowScope &)            = delete;
+    WideProlongNarrowScope &operator=(const WideProlongNarrowScope &) = delete;
+
+   private:
+    Mesh *m_mesh;
+    bool m_prev;
 };
 
 template <>
