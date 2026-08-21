@@ -12945,8 +12945,17 @@ inline unsigned int Mesh::wpxWalk(unsigned int ele, const unsigned int *dirs,
             unsigned int bit;
             if (nl == lev)
                 bit = WPX_LVL_SAME;
-            else if (nl == lev + 1)
+            else if (nl == lev + 1) {
+                // A finer neighbour spans half our extent, so its p intervals
+                // cover p*H/2 -- exactly the 3H the stencil asks for at p=6,
+                // and less below that. gatherExtendedCoarseImpl's decimated
+                // mapax would then index from p-6 to +6 and walk off both
+                // ends of the element (measured: SIGSEGV at p=4). Refuse the
+                // direction instead; the operator degrades to same-level
+                // reach, which is correct, just narrower.
+                if (m_uiElementOrder < 6u) return LOOK_UP_TABLE_DEFAULT;
                 bit = WPX_LVL_FINER;
+            }
             else if (nl + 1 == lev)
                 bit = WPX_LVL_COARSER;
             else
