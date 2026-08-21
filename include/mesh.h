@@ -268,8 +268,7 @@ class Mesh {
      *
      * @warning INCOMPLETE. The survey behind this design ("every trip is on a
      * GHOST element, none on local") was measured on a single-puncture mesh
-     * and DOES NOT GENERALISE. On a q1 binary mesh at np=4 two further trips
-     * appear and still MPI_Abort:
+     * and DOES NOT GENERALISE. Two further trips appear and still MPI_Abort:
      *
      *   [wide prolongation] hanging edge of element 724 needs a round-2 ghost
      *   [wide prolongation] rank 1: hanging face of element 246 (LOCAL, face
@@ -284,8 +283,16 @@ class Mesh {
      * themselves feed, so the materialise/exchange order has a genuine
      * dependency to resolve. np=1 is unaffected.
      *
-     * Reproduce: `mpirun -np 4 bssnSolver q1.tinytest.par.toml` from
-     * dendrogr_dfvk with DENDRO_WIDE_PROLONGATION=ON.
+     * Reproduce in seconds, no solver needed:
+     *
+     *   mpirun -np 2 ./testProlongationOrder -tc="unzip pad error*"
+     *
+     * i.e. the suite's DEFAULT bump mesh at any np >= 2. It is NOT specific to
+     * binary meshes -- the puncture golden config (PROLONG_MESH=puncture,
+     * PROLONG_MAXDEPTH=9, PROLONG_WTOL=1e-3) passes at np = 1, 2, 4, 8, and
+     * that is the only config the "bit-identical across np" claim was ever
+     * measured on. Also reproduces as `mpirun -np 4 bssnSolver
+     * q1.tinytest.par.toml` from dendrogr_dfvk.
      *
      * @note One fix was attempted and REVERTED (2026-08-20). The idea: build
      * every local element twice -- pass 0 with narrow faces (round-1 data
