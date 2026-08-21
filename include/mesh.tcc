@@ -3046,8 +3046,8 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
 template <typename T>
 void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
                                  unsigned int elementID, bool isDGVec,
-                                 double* im1, double* im2,
-                                 bool allowWide) const {
+                                 double* im1, double* im2, bool allowWide,
+                                 const T* allDg, size_t allDgEleStride) const {
     if (!m_uiIsActive) return;
 
     // handles the element get nodal values if the vec is an element DG vector.
@@ -3111,7 +3111,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         if (!(allowWide &&
               this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_LEFT, cnum,
                                               &(*(faceInpOut.begin())), im1,
-                                              im2)))
+                                              im2, allDg, allDgEleStride)))
             this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
                                             &(*(faceInpOut.begin())), cnum, 2,
                                             im1, im2);
@@ -3155,7 +3155,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         if (!(allowWide &&
               this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_RIGHT, cnum,
                                               &(*(faceInpOut.begin())), im1,
-                                              im2)))
+                                              im2, allDg, allDgEleStride)))
             this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
                                             &(*(faceInpOut.begin())), cnum, 2,
                                             im1, im2);
@@ -3200,7 +3200,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         if (!(allowWide &&
               this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_DOWN, cnum,
                                               &(*(faceInpOut.begin())), im1,
-                                              im2)))
+                                              im2, allDg, allDgEleStride)))
             this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
                                             &(*(faceInpOut.begin())), cnum, 2,
                                             im1, im2);
@@ -3244,7 +3244,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         if (!(allowWide &&
               this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_UP, cnum,
                                               &(*(faceInpOut.begin())), im1,
-                                              im2)))
+                                              im2, allDg, allDgEleStride)))
             this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
                                             &(*(faceInpOut.begin())), cnum, 2,
                                             im1, im2);
@@ -3289,7 +3289,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         if (!(allowWide &&
               this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_BACK, cnum,
                                               &(*(faceInpOut.begin())), im1,
-                                              im2)))
+                                              im2, allDg, allDgEleStride)))
             this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
                                             &(*(faceInpOut.begin())), cnum, 2,
                                             im1, im2);
@@ -3333,7 +3333,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
         if (!(allowWide &&
               this->prolongateHangingFaceWide(vec, elementID, OCT_DIR_FRONT, cnum,
                                               &(*(faceInpOut.begin())), im1,
-                                              im2)))
+                                              im2, allDg, allDgEleStride)))
             this->parent2ChildInterpolation(&(*(faceInpIn.begin())),
                                             &(*(faceInpOut.begin())), cnum, 2,
                                             im1, im2);
@@ -3381,7 +3381,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_LEFT, OCT_DIR_DOWN, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3419,7 +3419,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_LEFT, OCT_DIR_UP, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3459,7 +3459,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_LEFT, OCT_DIR_BACK, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3497,7 +3497,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_LEFT, OCT_DIR_FRONT, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3536,7 +3536,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_RIGHT, OCT_DIR_DOWN, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3576,7 +3576,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_RIGHT, OCT_DIR_UP, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3618,7 +3618,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_RIGHT, OCT_DIR_BACK, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3658,7 +3658,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_RIGHT, OCT_DIR_FRONT, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3698,7 +3698,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_DOWN, OCT_DIR_BACK, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3736,7 +3736,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_DOWN, OCT_DIR_FRONT, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3775,7 +3775,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_UP, OCT_DIR_BACK, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -3815,7 +3815,7 @@ void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
             if (!(allowWide &&
                   this->prolongateHangingEdgeWide(
                       vec, elementID, OCT_DIR_UP, OCT_DIR_FRONT, cnum,
-                      &(*(edgeInpOut.begin())), im1, im2)))
+                      &(*(edgeInpOut.begin())), im1, im2, allDg, allDgEleStride)))
                 this->parent2ChildInterpolation(&(*(edgeInpIn.begin())),
                                                 &(*(edgeInpOut.begin())),
                                                 cnum, 1, im1, im2);
@@ -14073,10 +14073,11 @@ template <typename T>
 bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
                                      unsigned int d1, unsigned int d2,
                                      unsigned int cnum, T *out, double *im1,
-                                     double *im2) const {
+                                     double *im2, const T *allDg,
+                                     size_t allDgEleStride) const {
 #ifndef DENDRO_WIDE_PROLONGATION
     (void)vec; (void)elementID; (void)d1; (void)d2; (void)cnum; (void)out;
-    (void)im1; (void)im2;
+    (void)im1; (void)im2; (void)allDg; (void)allDgEleStride;
     return false;
 #else
     // Checked before the counter so the call counts report actual wide work.
@@ -14086,6 +14087,8 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
     const unsigned int nrp = p + 1;
 
     wpxEdgeCalls()++;
+    // see prolongateHangingFaceWide: a DG array makes ghosts readable.
+    const bool dgOk          = (allDg != nullptr);
     const unsigned int owner = this->wpxEdgeOwner(elementID, d1, d2);
     if (owner == LOOK_UP_TABLE_DEFAULT) return false;
 
@@ -14099,8 +14102,8 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
 
     unsigned int ext[6];
     unsigned char emode[6];
-    const unsigned int st =
-        this->probeCoarseExtension(owner, want, ext, WPX_LVL_SAME, emode);
+    const unsigned int st = this->probeCoarseExtension(
+        owner, want, ext, WPX_LVL_SAME, emode, dgOk);
     if (st & WPX_CLIPPED_GHOST) {
         std::cerr << "[wide prolongation] hanging edge of element "
                   << elementID
@@ -14154,9 +14157,13 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
     cube.resize((size_t)nx * ny * nz);
     eleScratch.resize((size_t)8 * m_uiNpE);
 
-    this->gatherExtendedCoarseNodesCG(vec, owner, ext, cube.data(),
-                                      eleScratch.data(), g_im1, g_im2, false,
-                                      emode);
+    if (dgOk)
+        this->gatherExtendedCoarseNodesDG(allDg, allDgEleStride, 0, owner, ext,
+                                          cube.data(), emode);
+    else
+        this->gatherExtendedCoarseNodesCG(vec, owner, ext, cube.data(),
+                                          eleScratch.data(), g_im1, g_im2,
+                                          false, emode);
 
     const unsigned int n_in = nrp + ext[2 * ax] + ext[2 * ax + 1];
     line.resize(n_in);
@@ -14187,10 +14194,12 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
 template <typename T>
 bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
                                      unsigned int dir, unsigned int cnum,
-                                     T *out, double *im1, double *im2) const {
+                                     T *out, double *im1, double *im2,
+                                     const T *allDg,
+                                     size_t allDgEleStride) const {
 #ifndef DENDRO_WIDE_PROLONGATION
     (void)vec; (void)elementID; (void)dir; (void)cnum; (void)out;
-    (void)im1; (void)im2;
+    (void)im1; (void)im2; (void)allDg; (void)allDgEleStride;
     return false;
 #else
     // Checked before the counter so the call counts report actual wide work.
@@ -14200,11 +14209,14 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
     const unsigned int nrp = p + 1;
 
     wpxFaceCalls()++;
+    // A whole-mesh DG array carries finished values for every ghost, so the
+    // owner and its neighbourhood are readable even without a nodal map.
+    const bool dgOk = (allDg != nullptr);
     const unsigned int owner =
         m_uiE2EMapping[elementID * m_uiNumDirections + dir];
     if (owner == LOOK_UP_TABLE_DEFAULT || owner >= m_uiAllElements.size())
         return false;
-    if (!m_uiIsNodalMapValid[owner]) return false;
+    if (!dgOk && !m_uiIsNodalMapValid[owner]) return false;
     if (m_uiAllElements[owner].getLevel() + 1 !=
         m_uiAllElements[elementID].getLevel())
         return false;
@@ -14232,7 +14244,8 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
     // further on inputs that dirty amplifies them rather than helping.
     unsigned int ext[6];
     const unsigned int st =
-        this->probeCoarseExtension(owner, want, ext, WPX_LVL_SAME);
+        this->probeCoarseExtension(owner, want, ext, WPX_LVL_SAME, nullptr,
+                                   dgOk);
     if (st & WPX_CLIPPED_GHOST) {
         std::cerr << "[wide prolongation] rank " << m_uiActiveRank
                   << ": hanging face of element " << elementID << " ("
@@ -14292,8 +14305,16 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
 
     // allowWide=false inside the gather: the inner fetches must not widen
     // their own hanging faces or this recurses. Bounded at depth two.
-    this->gatherExtendedCoarseNodesCG(vec, owner, ext, cube.data(),
-                                      eleScratch.data(), g_im1, g_im2);
+    //
+    // The DG array carries exactly those narrow-face values already, computed
+    // once by whichever rank owns each element, so reading it is both cheaper
+    // and the only option for a neighbourhood that reaches past round 1.
+    if (dgOk)
+        this->gatherExtendedCoarseNodesDG(allDg, allDgEleStride, 0, owner, ext,
+                                          cube.data());
+    else
+        this->gatherExtendedCoarseNodesCG(vec, owner, ext, cube.data(),
+                                          eleScratch.data(), g_im1, g_im2);
 
     for (unsigned int ib = 0; ib < nb; ib++)
         for (unsigned int ia = 0; ia < na; ia++) {

@@ -3205,8 +3205,9 @@ class Mesh {
     template <typename T>
     void getElementNodalValues(const T *vec, T *nodalValues,
                                unsigned int elementID, bool isDGVec,
-                               double *im1, double *im2,
-                               bool allowWide = true) const;
+                               double *im1, double *im2, bool allowWide = true,
+                               const T *allDg        = nullptr,
+                               size_t allDgEleStride = 0) const;
 
     /**
      * @brief Rebuild a hanging face with the wide stencil.
@@ -3224,7 +3225,9 @@ class Mesh {
     template <typename T>
     bool prolongateHangingFaceWide(const T *vec, unsigned int elementID,
                                    unsigned int dir, unsigned int cnum, T *out,
-                                   double *im1, double *im2) const;
+                                   double *im1, double *im2,
+                                   const T *allDg        = nullptr,
+                                   size_t allDgEleStride = 0) const;
 
     /**
      * @brief The coarse element owning a hanging edge of `ele`.
@@ -3250,7 +3253,8 @@ class Mesh {
     bool prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
                                    unsigned int d1, unsigned int d2,
                                    unsigned int cnum, T *out, double *im1,
-                                   double *im2) const;
+                                   double *im2, const T *allDg = nullptr,
+                                   size_t allDgEleStride = 0) const;
 
     /**
      * @assumption: input is the elemental nodal values.
