@@ -79,6 +79,34 @@ constexpr bool WPX_COMPILED_IN = false;
  *  WideProlongNarrowScope. Regenerate only if the mesh or field changes. */
 constexpr unsigned long long WPX_NARROW_UNZIP_FINGERPRINT = 0x39c749626f1432c8ull;
 
+/** As above, with the wide stencil ON in its plain configuration (no _FINER,
+ *  _COARSER or _DECIMATE).
+ *
+ *  This is the instrument the round-2 ghost work is held to, because the pad
+ *  metric skips domain-boundary blocks and so cannot see a value change
+ *  there. It is NOT a rank-independence check: XOR is invariant to the ORDER
+ *  of the values, but block decomposition depends on the rank count, so at
+ *  np=4 the array is a different set of points -- measured, and true of the
+ *  narrow build too. Rank-independence is pinned separately in "unzip pad
+ *  error across 2:1 interfaces", which keys on (coordinate, block level) and
+ *  is the correct invariant. Both goldens here are therefore guarded on the
+ *  decomposition matching np=1's. */
+constexpr unsigned long long WPX_WIDE_UNZIP_FINGERPRINT = 0x005c07068572e09dull;
+
+/** Global unzip dof the two fingerprints above were taken at. Block
+ *  decomposition follows the rank count, so a run that does not match this is
+ *  fingerprinting a different set of points and the goldens do not apply. */
+constexpr long long WPX_FINGERPRINT_UNZIP_DOF = 581188;
+
+#if defined(DENDRO_WIDE_PROLONGATION) &&                                     \
+    !defined(DENDRO_WIDE_PROLONGATION_FINER) &&                              \
+    !defined(DENDRO_WIDE_PROLONGATION_COARSER) &&                            \
+    !defined(DENDRO_WIDE_PROLONGATION_DECIMATE)
+constexpr bool WPX_PLAIN_WIDE = true;
+#else
+constexpr bool WPX_PLAIN_WIDE = false;
+#endif
+
 /** Interface location. Kept away from any zero of the test function. */
 constexpr real X0 = 0.3Q;
 
@@ -1277,8 +1305,17 @@ TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
     // Measured twice: with the inner fetch narrow, and with it widened. The
     // gap between them says how much of the contamination the face widening
     // already removes, and therefore whether the remainder is edges.
+    //
+    // Pass 1 is np=1 only, for the same reason as the probe further down: it
+    // asks the inner fetch to widen, and that fetch re-materialises
+    // neighbours -- which at np>1 can be ghosts whose own hanging faces need
+    // round-2 data this rank does not hold. The library's path avoids it by
+    // gathering from a DG array whose ghost slices come from their owners;
+    // this diagnostic has no such array.
+    int np_cg = 1;
+    MPI_Comm_size(MPI_COMM_WORLD, &np_cg);
     double cg_worst = 0.0, cg_worst_wide = 0.0;
-    for (int pass = 0; pass < 2; pass++) {
+    for (int pass = 0; pass < (np_cg == 1 ? 2 : 1); pass++) {
         auto tf = [](double x, double y, double z) {
             return std::exp(0.013 * x) * std::cos(0.011 * y) +
                    0.5 * std::sin(0.009 * z);
@@ -1322,11 +1359,18 @@ TEST_CASE("gather decimates a finer neighbour onto the coarse lattice") {
                     }
         }
     }
-    std::printf(
-        "CG-sourced gather vs analytic (exposes interpolated inputs):\n"
-        "  inner fetch narrow      max = %.3e\n"
-        "  inner fetch widened     max = %.3e   (faces already widened)\n",
-        cg_worst, cg_worst_wide);
+    if (np_cg == 1)
+        std::printf(
+            "CG-sourced gather vs analytic (exposes interpolated inputs):\n"
+            "  inner fetch narrow      max = %.3e\n"
+            "  inner fetch widened     max = %.3e   (faces already widened)\n",
+            cg_worst, cg_worst_wide);
+    else
+        std::printf(
+            "CG-sourced gather vs analytic (exposes interpolated inputs):\n"
+            "  inner fetch narrow      max = %.3e\n"
+            "  inner fetch widened     skipped at np=%d\n",
+            cg_worst, np_cg);
 
     // The index map is exact; the CG path is not. That gap is narrow-operator
     // hanging-node values inside the finer neighbours, and it is why
@@ -2991,10 +3035,12 @@ TEST_CASE("the wavelet criterion can be held on the narrow operator") {
     REQUIRE(mesh != nullptr);
 
     unsigned long long fp_on = 0ull, fp_off = 0ull;
+    long long uzdof = 0;
 
     if (mesh->isActive()) {
         std::vector<double> cg(mesh->getDegOfFreedom(), 0.0);
         std::vector<double> uz(mesh->getDegOfFreedomUnZip(), 0.0);
+        uzdof = (long long)uz.size();
 
         // A smooth non-polynomial field: a wide stencil is not exact on it, so
         // toggling actually moves the answer.
@@ -3033,13 +3079,19 @@ TEST_CASE("the wavelet criterion can be held on the narrow operator") {
         // The scope must restore, not force-enable.
         CHECK(mesh->isWideProlongEnabled() == WPX_COMPILED_IN);
 
-        unsigned long long g_on = fp_on, g_off = fp_off;
-        MPI_Allreduce(&fp_on, &g_on, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR,
+    }
+
+    // Inactive ranks hold nothing; fold the totals so every rank checks the
+    // same numbers and doctest agrees across the job.
+    {
+        long long gd = uzdof;
+        MPI_Allreduce(&uzdof, &gd, 1, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
+        uzdof = gd;
+        unsigned long long a = fp_on, b = fp_off;
+        MPI_Allreduce(&a, &fp_on, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR,
                       MPI_COMM_WORLD);
-        MPI_Allreduce(&fp_off, &g_off, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR,
+        MPI_Allreduce(&b, &fp_off, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR,
                       MPI_COMM_WORLD);
-        fp_on  = g_on;
-        fp_off = g_off;
     }
 
     std::printf(
@@ -3047,6 +3099,18 @@ TEST_CASE("the wavelet criterion can be held on the narrow operator") {
         "unzip fingerprint: wide-as-built %016llx | narrow scope %016llx\n"
         "compiled with DENDRO_WIDE_PROLONGATION: %s\n",
         m_uiMaxDepth, fp_on, fp_off, WPX_COMPILED_IN ? "yes" : "no");
+
+    if (uzdof != WPX_FINGERPRINT_UNZIP_DOF) {
+        // A different rank count blocks the mesh differently, so the array is
+        // not the same set of points and neither golden applies. Say so
+        // rather than checking something that only looks like the same thing.
+        std::printf(
+            "  unzip dof %lld != %lld, so this rank count blocks the mesh "
+            "differently; goldens not applicable\n",
+            (long long)uzdof, (long long)WPX_FINGERPRINT_UNZIP_DOF);
+        delete mesh;
+        return;
+    }
 
     // Checked in BOTH builds against ONE constant: this is the cross-build
     // bit-identity pin, and an #ifdef here would defeat its whole purpose.
@@ -3058,6 +3122,12 @@ TEST_CASE("the wavelet criterion can be held on the narrow operator") {
         CHECK(fp_on != fp_off);
     } else {
         CHECK(fp_on == fp_off);
+    }
+
+    if (WPX_PLAIN_WIDE) {
+        // A change here means the wide path now computes something different
+        // -- anywhere in the unzip, boundary blocks included.
+        CHECK(fp_on == WPX_WIDE_UNZIP_FINGERPRINT);
     }
 
     delete mesh;
