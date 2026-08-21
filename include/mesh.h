@@ -2335,23 +2335,37 @@ class Mesh {
      *   straddle at the finer spacing       5.41e-06
      *
      * The "fine-side nodes are contaminated" explanation for this was
-     * measured and is WRONG. A mode-aware probe -- one that gathers the way
-     * prolongateChildNodes actually does, rather than with a null mode, which
-     * silently reads the decimated variant instead -- puts the straddle
-     * path's own inputs at 1.041e-17 on a field of degree 7 in every axis.
-     * The inputs are exact. A 10-point stencil is degree-9 exact on any
-     * distinct nodes, so on exact inputs this path cannot be inexact unless
-     * something is wrong with it, and it is: on that same field it gives
-     * 3.541325e-08 against 1.770663e-08 for same-level only. It also moves
-     * elements that do not straddle at all (1.770663e-08 -> 2.253600e-08),
-     * and shifts the hanging-face call count 13536 -> 12480, so the defect
-     * is not confined to the straddle geometry.
+     * measured and is WRONG: a mode-aware probe puts the straddle path's own
+     * inputs at 1.041e-17 on a field of degree 7 in every axis.
      *
-     * Kept and tested; enable with DENDRO_WIDE_PROLONGATION_FINER. Its
-     * rejection rests on a measurement of defective code, so the "measured
-     * worse" verdict above should not be treated as a verdict on straddling
-     * as such. Any retry must first make a degree-7-per-axis field return
-     * roundoff, which is cheap and which no previous attempt checked.
+     * An earlier note then concluded from that a DEFECT: "a 10-point stencil
+     * is degree-9 exact, so on exact inputs it cannot be inexact, and it
+     * gives 3.541325e-08 against 1.770663e-08 same-level". **That inference
+     * is unsound and there is no evidence of a defect.** Re-measured
+     * 2026-08-21, puncture wtol=1e-3:
+     *
+     *   - Same-level-only is ALSO inexact on that field, at 1.770663e-08. The
+     *     argument proves a defect in same-level too, i.e. it proves nothing.
+     *     The cause is shared and structural: only 18.6% of directions reach
+     *     full width, and a clipped direction falls back to degree 6, which
+     *     is not exact on a degree-7 field. The global max is therefore a
+     *     statistic about CLIPPED points, not about straddling.
+     *   - Geometry and indexing are correct: PROLONG_FIELD=lin returns
+     *     1.243450e-14, i.e. roundoff. That is the probe which caught all
+     *     three graded bugs, and it is clean here.
+     *   - Reach is IDENTICAL with and without it: full 64 (18.6%), partial
+     *     280, none 0. It unblocks no direction on this mesh; it only changes
+     *     how already-reachable ones are read.
+     *   - rms is unchanged: 3.244023e-09 -> 3.220475e-09, marginally better.
+     *     Only the max moves, and to a DIFFERENT location, so it is not one
+     *     point being scaled.
+     *
+     * So the "measured worse" verdict stands, on better grounds than before:
+     * it costs worst-case accuracy, leaves rms and reach untouched, and buys
+     * no reach at all. Kept and tested; enable with
+     * DENDRO_WIDE_PROLONGATION_FINER. Anyone reviving it should measure
+     * poly3 error RESTRICTED TO FULL-REACH STRADDLE POINTS -- the global max
+     * cannot answer the question, which is what misled the earlier note.
      */
     static constexpr unsigned int WPX_LVL_DEFAULT =
         WPX_LVL_SAME
@@ -3085,6 +3099,20 @@ class Mesh {
      * @param[in] vec: variable vector needs to be transfered.
      * @param[out] vec: transfered varaible vector
      * @param[in] pMesh: Mesh that we need to transfer the old varaible.
+     *
+     * @note Grid transfer is NARROW, deliberately, while unzip is wide -- so a
+     * field crosses a refinement change by a different operator than it is
+     * unzipped with. Two reasons to leave it that way for now: it prolongates
+     * with parent2ChildInterpolation directly rather than through
+     * prolongateChildNodes, so widening it is a separate piece of work; and it
+     * runs on remesh, where a changed value changes the grid the run continues
+     * on, which is a much harder thing to validate than a changed pad value.
+     *
+     * Until 2026-08-21 this was accidentally a HYBRID: the operator was
+     * narrow, but getElementNodalValues defaulted allowWide=true, so its
+     * inputs had wide-filled hanging faces. That is what aborted at np>1 --
+     * this path holds no DG array, so the widening reached round 2. It is now
+     * narrow on both counts.
      * */
     template <typename T>
     void interGridTransfer(
