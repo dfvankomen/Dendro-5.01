@@ -46,6 +46,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <string>
 #include <vector>
 
@@ -65,6 +66,18 @@ namespace {
 using real = __float128;
 
 constexpr unsigned ELE_ORDER = 6;
+
+#ifdef DENDRO_WIDE_PROLONGATION
+constexpr bool WPX_COMPILED_IN = true;
+#else
+constexpr bool WPX_COMPILED_IN = false;
+#endif
+
+/** Bit-pattern XOR of the whole unzip array on the default bump mesh with the
+ *  wide stencil held off. Cross-build golden: the narrow build produces it on
+ *  the narrow path and the wide build must reach the same bits through
+ *  WideProlongNarrowScope. Regenerate only if the mesh or field changes. */
+constexpr unsigned long long WPX_NARROW_UNZIP_FINGERPRINT = 0x39c749626f1432c8ull;
 
 /** Interface location. Kept away from any zero of the test function. */
 constexpr real X0 = 0.3Q;
@@ -2942,6 +2955,110 @@ TEST_CASE("corner rule failure modes") {
         lmin_, coarsestEle, coarsestFull,
         cfMissing, cfFiner, cfSame, cfCoarser, ccDirs,
         ccMissing, ccCoarser, ccFiner, ccSame);
+
+    delete mesh;
+}
+
+TEST_CASE("the wavelet criterion can be held on the narrow operator") {
+    // The refinement criterion runs on unzipped data (BSSNCtx hands the array
+    // straight from Mesh::unzip to isReMeshWAMR), so a wide prolongation
+    // changes which elements refine and the MESH becomes a function of the
+    // build flag. Measured in BSSN at np=1 on a q1 binary: the initial-grid
+    // trajectory is 3452 -> 2640 narrow and 3452 -> 2745 -> 3410 wide, while a
+    // single-puncture mesh is unaffected -- which is why an earlier survey
+    // concluded, from the puncture alone, that the operator could not reach
+    // the mesh at all.
+    //
+    // WideProlongNarrowScope is the fix. What has to hold is that it produces
+    // the NARROW build's values exactly, so the fingerprint below is checked
+    // against one golden with no #ifdef: the narrow build computes it on the
+    // narrow path, and the wide build has to land on the same bits.
+    const double L  = (double)(1u << m_uiMaxDepth);
+    const double kw = 2.0 * M_PI / L;
+
+    std::function<double(double, double, double)> fr =
+        [L](double x, double y, double z) {
+            const double dx = (x - 0.42 * L) / (0.03 * L);
+            const double dy = (y - 0.55 * L) / (0.03 * L);
+            const double dz = (z - 0.47 * L) / (0.03 * L);
+            return std::exp(-(dx * dx + dy * dy + dz * dz));
+        };
+
+    std::vector<ot::TreeNode> tmp;
+    function2Octree(fr, tmp, m_uiMaxDepth, 1e-4, ELE_ORDER, MPI_COMM_WORLD);
+    ot::Mesh *mesh = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
+                                    MPI_COMM_WORLD, 0);
+    REQUIRE(mesh != nullptr);
+
+    unsigned long long fp_on = 0ull, fp_off = 0ull;
+
+    if (mesh->isActive()) {
+        std::vector<double> cg(mesh->getDegOfFreedom(), 0.0);
+        std::vector<double> uz(mesh->getDegOfFreedomUnZip(), 0.0);
+
+        // A smooth non-polynomial field: a wide stencil is not exact on it, so
+        // toggling actually moves the answer.
+        {
+            std::vector<ot::TreeNode> nodes;
+            mesh->createVector<double>(cg, [kw](double x, double y, double z) {
+                return std::sin(kw * x) * std::cos(kw * y) * std::sin(kw * z);
+            });
+        }
+
+        // XOR of the raw bit patterns: order-independent, so it survives any
+        // rank count, and one ULP anywhere flips it.
+        auto fingerprint = [](const std::vector<double> &v) {
+            unsigned long long h = 0ull;
+            for (size_t i = 0; i < v.size(); i++) {
+                unsigned long long b;
+                std::memcpy(&b, &v[i], sizeof(b));
+                h ^= b;
+            }
+            return h;
+        };
+
+        mesh->performGhostExchange(cg);
+
+        std::fill(uz.begin(), uz.end(), 0.0);
+        mesh->unzip(cg.data(), uz.data(), 1);
+        fp_on = fingerprint(uz);
+
+        {
+            ot::WideProlongNarrowScope narrow(mesh);
+            std::fill(uz.begin(), uz.end(), 0.0);
+            mesh->unzip(cg.data(), uz.data(), 1);
+        }
+        fp_off = fingerprint(uz);
+
+        // The scope must restore, not force-enable.
+        CHECK(mesh->isWideProlongEnabled() == WPX_COMPILED_IN);
+
+        unsigned long long g_on = fp_on, g_off = fp_off;
+        MPI_Allreduce(&fp_on, &g_on, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR,
+                      MPI_COMM_WORLD);
+        MPI_Allreduce(&fp_off, &g_off, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR,
+                      MPI_COMM_WORLD);
+        fp_on  = g_on;
+        fp_off = g_off;
+    }
+
+    std::printf(
+        "\n=== wavelet-criterion narrow scope (maxdepth %u) ===\n"
+        "unzip fingerprint: wide-as-built %016llx | narrow scope %016llx\n"
+        "compiled with DENDRO_WIDE_PROLONGATION: %s\n",
+        m_uiMaxDepth, fp_on, fp_off, WPX_COMPILED_IN ? "yes" : "no");
+
+    // Checked in BOTH builds against ONE constant: this is the cross-build
+    // bit-identity pin, and an #ifdef here would defeat its whole purpose.
+    CHECK(fp_off == WPX_NARROW_UNZIP_FINGERPRINT);
+
+    if (WPX_COMPILED_IN) {
+        // Otherwise the scope is silently inert and the check above proves
+        // nothing about the wide path.
+        CHECK(fp_on != fp_off);
+    } else {
+        CHECK(fp_on == fp_off);
+    }
 
     delete mesh;
 }
