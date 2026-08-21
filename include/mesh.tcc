@@ -11388,6 +11388,25 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     // capped unzip thread-scaling). Element work is uneven (only hanging-face
     // elements interpolate), hence the dynamic schedule.
     std::vector<T> all_dg((std::size_t)m_uiNumTotalElements * dof * dgSz);
+#ifdef DENDRO_WIDE_PROLONGATION
+    // Pass 0 of two. A widened hanging face needs the FACE OWNER's
+    // neighbourhood, which is two hops away and so out of reach for any
+    // element near a partition edge -- including LOCAL ones, whose face owner
+    // may itself be a ghost. That is a genuine circular dependency: this
+    // rank cannot finish such an element before the exchange, and the
+    // exchange has to carry it.
+    //
+    // Breaking it costs one extra materialisation. Pass 0 builds every local
+    // element with hanging faces NARROW, which needs round-1 data only and so
+    // always succeeds; after the exchange every ghost slice holds a finished
+    // narrow value, and pass 1 redoes the faces wide out of that array.
+    //
+    // The values are unchanged from the single-pass np=1 path because the
+    // widening always DID read narrow neighbours -- gatherExtendedCoarseNodesCG
+    // re-materialises them with allowWide=false. Pass 0 just precomputes what
+    // that gather used to recompute per call.
+    std::vector<T> dg_narrow((std::size_t)m_uiNumTotalElements * dof * dgSz);
+#endif
 #pragma omp parallel
     {
         std::vector<double> im1_pre(nPe), im2_pre(nPe);
@@ -11396,14 +11415,18 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 #pragma omp for schedule(dynamic, 16)
         for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
 #ifdef DENDRO_WIDE_PROLONGATION
-            // Ghost slices come from the rank that owns them: a ghost's
-            // hanging-face reconstruction probes a neighbour's neighbours,
-            // i.e. round 2, which this rank does not have. Locals are ALL
+            // Ghost slices come from the rank that owns them. Locals are ALL
             // materialised -- no e2b or block filter -- because another rank
             // may request any of them and exchangeWideProlongDG packs
             // straight out of this array.
             if (ele < m_uiElementLocalBegin || ele >= m_uiElementLocalEnd)
                 continue;
+            T* base0 = dg_narrow.data() + (std::size_t)ele * dof * dgSz;
+            for (unsigned int v = 0; v < dof; v++)
+                this->getElementNodalValues(in + v * cgSz, base0 + v * dgSz,
+                                            ele, false, im1_p, im2_p,
+                                            /*allowWide=*/false);
+            continue;
 #else
             if (m_e2b_unzip_counts[ele] == 0) continue;
             if (blk_filter >= 0) {
@@ -11431,6 +11454,27 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
         }
     }
 #ifdef DENDRO_WIDE_PROLONGATION
+    this->exchangeWideProlongDG(in, cgSz, dg_narrow.data(),
+                                (size_t)dof * dgSz, dof, dgSz);
+
+    // Pass 1: same elements, faces widened out of the now-complete narrow
+    // array. It must not read what it writes, or the answer would depend on
+    // element visit order, hence the separate destination.
+#pragma omp parallel
+    {
+        std::vector<double> im1_w(nPe), im2_w(nPe);
+#pragma omp for schedule(dynamic, 16)
+        for (unsigned int ele = m_uiElementLocalBegin;
+             ele < m_uiElementLocalEnd; ele++) {
+            T* base = all_dg.data() + (std::size_t)ele * dof * dgSz;
+            for (unsigned int v = 0; v < dof; v++)
+                this->getElementNodalValues(
+                    in + v * cgSz, base + v * dgSz, ele, false, im1_w.data(),
+                    im2_w.data(), /*allowWide=*/true,
+                    dg_narrow.data() + (std::size_t)v * dgSz,
+                    (size_t)dof * dgSz);
+        }
+    }
     this->exchangeWideProlongDG(in, cgSz, all_dg.data(),
                                 (size_t)dof * dgSz, dof, dgSz);
 #endif
@@ -11606,13 +11650,26 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     // back to gathering through CG, which re-materialises neighbour elements --
     // ghosts included -- and hits the same wall.
     std::vector<T> all_dg_s((std::size_t)m_uiNumTotalElements * dof * dgSz);
+    // Pass 0 of two -- see the OMP path for why the widening cannot be done in
+    // a single sweep. Narrow values only, which never reach past round 1.
+    std::vector<T> dg_narrow_s((std::size_t)m_uiNumTotalElements * dof * dgSz);
     {
         std::vector<double> im1_s(nPe), im2_s(nPe);
-        auto materialise = [&](unsigned int e) {
-            T* base = all_dg_s.data() + (std::size_t)e * dof * dgSz;
+        auto materialise_narrow = [&](unsigned int e) {
+            T* base = dg_narrow_s.data() + (std::size_t)e * dof * dgSz;
             for (unsigned int v = 0; v < dof; v++)
                 this->getElementNodalValues(in + v * cgSz, base + v * dgSz, e,
-                                            false, im1_s.data(), im2_s.data());
+                                            false, im1_s.data(), im2_s.data(),
+                                            /*allowWide=*/false);
+        };
+        auto materialise_wide = [&](unsigned int e) {
+            T* base = all_dg_s.data() + (std::size_t)e * dof * dgSz;
+            for (unsigned int v = 0; v < dof; v++)
+                this->getElementNodalValues(
+                    in + v * cgSz, base + v * dgSz, e, false, im1_s.data(),
+                    im2_s.data(), /*allowWide=*/true,
+                    dg_narrow_s.data() + (std::size_t)v * dgSz,
+                    (std::size_t)dof * dgSz);
         };
 
         // Overlap on the MATERIALISATION, not on the scatter. The scatter
@@ -11628,31 +11685,36 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
         double t_a = 0, t_b = 0, t_c = 0, t_d = 0, t_e = 0;
         if (wpx_prof) t_a = MPI_Wtime();
 
-        // 1. what other ranks are waiting on
-        for (size_t i = 0; i < m_uiWpxSendEle.size(); i++)
-            if (!m_uiWpxSendDone[m_uiWpxSendEle[i]]) {
-                materialise(m_uiWpxSendEle[i]);
-                m_uiWpxSendDone[m_uiWpxSendEle[i]] = 1;
-            }
-        if (wpx_prof) t_b = MPI_Wtime();
+        // Each pass overlaps its own exchange the same way: build what other
+        // ranks are waiting on, post, build the rest, land it.
+        auto sweep = [&](const std::function<void(unsigned int)>& mat,
+                         T* dst) {
+            for (size_t i = 0; i < m_uiWpxSendEle.size(); i++)
+                if (!m_uiWpxSendDone[m_uiWpxSendEle[i]]) {
+                    mat(m_uiWpxSendEle[i]);
+                    m_uiWpxSendDone[m_uiWpxSendEle[i]] = 1;
+                }
+            if (wpx_prof) t_b = MPI_Wtime();
 
-        // 2. post, then keep working
-        this->exchangeWideProlongDGBegin(all_dg_s.data(),
-                                         (std::size_t)dof * dgSz, dof, dgSz);
-        if (wpx_prof) t_c = MPI_Wtime();
+            this->exchangeWideProlongDGBegin(dst, (std::size_t)dof * dgSz, dof,
+                                             dgSz);
+            if (wpx_prof) t_c = MPI_Wtime();
 
-        // 3. the rest of our locals, overlapping the exchange. No
-        // m_e2b_unzip_counts filter: a local element feeding no block of ours
-        // may still have been requested, and the pack reads this array.
-        for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd;
-             e++)
-            if (!m_uiWpxSendDone[e]) materialise(e);
-        if (wpx_prof) t_d = MPI_Wtime();
+            // No m_e2b_unzip_counts filter: a local element feeding no block
+            // of ours may still have been requested, and the pack reads this
+            // array.
+            for (unsigned int e = m_uiElementLocalBegin;
+                 e < m_uiElementLocalEnd; e++)
+                if (!m_uiWpxSendDone[e]) mat(e);
+            if (wpx_prof) t_d = MPI_Wtime();
 
-        // 4. land it before anything reads a ghost slice
-        this->exchangeWideProlongDGEnd(all_dg_s.data(),
-                                       (std::size_t)dof * dgSz, dof, dgSz);
-        std::fill(m_uiWpxSendDone.begin(), m_uiWpxSendDone.end(), 0);
+            this->exchangeWideProlongDGEnd(dst, (std::size_t)dof * dgSz, dof,
+                                           dgSz);
+            std::fill(m_uiWpxSendDone.begin(), m_uiWpxSendDone.end(), 0);
+        };
+
+        sweep(materialise_narrow, dg_narrow_s.data());
+        sweep(materialise_wide, all_dg_s.data());
         if (wpx_prof) {
             t_e = MPI_Wtime();
             std::printf(

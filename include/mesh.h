@@ -250,14 +250,13 @@ class Mesh {
     /**
      * Wide-prolongation ghost DG halo.
      *
-     * The wide stencil never needs round-2 data for a LOCAL element -- measured
-     * at np=1 vs np=2, every local element's achieved reach is identical and
-     * none report WPX_CLIPPED_GHOST. Every trip is on a GHOST element, because
-     * the unzip DG precompute runs getElementNodalValues over ghost elements
-     * too and their hanging-face reconstruction probes a neighbour's
-     * neighbours, which is round 2.
+     * A ghost element's hanging-face reconstruction probes a neighbour's
+     * neighbours, i.e. round 2, which this rank does not have. (An earlier
+     * note here claimed a LOCAL element never needs round-2 data. That was
+     * measured on a single-puncture mesh and is false in general -- a local
+     * element whose face OWNER is a ghost needs it too. See the @note below.)
      *
-     * Each of those ghost elements is LOCAL on exactly one rank, where the
+     * Each such ghost element is LOCAL on exactly one rank, where the
      * same computation succeeds. So rather than widen the ghost layer, receive
      * the finished element-nodal values from the owner. That terminates (no
      * round-3 recursion) and makes the result rank-independent by
@@ -266,56 +265,40 @@ class Mesh {
      * Built lazily and once; mutable so a const unzip can populate it. All
      * active ranks must reach it together -- it is collective.
      *
-     * @warning INCOMPLETE. The survey behind this design ("every trip is on a
-     * GHOST element, none on local") was measured on a single-puncture mesh
-     * and DOES NOT GENERALISE. Two further trips appear and still MPI_Abort:
+     * @note FIXED 2026-08-21, and the original survey behind this design
+     * ("every trip is on a GHOST element, none on local") was wrong -- it was
+     * taken on a single-puncture mesh, which is the one config that does not
+     * trip. Two further trips existed: a LOCAL element whose face OWNER is a
+     * ghost (the face path probes the owner's neighbours, two hops), and the
+     * hanging-EDGE path, which fires zero times on a puncture mesh.
      *
-     *   [wide prolongation] hanging edge of element 724 needs a round-2 ghost
-     *   [wide prolongation] rank 1: hanging face of element 246 (LOCAL, face
-     *                       owner 131 GHOST) needs a round-2 ghost
+     * Two changes closed it.
      *
-     * A LOCAL element whose face OWNER is a ghost trips, because the face path
-     * probes that owner's neighbours -- two hops from us, round 2. And the
-     * hanging-EDGE path, which fires zero times on a puncture mesh, fires here.
+     * 1. `getElementNodalValues`'s `allowWide` was flipped to opt-IN. It had
+     *    defaulted to true, which enabled the wide hanging-face/edge
+     *    reconstruction at every one of its ~77 call sites -- grid transfer
+     *    and the oda/daUtils paths included. None of those hold a DG array, so
+     *    at np>1 they reach round 2 and abort. This was the actual cause of
+     *    the BSSN aborts; only the unzip materialisation passes true now, and
+     *    it passes `allDg` with it.
      *
-     * Fetching the owner's finished DG slice is not enough on its own: local
-     * elements with ghost face owners depend on the exchange that they
-     * themselves feed, so the materialise/exchange order has a genuine
-     * dependency to resolve. np=1 is unaffected.
+     * 2. The unzip materialisation became TWO passes, because a widened face
+     *    genuinely depends on the exchange that carries it. Pass 0 builds
+     *    every local element narrow (round-1 data only, always succeeds), the
+     *    exchange fills every ghost slice, and pass 1 redoes the faces wide out
+     *    of that now-complete array, followed by a second exchange. Pass 1
+     *    must not read what it writes, hence the separate destination.
      *
-     * Reproduce in seconds, no solver needed:
+     *    Values are unchanged at np=1 because the widening always DID read
+     *    narrow neighbours -- gatherExtendedCoarseNodesCG re-materialises them
+     *    with allowWide=false. Pass 0 only precomputes what that gather used
+     *    to recompute per call. Costs one extra materialisation sweep and one
+     *    extra exchange, plus a second whole-mesh DG array.
      *
-     *   mpirun -np 2 ./testProlongationOrder -tc="unzip pad error*"
-     *
-     * i.e. the suite's DEFAULT bump mesh at any np >= 2. It is NOT specific to
-     * binary meshes -- the puncture golden config (PROLONG_MESH=puncture,
-     * PROLONG_MAXDEPTH=9, PROLONG_WTOL=1e-3) passes at np = 1, 2, 4, 8, and
-     * that is the only config the "bit-identical across np" claim was ever
-     * measured on. Also reproduces as `mpirun -np 4 bssnSolver
-     * q1.tinytest.par.toml` from dendrogr_dfvk.
-     *
-     * @note One fix was attempted and REVERTED (2026-08-20). The idea: build
-     * every local element twice -- pass 0 with narrow faces (round-1 data
-     * only, always succeeds), exchange to fill every ghost slice from its
-     * owner, then pass 1 redoing the faces wide while gathering the owner's
-     * neighbourhood out of that now-complete DG array, plus a second exchange.
-     * Widening was also made to REQUIRE a DG array, so the choice is a
-     * property of the call site rather than of what this rank happens to hold
-     * -- which keeps it rank-independent.
-     *
-     * It reproduced the unzip pad error exactly at np = 1, 2, 4, 8 on a
-     * puncture mesh and passed all 88 assertions, but it sent BSSN's
-     * initial-grid refinement into runaway on the q1 binary: mesh
-     * 1380 -> 9332 -> 43016 -> 230385 elements against a healthy
-     * 1380 -> 3452 -> 2640. **It does this at np=1 too**, so the two-pass
-     * construction is producing wrong values somewhere the pad harness does
-     * not see -- not an MPI problem. Snapshotting pass 0 before pass 1 (pass 1
-     * must not read the array it writes, or the answer depends on element
-     * visit order) was necessary but not sufficient.
-     *
-     * Anyone retrying: get a BSSN mesh-trajectory check into the loop first.
-     * The pad harness and the 88 assertions both pass while the refinement is
-     * diverging, so they cannot see this class of error at all.
+     * Verified: unzip bit-identical at np = 1, 2, 4, 8 on the bump mesh that
+     * used to abort, and BSSN `q1.tinytest.par.toml` at np=4 reproduces the
+     * np=1 initial-grid trajectory 1380 -> 3452 -> 2640 -> 3452 -> 2640
+     * exactly.
      */
     mutable std::vector<unsigned int> m_uiWpxRecvEle;  // ghost ids I fill
     mutable std::vector<int> m_uiWpxRecvCount, m_uiWpxRecvOffset;
@@ -3198,6 +3181,16 @@ class Mesh {
                                unsigned int elementID,
                                bool isDGVec = false) const;
 
+    /**
+     * @note `allowWide` is opt-IN, and deliberately so. It gates the wide
+     * hanging-face/edge reconstruction, which needs the FACE OWNER's
+     * neighbourhood -- two hops, so out of reach on any element near a
+     * partition edge unless the caller also supplies `allDg`. It used to
+     * default to true, which quietly enabled widening at every one of the ~77
+     * call sites, grid transfer and the oda/daUtils paths included; those have
+     * no DG array, so at np>1 they hit round-2 and abort. Only the unzip
+     * materialisation passes true, and it passes `allDg` with it.
+     */
     // Thread-safe overload: caller supplies scratch (size m_uiNpE each).
     // Safe to call concurrently from OpenMP parallel regions because the
     // face/edge interpolations use the thread-safe parent2ChildInterpolation
@@ -3205,7 +3198,8 @@ class Mesh {
     template <typename T>
     void getElementNodalValues(const T *vec, T *nodalValues,
                                unsigned int elementID, bool isDGVec,
-                               double *im1, double *im2, bool allowWide = true,
+                               double *im1, double *im2,
+                               bool allowWide        = false,
                                const T *allDg        = nullptr,
                                size_t allDgEleStride = 0) const;
 
