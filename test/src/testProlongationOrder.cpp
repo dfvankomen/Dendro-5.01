@@ -3068,6 +3068,77 @@ TEST_CASE("unzip cost") {
 
 
 /* ------------------------------------------------------------------ */
+/* Unzip must treat every dof slice independently                      */
+/* ------------------------------------------------------------------ */
+
+TEST_CASE("unzip is linear across dof slices") {
+    // Unzip is a linear operator applied independently per variable, so
+    // feeding variable v the field 2^v * chi must return exactly 2^v times
+    // variable 0's unzip -- power-of-two scaling commutes through IEEE
+    // adds and multiplies bit-for-bit. The dof-replicated cost test cannot
+    // catch a variable-mixing bug (its slices are identical), and every
+    // accuracy test runs dof=1, which is how the graded gather shipped a
+    // slab array materialised from variable 0 only and reused for every v.
+    const double L   = (double)(1u << m_uiMaxDepth);
+    const double DOM = 200.0;
+    auto phys = [L, DOM](double c) { return (c / L) * DOM - 0.5 * DOM; };
+    auto chi  = [phys](double x, double y, double z) {
+        const double px = phys(x), py = phys(y), pz = phys(z);
+        double r = std::sqrt(px * px + py * py + pz * pz);
+        if (r < 1e-2) r = 1e-2;
+        const double psi = 1.0 + 0.5 / r;
+        return std::pow(psi, -4.0);
+    };
+    const char *wp  = std::getenv("PROLONG_WTOL");
+    const double wt = wp ? std::atof(wp) : 1e-3;
+    std::function<double(double, double, double)> fr =
+        [chi](double x, double y, double z) { return chi(x, y, z); };
+
+    std::vector<ot::TreeNode> tmp;
+    function2Octree(fr, tmp, m_uiMaxDepth, wt, ELE_ORDER, MPI_COMM_WORLD);
+    ot::Mesh *mesh = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
+                                    MPI_COMM_WORLD, 0);
+    REQUIRE(mesh != nullptr);
+    // no early return on an inactive rank: the reduce below is on WORLD
+    const bool lact = mesh->isActive();
+
+    const unsigned int dofN = 3;
+    double worst            = 0.0;
+    if (lact) {
+        std::vector<double> cg;
+        mesh->createVector(cg, fr);
+        const size_t cgSz = cg.size();
+        const size_t unSz = mesh->getDegOfFreedomUnZip();
+        std::vector<double> cgN((size_t)dofN * cgSz);
+        for (unsigned int v = 0; v < dofN; v++) {
+            const double f = (double)(1u << v);
+            for (size_t i = 0; i < cgSz; i++) cgN[v * cgSz + i] = f * cg[i];
+            mesh->performGhostExchange(cgN.data() + v * cgSz);
+        }
+        std::vector<double> uz((size_t)dofN * unSz, 0.0);
+        mesh->unzip(cgN.data(), uz.data(), dofN);
+
+        for (unsigned int v = 1; v < dofN; v++) {
+            const double f = (double)(1u << v);
+            for (size_t i = 0; i < unSz; i++) {
+                const double d = std::fabs(uz[v * unSz + i] - f * uz[i]);
+                if (d > worst) worst = d;
+            }
+        }
+    }
+    double gworst = worst;
+    MPI_Allreduce(&worst, &gworst, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+    int rk_l = 0;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rk_l);
+    if (rk_l == 0)
+        std::printf("\n=== unzip dof-slice linearity: max |uz_v - 2^v uz_0| "
+                    "= %.6e (exact zero required) ===\n",
+                    gworst);
+    CHECK(gworst == 0.0);
+    delete mesh;
+}
+
+/* ------------------------------------------------------------------ */
 /* Why is a direction retired? Per-offset classification.              */
 /* ------------------------------------------------------------------ */
 

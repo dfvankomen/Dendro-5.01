@@ -13918,11 +13918,15 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
         if (!(anyGraded && allDg != nullptr)) gvalid.clear();
 
         if (anyGraded && allDg != nullptr) {
-            gslab.assign((size_t)27 * m_uiNpE, T(0));
+            // Per dof: the slab is DATA, and reusing variable 0's slab for
+            // every v silently mixed variables at any graded pad. Layout
+            // [v][sidx][node], so the per-v gather below can be handed a
+            // contiguous 27-slab block.
+            gslab.assign((size_t)dof * 27 * m_uiNpE, T(0));
             gvalid.assign(27, 0);
             const ot::TreeNode &E = m_uiAllElements[ele];
             const long S = 1l << (m_uiMaxDepth - E.getLevel());
-            std::vector<T> childBuf(m_uiNpE);
+            std::vector<T> childBuf((size_t)dof * m_uiNpE);
             for (int oz = -1; oz <= 1; oz++)
                 for (int oy = -1; oy <= 1; oy++)
                     for (int ox = -1; ox <= 1; ox++) {
@@ -13976,8 +13980,12 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                             if (!aligned) continue;
                             const T *src =
                                 allDg + (size_t)q * allDgEleStride;
-                            std::copy(src, src + m_uiNpE,
-                                      gslab.begin() + (size_t)sidx * m_uiNpE);
+                            for (unsigned int v = 0; v < dof; v++)
+                                std::copy(src + (size_t)v * dgSz,
+                                          src + (size_t)v * dgSz + m_uiNpE,
+                                          gslab.begin() +
+                                              ((size_t)v * 27 + sidx) *
+                                                  m_uiNpE);
                             gvalid[sidx] = 1;
                             continue;
                         }
@@ -14014,11 +14022,15 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                         }
                         this->prolongateChildNodes(
                             in, cgSz, allDg + (size_t)q * allDgEleStride, dgSz,
-                            q, cn, 1u, childBuf.data(), im1, im2, allDg,
+                            q, cn, dof, childBuf.data(), im1, im2, allDg,
                             allDgEleStride,
                             lvlMask & ~(unsigned int)WPX_LVL_COARSER);
-                        std::copy(childBuf.begin(), childBuf.end(),
-                                  gslab.begin() + (size_t)sidx * m_uiNpE);
+                        for (unsigned int v = 0; v < dof; v++)
+                            std::copy(childBuf.begin() + (size_t)v * m_uiNpE,
+                                      childBuf.begin() +
+                                          (size_t)(v + 1) * m_uiNpE,
+                                      gslab.begin() +
+                                          ((size_t)v * 27 + sidx) * m_uiNpE);
                         gvalid[sidx] = 1;
                     }
         }
@@ -14070,7 +14082,9 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                 this->gatherExtendedCoarseNodesDG(
                     allDg, allDgEleStride, (size_t)v * dgSz, ele, ext,
                     cube.data(), emode,
-                    gvalid.empty() ? nullptr : gslab.data(),
+                    gvalid.empty()
+                        ? nullptr
+                        : gslab.data() + (size_t)v * 27 * m_uiNpE,
                     gvalid.empty() ? nullptr : gvalid.data());
             else
                 this->gatherExtendedCoarseNodesCG(in + v * cgSz, ele, ext,
