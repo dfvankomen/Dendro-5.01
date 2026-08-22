@@ -2966,22 +2966,32 @@ TEST_CASE("unzip cost") {
                                     MPI_COMM_WORLD, 0);
     const double tm1 = MPI_Wtime();
     REQUIRE(mesh != nullptr);
-    if (!mesh->isActive()) { delete mesh; return; }
+    // Do NOT return early on an inactive rank: the timing loop barriers and
+    // the reductions below run on MPI_COMM_WORLD, so a rank that leaves here
+    // deadlocks the ranks the comm switch kept. (This deadlock is why the
+    // np>1 dof scaling stayed unmeasured for so long.) Inactive ranks walk
+    // through with zeros instead.
+    const bool tc_active = mesh->isActive();
 
-    std::vector<double> cg;
-    mesh->createVector(cg, fr);
-    // dof copies of the same field: the exchange payload is per variable, so
-    // this is what tells us how the cost scales toward a GR-sized system
-    std::vector<double> cgN((size_t)dofN * cg.size());
-    for (unsigned int v = 0; v < dofN; v++)
-        std::copy(cg.begin(), cg.end(), cgN.begin() + (size_t)v * cg.size());
-    std::vector<double> uz((size_t)dofN * mesh->getDegOfFreedomUnZip(), 0.0);
-    for (unsigned int v = 0; v < dofN; v++)
-        mesh->performGhostExchange(cgN.data() + (size_t)v * cg.size());
+    std::vector<double> cg, cgN, uz;
+    if (tc_active) {
+        mesh->createVector(cg, fr);
+        // dof copies of the same field: the exchange payload is per variable,
+        // so this is what tells us how the cost scales toward a GR-sized
+        // system
+        cgN.resize((size_t)dofN * cg.size());
+        for (unsigned int v = 0; v < dofN; v++)
+            std::copy(cg.begin(), cg.end(),
+                      cgN.begin() + (size_t)v * cg.size());
+        uz.assign((size_t)dofN * mesh->getDegOfFreedomUnZip(), 0.0);
+        for (unsigned int v = 0; v < dofN; v++)
+            mesh->performGhostExchange(cgN.data() + (size_t)v * cg.size());
+    }
 
-    double best = 1e30, tot = 0.0;
+    double best = tc_active ? 1e30 : 0.0, tot = 0.0;
     for (int it = 0; it < NIT; it++) {
         MPI_Barrier(MPI_COMM_WORLD);
+        if (!tc_active) continue;
         const double t0 = MPI_Wtime();
         mesh->unzip(cgN.data(), uz.data(), dofN);
         const double dt = MPI_Wtime() - t0;
@@ -2989,10 +2999,13 @@ TEST_CASE("unzip cost") {
         tot += dt;
     }
 
-    long nloc = (long)(mesh->getElementLocalEnd() -
-                       mesh->getElementLocalBegin());
-    long ngh  = (long)mesh->getAllElements().size() - nloc;
-    long nblk = (long)mesh->getLocalBlockList().size();
+    long nloc = 0, ngh = 0, nblk = 0;
+    if (tc_active) {
+        nloc = (long)(mesh->getElementLocalEnd() -
+                      mesh->getElementLocalBegin());
+        ngh  = (long)mesh->getAllElements().size() - nloc;
+        nblk = (long)mesh->getLocalBlockList().size();
+    }
 
     // How much work could actually be overlapped with the ghost DG exchange?
     // Only an element whose wide stencil stays entirely inside this rank can
@@ -3001,7 +3014,7 @@ TEST_CASE("unzip cost") {
     // ghost slices. Conservative test: local, and all 26 neighbour offsets
     // that exist are local too.
     long nsafe = 0;
-    {
+    if (tc_active) {
         const unsigned int lb = mesh->getElementLocalBegin();
         const unsigned int le = mesh->getElementLocalEnd();
         for (unsigned int e = lb; e < le; e++) {
