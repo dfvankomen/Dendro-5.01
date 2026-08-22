@@ -1781,14 +1781,177 @@ TEST_CASE("unzip pad error across 2:1 interfaces") {
             {
                 const std::vector<ot::TreeNode> &ael = mesh->getAllElements();
                 dg_wide.assign((size_t)ael.size() * nPe2, 0.0);
-                // Ghost elements are the owner's job -- their hanging-face
-                // reconstruction needs round-2 data this rank does not have.
-                // Mirrors what unzip now does.
+                // Two passes, mirroring unzip: the wide face path gathers
+                // ONLY from a whole-mesh DG array now (a CG gather would
+                // recurse), so build the narrow array first and hand it in.
+                // np=1 here, so every element is local.
+                std::vector<double> dg_n((size_t)ael.size() * nPe2, 0.0);
+                for (unsigned int e = mesh->getElementLocalBegin();
+                     e < mesh->getElementLocalEnd(); e++)
+                    mesh->getElementNodalValues(
+                        cg.data(), dg_n.data() + (size_t)e * nPe2, e, false,
+                        im1.data(), im2.data(), false);
                 for (unsigned int e = mesh->getElementLocalBegin();
                      e < mesh->getElementLocalEnd(); e++)
                     mesh->getElementNodalValues(
                         cg.data(), dg_wide.data() + (size_t)e * nPe2, e, false,
-                        im1.data(), im2.data(), true);
+                        im1.data(), im2.data(), true, dg_n.data(),
+                        (size_t)nPe2);
+            }
+
+            // Where does the DG input error live? At t=0 every non-hanging
+            // node is an exact sample, so all of it is hanging
+            // reconstruction. Bin |dg - analytic| by node class: face
+            // interior split by the owner-plane tangential reach the wide
+            // face path achieved, and edge/vertex nodes split by whether an
+            // edge owner resolved.
+            {
+                const std::vector<ot::TreeNode> &ael = mesh->getAllElements();
+                const unsigned int FAC6[6] = {OCT_DIR_LEFT, OCT_DIR_RIGHT,
+                                              OCT_DIR_DOWN, OCT_DIR_UP,
+                                              OCT_DIR_BACK, OCT_DIR_FRONT};
+                const unsigned int PRE[12][2] = {
+                    {OCT_DIR_LEFT, OCT_DIR_DOWN},  {OCT_DIR_LEFT, OCT_DIR_UP},
+                    {OCT_DIR_LEFT, OCT_DIR_BACK},  {OCT_DIR_LEFT, OCT_DIR_FRONT},
+                    {OCT_DIR_RIGHT, OCT_DIR_DOWN}, {OCT_DIR_RIGHT, OCT_DIR_UP},
+                    {OCT_DIR_RIGHT, OCT_DIR_BACK}, {OCT_DIR_RIGHT, OCT_DIR_FRONT},
+                    {OCT_DIR_DOWN, OCT_DIR_BACK},  {OCT_DIR_DOWN, OCT_DIR_FRONT},
+                    {OCT_DIR_UP, OCT_DIR_BACK},    {OCT_DIR_UP, OCT_DIR_FRONT}};
+                const char *cnm[6] = {"non-hanging",
+                                      "hanging face, full tangential reach",
+                                      "hanging face, clipped tangential",
+                                      "hanging edge, owner resolved",
+                                      "hanging edge, NO owner",
+                                      "hanging vertex"};
+                double cs2[6] = {0, 0, 0, 0, 0, 0};
+                double cmxv[6] = {0, 0, 0, 0, 0, 0};
+                long ccn[6] = {0, 0, 0, 0, 0, 0};
+                long clipwhy[4] = {0, 0, 0, 0};
+                const unsigned int wantT =
+                    dendro::wideprolong::stencil_width(ELE_ORDER) -
+                    (ELE_ORDER + 1);
+                for (unsigned int e = mesh->getElementLocalBegin();
+                     e < mesh->getElementLocalEnd(); e++) {
+                    const double szl =
+                        (double)(1u << (m_uiMaxDepth - ael[e].getLevel()));
+                    const double hl = szl / (double)ELE_ORDER;
+                    const unsigned int nd2 = mesh->getNumDirections();
+                    const std::vector<unsigned int> &e2e2 =
+                        mesh->getE2EMapping();
+                    for (unsigned int kk = 0; kk <= ELE_ORDER; kk++)
+                        for (unsigned int jj = 0; jj <= ELE_ORDER; jj++)
+                            for (unsigned int ii = 0; ii <= ELE_ORDER; ii++) {
+                                const bool hang =
+                                    mesh->isNodeHanging(e, ii, jj, kk);
+                                const int exl[3] = {
+                                    (ii == 0) ? -1 : (ii == ELE_ORDER) ? 1 : 0,
+                                    (jj == 0) ? -1 : (jj == ELE_ORDER) ? 1 : 0,
+                                    (kk == 0) ? -1 : (kk == ELE_ORDER) ? 1 : 0};
+                                const int nxt = (exl[0] != 0) + (exl[1] != 0) +
+                                                (exl[2] != 0);
+                                int cls;
+                                if (!hang)
+                                    cls = 0;
+                                else if (nxt <= 1) {
+                                    // which face: the single extreme axis
+                                    int ax = (exl[0] != 0) ? 0
+                                             : (exl[1] != 0) ? 1 : 2;
+                                    int d = 2 * ax + (exl[ax] > 0 ? 1 : 0);
+                                    const unsigned int owner =
+                                        e2e2[e * nd2 + FAC6[d]];
+                                    bool fullt = false;
+                                    if (owner != LOOK_UP_TABLE_DEFAULT &&
+                                        owner < ael.size()) {
+                                        unsigned int exf[6];
+                                        unsigned char emf[6];
+                                        mesh->probeCoarseExtension(
+                                            owner, wantT, exf,
+                                            ot::Mesh::WPX_LVL_DEFAULT, emf);
+                                        const int aA = (ax == 0) ? 1 : 0;
+                                        const int aB = (ax == 2) ? 1 : 2;
+                                        fullt =
+                                            (exf[2 * aA] + exf[2 * aA + 1] >=
+                                             wantT) &&
+                                            (exf[2 * aB] + exf[2 * aB + 1] >=
+                                             wantT);
+                                        // why is a tangential direction of
+                                        // this owner refused?
+                                        if (!fullt && ii == 1 && jj == 1) {
+                                            const int tang[2] = {aA, aB};
+                                            for (int t2 = 0; t2 < 2; t2++)
+                                                for (int lo2 = 0; lo2 < 2;
+                                                     lo2++) {
+                                                    const unsigned int dd2 =
+                                                        2 * tang[t2] + lo2;
+                                                    if (exf[dd2]) continue;
+                                                    const unsigned int nb2 =
+                                                        e2e2[owner * nd2 +
+                                                             FAC6[dd2]];
+                                                    if (nb2 ==
+                                                            LOOK_UP_TABLE_DEFAULT ||
+                                                        nb2 >= ael.size())
+                                                        clipwhy[0]++;
+                                                    else if (ael[nb2]
+                                                                 .getLevel() >
+                                                             ael[owner]
+                                                                 .getLevel())
+                                                        clipwhy[1]++;
+                                                    else if (ael[nb2]
+                                                                 .getLevel() <
+                                                             ael[owner]
+                                                                 .getLevel())
+                                                        clipwhy[2]++;
+                                                    else
+                                                        clipwhy[3]++;
+                                                }
+                                        }
+                                    }
+                                    cls = fullt ? 1 : 2;
+                                } else if (nxt == 2) {
+                                    // which edge: the two extreme axes
+                                    int d1 = -1, d2 = -1;
+                                    for (int a = 0; a < 3; a++)
+                                        if (exl[a] != 0) {
+                                            int d = 2 * a + (exl[a] > 0);
+                                            if (d1 < 0) d1 = d;
+                                            else d2 = d;
+                                        }
+                                    cls = (mesh->wpxEdgeOwner(
+                                               e, FAC6[d1], FAC6[d2]) !=
+                                           LOOK_UP_TABLE_DEFAULT)
+                                              ? 3
+                                              : 4;
+                                } else
+                                    cls = 5;
+                                const double vv = fn(
+                                    (double)ael[e].getX() + ii * hl,
+                                    (double)ael[e].getY() + jj * hl,
+                                    (double)ael[e].getZ() + kk * hl);
+                                const double dd = std::fabs(
+                                    dg_wide[(size_t)e * nPe2 +
+                                            (kk * (ELE_ORDER + 1) + jj) *
+                                                (ELE_ORDER + 1) +
+                                            ii] -
+                                    vv);
+                                cs2[cls] += dd * dd;
+                                if (dd > cmxv[cls]) cmxv[cls] = dd;
+                                ccn[cls]++;
+                            }
+                }
+                (void)PRE;
+                std::printf(
+                    "\nDG input error by node class (|dg_wide - analytic|, "
+                    "local elements):\n");
+                for (int c = 0; c < 6; c++) {
+                    if (!ccn[c]) continue;
+                    std::printf("  %-38s %9ld  rms %.3e  max %.3e\n", cnm[c],
+                                ccn[c], std::sqrt(cs2[c] / (double)ccn[c]),
+                                cmxv[c]);
+                }
+                std::printf(
+                    "  clipped-face owner tangential refusals (one node per "
+                    "face): bdy %ld finer %ld coarser %ld corner-rule %ld\n",
+                    clipwhy[0], clipwhy[1], clipwhy[2], clipwhy[3]);
             }
 
             // Pass 3 probes WITH the mode array, which is what
@@ -2301,7 +2464,17 @@ TEST_CASE("hamiltonian constraint across 2:1 interfaces") {
     mesh->createVector(cg, fr);
     std::vector<double> uz(mesh->getDegOfFreedomUnZip(), 0.0);
     mesh->performGhostExchange(cg);
+    // SS5.1 decider, part two: PROLONG_ANALYTIC_INPUTS feeds the pad fill
+    // EXACT nodal values (hanging nodes included), so any interface excess
+    // that remains is operator/reach error and any excess that disappears
+    // was input contamination from hanging-node reconstruction.
+    const bool exact_inputs =
+        std::getenv("PROLONG_ANALYTIC_INPUTS") != nullptr;
+    if (exact_inputs)
+        mesh->setWpxAnalyticDebug(
+            [chi](double x, double y, double z) { return chi(x, y, z); });
     mesh->unzip(cg.data(), uz.data(), 1);
+    if (exact_inputs) mesh->setWpxAnalyticDebug(nullptr);
 
     // The radius-3 stencils below assume a pad width of 3, which is p/2 and
     // so holds only at p >= 6. At p=4 the pad is 2 and every stencil reads
@@ -2340,6 +2513,43 @@ TEST_CASE("hamiltonian constraint across 2:1 interfaces") {
         return -1;
     };
 
+    // index of the element containing a point, or -1
+    auto locateEle = [&](double x, double y, double z) -> long {
+        for (size_t e = 0; e < AE.size(); e++) {
+            const double sz =
+                (double)(1u << (m_uiMaxDepth - AE[e].getLevel()));
+            if (x < (double)AE[e].getX() || x >= (double)AE[e].getX() + sz)
+                continue;
+            if (y < (double)AE[e].getY() || y >= (double)AE[e].getY() + sz)
+                continue;
+            if (z < (double)AE[e].getZ() || z >= (double)AE[e].getZ() + sz)
+                continue;
+            return (long)e;
+        }
+        return -1;
+    };
+
+    // Reach class of a source element: did the wide stencil achieve full
+    // width on ALL three axes when prolongating out of it? Memoised; the
+    // probe is read-only. This is the split handoff3 SS5.1 asks for: if
+    // full-reach sources still show ~10x interface excess, reach is not the
+    // binding constraint and the non-uniform gather rewrite is not the fix.
+    const unsigned int wantR =
+        dendro::wideprolong::stencil_width(ELE_ORDER) - (ELE_ORDER + 1);
+    std::vector<int> reachCls(AE.size(), -1);
+    auto reachOf = [&](long e) -> int {
+        if (reachCls[e] < 0) {
+            unsigned int ex[6];
+            mesh->probeCoarseExtension((unsigned int)e, wantR, ex,
+                                       ot::Mesh::WPX_LVL_DEFAULT);
+            bool f = true;
+            for (int a = 0; a < 3; a++)
+                if (ex[2 * a] + ex[2 * a + 1] < wantR) f = false;
+            reachCls[e] = f ? 1 : 0;
+        }
+        return reachCls[e];
+    };
+
     // Pooling levels makes the >=4 bin the bulk error of the COARSEST blocks,
     // which swamps the interface excess we are trying to see. Stratify, so
     // each level's dist-1 is compared against a background at its own
@@ -2355,6 +2565,18 @@ TEST_CASE("hamiltonian constraint across 2:1 interfaces") {
     double mx[NB]  = {0, 0, 0, 0, 0};
     long   cnt[NB] = {0, 0, 0, 0, 0};
     long   nskip = 0, njumpblk = 0;
+
+    // dist 1-3 split by the reach class of the source element that filled
+    // the pad this point's stencil reads: [level][dist bin][partial|full]
+    static double s2R[NL][3][2];
+    static double mxR[NL][3][2];
+    static long   cnR[NL][3][2];
+    for (int a = 0; a < NL; a++)
+        for (int t = 0; t < 3; t++)
+            for (int r = 0; r < 2; r++) {
+                s2R[a][t][r] = 0; mxR[a][t][r] = 0; cnR[a][t][r] = 0;
+            }
+    long nsrcmiss = 0;
 
     const std::vector<ot::Block> &blks = mesh->getLocalBlockList();
     for (size_t b = 0; b < blks.size(); b++) {
@@ -2476,6 +2698,34 @@ TEST_CASE("hamiltonian constraint across 2:1 interfaces") {
                             mxL[bl][bin] = std::fabs(H);
                         cnL[bl][bin]++;
                     }
+
+                    // attribute the point to the coarse element that filled
+                    // the pad across its nearest 2:1 face, and split by that
+                    // element's stencil reach
+                    if (bin < 3 && bl < NL) {
+                        int nf = -1;
+                        for (int d = 0; d < 6; d++)
+                            if (jump[d] && di[d] == dist) { nf = d; break; }
+                        if (nf >= 0) {
+                            double q[3] = {px, py, pz};
+                            const int ax2 = nf / 2;
+                            const double lo =
+                                (ax2 == 0) ? x0 : (ax2 == 1) ? y0 : z0;
+                            const double nn =
+                                (ax2 == 0) ? lx : (ax2 == 1) ? ly : lz;
+                            q[ax2] = (nf % 2 == 0) ? lo + 0.5 * hx
+                                                   : lo + (nn - 1.5) * hx;
+                            const long se = locateEle(q[0], q[1], q[2]);
+                            if (se >= 0) {
+                                const int rc = reachOf(se);
+                                s2R[bl][bin][rc] += H * H;
+                                if (std::fabs(H) > mxR[bl][bin][rc])
+                                    mxR[bl][bin][rc] = std::fabs(H);
+                                cnR[bl][bin][rc]++;
+                            } else
+                                nsrcmiss++;
+                        }
+                    }
                 }
     }
 
@@ -2516,6 +2766,31 @@ TEST_CASE("hamiltonian constraint across 2:1 interfaces") {
                         std::sqrt(s2L[a][t] / (double)cnL[a][t]), mxL[a][t]);
         }
     }
+
+    // SS5.1 decider: same rows, split by source-element reach. Compare each
+    // row's rms against the same level's dist>=4 background above.
+    long nfullE = 0, npartE = 0;
+    for (size_t e = 0; e < reachCls.size(); e++) {
+        if (reachCls[e] == 1) nfullE++;
+        if (reachCls[e] == 0) npartE++;
+    }
+    std::printf(
+        "\ndist 1-3 split by SOURCE element reach (full = 10-pt stencil on "
+        "all axes):\nsource elements probed: full %ld, partial %ld;  points "
+        "with no source found %ld\n",
+        nfullE, npartE, nsrcmiss);
+    std::printf("%-6s %-10s %-8s %9s  %-13s %-13s\n", "lvl", "bin", "reach",
+                "count", "rms |H|", "max |H|");
+    const char *rn[2] = {"PARTIAL", "full"};
+    for (int a = 0; a < NL; a++)
+        for (int t = 0; t < 3; t++)
+            for (int r = 1; r >= 0; r--) {
+                if (!cnR[a][t][r]) continue;
+                std::printf("%-6d %-10s %-8s %9ld  %.6e  %.6e\n", a, nm[t],
+                            rn[r], cnR[a][t][r],
+                            std::sqrt(s2R[a][t][r] / (double)cnR[a][t][r]),
+                            mxR[a][t][r]);
+            }
 
     CHECK(cnt[0] > 0);
     delete mesh;
