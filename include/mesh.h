@@ -40,6 +40,7 @@
 #include "octUtils.h"
 #include "point.h"
 #include <atomic>
+#include <functional>
 
 #include "refel.h"
 #include "wideprolong.h"
@@ -328,6 +329,16 @@ class Mesh {
      * evolve in.
      */
     bool m_uiWpxRuntimeEnabled = true;
+
+    /**
+     * Diagnostic only. When set, unzip overwrites every materialised DG nodal
+     * value (hanging nodes included) with this analytic field before the
+     * scatter, so the prolongation runs on EXACT inputs. The residual
+     * interface error is then pure operator/reach error, which bounds what
+     * any input-quality fix (better hanging-face reconstruction) could buy.
+     * Never set outside a test.
+     */
+    std::function<double(double, double, double)> m_uiWpxAnalyticDebug;
 
     /**
      * Overlap state for the ghost DG exchange.
@@ -2706,6 +2717,12 @@ class Mesh {
      * See m_uiWpxRuntimeEnabled for what it does and does not change.
      */
     inline void setWideProlongEnabled(bool v) { m_uiWpxRuntimeEnabled = v; }
+
+    /** @brief Diagnostic: see m_uiWpxAnalyticDebug. Pass nullptr to clear. */
+    inline void setWpxAnalyticDebug(
+        std::function<double(double, double, double)> f) {
+        m_uiWpxAnalyticDebug = std::move(f);
+    }
 
     template <typename T>
     void unzip(const T *in, T *out, unsigned int dof = 1, int blk_filter = -1);

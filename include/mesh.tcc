@@ -11477,6 +11477,50 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     }
     this->exchangeWideProlongDG(in, cgSz, all_dg.data(),
                                 (size_t)dof * dgSz, dof, dgSz);
+
+    // Diagnostic: exact-input mode. Overwrite every DG value -- local and
+    // ghost, hanging nodes included -- with the analytic field, so the pad
+    // fill below runs on perfect inputs. See m_uiWpxAnalyticDebug.
+    if (m_uiWpxAnalyticDebug) {
+        // DENDRO_WPX_EXACT_CLASS limits the overwrite to one node class so
+        // the input error can be attributed: "face" = at most one extreme
+        // coordinate, "edge" = two or more (element edge or vertex).
+        // Unset = every node. Non-hanging nodes are exact already, so
+        // overwriting them is a no-op either way.
+        const char* cls_dbg = std::getenv("DENDRO_WPX_EXACT_CLASS");
+        const int want_cls =
+            (!cls_dbg) ? -1 : ((cls_dbg[0] == 'f') ? 0 : 1);
+        const unsigned int eo_dbg = m_uiElementOrder;
+        for (unsigned int e_dbg = 0; e_dbg < m_uiNumTotalElements; e_dbg++) {
+            const ot::TreeNode& tn_dbg = m_uiAllElements[e_dbg];
+            const double h_dbg =
+                (double)(1u << (m_uiMaxDepth - tn_dbg.getLevel())) /
+                (double)eo_dbg;
+            for (unsigned int kk = 0; kk <= eo_dbg; kk++)
+                for (unsigned int jj = 0; jj <= eo_dbg; jj++)
+                    for (unsigned int ii = 0; ii <= eo_dbg; ii++) {
+                        const int next_dbg =
+                            (ii == 0 || ii == eo_dbg ? 1 : 0) +
+                            (jj == 0 || jj == eo_dbg ? 1 : 0) +
+                            (kk == 0 || kk == eo_dbg ? 1 : 0);
+                        if (want_cls == 0 && next_dbg >= 2) continue;
+                        if (want_cls == 1 && next_dbg < 2) continue;
+                        const double val_dbg = m_uiWpxAnalyticDebug(
+                            (double)tn_dbg.getX() + ii * h_dbg,
+                            (double)tn_dbg.getY() + jj * h_dbg,
+                            (double)tn_dbg.getZ() + kk * h_dbg);
+                        const unsigned int n_dbg =
+                            (kk * (eo_dbg + 1) + jj) * (eo_dbg + 1) + ii;
+                        for (unsigned int v_dbg = 0; v_dbg < dof; v_dbg++) {
+                            const std::size_t at_dbg =
+                                (std::size_t)e_dbg * dof * dgSz +
+                                (std::size_t)v_dbg * dgSz + n_dbg;
+                            all_dg[at_dbg] = (T)val_dbg;
+                            dg_narrow[at_dbg] = (T)val_dbg;
+                        }
+                    }
+        }
+    }
 #endif
 
 #pragma omp parallel
@@ -11715,6 +11759,51 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 
         sweep(materialise_narrow, dg_narrow_s.data());
         sweep(materialise_wide, all_dg_s.data());
+
+        // Diagnostic: exact-input mode. Overwrite every DG value -- local and
+        // ghost, hanging nodes included -- with the analytic field, so the pad
+        // fill below runs on perfect inputs. See m_uiWpxAnalyticDebug.
+        if (m_uiWpxAnalyticDebug) {
+            // DENDRO_WPX_EXACT_CLASS limits the overwrite to one node class
+            // so the input error can be attributed: "face" = at most one
+            // extreme coordinate, "edge" = two or more (element edge or
+            // vertex). Unset = every node. Non-hanging nodes are exact
+            // already, so overwriting them is a no-op either way.
+            const char* cls_dbg = std::getenv("DENDRO_WPX_EXACT_CLASS");
+            const int want_cls =
+                (!cls_dbg) ? -1 : ((cls_dbg[0] == 'f') ? 0 : 1);
+            const unsigned int eo_dbg = m_uiElementOrder;
+            for (unsigned int e_dbg = 0; e_dbg < m_uiNumTotalElements; e_dbg++) {
+                const ot::TreeNode& tn_dbg = m_uiAllElements[e_dbg];
+                const double h_dbg =
+                    (double)(1u << (m_uiMaxDepth - tn_dbg.getLevel())) /
+                    (double)eo_dbg;
+                for (unsigned int kk = 0; kk <= eo_dbg; kk++)
+                    for (unsigned int jj = 0; jj <= eo_dbg; jj++)
+                        for (unsigned int ii = 0; ii <= eo_dbg; ii++) {
+                            const int next_dbg =
+                                (ii == 0 || ii == eo_dbg ? 1 : 0) +
+                                (jj == 0 || jj == eo_dbg ? 1 : 0) +
+                                (kk == 0 || kk == eo_dbg ? 1 : 0);
+                            if (want_cls == 0 && next_dbg >= 2) continue;
+                            if (want_cls == 1 && next_dbg < 2) continue;
+                            const double val_dbg = m_uiWpxAnalyticDebug(
+                                (double)tn_dbg.getX() + ii * h_dbg,
+                                (double)tn_dbg.getY() + jj * h_dbg,
+                                (double)tn_dbg.getZ() + kk * h_dbg);
+                            const unsigned int n_dbg =
+                                (kk * (eo_dbg + 1) + jj) * (eo_dbg + 1) + ii;
+                            for (unsigned int v_dbg = 0; v_dbg < dof; v_dbg++) {
+                                const std::size_t at_dbg =
+                                    (std::size_t)e_dbg * dof * dgSz +
+                                    (std::size_t)v_dbg * dgSz + n_dbg;
+                                all_dg_s[at_dbg] = (T)val_dbg;
+                                dg_narrow_s[at_dbg] = (T)val_dbg;
+                            }
+                        }
+            }
+        }
+
         if (wpx_prof) {
             t_e = MPI_Wtime();
             std::printf(
