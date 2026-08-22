@@ -14247,8 +14247,9 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
     const unsigned int nrp = p + 1;
 
     wpxEdgeCalls()++;
-    // see prolongateHangingFaceWide: a DG array makes ghosts readable.
-    const bool dgOk          = (allDg != nullptr);
+    // see prolongateHangingFaceWide: without a DG array the volume gather
+    // would recurse through its own hanging-face widening, so fall back.
+    if (allDg == nullptr) return false;
     const unsigned int owner = this->wpxEdgeOwner(elementID, d1, d2);
     if (owner == LOOK_UP_TABLE_DEFAULT) return false;
 
@@ -14260,10 +14261,16 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
     const unsigned int width = dendro::wideprolong::stencil_width(p);
     const unsigned int want  = (width > nrp) ? (width - nrp) : 0u;
 
+    // Like the hanging face: the edge values are the owner's prolongated
+    // child restricted to the edge line, so build them with the volume
+    // operator, which can extend graded into coarser neighbours where the
+    // along-axis neighbour is not at the owner's level.
+    const unsigned int mask = WPX_LVL_DEFAULT;
+
     unsigned int ext[6];
     unsigned char emode[6];
     const unsigned int st = this->probeCoarseExtension(
-        owner, want, ext, WPX_LVL_SAME, emode, dgOk);
+        owner, want, ext, mask, emode, true);
     if (st & WPX_CLIPPED_GHOST) {
         std::cerr << "[wide prolongation] hanging edge of element "
                   << elementID
@@ -14273,20 +14280,19 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
         MPI_Abort(m_uiCommGlobal, 1);
     }
 
-    // widen along the edge axis only
-    for (int a = 0; a < 3; a++)
-        if (a != ax) {
-            ext[2 * a] = 0;
-            ext[2 * a + 1] = 0;
-            emode[2 * a] = WPX_EXT_NONE;
-            emode[2 * a + 1] = WPX_EXT_NONE;
-        }
-    if (!(ext[2 * ax] || ext[2 * ax + 1])) {
+    // values on the line depend only on data along it, so with no room on
+    // the edge axis the volume operator cannot beat the narrow 1D
+    // interpolation -- keep today's fallback
+    const unsigned int e_tot = ext[2 * ax] + ext[2 * ax + 1];
+    if (!e_tot) {
         wpxLogFallbackOnce("hanging edge", 0, want);
         return false;
     }
+    if (e_tot < want) wpxLogFallbackOnce("hanging edge", e_tot, want);
 
-    // where this element's edge sits on the owner
+    // where this element's edge sits on the owner: for the two axes normal
+    // to the edge it lies on the owner's boundary (node 0 or p), and along
+    // the edge this element covers the half given by the 1D cnum bit
     const ot::TreeNode &E = m_uiAllElements[elementID];
     const ot::TreeNode &Q = m_uiAllElements[owner];
     const long Sq         = 1l << (m_uiMaxDepth - Q.getLevel());
@@ -14297,55 +14303,33 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
         if (d1 == (unsigned int)(2 * a + 1) || d2 == (unsigned int)(2 * a + 1))
             c += (1l << (m_uiMaxDepth - E.getLevel()));  // high-side edge
         loc[a] = (unsigned int)((c * (long)p) / Sq);
-        if (loc[a] > p) return false;
+        if (loc[a] != 0 && loc[a] != p) return false;  // not on Q's edge
     }
 
-    static thread_local std::vector<T> cube, eleScratch, line;
-    static thread_local std::vector<double> op, coords, im1_own, im2_own;
-
-    if (im1 == nullptr || im2 == nullptr) {
-        im1_own.resize(m_uiNpE);
-        im2_own.resize(m_uiNpE);
+    unsigned int cb[3];
+    cb[ax] = cnum & 1u;
+    for (int a = 0; a < 3; a++) {
+        if (a == ax) continue;
+        cb[a] = (loc[a] == p) ? 1u : 0u;
     }
-    double *const g_im1 = (im1 != nullptr) ? im1 : im1_own.data();
-    double *const g_im2 = (im2 != nullptr) ? im2 : im2_own.data();
+    const unsigned int cnum3 = cb[0] | (cb[1] << 1u) | (cb[2] << 2u);
 
-    const unsigned int nx = nrp + ext[0] + ext[1];
-    const unsigned int ny = nrp + ext[2] + ext[3];
-    const unsigned int nz = nrp + ext[4] + ext[5];
+    static thread_local std::vector<T> childBufE;
+    const T *odg = allDg + (size_t)owner * allDgEleStride;
+    childBufE.resize(m_uiNpE);
+    this->prolongateChildNodes(vec, (size_t)0, odg, (size_t)m_uiNpE, owner,
+                               cnum3, 1u, childBufE.data(), im1, im2, allDg,
+                               allDgEleStride, mask);
 
-    cube.resize((size_t)nx * ny * nz);
-    eleScratch.resize((size_t)8 * m_uiNpE);
-
-    if (dgOk)
-        this->gatherExtendedCoarseNodesDG(allDg, allDgEleStride, 0, owner, ext,
-                                          cube.data(), emode);
-    else
-        this->gatherExtendedCoarseNodesCG(vec, owner, ext, cube.data(),
-                                          eleScratch.data(), g_im1, g_im2,
-                                          false, emode);
-
-    const unsigned int n_in = nrp + ext[2 * ax] + ext[2 * ax + 1];
-    line.resize(n_in);
-    for (unsigned int t = 0; t < n_in; t++) {
-        unsigned int idx[3];
-        idx[0] = loc[0] + ext[0];
-        idx[1] = loc[1] + ext[2];
-        idx[2] = loc[2] + ext[4];
-        idx[ax] = t;
-        line[t] = cube[(size_t)(idx[2] * ny + idx[1]) * nx + idx[0]];
+    for (unsigned int t = 0; t < nrp; t++) {
+        unsigned int id3[3];
+        id3[0]  = loc[0];
+        id3[1]  = loc[1];
+        id3[2]  = loc[2];
+        id3[ax] = t;
+        out[t]  = childBufE[(id3[2] * nrp + id3[1]) * nrp + id3[0]];
     }
 
-    wpxAxisCoords(p, ext[2 * ax], emode[2 * ax], ext[2 * ax + 1],
-                  emode[2 * ax + 1], coords);
-    dendro::wideprolong::build_1d_at(p, cnum & 1u, coords, width, op);
-
-    for (unsigned int i = 0; i < nrp; i++) {
-        T acc = T(0);
-        for (unsigned int j = 0; j < n_in; j++)
-            acc += (T)op[(size_t)i * n_in + j] * line[j];
-        out[i] = acc;
-    }
     wpxEdgeWins()++;
     return true;
 #endif
@@ -14369,20 +14353,23 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
     const unsigned int nrp = p + 1;
 
     wpxFaceCalls()++;
-    // A whole-mesh DG array carries finished values for every ghost, so the
-    // owner and its neighbourhood are readable even without a nodal map.
-    const bool dgOk = (allDg != nullptr);
+    // The volume operator below gathers through the whole-mesh DG array. A
+    // CG gather is not an option here: its inner fetches widen their own
+    // hanging faces, which re-enters this function on the owner's
+    // neighbourhood and recurses without bound. Callers without a DG array
+    // (grid transfer, oda, the CG diagnostics) fall back to narrow, exactly
+    // as they did before allowWide became opt-in.
+    if (allDg == nullptr) return false;
     const unsigned int owner =
         m_uiE2EMapping[elementID * m_uiNumDirections + dir];
     if (owner == LOOK_UP_TABLE_DEFAULT || owner >= m_uiAllElements.size())
         return false;
-    if (!dgOk && !m_uiIsNodalMapValid[owner]) return false;
     if (m_uiAllElements[owner].getLevel() + 1 !=
         m_uiAllElements[elementID].getLevel())
         return false;
 
-    // in-plane axes: normal axis carries no extension, we only widen
-    // tangentially within the owner's face plane
+    // normal axis plus the two in-plane tangentials; the 2D face cnum encodes
+    // the tangentials as bit 0 -> axA, bit 1 -> axB
     int axN, axA, axB;
     if (dir == OCT_DIR_LEFT || dir == OCT_DIR_RIGHT) {
         axN = 0; axA = 1; axB = 2;
@@ -14392,20 +14379,24 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
         axN = 2; axA = 0; axB = 1;
     }
 
-    const unsigned int width =
-        dendro::wideprolong::stencil_width(p);
-    const unsigned int want = (width > nrp) ? (width - nrp) : 0u;
+    const unsigned int width = dendro::wideprolong::stencil_width(p);
+    const unsigned int want  = (width > nrp) ? (width - nrp) : 0u;
 
-    // Same-level neighbours only here, regardless of the decimation
-    // setting. This path must gather with widening disabled (it is itself
-    // inside getElementNodalValues, so widening would recurse), which
-    // leaves its inputs carrying narrow hanging-node values -- measured at
-    // 1.1e-07, against 4.1e-10 when the inner fetch may widen. Reaching
-    // further on inputs that dirty amplifies them rather than helping.
+    // These face values are the owner's prolongated child restricted to the
+    // shared plane, so build them with the VOLUME operator and read the plane
+    // off the child. That is the one path that already knows how to extend
+    // graded into a coarser neighbour, and reusing it keeps face and pad
+    // values consistent by construction. The in-plane-only widening that used
+    // to live here was the single largest input-error source when clipped:
+    // rms 1.5e-07 on clipped faces against 6.7e-13 on unclipped ones, with
+    // 43% of hanging-face nodes clipped on the wtol=1e-6 puncture mesh.
+    //
+    const unsigned int mask = WPX_LVL_DEFAULT;
+
     unsigned int ext[6];
+    unsigned char emode[6];
     const unsigned int st =
-        this->probeCoarseExtension(owner, want, ext, WPX_LVL_SAME, nullptr,
-                                   dgOk);
+        this->probeCoarseExtension(owner, want, ext, mask, emode, true);
     if (st & WPX_CLIPPED_GHOST) {
         std::cerr << "[wide prolongation] rank " << m_uiActiveRank
                   << ": hanging face of element " << elementID << " ("
@@ -14424,79 +14415,45 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
         MPI_Abort(m_uiCommGlobal, 1);
     }
 
-    ext[2 * axN]     = 0;
-    ext[2 * axN + 1] = 0;
-
-    const unsigned int a_lo = ext[2 * axA], a_hi = ext[2 * axA + 1];
-    const unsigned int b_lo = ext[2 * axB], b_hi = ext[2 * axB + 1];
-    if (!(a_lo || a_hi || b_lo || b_hi)) {
+    // values on the plane depend only on in-plane data, so with no
+    // tangential room the volume operator cannot beat the narrow 2D
+    // interpolation -- keep today's fallback
+    const unsigned int a_tot = ext[2 * axA] + ext[2 * axA + 1];
+    const unsigned int b_tot = ext[2 * axB] + ext[2 * axB + 1];
+    if (!(a_tot || b_tot)) {
         wpxLogFallbackOnce("hanging face", 0, want);
         return false;
     }
-    if (a_lo + a_hi < want || b_lo + b_hi < want)
-        wpxLogFallbackOnce("hanging face",
-                           std::min(a_lo + a_hi, b_lo + b_hi), want);
+    if (a_tot < want || b_tot < want)
+        wpxLogFallbackOnce("hanging face", std::min(a_tot, b_tot), want);
 
-    const unsigned int na = nrp + a_lo + a_hi;
-    const unsigned int nb = nrp + b_lo + b_hi;
-    const unsigned int nx = nrp + ext[0] + ext[1];
-    const unsigned int ny = nrp + ext[2] + ext[3];
+    // the owner's virtual child sharing this face: tangential bits from the
+    // 2D face cnum, normal bit on the side abutting this element
+    unsigned int cb[3] = {0, 0, 0};
+    cb[axA]            = cnum & 1u;
+    cb[axB]            = (cnum >> 1u) & 1u;
+    cb[axN]            = (dir & 1u) ? 0u : 1u;
+    const unsigned int cnum3 = cb[0] | (cb[1] << 1u) | (cb[2] << 2u);
+    // that child's face toward this element
+    const unsigned int nIdx = (dir & 1u) ? 0u : p;
 
-    // our face `dir` abuts the owner's opposite face
-    const unsigned int nIdx =
-        (dir == OCT_DIR_LEFT || dir == OCT_DIR_DOWN || dir == OCT_DIR_BACK)
-            ? p
-            : 0u;
+    static thread_local std::vector<T> childBuf;
+    const T *odg = allDg + (size_t)owner * allDgEleStride;
+    childBuf.resize(m_uiNpE);
+    this->prolongateChildNodes(vec, (size_t)0, odg, (size_t)m_uiNpE, owner,
+                               cnum3, 1u, childBuf.data(), im1, im2, allDg,
+                               allDgEleStride, mask);
 
-    static thread_local std::vector<T> cube, eleScratch, plane, tmp2d;
-    static thread_local std::vector<double> opA, opB, im1_own, im2_own;
-
-    if (im1 == nullptr || im2 == nullptr) {
-        im1_own.resize(m_uiNpE);
-        im2_own.resize(m_uiNpE);
-    }
-    double *const g_im1 = (im1 != nullptr) ? im1 : im1_own.data();
-    double *const g_im2 = (im2 != nullptr) ? im2 : im2_own.data();
-
-    cube.resize((size_t)nx * ny * (nrp + ext[4] + ext[5]));
-    eleScratch.resize((size_t)8 * m_uiNpE);
-    plane.resize((size_t)na * nb);
-    tmp2d.resize((size_t)nrp * nb);
-
-    // allowWide=false inside the gather: the inner fetches must not widen
-    // their own hanging faces or this recurses. Bounded at depth two.
-    //
-    // The DG array carries exactly those narrow-face values already, computed
-    // once by whichever rank owns each element, so reading it is both cheaper
-    // and the only option for a neighbourhood that reaches past round 1.
-    if (dgOk)
-        this->gatherExtendedCoarseNodesDG(allDg, allDgEleStride, 0, owner, ext,
-                                          cube.data());
-    else
-        this->gatherExtendedCoarseNodesCG(vec, owner, ext, cube.data(),
-                                          eleScratch.data(), g_im1, g_im2);
-
-    for (unsigned int ib = 0; ib < nb; ib++)
-        for (unsigned int ia = 0; ia < na; ia++) {
-            size_t c;
-            if (axN == 0)
-                c = (size_t)(ib * ny + ia) * nx + nIdx;
-            else if (axN == 1)
-                c = (size_t)(ib * ny + nIdx) * nx + ia;
-            else
-                c = (size_t)(nIdx * ny + ib) * nx + ia;
-            plane[(size_t)ib * na + ia] = cube[c];
+    for (unsigned int b = 0; b < nrp; b++)
+        for (unsigned int a = 0; a < nrp; a++) {
+            unsigned int id3[3];
+            id3[axN]         = nIdx;
+            id3[axA]         = a;
+            id3[axB]         = b;
+            out[b * nrp + a] =
+                childBuf[(id3[2] * nrp + id3[1]) * nrp + id3[0]];
         }
 
-    unsigned int na_in = 0, nb_in = 0;
-    dendro::wideprolong::build_1d(p, cnum & 1u, a_lo, a_hi, width, opA, na_in);
-    dendro::wideprolong::build_1d(p, (cnum >> 1u) & 1u, b_lo, b_hi, width, opB,
-                                  nb_in);
-
-    dendro::wideprolong::apply_x(na_in, nrp, nb, 1, opA.data(), plane.data(),
-                                 tmp2d.data());
-    dendro::wideprolong::apply_y(nb_in, nrp, nrp, 1, opB.data(), tmp2d.data(),
-                                 out);
     wpxFaceWins()++;
     return true;
 #endif

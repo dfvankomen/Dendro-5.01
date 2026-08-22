@@ -3253,13 +3253,23 @@ class Mesh {
      *
      * The fine element's hanging-face e2n entries alias the coarse owner's
      * face nodes, so the narrow path never learns which element the owner is.
-     * Here we resolve the owner through E2E, gather its neighbourhood, take
-     * the face plane our element abuts, and interpolate in-plane with a wide
-     * stencil on both tangential axes.
+     * Here we resolve the owner through E2E and hand the job to
+     * prolongateChildNodes: the face values are the owner's prolongated child
+     * restricted to the shared plane, and the volume operator is the one path
+     * that can extend graded into a coarser neighbour. In-plane-only widening
+     * used to live here; its clipped tangential directions were the largest
+     * single input-error source (rms 1.5e-07 against 6.7e-13 unclipped, 43%
+     * of hanging-face nodes clipped on the wtol=1e-6 puncture mesh), and
+     * routing through the volume operator removed the clip everywhere a
+     * same-level or coarser in-plane neighbour exists.
      *
-     * @return false when the wide path is unavailable -- flag off, no usable
-     *         owner, or no tangential room -- and the caller must fall back to
-     *         the narrow operator.
+     * Requires `allDg`: a CG gather's inner fetches would widen their own
+     * hanging faces and recurse without bound. Callers without a DG array
+     * fall back to narrow.
+     *
+     * @return false when the wide path is unavailable -- flag off, no DG
+     *         array, no usable owner, or no tangential room -- and the caller
+     *         must fall back to the narrow operator.
      */
     template <typename T>
     bool prolongateHangingFaceWide(const T *vec, unsigned int elementID,
@@ -3282,9 +3292,10 @@ class Mesh {
     /**
      * @brief Rebuild a hanging edge with the wide stencil.
      *
-     * The 1D analogue of prolongateHangingFaceWide: resolve the owner, gather
-     * its neighbourhood extended along the edge axis only, pull out the line
-     * the edge lies on, and interpolate along it.
+     * The 1D analogue of prolongateHangingFaceWide: resolve the owner through
+     * wpxEdgeOwner, prolongate its child covering the edge with the volume
+     * operator, and read off the edge line. Requires `allDg` for the same
+     * recursion reason as the face path.
      *
      * @return false when unavailable, so the caller falls back to narrow.
      */
