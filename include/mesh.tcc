@@ -11350,6 +11350,11 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                          int blk_filter) {
     if (!m_uiIsActive) return;
 
+#ifdef DENDRO_WIDE_PROLONGATION
+    // new DG arrays this call: retire every wpx child-memo entry
+    m_uiWpxMemoEpoch = wpxMemoClock();
+#endif
+
     const ot::TreeNode* pNodes = m_uiAllElements.data();
     const ot::Block* blkList   = m_uiLocalBlockList.data();
     const unsigned int eOrder  = m_uiElementOrder;
@@ -12164,11 +12169,16 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
     // still allocate all_dg and walk every element.
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
 #if !defined(DENDRO_UNZIP_OMP)
-    // Non-OMP build: just loop. No win to amortize.
+    // Non-OMP build: just loop. No win to amortize. unzip_scatter ticks the
+    // wpx memo epoch itself.
     for (unsigned int v = 0; v < n_vars; v++)
         this->unzip_scatter(ins[v], outs[v], 1);
     return;
 #else
+#ifdef DENDRO_WIDE_PROLONGATION
+    // new DG arrays this call: retire every wpx child-memo entry
+    m_uiWpxMemoEpoch = wpxMemoClock();
+#endif
     const ot::TreeNode* pNodes = m_uiAllElements.data();
     const ot::Block* blkList   = m_uiLocalBlockList.data();
     const unsigned int eOrder  = m_uiElementOrder;
@@ -13843,6 +13853,61 @@ void Mesh::prolongateChildNodesNarrow(const T *dgEle, size_t dgSz,
 }
 
 template <typename T>
+const T *Mesh::wpxProlongChildMemo(const T *in, size_t cgSz, unsigned int ele,
+                                   unsigned int cnum, unsigned int dof,
+                                   size_t dgSz, const T *allDg,
+                                   size_t allDgEleStride,
+                                   unsigned int lvlMask, double *im1,
+                                   double *im2) const {
+    // key on the array's identity plus everything the value depends on; the
+    // epoch (ticked by unzip) retires entries when contents may have changed
+    struct Key {
+        const void *dg;
+        std::uint64_t k;
+        bool operator==(const Key &o) const { return dg == o.dg && k == o.k; }
+    };
+    struct KeyHash {
+        size_t operator()(const Key &x) const {
+            return std::hash<const void *>()(x.dg) ^
+                   (std::hash<std::uint64_t>()(x.k) * 0x9e3779b97f4a7c15ull);
+        }
+    };
+    static thread_local std::unordered_map<Key, std::vector<T>, KeyHash> memo;
+    static thread_local std::uint64_t memo_epoch = 0;
+    static thread_local size_t memo_elems       = 0;
+    // ~16 MiB of cached values per thread; past that, clear and refill. SFC
+    // locality keeps the working set of nearby owners hot either way, and a
+    // miss only costs the recompute the memo exists to skip.
+    constexpr size_t MEMO_ELEM_CAP = (size_t)2 * 1024 * 1024;
+
+    if (memo_epoch != m_uiWpxMemoEpoch) {
+        memo.clear();
+        memo_elems = 0;
+        memo_epoch = m_uiWpxMemoEpoch;
+    }
+
+    const Key key{allDg, ((std::uint64_t)ele << 12) |
+                             ((std::uint64_t)(cnum & 7u) << 9) |
+                             ((std::uint64_t)(lvlMask & 7u) << 6) |
+                             (std::uint64_t)(dof & 63u)};
+    auto it = memo.find(key);
+    if (it != memo.end()) return it->second.data();
+
+    std::vector<T> buf((size_t)dof * m_uiNpE);
+    this->prolongateChildNodes(in, cgSz,
+                               allDg + (size_t)ele * allDgEleStride, dgSz,
+                               ele, cnum, dof, buf.data(), im1, im2, allDg,
+                               allDgEleStride, lvlMask);
+
+    if (memo_elems + buf.size() > MEMO_ELEM_CAP) {
+        memo.clear();
+        memo_elems = 0;
+    }
+    memo_elems += buf.size();
+    return memo.emplace(key, std::move(buf)).first->second.data();
+}
+
+template <typename T>
 void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                                 size_t dgSz, unsigned int ele,
                                 unsigned int cnum, unsigned int dof, T *out,
@@ -13926,7 +13991,6 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
             gvalid.assign(27, 0);
             const ot::TreeNode &E = m_uiAllElements[ele];
             const long S = 1l << (m_uiMaxDepth - E.getLevel());
-            std::vector<T> childBuf((size_t)dof * m_uiNpE);
             for (int oz = -1; oz <= 1; oz++)
                 for (int oy = -1; oy <= 1; oy++)
                     for (int ox = -1; ox <= 1; ox++) {
@@ -14020,15 +14084,17 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                                             Q.getZ());
                             continue;
                         }
-                        this->prolongateChildNodes(
-                            in, cgSz, allDg + (size_t)q * allDgEleStride, dgSz,
-                            q, cn, dof, childBuf.data(), im1, im2, allDg,
+                        // memoised: the same partner child is requested by
+                        // every fine element that borders it. Copy out
+                        // immediately -- the pointer dies on the next call.
+                        const T *cb = this->wpxProlongChildMemo(
+                            in, cgSz, q, cn, dof, dgSz, allDg,
                             allDgEleStride,
-                            lvlMask & ~(unsigned int)WPX_LVL_COARSER);
+                            lvlMask & ~(unsigned int)WPX_LVL_COARSER, im1,
+                            im2);
                         for (unsigned int v = 0; v < dof; v++)
-                            std::copy(childBuf.begin() + (size_t)v * m_uiNpE,
-                                      childBuf.begin() +
-                                          (size_t)(v + 1) * m_uiNpE,
+                            std::copy(cb + (size_t)v * m_uiNpE,
+                                      cb + (size_t)(v + 1) * m_uiNpE,
                                       gslab.begin() +
                                           ((size_t)v * 27 + sidx) * m_uiNpE);
                         gvalid[sidx] = 1;
@@ -14328,12 +14394,10 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
     }
     const unsigned int cnum3 = cb[0] | (cb[1] << 1u) | (cb[2] << 2u);
 
-    static thread_local std::vector<T> childBufE;
-    const T *odg = allDg + (size_t)owner * allDgEleStride;
-    childBufE.resize(m_uiNpE);
-    this->prolongateChildNodes(vec, (size_t)0, odg, (size_t)m_uiNpE, owner,
-                               cnum3, 1u, childBufE.data(), im1, im2, allDg,
-                               allDgEleStride, mask);
+    // memoised, same lifetime rule as the face path
+    const T *child = this->wpxProlongChildMemo(
+        vec, (size_t)0, owner, cnum3, 1u, (size_t)m_uiNpE, allDg,
+        allDgEleStride, mask, im1, im2);
 
     for (unsigned int t = 0; t < nrp; t++) {
         unsigned int id3[3];
@@ -14341,7 +14405,7 @@ bool Mesh::prolongateHangingEdgeWide(const T *vec, unsigned int elementID,
         id3[1]  = loc[1];
         id3[2]  = loc[2];
         id3[ax] = t;
-        out[t]  = childBufE[(id3[2] * nrp + id3[1]) * nrp + id3[0]];
+        out[t]  = child[(id3[2] * nrp + id3[1]) * nrp + id3[0]];
     }
 
     wpxEdgeWins()++;
@@ -14451,12 +14515,11 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
     // that child's face toward this element
     const unsigned int nIdx = (dir & 1u) ? 0u : p;
 
-    static thread_local std::vector<T> childBuf;
-    const T *odg = allDg + (size_t)owner * allDgEleStride;
-    childBuf.resize(m_uiNpE);
-    this->prolongateChildNodes(vec, (size_t)0, odg, (size_t)m_uiNpE, owner,
-                               cnum3, 1u, childBuf.data(), im1, im2, allDg,
-                               allDgEleStride, mask);
+    // memoised: the owner's other exterior faces and edges want this same
+    // child. Copy the plane out before anything can call the memo again.
+    const T *child = this->wpxProlongChildMemo(
+        vec, (size_t)0, owner, cnum3, 1u, (size_t)m_uiNpE, allDg,
+        allDgEleStride, mask, im1, im2);
 
     for (unsigned int b = 0; b < nrp; b++)
         for (unsigned int a = 0; a < nrp; a++) {
@@ -14465,7 +14528,7 @@ bool Mesh::prolongateHangingFaceWide(const T *vec, unsigned int elementID,
             id3[axA]         = a;
             id3[axB]         = b;
             out[b * nrp + a] =
-                childBuf[(id3[2] * nrp + id3[1]) * nrp + id3[0]];
+                child[(id3[2] * nrp + id3[1]) * nrp + id3[0]];
         }
 
     wpxFaceWins()++;

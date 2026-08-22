@@ -40,7 +40,9 @@
 #include "octUtils.h"
 #include "point.h"
 #include <atomic>
+#include <cstdint>
 #include <functional>
+#include <unordered_map>
 
 #include "refel.h"
 #include "wideprolong.h"
@@ -329,6 +331,19 @@ class Mesh {
      * evolve in.
      */
     bool m_uiWpxRuntimeEnabled = true;
+
+    /** Monotone process-wide clock for the wpx child memo: every tick names
+     *  a new "the DG contents may have changed" era, so an epoch can never
+     *  collide across meshes or unzip calls, even through address reuse. */
+    static inline std::uint64_t wpxMemoClock() {
+        static std::atomic<std::uint64_t> c{0};
+        return ++c;
+    }
+
+    /** Epoch of this mesh's wpx child memo (see wpxProlongChildMemo). Fresh
+     *  at construction; unzip re-ticks it on entry, which retires every
+     *  cached child. */
+    mutable std::uint64_t m_uiWpxMemoEpoch = wpxMemoClock();
 
     /**
      * Diagnostic only. When set, unzip overwrites every materialised DG nodal
@@ -2592,6 +2607,34 @@ class Mesh {
      * With the flag off -- or with the runtime toggle off -- this is exactly
      * the existing parent2ChildInterpolation call and no extra work runs.
      */
+    /**
+     * @brief prolongateChildNodes, memoised per thread for DG-array callers.
+     *
+     * The same prolongated child is requested many times per unzip: the
+     * graded gather rebuilds each coarse partner's child for every fine
+     * element that borders it, and the hanging-face/edge paths rebuild the
+     * owner's child for every sibling face and edge on it. All of those are
+     * pure functions of (element, cnum, mask, the DG array), so cache them.
+     * A hit returns a pointer to dof*NpE cached values; the pointer stays
+     * valid until the NEXT call to this function on the same thread, so
+     * callers must copy out before calling again.
+     *
+     * Entries are keyed on the DG array pointer and the mesh's memo epoch,
+     * which unzip re-ticks on entry -- so the cache never serves values
+     * across unzip calls, across meshes, or across pass-0/pass-1 arrays.
+     * Within one epoch the caller must not mutate the DG array's contents,
+     * which unzip guarantees: the memo is only consulted while the array it
+     * reads is between exchanges and immutable. Requires allDg (the CG
+     * gather has no stable identity to key on, and the wide face path
+     * cannot run without a DG array anyway).
+     */
+    template <typename T>
+    const T *wpxProlongChildMemo(const T *in, size_t cgSz, unsigned int ele,
+                                 unsigned int cnum, unsigned int dof,
+                                 size_t dgSz, const T *allDg,
+                                 size_t allDgEleStride, unsigned int lvlMask,
+                                 double *im1, double *im2) const;
+
     template <typename T>
     void prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                               size_t dgSz, unsigned int ele, unsigned int cnum,
