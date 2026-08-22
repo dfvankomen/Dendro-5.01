@@ -14011,7 +14011,7 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
                         bool bg = false;
                         const unsigned int q = wpxNeighbour(
                             ele, ox, oy, oz, bg, lvlMask, dgGhostOk);
-                        const bool gdbg =
+                        static const bool gdbg =
                             (std::getenv("DENDRO_WPX_HOLES") != nullptr);
                         if (q == LOOK_UP_TABLE_DEFAULT) {
                             if (gdbg)
@@ -14123,10 +14123,10 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
         // across calls, so any region the gather cannot fill would otherwise
         // be read as stale data from a previous element. A hole is a bug in
         // the probe, but it must not present as plausible garbage.
+        static const bool holes_dbg =
+            (std::getenv("DENDRO_WPX_HOLES") != nullptr);
         cube.assign((size_t)nx_in * ny_in * nz_in,
-                    std::getenv("DENDRO_WPX_HOLES")
-                        ? std::numeric_limits<T>::quiet_NaN()
-                        : T(0));
+                    holes_dbg ? std::numeric_limits<T>::quiet_NaN() : T(0));
         eleScratch.resize((size_t)8 * m_uiNpE);
         w1.resize(ss);
         w2.resize(ss);
@@ -14203,7 +14203,7 @@ if (anyGraded && std::getenv("DENDRO_WPX_DEBUG_GRADED")) {
             // Holes are the failure mode to rule out first: if the probe
             // granted a direction the gather cannot fill, the cube keeps
             // whatever it was seeded with. Seed with NaN and count.
-            if (anyGraded && std::getenv("DENDRO_WPX_HOLES")) {
+            if (anyGraded && holes_dbg) {
                 long holes = 0;
                 for (size_t t = 0; t < cube.size(); t++)
                     if (cube[t] != cube[t]) holes++;

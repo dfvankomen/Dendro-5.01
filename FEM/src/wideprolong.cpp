@@ -78,27 +78,37 @@ void apply_x(unsigned int n_in, unsigned int n_out, unsigned int ny,
 
 void apply_y(unsigned int n_in, unsigned int n_out, unsigned int nx,
              unsigned int nz, const double *A, const double *X, double *Y) {
+    // AXPY over contiguous x-rows instead of a strided dot per point. Each
+    // output element still accumulates its terms in ascending i, starting
+    // from zero, so the result is bit-identical to the dot form -- the loop
+    // interchange only makes both streams unit-stride so the row op
+    // vectorises.
     for (unsigned int k = 0; k < nz; k++)
-        for (unsigned int o = 0; o < n_out; o++)
-            for (unsigned int i0 = 0; i0 < nx; i0++) {
-                double acc = 0.0;
-                for (unsigned int i = 0; i < n_in; i++)
-                    acc += A[(size_t)o * n_in + i] *
-                           X[(size_t)(k * n_in + i) * nx + i0];
-                Y[(size_t)(k * n_out + o) * nx + i0] = acc;
+        for (unsigned int o = 0; o < n_out; o++) {
+            double *yrow = Y + (size_t)(k * n_out + o) * nx;
+            for (unsigned int i0 = 0; i0 < nx; i0++) yrow[i0] = 0.0;
+            for (unsigned int i = 0; i < n_in; i++) {
+                const double a     = A[(size_t)o * n_in + i];
+                const double *xrow = X + (size_t)(k * n_in + i) * nx;
+                for (unsigned int i0 = 0; i0 < nx; i0++)
+                    yrow[i0] += a * xrow[i0];
             }
+        }
 }
 
 void apply_z(unsigned int n_in, unsigned int n_out, unsigned int nx,
              unsigned int ny, const double *A, const double *X, double *Y) {
+    // same interchange as apply_y, over whole planes
     const size_t plane = (size_t)nx * ny;
-    for (unsigned int o = 0; o < n_out; o++)
-        for (size_t t = 0; t < plane; t++) {
-            double acc = 0.0;
-            for (unsigned int i = 0; i < n_in; i++)
-                acc += A[(size_t)o * n_in + i] * X[(size_t)i * plane + t];
-            Y[(size_t)o * plane + t] = acc;
+    for (unsigned int o = 0; o < n_out; o++) {
+        double *yp = Y + (size_t)o * plane;
+        for (size_t t = 0; t < plane; t++) yp[t] = 0.0;
+        for (unsigned int i = 0; i < n_in; i++) {
+            const double a   = A[(size_t)o * n_in + i];
+            const double *xp = X + (size_t)i * plane;
+            for (size_t t = 0; t < plane; t++) yp[t] += a * xp[t];
         }
+    }
 }
 
 size_t scratch_size(unsigned int eleOrder, unsigned int nx_in,

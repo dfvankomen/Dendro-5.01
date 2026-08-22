@@ -95,12 +95,17 @@ constexpr unsigned long long WPX_NARROW_UNZIP_FINGERPRINT = 0x39c749626f1432c8ul
  *  error across 2:1 interfaces", which keys on (coordinate, block level) and
  *  is the correct invariant. Both goldens here are therefore guarded on the
  *  decomposition matching np=1's. */
-/** Re-pinned 2026-08-22: hanging faces and edges are now rebuilt through the
- *  volume operator (graded-capable), which changed wide unzip values --
- *  constraint interface excess at levels 4-6 dropped from ~12-13x to ~4-4.6x
- *  on the COARSER build. The narrow fingerprint is unchanged, as it must be:
- *  the criterion scope and the flag-off path do not touch this code. */
-constexpr unsigned long long WPX_WIDE_UNZIP_FINGERPRINT = 0x005c07068572ea57ull;
+/** Re-pinned 2026-08-22 (twice). First: hanging faces and edges are rebuilt
+ *  through the volume operator (graded-capable), which changed wide unzip
+ *  values -- constraint interface excess at levels 4-6 dropped from ~12-13x
+ *  to ~4-4.6x on the COARSER build. Second: apply_y/apply_z moved to a
+ *  unit-stride AXPY loop shape, which keeps every output's accumulation
+ *  order but lets the compiler contract mul+add differently -- an ULP-level
+ *  change, invisible at printed precision in every accuracy table, that
+ *  still flips an XOR of raw bits. The narrow fingerprint is unchanged, as
+ *  it must be: the criterion scope and the flag-off path touch none of this
+ *  code. */
+constexpr unsigned long long WPX_WIDE_UNZIP_FINGERPRINT = 0x005c07068572a59aull;
 
 /** Global unzip dof the two fingerprints above were taken at. Block
  *  decomposition follows the rank count, so a run that does not match this is
