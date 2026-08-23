@@ -2770,6 +2770,12 @@ bool Mesh::isReMeshUnzip(
             }
         }
 
+        // refinement buffer (collective on the active comm, so it runs on
+        // every active rank whether or not this rank's flags changed)
+        if (s_refineBufferLayers > 0 &&
+            this->applyRefineBufferLayers(refine_flags, s_refineBufferLayers))
+            isMeshLocalChanged = true;
+
         if (isMeshLocalChanged)
             isMeshLocalChanged = this->setMeshRefinementFlags(refine_flags);
     }

@@ -235,6 +235,9 @@ namespace ot {
 
 class Mesh {
    private:
+    /** Refinement buffer layers the default wavelet criterion applies
+     * (see setRefineBufferLayers). Process-wide; 0 = off. */
+    static unsigned int s_refineBufferLayers;
     /** Element to Element mapping data. Array size:
      * [m_uiAllNodes.size()*m_uiStensilSz*m_uiNumDirections];  But this is done
      * for m_uiStencilSz=1*/
@@ -3493,6 +3496,28 @@ class Mesh {
      *
      */
     bool setMeshRefinementFlags(const std::vector<unsigned int> &refine_flags);
+
+    /**
+     * @brief Refinement buffer layers for the default wavelet criterion
+     * (isReMeshUnzip): each element is raised to the max TARGET level of its
+     * face neighbours, `layers` times, so 2:1 interfaces sit that many coarse
+     * elements outside the wavelet-tagged region. Only raises; 0 = off
+     * (bit-identical). Process-wide so remeshed meshes inherit it.
+     * See findings/wide_prolongation_handoff4.md §9.2/§9.8.
+     */
+    static void setRefineBufferLayers(unsigned int layers) {
+        s_refineBufferLayers = layers;
+    }
+    static unsigned int getRefineBufferLayers() {
+        return s_refineBufferLayers;
+    }
+
+    /**
+     * @brief Apply the refinement buffer to local refine flags. Returns true
+     * if any flag changed. Collective on the active comm.
+     */
+    bool applyRefineBufferLayers(std::vector<unsigned int> &refine_flags,
+                                 unsigned int layers);
 
     /**
      * @brief Perform linear transformation from octree coordinate to domain

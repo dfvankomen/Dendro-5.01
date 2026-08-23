@@ -14062,6 +14062,60 @@ std::vector<unsigned int> Mesh::getAllRefinementFlags() {
     return refine_flags;
 }
 
+unsigned int Mesh::s_refineBufferLayers = 0;
+
+bool Mesh::applyRefineBufferLayers(std::vector<unsigned int> &refine_flags,
+                                   unsigned int layers) {
+    // collective on the active comm (element-vector ghost exchange below)
+    if (!this->isActive() || layers == 0) return false;
+    assert(refine_flags.size() == m_uiNumLocalElements);
+
+    const unsigned int lb                = m_uiElementLocalBegin;
+    const unsigned int le                = m_uiElementLocalEnd;
+    const std::vector<ot::TreeNode> &AE  = m_uiAllElements;
+    const std::vector<unsigned int> &e2e = m_uiE2EMapping;
+    const unsigned int nd                = m_uiNumDirections;
+    const unsigned int nTot              = (unsigned int)AE.size();
+    const unsigned int FAC[6] = {OCT_DIR_LEFT, OCT_DIR_RIGHT, OCT_DIR_DOWN,
+                                 OCT_DIR_UP,   OCT_DIR_BACK,  OCT_DIR_FRONT};
+
+    // target level per element (ghosts filled by the exchange, so this is
+    // partition-independent and can't ratchet outward)
+    std::vector<int> tgt(nTot, -1);
+    for (unsigned int e = lb; e < le; e++) {
+        const unsigned int f = refine_flags[e - lb];
+        tgt[e]               = (int)AE[e].getLevel() +
+                 ((f == OCT_SPLIT) ? 1 : (f == OCT_COARSE) ? -1 : 0);
+    }
+    std::vector<int> nxt(nTot, -1);
+    for (unsigned int layer = 0; layer < layers; layer++) {
+        this->readFromGhostBeginElementVec(tgt.data(), 1);
+        this->readFromGhostEndElementVec(tgt.data(), 1);
+        nxt = tgt;
+        for (unsigned int e = lb; e < le; e++)
+            for (int d = 0; d < 6; d++) {
+                const unsigned int nb = e2e[(size_t)e * nd + FAC[d]];
+                if (nb == LOOK_UP_TABLE_DEFAULT || nb >= nTot) continue;
+                if (tgt[nb] > nxt[e]) nxt[e] = tgt[nb];
+            }
+        tgt.swap(nxt);
+    }
+
+    // commit: only raises, +1 per remesh (the balancer handles the rest)
+    bool changed = false;
+    for (unsigned int e = lb; e < le; e++) {
+        const int lev = (int)AE[e].getLevel();
+        if (tgt[e] > lev) {
+            if (refine_flags[e - lb] != OCT_SPLIT) changed = true;
+            refine_flags[e - lb] = OCT_SPLIT;
+        } else if (tgt[e] == lev && refine_flags[e - lb] == OCT_COARSE) {
+            refine_flags[e - lb] = OCT_NO_CHANGE;
+            changed              = true;
+        }
+    }
+    return changed;
+}
+
 bool Mesh::setMeshRefinementFlags(
     const std::vector<unsigned int> &refine_flags) {
     // explicitly set the refinement flags,
