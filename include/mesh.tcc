@@ -11395,6 +11395,9 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     // elements interpolate), hence the dynamic schedule.
     std::vector<T> all_dg((std::size_t)m_uiNumTotalElements * dof * dgSz);
 #ifdef DENDRO_WIDE_PROLONGATION
+    // Narrow-fast (see m_uiWpxNarrowFast): the flag-OFF structure at runtime
+    // -- e2b-filtered narrow materialisation, no wpx exchanges.
+    const bool wpx_nf = m_uiWpxNarrowFast;
     // Pass 0 of two. A widened hanging face needs the FACE OWNER's
     // neighbourhood, which is two hops away and so out of reach for any
     // element near a partition edge -- including LOCAL ones, whose face owner
@@ -11411,7 +11414,8 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     // widening always DID read narrow neighbours -- gatherExtendedCoarseNodesCG
     // re-materialises them with allowWide=false. Pass 0 just precomputes what
     // that gather used to recompute per call.
-    std::vector<T> dg_narrow((std::size_t)m_uiNumTotalElements * dof * dgSz);
+    std::vector<T> dg_narrow(
+        wpx_nf ? 0 : (std::size_t)m_uiNumTotalElements * dof * dgSz);
 #endif
 #pragma omp parallel
     {
@@ -11421,17 +11425,44 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 #pragma omp for schedule(dynamic, 16)
         for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
 #ifdef DENDRO_WIDE_PROLONGATION
-            // Ghost slices come from the rank that owns them. Locals are ALL
-            // materialised -- no e2b or block filter -- because another rank
-            // may request any of them and exchangeWideProlongDG packs
-            // straight out of this array.
-            if (ele < m_uiElementLocalBegin || ele >= m_uiElementLocalEnd)
+            if (!wpx_nf) {
+                // Ghost slices come from the rank that owns them. Locals are
+                // ALL materialised -- no e2b or block filter -- because
+                // another rank may request any of them and
+                // exchangeWideProlongDG packs straight out of this array.
+                if (ele < m_uiElementLocalBegin || ele >= m_uiElementLocalEnd)
+                    continue;
+                T* base0 =
+                    dg_narrow.data() + (std::size_t)ele * dof * dgSz;
+                for (unsigned int v = 0; v < dof; v++)
+                    this->getElementNodalValues(in + v * cgSz,
+                                                base0 + v * dgSz, ele, false,
+                                                im1_p, im2_p,
+                                                /*allowWide=*/false);
                 continue;
-            T* base0 = dg_narrow.data() + (std::size_t)ele * dof * dgSz;
-            for (unsigned int v = 0; v < dof; v++)
-                this->getElementNodalValues(in + v * cgSz, base0 + v * dgSz,
-                                            ele, false, im1_p, im2_p,
-                                            /*allowWide=*/false);
+            }
+            // narrow-fast: same filter as the flag-OFF branch below, values
+            // straight into all_dg, narrow
+            if (m_e2b_unzip_counts[ele] == 0) continue;
+            if (blk_filter >= 0) {
+                bool feeds            = false;
+                const unsigned int eo = m_e2b_unzip_offset[ele];
+                for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++)
+                    if ((int)blkList[m_e2b_unzip_map[eo + i]].getBlockType() ==
+                        blk_filter) {
+                        feeds = true;
+                        break;
+                    }
+                if (!feeds) continue;
+            }
+            {
+                T* basef = all_dg.data() + (std::size_t)ele * dof * dgSz;
+                for (unsigned int v = 0; v < dof; v++)
+                    this->getElementNodalValues(in + v * cgSz,
+                                                basef + v * dgSz, ele, false,
+                                                im1_p, im2_p,
+                                                /*allowWide=*/false);
+            }
             continue;
 #else
             if (m_e2b_unzip_counts[ele] == 0) continue;
@@ -11460,29 +11491,31 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
         }
     }
 #ifdef DENDRO_WIDE_PROLONGATION
-    this->exchangeWideProlongDG(in, cgSz, dg_narrow.data(),
-                                (size_t)dof * dgSz, dof, dgSz);
+    if (!wpx_nf) {
+        this->exchangeWideProlongDG(in, cgSz, dg_narrow.data(),
+                                    (size_t)dof * dgSz, dof, dgSz);
 
-    // Pass 1: same elements, faces widened out of the now-complete narrow
-    // array. It must not read what it writes, or the answer would depend on
-    // element visit order, hence the separate destination.
+        // Pass 1: same elements, faces widened out of the now-complete
+        // narrow array. It must not read what it writes, or the answer would
+        // depend on element visit order, hence the separate destination.
 #pragma omp parallel
-    {
-        std::vector<double> im1_w(nPe), im2_w(nPe);
+        {
+            std::vector<double> im1_w(nPe), im2_w(nPe);
 #pragma omp for schedule(dynamic, 16)
-        for (unsigned int ele = m_uiElementLocalBegin;
-             ele < m_uiElementLocalEnd; ele++) {
-            T* base = all_dg.data() + (std::size_t)ele * dof * dgSz;
-            for (unsigned int v = 0; v < dof; v++)
-                this->getElementNodalValues(
-                    in + v * cgSz, base + v * dgSz, ele, false, im1_w.data(),
-                    im2_w.data(), /*allowWide=*/true,
-                    dg_narrow.data() + (std::size_t)v * dgSz,
-                    (size_t)dof * dgSz);
+            for (unsigned int ele = m_uiElementLocalBegin;
+                 ele < m_uiElementLocalEnd; ele++) {
+                T* base = all_dg.data() + (std::size_t)ele * dof * dgSz;
+                for (unsigned int v = 0; v < dof; v++)
+                    this->getElementNodalValues(
+                        in + v * cgSz, base + v * dgSz, ele, false,
+                        im1_w.data(), im2_w.data(), /*allowWide=*/true,
+                        dg_narrow.data() + (std::size_t)v * dgSz,
+                        (size_t)dof * dgSz);
+            }
         }
+        this->exchangeWideProlongDG(in, cgSz, all_dg.data(),
+                                    (size_t)dof * dgSz, dof, dgSz);
     }
-    this->exchangeWideProlongDG(in, cgSz, all_dg.data(),
-                                (size_t)dof * dgSz, dof, dgSz);
 
     // Diagnostic: exact-input mode. Overwrite every DG value -- local and
     // ghost, hanging nodes included -- with the analytic field, so the pad
@@ -11700,10 +11733,36 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     // back to gathering through CG, which re-materialises neighbour elements --
     // ghosts included -- and hits the same wall.
     std::vector<T> all_dg_s((std::size_t)m_uiNumTotalElements * dof * dgSz);
+    // Narrow-fast (see m_uiWpxNarrowFast): flag-OFF structure at runtime.
+    const bool wpx_nf_s = m_uiWpxNarrowFast;
     // Pass 0 of two -- see the OMP path for why the widening cannot be done in
     // a single sweep. Narrow values only, which never reach past round 1.
-    std::vector<T> dg_narrow_s((std::size_t)m_uiNumTotalElements * dof * dgSz);
-    {
+    std::vector<T> dg_narrow_s(
+        wpx_nf_s ? 0 : (std::size_t)m_uiNumTotalElements * dof * dgSz);
+    if (wpx_nf_s) {
+        // e2b-filtered narrow values straight into the scatter's array, no
+        // wpx exchanges -- the same materialisation the flag-OFF build does.
+        std::vector<double> im1_s(nPe), im2_s(nPe);
+        for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+            if (m_e2b_unzip_counts[e] == 0) continue;
+            if (blk_filter >= 0) {
+                bool feeds            = false;
+                const unsigned int eo = m_e2b_unzip_offset[e];
+                for (unsigned int i = 0; i < m_e2b_unzip_counts[e]; i++)
+                    if ((int)blkList[m_e2b_unzip_map[eo + i]].getBlockType() ==
+                        blk_filter) {
+                        feeds = true;
+                        break;
+                    }
+                if (!feeds) continue;
+            }
+            T* base = all_dg_s.data() + (std::size_t)e * dof * dgSz;
+            for (unsigned int v = 0; v < dof; v++)
+                this->getElementNodalValues(in + v * cgSz, base + v * dgSz, e,
+                                            false, im1_s.data(), im2_s.data(),
+                                            /*allowWide=*/false);
+        }
+    } else {
         std::vector<double> im1_s(nPe), im2_s(nPe);
         auto materialise_narrow = [&](unsigned int e) {
             T* base = dg_narrow_s.data() + (std::size_t)e * dof * dgSz;
@@ -12177,6 +12236,13 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
     return;
 #else
 #ifdef DENDRO_WIDE_PROLONGATION
+    // Narrow-fast: no batch-specific two-pass machinery to skip -- just run
+    // the per-var scatter, which handles the mode itself.
+    if (m_uiWpxNarrowFast) {
+        for (unsigned int v = 0; v < n_vars; v++)
+            this->unzip_scatter(ins[v], outs[v], 1);
+        return;
+    }
     // new DG arrays this call: retire every wpx child-memo entry, and mark
     // the memo servable for the duration (see m_uiWpxMemoActive)
     WpxMemoScope wpx_memo_scope(this);

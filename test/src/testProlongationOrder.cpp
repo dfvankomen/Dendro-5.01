@@ -3468,7 +3468,7 @@ TEST_CASE("the wavelet criterion can be held on the narrow operator") {
                                     MPI_COMM_WORLD, 0);
     REQUIRE(mesh != nullptr);
 
-    unsigned long long fp_on = 0ull, fp_off = 0ull;
+    unsigned long long fp_on = 0ull, fp_off = 0ull, fp_fast = 0ull;
     long long uzdof = 0;
 
     if (mesh->isActive()) {
@@ -3510,8 +3510,21 @@ TEST_CASE("the wavelet criterion can be held on the narrow operator") {
         }
         fp_off = fingerprint(uz);
 
-        // The scope must restore, not force-enable.
+        // Narrow-fast: narrow operator AND no wpx exchanges (the amortized
+        // schedule's stages 2..N). Must be bit-identical to the narrow scope
+        // above -- same operator, same inputs, only the communication
+        // structure differs -- which is exactly what pins "skipping the
+        // exchanges loses nothing but the exchanges".
+        {
+            ot::WpxNarrowFastScope fast(mesh);
+            std::fill(uz.begin(), uz.end(), 0.0);
+            mesh->unzip(cg.data(), uz.data(), 1);
+        }
+        fp_fast = fingerprint(uz);
+
+        // The scopes must restore, not force-enable.
         CHECK(mesh->isWideProlongEnabled() == WPX_COMPILED_IN);
+        CHECK(!mesh->isWpxNarrowFastUnzip());
 
     }
 
@@ -3521,18 +3534,26 @@ TEST_CASE("the wavelet criterion can be held on the narrow operator") {
         long long gd = uzdof;
         MPI_Allreduce(&uzdof, &gd, 1, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
         uzdof = gd;
-        unsigned long long a = fp_on, b = fp_off;
+        unsigned long long a = fp_on, b = fp_off, c = fp_fast;
         MPI_Allreduce(&a, &fp_on, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR,
                       MPI_COMM_WORLD);
         MPI_Allreduce(&b, &fp_off, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR,
+                      MPI_COMM_WORLD);
+        MPI_Allreduce(&c, &fp_fast, 1, MPI_UNSIGNED_LONG_LONG, MPI_BXOR,
                       MPI_COMM_WORLD);
     }
 
     std::printf(
         "\n=== wavelet-criterion narrow scope (maxdepth %u) ===\n"
-        "unzip fingerprint: wide-as-built %016llx | narrow scope %016llx\n"
+        "unzip fingerprint: wide-as-built %016llx | narrow scope %016llx | "
+        "narrow-fast %016llx\n"
         "compiled with DENDRO_WIDE_PROLONGATION: %s\n",
-        m_uiMaxDepth, fp_on, fp_off, WPX_COMPILED_IN ? "yes" : "no");
+        m_uiMaxDepth, fp_on, fp_off, fp_fast, WPX_COMPILED_IN ? "yes" : "no");
+
+    // Independent of the goldens' decomposition guard: narrow-fast must equal
+    // the narrow scope at ANY rank count, since both are the narrow operator
+    // on identical inputs.
+    CHECK(fp_fast == fp_off);
 
     if (uzdof != WPX_FINGERPRINT_UNZIP_DOF || ELE_ORDER != 6u) {
         // A different rank count blocks the mesh differently, so the array is

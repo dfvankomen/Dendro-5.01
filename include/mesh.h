@@ -352,6 +352,19 @@ class Mesh {
      *  caller computes uncached. */
     mutable bool m_uiWpxMemoActive = false;
 
+    /**
+     * Runtime narrow-fast unzip: skip BOTH wpx DG exchanges and materialise
+     * e2b-filtered narrow element values directly, i.e. the flag-OFF unzip's
+     * structure inside a wide build. Values are the narrow operator's --
+     * callers must ALSO disable the wide operator (WpxNarrowFastScope does
+     * both). All ranks must agree: unlike m_uiWpxRuntimeEnabled this DOES
+     * change communication structure, and a disagreeing rank hangs the
+     * collective. Exists for the amortized-correction schedule, where stages
+     * after the first reuse a cached wide-minus-narrow pad delta and only
+     * need a narrow unzip with no wpx communication.
+     */
+    bool m_uiWpxNarrowFast = false;
+
     /** RAII: mark the child memo servable for the enclosing unzip. */
     struct WpxMemoScope {
         const Mesh *m;
@@ -2778,6 +2791,11 @@ class Mesh {
      */
     inline void setWideProlongEnabled(bool v) { m_uiWpxRuntimeEnabled = v; }
 
+    /** @brief See m_uiWpxNarrowFast. Prefer WpxNarrowFastScope. Collective:
+     *  all ranks must agree before the next unzip. */
+    inline void setWpxNarrowFastUnzip(bool v) { m_uiWpxNarrowFast = v; }
+    inline bool isWpxNarrowFastUnzip() const { return m_uiWpxNarrowFast; }
+
     /** @brief Diagnostic: see m_uiWpxAnalyticDebug. Pass nullptr to clear. */
     inline void setWpxAnalyticDebug(
         std::function<double(double, double, double)> f) {
@@ -3546,6 +3564,43 @@ class WideProlongNarrowScope {
    private:
     Mesh *m_mesh;
     bool m_prev;
+};
+
+/**
+ * @brief RAII: narrow-fast unzip -- narrow operator AND no wpx exchanges.
+ *
+ * The pair of settings for an unzip that must produce the flag-OFF narrow
+ * values at flag-OFF communication cost inside a wide build (the amortized
+ * correction's stages 2..N). Collective: construct and destroy on every rank
+ * around the same unzip, or the skipped exchange hangs the ranks that kept
+ * it. Restores previous settings, so nesting with WideProlongNarrowScope is
+ * safe. No-op without DENDRO_WIDE_PROLONGATION (the flags exist but the
+ * unzip ignores them).
+ */
+class WpxNarrowFastScope {
+   public:
+    explicit WpxNarrowFastScope(Mesh *m)
+        : m_mesh(m),
+          m_prevWide(m ? m->isWideProlongEnabled() : false),
+          m_prevFast(m ? m->isWpxNarrowFastUnzip() : false) {
+        if (m_mesh) {
+            m_mesh->setWideProlongEnabled(false);
+            m_mesh->setWpxNarrowFastUnzip(true);
+        }
+    }
+    ~WpxNarrowFastScope() {
+        if (m_mesh) {
+            m_mesh->setWideProlongEnabled(m_prevWide);
+            m_mesh->setWpxNarrowFastUnzip(m_prevFast);
+        }
+    }
+    WpxNarrowFastScope(const WpxNarrowFastScope &)            = delete;
+    WpxNarrowFastScope &operator=(const WpxNarrowFastScope &) = delete;
+
+   private:
+    Mesh *m_mesh;
+    bool m_prevWide;
+    bool m_prevFast;
 };
 
 template <>
