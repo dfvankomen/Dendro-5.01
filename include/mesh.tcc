@@ -11351,8 +11351,9 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     if (!m_uiIsActive) return;
 
 #ifdef DENDRO_WIDE_PROLONGATION
-    // new DG arrays this call: retire every wpx child-memo entry
-    m_uiWpxMemoEpoch = wpxMemoClock();
+    // new DG arrays this call: retire every wpx child-memo entry, and mark
+    // the memo servable for the duration (see m_uiWpxMemoActive)
+    WpxMemoScope wpx_memo_scope(this);
 #endif
 
     const ot::TreeNode* pNodes = m_uiAllElements.data();
@@ -12176,8 +12177,9 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
     return;
 #else
 #ifdef DENDRO_WIDE_PROLONGATION
-    // new DG arrays this call: retire every wpx child-memo entry
-    m_uiWpxMemoEpoch = wpxMemoClock();
+    // new DG arrays this call: retire every wpx child-memo entry, and mark
+    // the memo servable for the duration (see m_uiWpxMemoActive)
+    WpxMemoScope wpx_memo_scope(this);
 #endif
     const ot::TreeNode* pNodes = m_uiAllElements.data();
     const ot::Block* blkList   = m_uiLocalBlockList.data();
@@ -13875,10 +13877,23 @@ const T *Mesh::wpxProlongChildMemo(const T *in, size_t cgSz, unsigned int ele,
     static thread_local std::unordered_map<Key, std::vector<T>, KeyHash> memo;
     static thread_local std::uint64_t memo_epoch = 0;
     static thread_local size_t memo_elems       = 0;
+    static thread_local std::vector<T> uncached;
     // ~16 MiB of cached values per thread; past that, clear and refill. SFC
     // locality keeps the working set of nearby owners hot either way, and a
     // miss only costs the recompute the memo exists to skip.
     constexpr size_t MEMO_ELEM_CAP = (size_t)2 * 1024 * 1024;
+
+    // Outside an unzip the address-based key cannot be trusted (a caller's
+    // buffer can reuse a freed unzip array's address in the same epoch), so
+    // compute without caching.
+    if (!m_uiWpxMemoActive) {
+        uncached.resize((size_t)dof * m_uiNpE);
+        this->prolongateChildNodes(in, cgSz,
+                                   allDg + (size_t)ele * allDgEleStride, dgSz,
+                                   ele, cnum, dof, uncached.data(), im1, im2,
+                                   allDg, allDgEleStride, lvlMask);
+        return uncached.data();
+    }
 
     if (memo_epoch != m_uiWpxMemoEpoch) {
         memo.clear();

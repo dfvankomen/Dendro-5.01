@@ -345,6 +345,23 @@ class Mesh {
      *  cached child. */
     mutable std::uint64_t m_uiWpxMemoEpoch = wpxMemoClock();
 
+    /** The child memo may only serve entries while an unzip is running: its
+     *  keys use array ADDRESSES, and outside the unzip a caller's buffer can
+     *  land on a freed unzip array's address within the same epoch and be
+     *  served that array's values. Unzip sets this via RAII; any other
+     *  caller computes uncached. */
+    mutable bool m_uiWpxMemoActive = false;
+
+    /** RAII: mark the child memo servable for the enclosing unzip. */
+    struct WpxMemoScope {
+        const Mesh *m;
+        explicit WpxMemoScope(const Mesh *mm) : m(mm) {
+            m->m_uiWpxMemoEpoch  = wpxMemoClock();
+            m->m_uiWpxMemoActive = true;
+        }
+        ~WpxMemoScope() { m->m_uiWpxMemoActive = false; }
+    };
+
     /**
      * Diagnostic only. When set, unzip overwrites every materialised DG nodal
      * value (hanging nodes included) with this analytic field before the
