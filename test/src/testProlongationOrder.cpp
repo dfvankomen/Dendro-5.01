@@ -2460,10 +2460,57 @@ TEST_CASE("hamiltonian constraint across 2:1 interfaces") {
 
     std::vector<ot::TreeNode> tmp;
     function2Octree(fr, tmp, m_uiMaxDepth, wt, ELE_ORDER, MPI_COMM_WORLD);
+
+    // PROLONG_BUFFER=k: add k buffer layers -- refine every coarse element
+    // with a finer face neighbour, then let createMesh's 2:1 balance clean
+    // up. This moves each refinement interface one coarse-element width
+    // outward per layer, into smoother field, WITHOUT touching the operator:
+    // the buffer-layer experiment (GRChombo tag_buffer / Carpet buffer-zone
+    // style). np=1 only -- the marking walk uses the local element range.
+    int bufk = 0;
+    if (const char *bp = std::getenv("PROLONG_BUFFER")) bufk = std::atoi(bp);
+    {
+        int np_b = 1;
+        MPI_Comm_size(MPI_COMM_WORLD, &np_b);
+        if (np_b > 1) bufk = 0;
+    }
+    for (int b = 0; b < bufk; b++) {
+        ot::Mesh *mtmp = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
+                                        MPI_COMM_WORLD, 0);
+        REQUIRE(mtmp != nullptr);
+        const std::vector<ot::TreeNode> &AEb = mtmp->getAllElements();
+        const std::vector<unsigned int> &e2eb = mtmp->getE2EMapping();
+        const unsigned int ndb = mtmp->getNumDirections();
+        std::vector<ot::TreeNode> out;
+        out.reserve(AEb.size() * 2);
+        long nsplit = 0;
+        for (unsigned int e = mtmp->getElementLocalBegin();
+             e < mtmp->getElementLocalEnd(); e++) {
+            bool nearFiner = false;
+            for (unsigned int d = 0; d < ndb && !nearFiner; d++) {
+                const unsigned int nb = e2eb[e * ndb + d];
+                if (nb != LOOK_UP_TABLE_DEFAULT && nb < AEb.size() &&
+                    AEb[nb].getLevel() > AEb[e].getLevel())
+                    nearFiner = true;
+            }
+            if (nearFiner && AEb[e].getLevel() < m_uiMaxDepth) {
+                AEb[e].addChildren(out);
+                nsplit++;
+            } else
+                out.push_back(AEb[e]);
+        }
+        delete mtmp;
+        tmp.swap(out);
+        std::printf("[buffer] layer %d: split %ld coarse-side elements\n",
+                    b + 1, nsplit);
+    }
+
     ot::Mesh *mesh = ot::createMesh(tmp.data(), tmp.size(), ELE_ORDER,
                                     MPI_COMM_WORLD, 0);
     REQUIRE(mesh != nullptr);
     if (!mesh->isActive()) { delete mesh; return; }
+    std::printf("\n[buffer] PROLONG_BUFFER=%d  total elements %zu\n", bufk,
+                mesh->getAllElements().size());
 
     std::vector<double> cg;
     mesh->createVector(cg, fr);
