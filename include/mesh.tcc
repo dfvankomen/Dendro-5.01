@@ -13978,13 +13978,21 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
         // directly; its own child lands ON our lattice, and taking every
         // second node of that child gives the graded 2H extension. The nested
         // call is given a mask WITHOUT COARSER, so it cannot recurse.
-        // Per-call, NOT thread_local: the graded path calls this function
-        // recursively (once per coarse partner, to prolongate its child), and
-        // a shared buffer would let the nested call stomp the outer one's
-        // slabs. It did exactly that -- the nested call, which never has a
-        // graded direction, ran the clear below and emptied the outer gvalid,
-        // so the gather saw no slabs and left the extension unfilled.
-        std::vector<T> gslab;
+        //
+        // gvalid is per-call, NOT thread_local: this function calls itself
+        // (once per coarse partner), and a shared VALIDITY array let the
+        // nested call -- which never has a graded direction -- run the clear
+        // below and empty the outer call's flags, so the gather saw no slabs
+        // and left the extension unfilled.
+        //
+        // gslab is the opposite: thread_local, grow-only, and NOT zeroed. A
+        // slab is fully written before its gvalid bit flips and unmarked
+        // slabs are never read, so the old per-graded-element zeroing
+        // (dof*27*NpE, ~1.8 MiB at dof=24) bought nothing. Sharing is safe
+        // where sharing gvalid was not, because the nested call's stripped
+        // mask keeps it out of this block entirely -- it can clear its own
+        // gvalid, but it never touches gslab.
+        static thread_local std::vector<T> gslab;
         std::vector<unsigned char> gvalid;
         bool anyGraded = false;
         for (int d = 0; d < 6; d++)
@@ -14002,7 +14010,8 @@ void Mesh::prolongateChildNodes(const T *in, size_t cgSz, const T *dgEle,
             // every v silently mixed variables at any graded pad. Layout
             // [v][sidx][node], so the per-v gather below can be handed a
             // contiguous 27-slab block.
-            gslab.assign((size_t)dof * 27 * m_uiNpE, T(0));
+            if (gslab.size() < (size_t)dof * 27 * m_uiNpE)
+                gslab.resize((size_t)dof * 27 * m_uiNpE);
             gvalid.assign(27, 0);
             const ot::TreeNode &E = m_uiAllElements[ele];
             const long S = 1l << (m_uiMaxDepth - E.getLevel());
