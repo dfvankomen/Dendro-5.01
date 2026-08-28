@@ -538,6 +538,8 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testCCFD test/src/testCCFD.cpp)
   dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)
   dendro_add_deriv_test(testRhsWorkflow test/src/testRhsWorkflow.cpp)
+  dendro_add_deriv_test(testDerivSet test/src/testDerivSet.cpp)
+  dendro_add_deriv_test(benchDerivBlockStage test/src/benchDerivBlockStage.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
   dendro_add_deriv_test(testMeshTimeIntegrator test/src/testMeshTimeIntegrator.cpp)
 

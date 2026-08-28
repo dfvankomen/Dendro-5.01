@@ -917,12 +917,23 @@ class DendroDerivatives {
             _second_deriv_explicit->do_grad_z(du, u, dx, sz, bflag);
     }
 
+    // OUTPUT CONTRACT (all engines). A derivative output is defined on the
+    // block's ACTIVE region [pw, n-pw)^3, plus — for a plain (non-_last)
+    // grad_x / grad_y — the full extent along the axes a downstream operator
+    // may still differentiate: grad_x writes every y column and z slice (at
+    // active x rows), grad_y every y column and z slice (at active x rows),
+    // so they can serve as the intermediate of a mixed chain. NO derivative
+    // output is ever defined on the x-padding rows, and nothing in the solver
+    // may read any derivative output outside the active region except a
+    // chained grad_y / grad_z reading its intermediate. The matrix engines
+    // compute exactly that and nothing more (see derivs_utils.h); explicit
+    // engines may write more, never less.
+    //
     // "_last" variants: caller asserts the output will NOT be further
     // differentiated. Use only for solo 1st-derivatives or for the last
     // step of a mixed 2nd-order chain (e.g. grad_y_last when computing
-    // d^2u/dxdy = grad_y(grad_x(u))). Skips writing the output's
-    // padding cells, recovering a ~3.4x speedup on x and ~1.9x on y at
-    // eleorder=6. See Derivs::do_grad_x_last for the full contract.
+    // d^2u/dxdy = grad_y(grad_x(u))). Skips the y/z padding of the output
+    // too. See Derivs::do_grad_x_last for the full contract.
     //
     // _last is an optimization, NOT a correctness requirement: interior
     // output matches plain grad_* bit-for-bit on every engine (explicit,
@@ -931,6 +942,10 @@ class DendroDerivatives {
     // padding-skip speedup. The only hard rule is the inverse — never use
     // _last for the INTERMEDIATE derivative of a mixed chain, whose output
     // is re-read (padding included) by the next operator.
+    //
+    // Code generators should not pick these by hand: emit one grad_set()
+    // per variable with the mask of derivatives the RHS actually uses, and
+    // the engine chooses the intermediate/terminal shape of every call.
     //
     // grad_z has no _last variant because do_grad_z already
     // unconditionally skips by project convention.
@@ -1124,6 +1139,7 @@ class DendroDerivatives {
                  double dy, const unsigned int *sz, unsigned int bflag) {
         if (_first_deriv->try_fused_grad_xy_last(du, u, dx, dy, sz, bflag))
             return;
+        require_workspace(workspace, "grad_xy");
         grad_x(workspace, u, dx, sz, bflag);
         grad_y_last(du, workspace, dy, sz, bflag);
     }
@@ -1131,6 +1147,7 @@ class DendroDerivatives {
                  double dz, const unsigned int *sz, unsigned int bflag) {
         if (_first_deriv->try_fused_grad_xz_last(du, u, dx, dz, sz, bflag))
             return;
+        require_workspace(workspace, "grad_xz");
         grad_x(workspace, u, dx, sz, bflag);
         grad_z(du, workspace, dz, sz, bflag);  // grad_z is always last
     }
@@ -1138,9 +1155,128 @@ class DendroDerivatives {
                  double dz, const unsigned int *sz, unsigned int bflag) {
         if (_first_deriv->try_fused_grad_yz_last(du, u, dy, dz, sz, bflag))
             return;
+        require_workspace(workspace, "grad_yz");
         grad_y(workspace, u, dy, sz, bflag);
         grad_z(du, workspace, dz, sz, bflag);  // grad_z is always last
     }
+
+    // ------------------------------------------------------------------
+    // Planned per-variable derivative set — the entry point code generators
+    // should emit. The caller states WHICH derivatives of u the RHS uses
+    // (mask) and where each goes (out); the engine picks the shape of every
+    // call from that: a first derivative that also feeds a mixed derivative
+    // is computed as a chain intermediate and reused (measured best inside a
+    // full RHS), every other output is terminal (active region only), mixed
+    // derivatives without their first derivative in the mask go through the
+    // fused kernels (or the workspace chain on engines without them).
+    // Results are bit-identical to the corresponding individual grad_* calls
+    // (testDerivSet). Variables sharing a mask can go through
+    // grad_set_batch.
+    //
+    // @param workspace block-sized scratch; required only when a mixed
+    //                  derivative is requested without its first derivative
+    //                  AND the engine has no fused kernel (explicit engines).
+    // ------------------------------------------------------------------
+    enum DerivMask : unsigned int {
+        DM_X      = 1u << 0,
+        DM_Y      = 1u << 1,
+        DM_Z      = 1u << 2,
+        DM_XX     = 1u << 3,
+        DM_YY     = 1u << 4,
+        DM_ZZ     = 1u << 5,
+        DM_XY     = 1u << 6,
+        DM_XZ     = 1u << 7,
+        DM_YZ     = 1u << 8,
+        DM_FIRST  = DM_X | DM_Y | DM_Z,
+        DM_SECOND = DM_XX | DM_YY | DM_ZZ,
+        DM_MIXED  = DM_XY | DM_XZ | DM_YZ,
+        DM_ALL    = DM_FIRST | DM_SECOND | DM_MIXED
+    };
+
+    struct DerivSet {
+        double *x  = nullptr;
+        double *y  = nullptr;
+        double *z  = nullptr;
+        double *xx = nullptr;
+        double *yy = nullptr;
+        double *zz = nullptr;
+        double *xy = nullptr;
+        double *xz = nullptr;
+        double *yz = nullptr;
+    };
+
+    void grad_set(const DerivSet &out, const double *u, unsigned int mask,
+                  double dx, double dy, double dz, const unsigned int *sz,
+                  unsigned int bflag, double *workspace = nullptr) {
+        auto need = [&](unsigned int bit, double *p, const char *name) {
+            if ((mask & bit) && !p)
+                throw std::invalid_argument(
+                    std::string("grad_set: mask requests ") + name +
+                    " but its output pointer is null");
+            return (mask & bit) != 0u;
+        };
+        const bool wx  = need(DM_X, out.x, "x");
+        const bool wy  = need(DM_Y, out.y, "y");
+        const bool wz  = need(DM_Z, out.z, "z");
+        const bool wxx = need(DM_XX, out.xx, "xx");
+        const bool wyy = need(DM_YY, out.yy, "yy");
+        const bool wzz = need(DM_ZZ, out.zz, "zz");
+        const bool wxy = need(DM_XY, out.xy, "xy");
+        const bool wxz = need(DM_XZ, out.xz, "xz");
+        const bool wyz = need(DM_YZ, out.yz, "yz");
+
+        // a first derivative that feeds a mixed one is an intermediate: full
+        // along the axes still to be differentiated. otherwise terminal.
+        const bool x_feeds = wx && (wxy || wxz);
+        const bool y_feeds = wy && wyz;
+
+        if (wx) {
+            if (x_feeds) grad_x(out.x, u, dx, sz, bflag);
+            else grad_x_last(out.x, u, dx, sz, bflag);
+        }
+        if (wy) {
+            if (y_feeds) grad_y(out.y, u, dy, sz, bflag);
+            else grad_y_last(out.y, u, dy, sz, bflag);
+        }
+        if (wz) grad_z(out.z, u, dz, sz, bflag);
+
+        if (wxx) grad_xx_last(out.xx, u, dx, sz, bflag);
+        if (wyy) grad_yy_last(out.yy, u, dy, sz, bflag);
+        if (wzz) grad_zz(out.zz, u, dz, sz, bflag);
+
+        // mixed: chain on the intermediate when we have it, fused otherwise
+        if (wxy) {
+            if (x_feeds) grad_y_last(out.xy, out.x, dy, sz, bflag);
+            else grad_xy(out.xy, u, workspace, dx, dy, sz, bflag);
+        }
+        if (wxz) {
+            if (x_feeds) grad_z(out.xz, out.x, dz, sz, bflag);
+            else grad_xz(out.xz, u, workspace, dx, dz, sz, bflag);
+        }
+        if (wyz) {
+            if (y_feeds) grad_z(out.yz, out.y, dz, sz, bflag);
+            else grad_yz(out.yz, u, workspace, dy, dz, sz, bflag);
+        }
+    }
+
+    void grad_set_batch(const DerivSet *outs, const double *const *us,
+                        unsigned int n_vars, unsigned int mask, double dx,
+                        double dy, double dz, const unsigned int *sz,
+                        unsigned int bflag, double *workspace = nullptr) {
+        for (unsigned int v = 0; v < n_vars; v++)
+            grad_set(outs[v], us[v], mask, dx, dy, dz, sz, bflag, workspace);
+    }
+
+   private:
+    static void require_workspace(const double *workspace, const char *who) {
+        if (!workspace)
+            throw std::invalid_argument(
+                std::string(who) +
+                ": this engine has no fused mixed kernel, a block-sized "
+                "workspace is required");
+    }
+
+   public:
 
     std::string toString() {
         return "DendroDerivs<" + _first_deriv->toString() + ", " +
