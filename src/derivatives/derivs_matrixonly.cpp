@@ -37,13 +37,7 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
     for (BoundaryType b :
          {BoundaryType::NO_BOUNDARY, BoundaryType::LEFT_BOUNDARY,
           BoundaryType::RIGHT_BOUNDARY, BoundaryType::LEFTRIGHT_BOUNDARY}) {
-        // FIXME: this is an interesting problem, we have to assume that Dendro
-        // blocks will only potentially have LEFTRIGHT boundary in weird
-        // instances where the mesh is super unrefined or we have more than 1
-        // block "fused" together. So, there's really only a need to compute
-        // LEFTRIGHT for blocks > 1, but it's still so rare. Left-right
-        // corresponds to the cases where the boundary on both sides are "hard"
-        // boundaries.
+        // No caller passes true; skipping only ever returned silent zeros.
         if (b == BoundaryType::LEFTRIGHT_BOUNDARY && skip_leftright) continue;
 
         // std::cout << "Creating for b=" << b << std::endl;
@@ -61,10 +55,18 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
         }
 
         // build the local P and Q matrices from diagonals
-        std::vector<double> P_temp = create_P_from_diagonals(
-            *diagEntries, n, 1.0, boundary_top, boundary_bottom);
-        std::vector<double> Q_temp = create_Q_from_diagonals(
-            *diagEntries, n, Q_parity, boundary_top, boundary_bottom);
+        std::vector<double> P_temp, Q_temp;
+        try {
+            P_temp = create_P_from_diagonals(*diagEntries, n, 1.0, boundary_top,
+                                             boundary_bottom);
+            Q_temp = create_Q_from_diagonals(*diagEntries, n, Q_parity,
+                                             boundary_top, boundary_bottom);
+        } catch (const std::exception&) {
+            // Wide closures may not fit once both ends are trimmed.
+            if (b != BoundaryType::LEFTRIGHT_BOUNDARY) throw;
+            derivMatrixPtr->leftright_valid = false;
+            continue;
+        }
 
         std::vector<double>* const D_ptr =
             get_deriv_mat_by_boundary(derivMatrixPtr.get(), b);
@@ -132,13 +134,7 @@ createMatrixSystemForSingleSizeInMatrixFilter(
     for (BoundaryType b :
          {BoundaryType::NO_BOUNDARY, BoundaryType::LEFT_BOUNDARY,
           BoundaryType::RIGHT_BOUNDARY, BoundaryType::LEFTRIGHT_BOUNDARY}) {
-        // FIXME: this is an interesting problem, we have to assume that Dendro
-        // blocks will only potentially have LEFTRIGHT boundary in weird
-        // instances where the mesh is super unrefined or we have more than 1
-        // block "fused" together. So, there's really only a need to compute
-        // LEFTRIGHT for blocks > 1, but it's still so rare. Left-right
-        // corresponds to the cases where the boundary on both sides are "hard"
-        // boundaries.
+        // No caller passes true; skipping only ever returned silent zeros.
         if (b == BoundaryType::LEFTRIGHT_BOUNDARY && skip_leftright) continue;
 
         // std::cout << "Creating for b=" << b << std::endl;
@@ -156,14 +152,22 @@ createMatrixSystemForSingleSizeInMatrixFilter(
         }
 
         // build the local P and Q matrices from diagonals
-        std::vector<double> P_temp = create_P_from_diagonals(
-            *diagEntries, n, 1.0, boundary_top, boundary_bottom);
-        std::vector<double> Q_temp = create_Q_from_diagonals(
-            *diagEntries, n, Q_parity, boundary_top, boundary_bottom);
-        std::vector<double> R_temp = create_P_from_diagonals(
-            *filterEntries, n, 1.0, boundary_top, boundary_bottom);
-        std::vector<double> S_temp = create_Q_from_diagonals(
-            *filterEntries, n, 1.0, boundary_top, boundary_bottom);
+        std::vector<double> P_temp, Q_temp, R_temp, S_temp;
+        try {
+            P_temp = create_P_from_diagonals(*diagEntries, n, 1.0, boundary_top,
+                                             boundary_bottom);
+            Q_temp = create_Q_from_diagonals(*diagEntries, n, Q_parity,
+                                             boundary_top, boundary_bottom);
+            R_temp = create_P_from_diagonals(*filterEntries, n, 1.0,
+                                             boundary_top, boundary_bottom);
+            S_temp = create_Q_from_diagonals(*filterEntries, n, 1.0,
+                                             boundary_top, boundary_bottom);
+        } catch (const std::exception&) {
+            // Wide closures may not fit once both ends are trimmed.
+            if (b != BoundaryType::LEFTRIGHT_BOUNDARY) throw;
+            derivMatrixPtr->leftright_valid = false;
+            continue;
+        }
 
         std::vector<double>* const D_ptr =
             get_deriv_mat_by_boundary(derivMatrixPtr.get(), b);
@@ -233,13 +237,7 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
     for (BoundaryType b :
          {BoundaryType::NO_BOUNDARY, BoundaryType::LEFT_BOUNDARY,
           BoundaryType::RIGHT_BOUNDARY, BoundaryType::LEFTRIGHT_BOUNDARY}) {
-        // FIXME: this is an interesting problem, we have to assume that Dendro
-        // blocks will only potentially have LEFTRIGHT boundary in weird
-        // instances where the mesh is super unrefined or we have more than 1
-        // block "fused" together. So, there's really only a need to compute
-        // LEFTRIGHT for blocks > 1, but it's still so rare. Left-right
-        // corresponds to the cases where the boundary on both sides are "hard"
-        // boundaries.
+        // No caller passes true; skipping only ever returned silent zeros.
         if (b == BoundaryType::LEFTRIGHT_BOUNDARY && skip_leftright) continue;
 
         // std::cout << "Creating for b=" << b << std::endl;
@@ -267,10 +265,18 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
         }
 
         // build the local P and Q matrices from diagonals
-        std::vector<double> P_temp = create_P_from_diagonals(
-            *tempDiagEntries, n, 1.0, boundary_top, boundary_bottom);
-        std::vector<double> Q_temp = create_Q_from_diagonals(
-            *tempDiagEntries, n, Q_parity, boundary_top, boundary_bottom);
+        std::vector<double> P_temp, Q_temp;
+        try {
+            P_temp = create_P_from_diagonals(*tempDiagEntries, n, 1.0,
+                                             boundary_top, boundary_bottom);
+            Q_temp = create_Q_from_diagonals(*tempDiagEntries, n, Q_parity,
+                                             boundary_top, boundary_bottom);
+        } catch (const std::exception&) {
+            // Wide closures may not fit once both ends are trimmed.
+            if (b != BoundaryType::LEFTRIGHT_BOUNDARY) throw;
+            derivMatrixPtr->leftright_valid = false;
+            continue;
+        }
 
         std::vector<double>* const D_ptr =
             get_deriv_mat_by_boundary(derivMatrixPtr.get(), b);
@@ -337,10 +343,10 @@ void MatrixCompactDerivs<DerivOrder>::init() {
         //           << " , which is of size: " << n << std::endl;
 
         // because we're using smart pointers, just store the result immediately
-        // std::cout << " n = " << n << " and i==1:" << (i == 1) << std::endl;
         // the filter/scheme branch lives in build_storage_for_size so that this
         // eager path and the lazy get_storage_for_size path cannot disagree.
-        D_storage_map_.emplace(n, build_storage_for_size(n, i == 1));
+        // i == 1 is the single-element block, which most needs LEFTRIGHT.
+        D_storage_map_.emplace(n, build_storage_for_size(n, false));
     }
 }
 
