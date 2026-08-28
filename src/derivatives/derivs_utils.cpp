@@ -25,6 +25,8 @@ std::shared_mutex kernel_cache_y_direct_mutex;
 std::unordered_map<ZDirectKernelKey, KernelType, ZDirectKernelKeyHash>
     kernel_cache_z_direct;
 std::shared_mutex kernel_cache_z_direct_mutex;
+std::unordered_map<KernelKey, KernelType, KernelKeyHash> kernel_cache_ld;
+std::shared_mutex kernel_cache_ld_mutex;
 
 void prewarm_kernel_cache(const std::vector<BlockShape> &shapes,
                           unsigned int pw) {
@@ -363,22 +365,25 @@ void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
         R_scaled[ii] = R[ii] * alpha;
     }
 
+    // only the active x-rows of the output are ever read (see the contract in
+    // derivs_utils.h), so the GEMM is D[pw:pw+ma, :] * u with LDA = nx and the
+    // output pointer offset by pw. ma is the active count padded for SIMD
+    const unsigned int ma       = active_m_padded(nx, pw);
+    const unsigned int slice_sz = nx * ny;
+    const double *A             = R_scaled + pw;
+
     if (is_last_op) {
-        // Skip both y and z padding regions of the output. Safe only when
-        // no downstream operation reads Dxu's padding cells (i.e. this is
-        // a solo grad_x or the last op in its chain — see the header
-        // comment in derivs_utils.h). At eleorder=6 this drops the GEMM
-        // work from (nx, ny*nz, nx) to (nx, ny_active, nx) per active
-        // z-slice, a ~71% reduction.
+        // skip the y and z padding of the output as well: one GEMM per active
+        // z-slice over the active y columns only. at eleorder=6 that is
+        // (8, 7, 13) x 7 slices instead of (13, 169, 13)
         const unsigned int y_start   = pw;
-        const unsigned int y_end     = ny - pw;
         const unsigned int z_start   = pw;
         const unsigned int z_end     = nz - pw;
-        const unsigned int ny_active = y_end - y_start;
-        const unsigned int slice_sz  = nx * ny;
+        const unsigned int ny_active = ny - 2u * pw;
         const unsigned int y_off     = y_start * nx;
 
-        auto kernel = get_or_create_kernel_x(nx, ny_active, nx);
+        auto kernel = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_NONE, ma,
+                                              ny_active, nx, nx, nx, nx);
         if (!kernel) {
             std::cout << "FALLING BACK TO MATMUL X DIM (last-op path)\n";
             return matmul_x_dim_old(R, Dxu, u, alpha, sz, bflag, pw);
@@ -388,38 +393,30 @@ void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
         libxsmm_gemmfunction raw_fn = kernel.kernel();
         if (raw_fn) {
             libxsmm_gemm_param args;
-            args.a.primary = (void *)R_scaled;
+            args.a.primary = (void *)A;
             for (unsigned int k = z_start; k < z_end; k++) {
-                args.b.primary = (void *)(u   + k * slice_sz + y_off);
-                args.c.primary = (void *)(Dxu + k * slice_sz + y_off);
+                args.b.primary = (void *)(u + k * slice_sz + y_off);
+                args.c.primary = (void *)(Dxu + k * slice_sz + y_off + pw);
                 raw_fn(&args);
             }
             return;
         }
 #endif
         for (unsigned int k = z_start; k < z_end; k++) {
-            kernel(R_scaled, u   + k * slice_sz + y_off,
-                              Dxu + k * slice_sz + y_off);
+            kernel(A, u + k * slice_sz + y_off, Dxu + k * slice_sz + y_off + pw);
         }
         return;
     }
 
-    // Chain-intermediate path: a downstream grad_z reads this across the full z
-    // range, so write all z-slices. (bflag-trimming z here left boundary-block
-    // padding uninitialized -> NaN into the chained grad_z.)
-    const int z_start                = 0;
-    const int z_end                  = (int)nz;
-    const unsigned int n_active_cols = ny * (z_end - z_start);
-
-    auto kernel = get_or_create_kernel_x(nx, n_active_cols, nx);
+    // Chain-intermediate path: a downstream grad_y / grad_z reads this across
+    // the full y and z range (at active x rows), so write every column
+    auto kernel = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_NONE, ma, ny * nz,
+                                          nx, nx, nx, nx);
     if (!kernel) {
         std::cout << "FALLING BACK TO MATMUL X DIM" << std::endl;
         return matmul_x_dim_old(R, Dxu, u, alpha, sz, bflag, pw);
     }
-
-    const double *u_start = u + z_start * nx * ny;
-    double *du_start      = Dxu + z_start * nx * ny;
-    kernel(R_scaled, u_start, du_start);
+    kernel(A, u, Dxu + pw);
 }
 
 void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
@@ -427,36 +424,9 @@ void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
                   const unsigned int *sz, double *__restrict__ workspace,
                   const unsigned int bflag, const unsigned int pw,
                   bool is_last_op) {
-    const unsigned int nx               = sz[0];
-    const unsigned int ny               = sz[1];
-    const unsigned int nz               = sz[2];
-
-    static const char TRANSA            = 'N';
-    static const char TRANSB            = 'T';
-    const int M                         = ny;
-    const int N                         = nx;
-    const int K                         = ny;
-    // NOTE: LDA = M, LDB = N, and LDC = M
-    // LDB is N because in memory, Y is transposed!
-
-    static const double beta            = 0.0;
-
-    static const double alpha_domatcopy = 1.0;
-
-    auto kernel                         = get_or_create_kernel_yz(M, N, K);
-
-    if (!kernel) {
-        std::cout << "FALLING BACK TO MATMUL Y DIM" << std::endl;
-        return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag, pw);
-    }
-
-    const unsigned int slice_size = nx * ny;
-
-    // Last op: trim z-padding (nothing reads it). Intermediate (grad_z(grad_y))
-    // reads the full z range downstream, so write it all. (Trimming left that
-    // padding uninitialized -> NaN.)
-    const int z_start             = is_last_op ? (int)pw : 0;
-    const int z_end               = is_last_op ? (int)(nz - pw) : (int)nz;
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
 
     // pre-scale the derivative matrix by alpha so the GEMM writes the
     // final result directly. R is ny*ny which is small (e.g. 81 doubles),
@@ -466,121 +436,96 @@ void matmul_y_dim(const double *__restrict__ R, double *__restrict__ Dyu,
         R_scaled[ii] = R[ii] * alpha;
     }
 
-    auto kernel_direct = get_or_create_kernel_y_direct(nx, ny);
+    // per z-slice: C(ma, N) = U(ma, ny) * D^T restricted to the output
+    // columns. A = u_slice + pw (active x rows, LDA = nx), TRANS_B with the
+    // operator rows selecting which y outputs are produced, C offset to the
+    // same rows/columns. last op: only the active y columns and z slices.
+    // intermediate: all y columns and all z slices (a downstream y/z op reads
+    // them), still only the active x rows
+    const unsigned int ma         = active_m_padded(nx, pw);
+    const unsigned int slice_size = nx * ny;
+    const unsigned int z_start    = is_last_op ? pw : 0u;
+    const unsigned int z_end      = is_last_op ? nz - pw : nz;
+    const unsigned int y_start    = is_last_op ? pw : 0u;
+    const unsigned int n_cols     = is_last_op ? ny - 2u * pw : ny;
 
-    if (kernel_direct) {
+    auto kernel = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma, n_cols,
+                                          ny, nx, ny, nx);
+    if (!kernel) {
+        std::cout << "FALLING BACK TO MATMUL Y DIM (old)" << std::endl;
+        return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag, pw);
+    }
+
+    const double *B          = R_scaled + y_start;
+    const unsigned int c_off = y_start * nx + pw;
+
 #if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
-        // use the raw JIT function pointer for tighter per-call dispatch
-        libxsmm_gemmfunction raw_fn = kernel_direct.kernel();
-
-        if (raw_fn) {
-            libxsmm_gemm_param args;
-            args.b.primary = (void *)R_scaled;
-
-            for (unsigned int k = z_start; k < z_end; k++) {
-                args.a.primary = (void *)(u + k * slice_size);
-                args.c.primary = (void *)(Dyu + k * slice_size);
-                raw_fn(&args);
-            }
-            return;
-        }
-#endif
-        // standard C++ wrapper dispatch
+    libxsmm_gemmfunction raw_fn = kernel.kernel();
+    if (raw_fn) {
+        libxsmm_gemm_param args;
+        args.b.primary = (void *)B;
         for (unsigned int k = z_start; k < z_end; k++) {
-            kernel_direct(u + k * slice_size, R_scaled, Dyu + k * slice_size);
+            args.a.primary = (void *)(u + k * slice_size + pw);
+            args.c.primary = (void *)(Dyu + k * slice_size + c_off);
+            raw_fn(&args);
         }
         return;
     }
-
-    // fallback
-    std::cout << "FALLING BACK TO MATMUL Y DIM (old)" << std::endl;
-    return matmul_y_dim_old(R, Dyu, u, alpha, sz, workspace, bflag, pw);
+#endif
+    for (unsigned int k = z_start; k < z_end; k++) {
+        kernel(u + k * slice_size + pw, B, Dyu + k * slice_size + c_off);
+    }
 }
 
 void matmul_z_dim(const double *__restrict__ R, double *__restrict__ Dzu,
                   const double *__restrict__ u, const double alpha,
                   const unsigned int *sz, double *__restrict__ workspace,
                   const unsigned int bflag, const unsigned int pw) {
-    const int nx             = sz[0];
-    const int ny             = sz[1];
-    const int nz             = sz[2];
+    const unsigned int nx = sz[0];
+    const unsigned int ny = sz[1];
+    const unsigned int nz = sz[2];
 
-    static const char TRANSA = 'N';
-    static const char TRANSB = 'T';
-    const int M              = nz;
-    const int N              = nx;
-    const int K              = nz;
-    static const double beta = 0.0;
+    // pre-scale D by alpha
+    double R_scaled[nz * nz];
+    for (unsigned int ii = 0; ii < nz * nz; ii++) {
+        R_scaled[ii] = R[ii] * alpha;
+    }
 
-    auto kernel              = get_or_create_kernel_yz(M, N, K);
+    // z is always the last operator in a chain, so only the active region of
+    // the output is needed: per active y-row, C(ma, nz_active) = U(ma, nz) *
+    // D^T[active rows] with LDA = LDC = nx*ny so the kernel reads/writes at
+    // z-stride straight in the 3D array (no gather/scatter)
+    const unsigned int ma        = active_m_padded(nx, pw);
+    const unsigned int ld_3d     = nx * ny;
+    const unsigned int y_start   = pw;
+    const unsigned int y_end     = ny - pw;
+    const unsigned int z_start   = pw;
+    const unsigned int nz_active = nz - 2u * pw;
 
+    auto kernel = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
+                                          nz_active, nz, ld_3d, nz, ld_3d);
     if (!kernel) {
         return matmul_z_dim_old(R, Dzu, u, alpha, sz, workspace, bflag, pw);
     }
 
-    // NOTE: due to how derivatives are called, and thanks to the padding width,
-    // we can actually skip both padding regions of j, they'll never be needed
-    // on the z derivative, because z is always called last on 2nd order mixed
-    // derivatives
+    const double *B          = R_scaled + z_start;
+    const unsigned int c_off = pw + z_start * ld_3d;
 
-    const unsigned int y_start    = pw;
-    const unsigned int y_end      = ny - pw;
-
-    const unsigned int slice_size = nx * nz;
-
-    // pre-scale D by alpha
-    double R_scaled[nz * nz];
-    for (int ii = 0; ii < nz * nz; ii++) {
-        R_scaled[ii] = R[ii] * alpha;
-    }
-
-    // zero-copy approach: strided LDA/LDC = nx*ny so the GEMM reads/writes
-    // directly from/to the 3D array with no gather/scatter
-    auto kernel_direct = get_or_create_kernel_z_direct(nx, ny, nz);
-
-    if (kernel_direct) {
 #if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
-        libxsmm_gemmfunction raw_fn = kernel_direct.kernel();
-
-        if (raw_fn) {
-            libxsmm_gemm_param args;
-            args.b.primary = (void *)R_scaled;
-
-            for (unsigned int j = y_start; j < y_end; j++) {
-                args.a.primary = (void *)(u + j * nx);
-                args.c.primary = (void *)(Dzu + j * nx);
-                raw_fn(&args);
-            }
-            return;
-        }
-#endif
-        // standard C++ wrapper dispatch
+    libxsmm_gemmfunction raw_fn = kernel.kernel();
+    if (raw_fn) {
+        libxsmm_gemm_param args;
+        args.b.primary = (void *)B;
         for (unsigned int j = y_start; j < y_end; j++) {
-            kernel_direct(u + j * nx, R_scaled, Dzu + j * nx);
+            args.a.primary = (void *)(u + j * nx + pw);
+            args.c.primary = (void *)(Dzu + j * nx + c_off);
+            raw_fn(&args);
         }
         return;
     }
-
-    // fallback: gather/scatter approach if kernel creation fails
-    const double *workspace_out = workspace + nx * ny * nz;
-
+#endif
     for (unsigned int j = y_start; j < y_end; j++) {
-        double *u_slice  = workspace;
-        double *du_slice = (double *)workspace_out;
-
-        for (unsigned int k = 0; k < nz; k++) {
-            for (unsigned int i = 0; i < nx; i++) {
-                u_slice[k * nx + i] = u[INDEX_3D(i, j, k)];
-            }
-        }
-
-        kernel(R, u_slice, du_slice);
-
-        for (unsigned int k = 0; k < nz; k++) {
-            for (unsigned int i = 0; i < nx; i++) {
-                Dzu[INDEX_3D(i, j, k)] = du_slice[k + i * nz] * alpha;
-            }
-        }
+        kernel(u + j * nx + pw, B, Dzu + j * nx + c_off);
     }
 }
 

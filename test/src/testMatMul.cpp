@@ -44,6 +44,11 @@ void print_2d_mat(const double* matrix, uint32_t nx, uint32_t ny) {
     std::cout << std::endl;
 }
 
+// ghost padding width handed to the matmul routines; their output is only
+// defined on the active region [PW, n-PW) (see derivs_utils.h), so the
+// correctness checks compare that region only
+static const uint32_t PW = 1;
+
 bool test_correctness_x() {
     static uint32_t nx = 7;
     static uint32_t ny = 8;
@@ -84,7 +89,7 @@ bool test_correctness_x() {
     print_3d_mat(fullBlock, nx, ny, nz);
 #endif
 
-    dendroderivs::matmul_x_dim(matrix_x, results, fullBlock, 1.0, sz, 0);
+    dendroderivs::matmul_x_dim(matrix_x, results, fullBlock, 1.0, sz, 0, PW);
 
 #if 0
     std::cout << "RESULTS" << std::endl;
@@ -94,9 +99,9 @@ bool test_correctness_x() {
     bool calc_passed = true;
 
     // do a check to see if they're accurate
-    for (uint32_t k = 0; k < nz && calc_passed; ++k)
-        for (uint32_t j = 0; j < ny && calc_passed; ++j)
-            for (uint32_t i = 0; i < nx && calc_passed; ++i) {
+    for (uint32_t k = PW; k < nz - PW && calc_passed; ++k)
+        for (uint32_t j = PW; j < ny - PW && calc_passed; ++j)
+            for (uint32_t i = PW; i < nx - PW && calc_passed; ++i) {
                 double diff = std::abs(fullBlock[INDEX_3D(i, j, k)] -
                                        results[INDEX_3D(i, j, k)]);
 
@@ -158,7 +163,7 @@ bool test_correctness_y() {
 #endif
 
     dendroderivs::matmul_y_dim(matrix_y, results, fullBlock, 1.0, sz, workspace,
-                               0);
+                               0, PW);
 
 #if 0
     std::cout << "RESULTS" << std::endl;
@@ -168,9 +173,9 @@ bool test_correctness_y() {
     bool calc_passed = true;
 
     // do a check to see if they're accurate
-    for (uint32_t k = 0; k < nz && calc_passed; ++k)
-        for (uint32_t j = 0; j < ny && calc_passed; ++j)
-            for (uint32_t i = 0; i < nx && calc_passed; ++i) {
+    for (uint32_t k = PW; k < nz - PW && calc_passed; ++k)
+        for (uint32_t j = PW; j < ny - PW && calc_passed; ++j)
+            for (uint32_t i = PW; i < nx - PW && calc_passed; ++i) {
                 double diff = std::abs(fullBlock[INDEX_3D(i, j, k)] -
                                        results[INDEX_3D(i, j, k)]);
 
@@ -232,7 +237,7 @@ bool test_correctness_z() {
 #endif
 
     dendroderivs::matmul_z_dim(matrix_z, results, fullBlock, 1.0, sz, workspace,
-                               0);
+                               0, PW);
 
 #if 0
     std::cout << "RESULTS" << std::endl;
@@ -242,9 +247,9 @@ bool test_correctness_z() {
     bool calc_passed = true;
 
     // do a check to see if they're accurate
-    for (uint32_t k = 0; k < nz && calc_passed; ++k)
-        for (uint32_t j = 0; j < ny && calc_passed; ++j)
-            for (uint32_t i = 0; i < nx && calc_passed; ++i) {
+    for (uint32_t k = PW; k < nz - PW && calc_passed; ++k)
+        for (uint32_t j = PW; j < ny - PW && calc_passed; ++j)
+            for (uint32_t i = PW; i < nx - PW && calc_passed; ++i) {
                 double diff = std::abs(fullBlock[INDEX_3D(i, j, k)] -
                                        results[INDEX_3D(i, j, k)]);
 
@@ -321,7 +326,7 @@ double test_speed_x(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
     double time          = test_runner(
         [&]() {
             dendroderivs::matmul_x_dim(matrix_x, results, fullBlock, 1.0, sz,
-                                                0);
+                                       0, PW);
         },
         n_startups, n_runs);
 
@@ -345,7 +350,7 @@ double test_speed_y(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
     double time          = test_runner(
         [&]() {
             dendroderivs::matmul_y_dim(matrix_y, results, fullBlock, 1.0, sz,
-                                                workspace, 0);
+                                       workspace, 0, PW);
         },
         n_startups, n_runs);
 
@@ -370,7 +375,7 @@ double test_speed_z(uint32_t n_startups, uint32_t n_runs, uint32_t nx,
     double time          = test_runner(
         [&]() {
             dendroderivs::matmul_z_dim(matrix_z, results, fullBlock, 1.0, sz,
-                                                workspace, 0);
+                                       workspace, 0, PW);
         },
         n_startups, n_runs);
 

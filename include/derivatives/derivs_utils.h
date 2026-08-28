@@ -357,12 +357,25 @@ inline void dgemm_cpp_safe(const char *TRANSA, const char *TRANSB, const int *m,
 // caller). it used to live in a mutable global DENDRO_DERIVS_PW; passing it
 // explicitly lets two derivs instances at different ele_orders coexist
 // safely in the same process
-// is_last_op = true tells the kernel that no downstream operation will
-// read the output's padding cells. Allows skipping work on those cells.
-// Default false (safe): writes the full output, suitable for use as an
-// intermediate step in mixed 2nd-order derivatives (e.g. v = grad_x(u)
-// followed by w = grad_y(v) — y reads v across full y range including
-// y-padding, so x must write those cells).
+//
+// OUTPUT CONTRACT (active region). A compact operator along axis a is dense
+// along a, so each active output reads the FULL extent of its input along a
+// (padding included) but only the ACTIVE extent [pw, n-pw) along the other
+// two axes. Consequently a derivative output only ever needs to be defined
+//   - full along every axis that a downstream operator will differentiate,
+//   - active along every other axis.
+// The x-padding rows [0,pw) and [nx-pw,nx) of ANY derivative output are never
+// read by anyone (RHS loops, boundary conditions and chained y/z operators all
+// stay inside the active x range), so no path computes them. The GEMMs are
+// restricted to M = active x-rows (padded up to a multiple of 4 for unmasked
+// SIMD, see active_m_padded) and the corresponding output rows only.
+//
+// is_last_op = true additionally tells the kernel that no downstream operator
+// will read the output at all, so the y/z padding is skipped too.
+// Default false (safe): writes all y columns and all z slices (at active x
+// rows), suitable for use as an intermediate step in mixed 2nd-order
+// derivatives (e.g. v = grad_x(u) followed by w = grad_y(v) — y reads v
+// across the full y range including y-padding, so x must write those cells).
 // matmul_z_dim does NOT take this flag because by the project convention
 // "z is always called last in mixed chains" it unconditionally skips.
 void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
@@ -407,6 +420,21 @@ std::vector<std::vector<double>> inline generate_identity_bdys(size_t nbdry) {
     }
 
     return bdry_coeffs;
+}
+
+// number of active x-rows to hand the GEMM as M: the active count n - 2*pw,
+// rounded up to a multiple of DENDRO_DERIVS_M_PAD when the extra rows still
+// fit inside the block (they land in x-padding, which nobody reads). an
+// unmasked M is measurably faster for libxsmm (n=13: 7 -> 8 is ~1.3x)
+#ifndef DENDRO_DERIVS_M_PAD
+#define DENDRO_DERIVS_M_PAD 4u
+#endif
+inline unsigned int active_m_padded(unsigned int n, unsigned int pw) {
+    const unsigned int na = n - 2u * pw;
+    const unsigned int mp =
+        ((na + DENDRO_DERIVS_M_PAD - 1u) / DENDRO_DERIVS_M_PAD) *
+        DENDRO_DERIVS_M_PAD;
+    return (pw + mp <= n) ? mp : na;
 }
 
 // libxsmm stuff
@@ -555,6 +583,55 @@ inline KernelType get_or_create_kernel_z_direct(int nx, int ny, int nz) {
         return KernelType();
     }
     kernel_cache_z_direct[key] = new_kernel;
+    return new_kernel;
+}
+
+// general kernel cache keyed on the full GEMM description (flags + shape +
+// leading dimensions). the active-region paths need LDA/LDB/LDC that differ
+// from M/K/M (they address a sub-block of the operator and of the field), so
+// the three shape-only caches above can't describe them
+struct KernelKey {
+    int flags, M, N, K, lda, ldb, ldc;
+    bool operator==(const KernelKey &o) const {
+        return flags == o.flags && M == o.M && N == o.N && K == o.K &&
+               lda == o.lda && ldb == o.ldb && ldc == o.ldc;
+    }
+};
+
+struct KernelKeyHash {
+    size_t operator()(const KernelKey &k) const {
+        size_t h = std::hash<int>{}(k.flags);
+        h = h * 1315423911u ^ std::hash<int>{}(k.M);
+        h = h * 1315423911u ^ std::hash<int>{}(k.N);
+        h = h * 1315423911u ^ std::hash<int>{}(k.K);
+        h = h * 1315423911u ^ std::hash<int>{}(k.lda);
+        h = h * 1315423911u ^ std::hash<int>{}(k.ldb);
+        h = h * 1315423911u ^ std::hash<int>{}(k.ldc);
+        return h;
+    }
+};
+
+extern std::unordered_map<KernelKey, KernelType, KernelKeyHash> kernel_cache_ld;
+extern std::shared_mutex kernel_cache_ld_mutex;
+
+inline KernelType get_or_create_kernel_ld(int flags, int M, int N, int K,
+                                          int lda, int ldb, int ldc) {
+    KernelKey key{flags, M, N, K, lda, ldb, ldc};
+    {
+        std::shared_lock<std::shared_mutex> lk(kernel_cache_ld_mutex);
+        auto it = kernel_cache_ld.find(key);
+        if (it != kernel_cache_ld.end()) return it->second;
+    }
+    std::unique_lock<std::shared_mutex> lk(kernel_cache_ld_mutex);
+    auto it = kernel_cache_ld.find(key);
+    if (it != kernel_cache_ld.end()) return it->second;
+
+    KernelType new_kernel(flags, M, N, K, lda, ldb, ldc, 1.0, 0.0);
+    if (!new_kernel) {
+        kernel_cache_ld[key] = KernelType();
+        return KernelType();
+    }
+    kernel_cache_ld[key] = new_kernel;
     return new_kernel;
 }
 
