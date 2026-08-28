@@ -7,6 +7,7 @@
 
 #include "derivatives.h"
 #include "derivatives/derivs_explicit.h"
+#include "derivatives/derivs_explicit_simd.h"
 #include "derivatives/filt_kodiss_explicit.h"
 #include "derivatives/filt_kodiss_matrix.h"
 #include "derivatives/impl_boris.h"
@@ -155,6 +156,9 @@ get_first_order_registry() {
         {"E4", make_explicit<ExplicitDerivsO4_DX>},
         {"E6", make_explicit<ExplicitDerivsO6_DX>},
         {"E8", make_explicit<ExplicitDerivsO8_DX>},
+        {"E4Simd", make_explicit<ExplicitSimdDerivs<4, 1>>},
+        {"E6Simd", make_explicit<ExplicitSimdDerivs<6, 1>>},
+        {"E8Simd", make_explicit<ExplicitSimdDerivs<8, 1>>},
 
         // explicit matrix
         {"E4Matrix", make_generic<1, createE4DiagonalsFirstOrder, DerivType::D_E4>},
@@ -453,6 +457,9 @@ get_second_order_registry() {
         {"E4", make_explicit<ExplicitDerivsO4_DXX>},
         {"E6", make_explicit<ExplicitDerivsO6_DXX>},
         {"E8", make_explicit<ExplicitDerivsO8_DXX>},
+        {"E4Simd", make_explicit<ExplicitSimdDerivs<4, 2>>},
+        {"E6Simd", make_explicit<ExplicitSimdDerivs<6, 2>>},
+        {"E8Simd", make_explicit<ExplicitSimdDerivs<8, 2>>},
 
         // explicit matrix
         {"E4Matrix", make_generic<2, createE4DiagonalsSecondOrder, DerivType::D_E4>},

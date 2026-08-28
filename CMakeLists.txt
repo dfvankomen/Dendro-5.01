@@ -541,6 +541,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testDerivSet test/src/testDerivSet.cpp)
   dendro_add_deriv_test(benchDerivBlockStage test/src/benchDerivBlockStage.cpp)
   dendro_add_deriv_test(testKOMatrix test/src/testKOMatrix.cpp)
+  dendro_add_deriv_test(testExplicitSimd test/src/testExplicitSimd.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
   dendro_add_deriv_test(testMeshTimeIntegrator test/src/testMeshTimeIntegrator.cpp)
 
