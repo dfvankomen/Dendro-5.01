@@ -106,13 +106,8 @@ class MatrixCompactDerivs : public CompactDerivs {
     mutable unsigned int _cached_sz = 0;
     mutable DerivMatrixStorage *_cached_storage = nullptr;
 
-    // hot-path memo. an instance is per-thread under the clone model, so
-    // these need no lock: the kernel plan for the last block shape, and the
-    // alpha-scaled operator for the last (D, alpha) seen on each axis. blocks
-    // arrive in Morton order, so consecutive blocks nearly always share both,
-    // and the shared kernel cache (shared_mutex + hash) and the per-call
-    // re-scale stay off the timestep loop. reset on copy: the src pointers
-    // key into THIS instance's D storage
+    // per-instance hot-path memo (instances are per thread): kernel plan for
+    // the last block shape and scaled operator per axis. reset on copy
     MatmulPlan plan_;
     ScaledOperator sop_[3];
 
@@ -323,15 +318,9 @@ class MatrixCompactDerivs : public CompactDerivs {
         apply_y(du, u, dx, sz, bflag, /*last=*/true);
     }
 
-    // Fused mixed second derivatives d^2u/dadb (1st-order engines only). Each
-    // streams one slice/slab through both operators: step 1 differentiates
-    // along the first axis into a small intermediate that stays in L1, step 2
-    // applies the second axis from it straight into the active output. Both
-    // steps use active shapes (M = active x rows, output columns active only)
-    // and the memoized scaled operators / kernel plan, so a call does no
-    // lookups, no re-scaling and no allocation. Output is defined on the
-    // active region only, per the contract in derivs_utils.h. Bit-identical
-    // to the chained form (same dot products, same order).
+    // Fused mixed second derivatives (1st-order engines): axis 1 into an L1
+    // intermediate, axis 2 from it into the active output, on the memoized
+    // plan and operators. Bit-identical to the chained form.
     // isotropic forwarders (kept for existing callers)
     void do_grad_xy_last(double *const w, const double *const u,
                          const double dx, const unsigned int *sz,
@@ -522,8 +511,7 @@ class MatrixCompactDerivs : public CompactDerivs {
         return false;
     }
 
-    // batch overrides: the scaled operator and the kernel plan are memoized
-    // on the instance, so every variable after the first is just the apply
+    // batch overrides: plan and scaled operator are memoized, so this is a loop
     void do_grad_x_batch(double **du_arr, const double **u_arr,
                          unsigned int n_vars, const double dx,
                          const unsigned int *sz,

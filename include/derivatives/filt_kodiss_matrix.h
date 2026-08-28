@@ -13,26 +13,13 @@ namespace dendroderivs {
 /**
  * @brief Matrix-form Kreiss-Oliger dissipation.
  *
- * KO dissipation along one axis is a banded linear operator on the block
- * (a centred stencil in the interior, one-sided rows at a physical-boundary
- * face), exactly like an explicit derivative. This class assembles that
- * operator as a dense n x n matrix per axis and bflag variant — by probing the
- * wrapped explicit filter with unit vectors, so every entry is exactly the
- * stencil's own coefficient and any KO order / padding width the explicit
- * class supports is supported here without transcribing tables — and applies
- * it through the same libxsmm kernel plan the compact derivatives use: three
- * active-region GEMMs that accumulate D_x u + D_y u + D_z u into one
- * workspace, then output += coeff * ws on the active region.
- *
- * Versus the stencil loops (three full-block passes into three workspaces plus
- * a combine pass) this is 2.5-3.4x faster per call at n = 13. The result
- * agrees with the stencil path to roundoff (relative ~1e-16: same products,
- * GEMM summation order), NOT bit-for-bit — which is why it is a separately
- * named filter ("KO4Matrix" etc.) and the stencil "KO4" stays the default.
- *
- * Thread model as for the derivative engines: one instance per thread
- * (clone()); the operators are immutable once built, the kernel plan and the
- * scaled-operator copies are per-instance memos.
+ * The per-axis KO stencil (centred interior, one-sided rows at bflag faces) is
+ * assembled as a dense n x n operator by probing the wrapped explicit filter
+ * with unit vectors, so every entry is exactly the stencil coefficient, and
+ * applied as three active-region GEMMs accumulating D_x u + D_y u + D_z u,
+ * then output += coeff * ws. 2.5-3.4x faster per call than the stencil loops
+ * at n = 13; agrees with them to roundoff, not bit-for-bit, hence the separate
+ * "KO4Matrix" names (stencil "KO4" stays the default). One instance per thread.
  */
 class MatrixKODiss : public Filters {
    protected:
@@ -59,11 +46,8 @@ class MatrixKODiss : public Filters {
         return bf;
     }
 
-    // assemble the operator along `axis` for a cubic block of size n by
-    // probing the explicit filter with unit vectors that are constant along
-    // the other two axes: their stencils then vanish exactly (integer
-    // coefficients summing to zero), so with coeff = 1 and spacing 1 the
-    // output column is exactly the axis operator's column
+    // probe the explicit filter with unit vectors constant along the other two
+    // axes (their stencils vanish exactly): output column = operator column
     std::unique_ptr<DerivMatrixStorage> build_storage(int axis,
                                                       unsigned int n) {
         auto st        = std::make_unique<DerivMatrixStorage>();
@@ -117,8 +101,7 @@ class MatrixKODiss : public Filters {
         return plan_;
     }
 
-    // ws = D_x u + D_y u + D_z u on the active region. false if a kernel is
-    // missing (caller falls back to the stencil path)
+    // ws = D_x u + D_y u + D_z u on the active region; false if a kernel is missing
     bool sum_axes(double *ws, const double *u, double dx, double dy, double dz,
                   const unsigned int *sz, unsigned int bflag) {
         const MatmulPlan &p = plan_for(sz);

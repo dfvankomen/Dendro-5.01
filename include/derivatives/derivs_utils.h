@@ -75,6 +75,8 @@ struct DerivMatrixStorage {
     std::vector<double> D_right;     ///< Storage for matrix with right boundary
     std::vector<double> D_leftright;  ///< Storage for matrix left and right
     uint32_t dim_size = 13;
+    /// False when closures don't fit the reduced matrix; dispatch throws.
+    bool leftright_valid = true;
 
     // Destructor to self-clean
     ~DerivMatrixStorage() {}
@@ -135,6 +137,10 @@ inline std::vector<double> *const get_deriv_mat_by_bflag_x(
                (bflag & (1u << OCT_DIR_RIGHT))) {
         return &dmat->D_right;
     } else {
+        if (!dmat->leftright_valid)
+            throw std::runtime_error(
+                "left-right operator unavailable at this block size: the "
+                "scheme's closure rows do not fit. Use a larger block.");
         return &dmat->D_leftright;
     }
 }
@@ -150,6 +156,10 @@ inline std::vector<double> *const get_deriv_mat_by_bflag_y(
                (bflag & (1u << OCT_DIR_UP))) {
         return &dmat->D_right;
     } else {
+        if (!dmat->leftright_valid)
+            throw std::runtime_error(
+                "left-right operator unavailable at this block size: the "
+                "scheme's closure rows do not fit. Use a larger block.");
         return &dmat->D_leftright;
     }
 }
@@ -165,6 +175,10 @@ inline std::vector<double> *const get_deriv_mat_by_bflag_z(
                (bflag & (1u << OCT_DIR_FRONT))) {
         return &dmat->D_right;
     } else {
+        if (!dmat->leftright_valid)
+            throw std::runtime_error(
+                "left-right operator unavailable at this block size: the "
+                "scheme's closure rows do not fit. Use a larger block.");
         return &dmat->D_leftright;
     }
 }
@@ -357,25 +371,12 @@ inline void dgemm_cpp_safe(const char *TRANSA, const char *TRANSB, const int *m,
 // caller). it used to live in a mutable global DENDRO_DERIVS_PW; passing it
 // explicitly lets two derivs instances at different ele_orders coexist
 // safely in the same process
-//
-// OUTPUT CONTRACT (active region). A compact operator along axis a is dense
-// along a, so each active output reads the FULL extent of its input along a
-// (padding included) but only the ACTIVE extent [pw, n-pw) along the other
-// two axes. Consequently a derivative output only ever needs to be defined
-//   - full along every axis that a downstream operator will differentiate,
-//   - active along every other axis.
-// The x-padding rows [0,pw) and [nx-pw,nx) of ANY derivative output are never
-// read by anyone (RHS loops, boundary conditions and chained y/z operators all
-// stay inside the active x range), so no path computes them. The GEMMs are
-// restricted to M = active x-rows (padded up to a multiple of 4 for unmasked
-// SIMD, see active_m_padded) and the corresponding output rows only.
-//
-// is_last_op = true additionally tells the kernel that no downstream operator
-// will read the output at all, so the y/z padding is skipped too.
-// Default false (safe): writes all y columns and all z slices (at active x
-// rows), suitable for use as an intermediate step in mixed 2nd-order
-// derivatives (e.g. v = grad_x(u) followed by w = grad_y(v) — y reads v
-// across the full y range including y-padding, so x must write those cells).
+// Output contract: a derivative is defined on the active region [pw, n-pw)^3
+// plus the full extent along any axis a downstream operator still
+// differentiates (plain grad_x/grad_y write every y column and z slice at
+// active x rows). Nothing reads the x-padding rows of any derivative output,
+// so the GEMMs only produce M = active x-rows (see active_m_padded).
+// is_last_op = true: nothing downstream reads the output, skip y/z padding too.
 // matmul_z_dim does NOT take this flag because by the project convention
 // "z is always called last in mixed chains" it unconditionally skips.
 void matmul_x_dim(const double *__restrict__ R, double *__restrict__ Dxu,
@@ -422,10 +423,8 @@ std::vector<std::vector<double>> inline generate_identity_bdys(size_t nbdry) {
     return bdry_coeffs;
 }
 
-// number of active x-rows to hand the GEMM as M: the active count n - 2*pw,
-// rounded up to a multiple of DENDRO_DERIVS_M_PAD when the extra rows still
-// fit inside the block (they land in x-padding, which nobody reads). an
-// unmasked M is measurably faster for libxsmm (n=13: 7 -> 8 is ~1.3x)
+// M for the GEMM: active x-rows n - 2*pw, rounded up to a multiple of
+// DENDRO_DERIVS_M_PAD when it still fits (unmasked SIMD rows, ~1.3x at n=13)
 #ifndef DENDRO_DERIVS_M_PAD
 #define DENDRO_DERIVS_M_PAD 4u
 #endif
@@ -439,10 +438,8 @@ inline unsigned int active_m_padded(unsigned int n, unsigned int pw) {
 
 using KernelType = libxsmm_mmfunction<double>;
 
-// general kernel cache keyed on the full GEMM description (flags + shape +
-// leading dimensions). the active-region paths need LDA/LDB/LDC that differ
-// from M/K/M (they address a sub-block of the operator and of the field), so
-// the three shape-only caches above can't describe them
+// kernel cache keyed on the full GEMM description: the active-region paths
+// use leading dimensions that differ from M/K/M
 struct KernelKey {
     int flags, M, N, K, lda, ldb, ldc;
     int accumulate;  // beta = 1 (C += A*B) instead of beta = 0
@@ -470,8 +467,7 @@ struct KernelKeyHash {
 extern std::unordered_map<KernelKey, KernelType, KernelKeyHash> kernel_cache_ld;
 extern std::shared_mutex kernel_cache_ld_mutex;
 
-// alpha is always 1.0 (the spacing is folded into the operator copy); beta
-// is 0 for a plain product or 1 for accumulation into C
+// alpha is always 1.0 (the spacing lives in the operator copy); beta 0 or 1
 inline KernelType get_or_create_kernel_ld(int flags, int M, int N, int K,
                                           int lda, int ldb, int ldc,
                                           bool accumulate = false) {
@@ -498,19 +494,14 @@ inline KernelType get_or_create_kernel_ld(int flags, int M, int N, int K,
 // ----------------------------------------------------------------------
 // per-shape kernel plan + apply routines (the matrix-path hot loop)
 // ----------------------------------------------------------------------
-// the five kernels one block shape needs. built from the shared cache once
-// per shape and then memoized per Derivs instance (one instance per thread
-// under the clone model), so the timestep loop never takes the cache's
-// shared_mutex or hashes a key. see MatrixCompactDerivs::plan_for
+// the kernels one block shape dispatches, built from the shared cache once and
+// memoized per Derivs instance (per thread), so the hot loop takes no lock
 struct MatmulPlan {
     unsigned int nx = 0, ny = 0, nz = 0, pw = 0, ma = 0;
     KernelType kx_last, kx_int, ky_last, ky_int, kz;
-    // fused mixed derivatives (1st-order engines): step 1 differentiates a
-    // slice/slab along the first axis into a small L1 intermediate, step 2
-    // applies the second axis from it straight into the active output
+    // fused mixed derivatives: axis 1 into an L1 intermediate, axis 2 from it
     KernelType kxy1, kxy2, kxz1, kxz2, kyz1, kyz2;
-    // accumulating (beta = 1) terminal y/z applies, for operators that sum
-    // three axis contributions into one buffer (matrix-form KO dissipation)
+    // beta = 1 terminal y/z applies (summed-axis operators such as matrix KO)
     KernelType ky_last_acc, kz_acc;
     bool valid = false;
 
@@ -521,11 +512,8 @@ struct MatmulPlan {
 
 MatmulPlan build_matmul_plan(const unsigned int *sz, unsigned int pw);
 
-// per-instance memo of one operator with the 1/h^p spacing folded in:
-// re-scales only when the source operator, the spacing or the size changes
-// (consecutive blocks share all three), so the timestep loop never pays the
-// n*n multiply. instances are per thread under the clone model -> no lock.
-// reset on copy: src keys into the owning instance's operator storage
+// per-instance copy of an operator with the spacing folded in; re-scales only
+// when (operator, alpha, n) changes. reset on copy: src keys into the owner
 struct ScaledOperator {
     const double *src = nullptr;
     double alpha      = 0.0;
@@ -545,12 +533,8 @@ struct ScaledOperator {
     void reset() { src = nullptr; }
 };
 
-// apply routines: take a kernel from the plan and an operator that already
-// has the 1/h^p spacing folded in (Ds = alpha * D). return false when the
-// kernel is empty (JIT failure) so the caller can fall back to the BLAS path
-// with the same Ds and alpha = 1.0. the addressing here IS the active-region
-// contract documented above matmul_x_dim; the matmul_*_dim wrappers and the
-// Derivs instances both route through these so there is one implementation
+// apply a plan kernel with a pre-scaled operator Ds = alpha * D. false if the
+// kernel is empty, so the caller can fall back to the BLAS path with alpha = 1
 inline bool matmul_x_apply(const KernelType &kernel,
                            const double *__restrict__ Ds,
                            double *__restrict__ Dxu,
@@ -599,10 +583,8 @@ inline bool matmul_y_apply(const KernelType &kernel,
     const unsigned int ny         = sz[1];
     const unsigned int nz         = sz[2];
     const unsigned int slice_size = nx * ny;
-    // per z-slice C(ma, N) = U(ma, ny) * D^T[rows y_start..]: A = slice + pw
-    // (active x rows, LDA = nx), B = Ds + y_start with TRANS_B selecting the
-    // output y columns, C at the same rows/columns. last op: active y and z
-    // only; intermediate: all y columns and all z slices
+    // per z-slice: C(ma, N) = U(ma, ny) * D^T rows [y_start..). last op writes
+    // active y and z only, intermediate all y columns and z slices
     const unsigned int z_start = is_last_op ? pw : 0u;
     const unsigned int z_end   = is_last_op ? nz - pw : nz;
     const unsigned int y_start = is_last_op ? pw : 0u;
@@ -636,8 +618,7 @@ inline bool matmul_z_apply(const KernelType &kernel,
     const unsigned int nx    = sz[0];
     const unsigned int ny    = sz[1];
     const unsigned int ld_3d = nx * ny;
-    // z is always last: per active y-row, C(ma, nz_active) = U(ma, nz) *
-    // D^T[active rows] with LDA = LDC = nx*ny (z-stride in the 3D array)
+    // z is always last: per active y-row, strided LDA = LDC = nx*ny
     const double *B          = Ds + pw;
     const unsigned int c_off = pw + pw * ld_3d;
 #if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
@@ -662,12 +643,8 @@ inline bool matmul_z_apply(const KernelType &kernel,
 // ----------------------------------------------------------------------
 // thread-safety helper: prewarm_kernel_cache
 // ----------------------------------------------------------------------
-// the kernel cache is shared-mutex-protected, so concurrent lazy creation is
-// safe — but the first touch of each new shape still JITs under the write
-// lock. call this once at mesh setup (before any threading begins) to build
-// every kernel the matrix path dispatches for the given block shapes (the
-// full MatmulPlan: x/y/z, last and intermediate, and the fused mixed pairs),
-// so a thread's first plan_for() is a cache hit under the shared read lock.
+// build every kernel the matrix path dispatches for these block shapes at
+// setup, so no thread JITs under the exclusive lock during the timestep loop
 struct BlockShape {
     unsigned int nx;
     unsigned int ny;

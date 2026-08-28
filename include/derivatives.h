@@ -917,17 +917,10 @@ class DendroDerivatives {
             _second_deriv_explicit->do_grad_z(du, u, dx, sz, bflag);
     }
 
-    // OUTPUT CONTRACT (all engines). A derivative output is defined on the
-    // block's ACTIVE region [pw, n-pw)^3, plus — for a plain (non-_last)
-    // grad_x / grad_y — the full extent along the axes a downstream operator
-    // may still differentiate: grad_x writes every y column and z slice (at
-    // active x rows), grad_y every y column and z slice (at active x rows),
-    // so they can serve as the intermediate of a mixed chain. NO derivative
-    // output is ever defined on the x-padding rows, and nothing in the solver
-    // may read any derivative output outside the active region except a
-    // chained grad_y / grad_z reading its intermediate. The matrix engines
-    // compute exactly that and nothing more (see derivs_utils.h); explicit
-    // engines may write more, never less.
+    // Output contract (all engines): a derivative is defined on the active
+    // region [pw, n-pw)^3, plus the full y/z extent for plain grad_x / grad_y
+    // so they can feed a mixed chain. Nothing may read a derivative output
+    // outside that; the matrix engines compute exactly that (derivs_utils.h).
     //
     // "_last" variants: caller asserts the output will NOT be further
     // differentiated. Use only for solo 1st-derivatives or for the last
@@ -943,9 +936,7 @@ class DendroDerivatives {
     // _last for the INTERMEDIATE derivative of a mixed chain, whose output
     // is re-read (padding included) by the next operator.
     //
-    // Code generators should not pick these by hand: emit one grad_set()
-    // per variable with the mask of derivatives the RHS actually uses, and
-    // the engine chooses the intermediate/terminal shape of every call.
+    // Code generators: emit one grad_set() per variable instead of these.
     //
     // grad_z has no _last variant because do_grad_z already
     // unconditionally skips by project convention.
@@ -1160,23 +1151,12 @@ class DendroDerivatives {
         grad_z(du, workspace, dz, sz, bflag);  // grad_z is always last
     }
 
-    // ------------------------------------------------------------------
-    // Planned per-variable derivative set — the entry point code generators
-    // should emit. The caller states WHICH derivatives of u the RHS uses
-    // (mask) and where each goes (out); the engine picks the shape of every
-    // call from that: a first derivative that also feeds a mixed derivative
-    // is computed as a chain intermediate and reused (measured best inside a
-    // full RHS), every other output is terminal (active region only), mixed
-    // derivatives without their first derivative in the mask go through the
-    // fused kernels (or the workspace chain on engines without them).
-    // Results are bit-identical to the corresponding individual grad_* calls
-    // (testDerivSet). Variables sharing a mask can go through
-    // grad_set_batch.
-    //
-    // @param workspace block-sized scratch; required only when a mixed
-    //                  derivative is requested without its first derivative
-    //                  AND the engine has no fused kernel (explicit engines).
-    // ------------------------------------------------------------------
+    // Planned per-variable derivative set: the caller gives the mask of
+    // derivatives the RHS uses and where each goes; the engine picks
+    // intermediate vs terminal shapes and chains or fuses the mixed ones.
+    // Bit-identical to the individual grad_* calls (testDerivSet).
+    // workspace: block-sized scratch, needed only for a mixed derivative
+    // without its first derivative on an engine without fused kernels.
     enum DerivMask : unsigned int {
         DM_X      = 1u << 0,
         DM_Y      = 1u << 1,
