@@ -645,6 +645,10 @@ inline KernelType get_or_create_kernel_ld(int flags, int M, int N, int K,
 struct MatmulPlan {
     unsigned int nx = 0, ny = 0, nz = 0, pw = 0, ma = 0;
     KernelType kx_last, kx_int, ky_last, ky_int, kz;
+    // fused mixed derivatives (1st-order engines): step 1 differentiates a
+    // slice/slab along the first axis into a small L1 intermediate, step 2
+    // applies the second axis from it straight into the active output
+    KernelType kxy1, kxy2, kxz1, kxz2, kyz1, kyz2;
     bool valid = false;
 
     bool matches(const unsigned int *sz, unsigned int pw_) const {

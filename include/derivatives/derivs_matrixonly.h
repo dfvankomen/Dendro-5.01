@@ -92,11 +92,11 @@ class MatrixCompactDerivs : public CompactDerivs {
     std::vector<double> workspace_;
     unsigned int workspace_tot_;
 
-    // reused scratch for the fused mixed-2nd kernels: two scaled operator
-    // copies + one intermediate. grown once and refilled per call, so the
-    // fused path does no per-call heap allocation. not thread-safe to share
-    // (same as workspace_); the block-parallel model clones per thread.
-    std::vector<double> fused_a_, fused_b_, fused_tmp_;
+    // reused scratch for the fused mixed-2nd kernels' L1 intermediate. grown
+    // once and refilled per call, so the fused path does no per-call heap
+    // allocation. not thread-safe to share (same as workspace_); the
+    // block-parallel model clones per thread.
+    std::vector<double> fused_tmp_;
 
     std::unordered_map<unsigned int, std::unique_ptr<DerivMatrixStorage>>
         D_storage_map_;
@@ -338,324 +338,169 @@ class MatrixCompactDerivs : public CompactDerivs {
         apply_y(du, u, dx, sz, bflag, /*last=*/true);
     }
 
-    // Fused d^2u/dxdy in a single call. Per active z-slice (k in [pw, nz-pw))
-    //   tmp = D_x * u_slice            (full nx x ny, intermediate in L1)
-    //   w_slice = tmp * D_y^T          (active y region only)
-    // Saves vs. the chain grad_x; grad_y_last:
-    //   - no full-z intermediate written to RAM (chain's grad_x must write all
-    //     of v because the chain treats grad_x as a black-box operation; the
-    //     fused function knows only active z is needed downstream)
-    //   - ~46% FLOP reduction (chain's grad_x computes z-padding cells too)
-    // Only available for 1st-order MatrixCompactDerivs (DerivOrder == 1);
-    // mixed 2nd-derivs use two 1st-order applications, so this is the
-    // relevant order. Output: w in i in [0, nx), j in [pw, ny-pw),
-    // k in [pw, nz-pw). The y- and z-padding cells of w are NOT written.
-    // isotropic forwarder (kept for existing callers): dx == dy
+    // Fused mixed second derivatives d^2u/dadb (1st-order engines only). Each
+    // streams one slice/slab through both operators: step 1 differentiates
+    // along the first axis into a small intermediate that stays in L1, step 2
+    // applies the second axis from it straight into the active output. Both
+    // steps use active shapes (M = active x rows, output columns active only)
+    // and the memoized scaled operators / kernel plan, so a call does no
+    // lookups, no re-scaling and no allocation. Output is defined on the
+    // active region only, per the contract in derivs_utils.h. Bit-identical
+    // to the chained form (same dot products, same order).
+    // isotropic forwarders (kept for existing callers)
     void do_grad_xy_last(double *const w, const double *const u,
                          const double dx, const unsigned int *sz,
                          const unsigned int bflag) {
         do_grad_xy_last(w, u, dx, dx, sz, bflag);
     }
-    void do_grad_xy_last(double *const w, const double *const u,
-                         const double dx, const double dy,
-                         const unsigned int *sz, const unsigned int bflag) {
-        static_assert(DerivOrder == 1,
-                      "do_grad_xy_last is only for 1st-order MatrixCompactDerivs");
-        const unsigned int nx = sz[0];
-        const unsigned int ny = sz[1];
-        const unsigned int nz = sz[2];
-        const unsigned int pw = this->p_pw;
-
-        auto *sx = this->get_storage_for_size(nx);
-        auto *sy = this->get_storage_for_size(ny);
-        auto *Dx = get_deriv_mat_by_bflag_x(sx, bflag);
-        auto *Dy = get_deriv_mat_by_bflag_y(sy, bflag);
-
-        // pre-scale Dx by 1/dx and Dy by 1/dy so the per-slice GEMMs apply
-        // each axis spacing; their product gives the d^2/dxdy scaling
-        // (1/(dx*dy)). dx==dy recovers the isotropic 1/dx^2.
-        const double alpha_x = 1.0 / dx;
-        const double alpha_y = 1.0 / dy;
-        std::vector<double> &Dx_scaled = fused_a_;
-        std::vector<double> &Dy_scaled = fused_b_;
-        Dx_scaled.resize((size_t)nx * nx);
-        Dy_scaled.resize((size_t)ny * ny);
-        for (size_t i = 0; i < (size_t)nx * nx; i++)
-            Dx_scaled[i] = Dx->data()[i] * alpha_x;
-        for (size_t i = 0; i < (size_t)ny * ny; i++)
-            Dy_scaled[i] = Dy->data()[i] * alpha_y;
-
-        // per-slice intermediate buffer; (nx * ny) doubles fits in L1 at
-        // typical block sizes. reused member scratch, no per-call alloc.
-        std::vector<double> &tmp = fused_tmp_;
-        tmp.resize((size_t)nx * ny);
-
-        const unsigned int y_start   = pw;
-        const unsigned int y_end     = ny - pw;
-        const unsigned int ny_active = y_end - y_start;
-        const unsigned int slice_sz  = nx * ny;
-        const unsigned int z_start   = pw;
-        const unsigned int z_end     = nz - pw;
-        const unsigned int y_off     = y_start * nx;
-
-        // Per-slice fused loop. tmp lives in L1 (only nx*ny doubles).
-        // LIBXSMM JITs better kernels for small N=ny=13 than for the
-        // batched N=ny*nz_active=91 alternative, and the per-slice
-        // approach keeps tmp hot in L1 between the x and y steps.
-        auto kx = get_or_create_kernel_x(nx, ny, nx);
-        KernelType ky_skip(LIBXSMM_GEMM_FLAG_TRANS_B, nx, ny_active, ny,
-                           nx, ny, nx, 1.0, 0.0);
-
-        if (!kx || !ky_skip) {
-            this->do_grad_x(tmp.data(), u, dx, sz, bflag);
-            this->do_grad_y_last(w, tmp.data(), dy, sz, bflag);
-            return;
-        }
-
-#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
-        libxsmm_gemmfunction raw_kx = kx.kernel();
-        libxsmm_gemmfunction raw_ky = ky_skip.kernel();
-        if (raw_kx && raw_ky) {
-            libxsmm_gemm_param a_args, b_args;
-            a_args.a.primary = (void *)Dx_scaled.data();
-            a_args.c.primary = (void *)tmp.data();
-            b_args.a.primary = (void *)tmp.data();
-            b_args.b.primary = (void *)(Dy_scaled.data() + y_start);
-            for (unsigned int k = z_start; k < z_end; k++) {
-                a_args.b.primary = (void *)(u + k * slice_sz);
-                raw_kx(&a_args);
-                b_args.c.primary = (void *)(w + k * slice_sz + y_off);
-                raw_ky(&b_args);
-            }
-            return;
-        }
-#endif
-        for (unsigned int k = z_start; k < z_end; k++) {
-            const double *u_slice = u + k * slice_sz;
-            double *w_slice       = w + k * slice_sz;
-            kx(Dx_scaled.data(), u_slice, tmp.data());
-            ky_skip(tmp.data(), Dy_scaled.data() + y_start,
-                    w_slice + y_off);
-        }
-    }
-
-    // Fused d^2u/dxdz in a single call. Per active y-slab (j in [pw, ny-pw))
-    //   tmp(nx, nz) = D_x * u_at_j(nx, nz, strided)
-    //   w[:, j, z_active] = tmp * D_z^T (strided output)
-    // Chain comparison: grad_x then grad_z. grad_z already skips y-padding
-    // (project convention) so it reads tmp only at active y; grad_x writes
-    // tmp at all y, wasting ~46% on the y-padding cells. Fused only
-    // computes tmp at active y.
-    // isotropic forwarder (kept for existing callers): dx == dz
     void do_grad_xz_last(double *const w, const double *const u,
                          const double dx, const unsigned int *sz,
                          const unsigned int bflag) {
         do_grad_xz_last(w, u, dx, dx, sz, bflag);
     }
-    void do_grad_xz_last(double *const w, const double *const u,
-                         const double dx, const double dz,
-                         const unsigned int *sz, const unsigned int bflag) {
-        static_assert(DerivOrder == 1,
-                      "do_grad_xz_last is only for 1st-order MatrixCompactDerivs");
-        const unsigned int nx = sz[0];
-        const unsigned int ny = sz[1];
-        const unsigned int nz = sz[2];
-        const unsigned int pw = this->p_pw;
-
-        auto *sx  = this->get_storage_for_size(nx);
-        auto *sz_s = this->get_storage_for_size(nz);
-        auto *Dx  = get_deriv_mat_by_bflag_x(sx, bflag);
-        auto *Dz  = get_deriv_mat_by_bflag_z(sz_s, bflag);
-
-        const double alpha_x = 1.0 / dx;
-        const double alpha_z = 1.0 / dz;
-        std::vector<double> &Dx_scaled = fused_a_;
-        std::vector<double> &Dz_scaled = fused_b_;
-        Dx_scaled.resize((size_t)nx * nx);
-        Dz_scaled.resize((size_t)nz * nz);
-        for (size_t i = 0; i < (size_t)nx * nx; i++)
-            Dx_scaled[i] = Dx->data()[i] * alpha_x;
-        for (size_t i = 0; i < (size_t)nz * nz; i++)
-            Dz_scaled[i] = Dz->data()[i] * alpha_z;
-
-        std::vector<double> &tmp = fused_tmp_;
-        tmp.resize((size_t)nx * nz);
-
-        const unsigned int y_start   = pw;
-        const unsigned int y_end     = ny - pw;
-        const unsigned int z_start   = pw;
-        const unsigned int z_end     = nz - pw;
-        const unsigned int nz_active = z_end - z_start;
-        const unsigned int ld_3d     = nx * ny;
-
-        // x kernel: tmp(nx, nz) = D_x_scaled(nx, nx) * u_at_j(nx, nz, strided)
-        //   M=nx, N=nz, K=nx; LDA=nx, LDB=ld_3d, LDC=nx; no trans
-        KernelType kx_strided(LIBXSMM_GEMM_FLAG_NONE, nx, nz, nx,
-                              nx, ld_3d, nx, 1.0, 0.0);
-        // z kernel: w_at_j[:, z_active](nx, nz_active) = tmp * D_z^T
-        //   M=nx, N=nz_active, K=nz; LDA=nx, LDB=nz, LDC=ld_3d; TRANS_B
-        KernelType kz_skip(LIBXSMM_GEMM_FLAG_TRANS_B, nx, nz_active, nz,
-                           nx, nz, ld_3d, 1.0, 0.0);
-
-        if (!kx_strided || !kz_skip) {
-            // fallback: do the chain with a heap intermediate
-            std::vector<double> chain_tmp((size_t)nx * ny * nz);
-            this->do_grad_x(chain_tmp.data(), u, dx, sz, bflag);
-            this->do_grad_z(w, chain_tmp.data(), dz, sz, bflag);
-            return;
-        }
-
-        // raw_fn dispatch saves the C++ wrapper overhead across the loop.
-#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
-        libxsmm_gemmfunction raw_kx = kx_strided.kernel();
-        libxsmm_gemmfunction raw_kz = kz_skip.kernel();
-        if (raw_kx && raw_kz) {
-            libxsmm_gemm_param a_args, b_args;
-            a_args.a.primary = (void *)Dx_scaled.data();
-            a_args.c.primary = (void *)tmp.data();
-            b_args.a.primary = (void *)tmp.data();
-            b_args.b.primary = (void *)(Dz_scaled.data() + z_start);
-            for (unsigned int j = y_start; j < y_end; j++) {
-                a_args.b.primary = (void *)(u + j * nx);
-                raw_kx(&a_args);
-                b_args.c.primary =
-                    (void *)(w + j * nx + z_start * ld_3d);
-                raw_kz(&b_args);
-            }
-            return;
-        }
-#endif
-        for (unsigned int j = y_start; j < y_end; j++) {
-            const double *u_at_j = u + j * nx;
-            double *w_at_j_zstart = w + j * nx + z_start * ld_3d;
-            // step 1: tmp(nx, nz) = D_x * u_at_j (strided read)
-            kx_strided(Dx_scaled.data(), u_at_j, tmp.data());
-            // step 2: w_at_j[:, z_active] = tmp * D_z^T  (strided write)
-            // D_z B pointer offset by z_start so kernel reads rows
-            // [z_start, z_end) of D_z.
-            kz_skip(tmp.data(), Dz_scaled.data() + z_start, w_at_j_zstart);
-        }
-    }
-
-    // Fused d^2u/dydz in a single call. Two-pass over a local tmp buffer:
-    //   pass 1: per z-slice (all z), tmp_slab(nx, ny_active) =
-    //           u_slice(nx, ny) * D_y_active^T  (y-derivative, output skip)
-    //   pass 2: per active y, w_at_j[:, z_active] = tmp_at_j * D_z^T
-    //           (strided write, z output skip)
-    // tmp is (nx, ny_active, nz); at eleorder=6 that's 13*7*13 = 1183
-    // doubles = 9.5 KB, comfortably in L1. Chain saves vs. chain by
-    // avoiding grad_y's writes to y-padding cells AND by reusing the
-    // tmp from L1 instead of reading it from RAM in grad_z.
-    // isotropic forwarder (kept for existing callers): dy == dz
     void do_grad_yz_last(double *const w, const double *const u,
                          const double dy, const unsigned int *sz,
                          const unsigned int bflag) {
         do_grad_yz_last(w, u, dy, dy, sz, bflag);
     }
+
+    void do_grad_xy_last(double *const w, const double *const u,
+                         const double dx, const double dy,
+                         const unsigned int *sz, const unsigned int bflag) {
+        static_assert(DerivOrder == 1,
+                      "do_grad_xy_last is only for 1st-order MatrixCompactDerivs");
+        const unsigned int nx = sz[0], ny = sz[1], nz = sz[2], pw = this->p_pw;
+        auto *Dx = get_deriv_mat_by_bflag_x(this->get_storage_for_size(nx), bflag);
+        auto *Dy = get_deriv_mat_by_bflag_y(this->get_storage_for_size(ny), bflag);
+        const double *Dxs   = scaled_op(0, Dx, 1.0 / dx, nx);
+        const double *Dys   = scaled_op(1, Dy, 1.0 / dy, ny);
+        const MatmulPlan &p = plan_for(sz);
+        if (!p.kxy1 || !p.kxy2) {
+            // chain through a block-sized intermediate
+            fused_tmp_.resize((size_t)nx * ny * nz);
+            this->do_grad_x(fused_tmp_.data(), u, dx, sz, bflag);
+            this->do_grad_y_last(w, fused_tmp_.data(), dy, sz, bflag);
+            return;
+        }
+        fused_tmp_.resize((size_t)p.ma * ny);
+        double *tmp                 = fused_tmp_.data();
+        const unsigned int slice_sz = nx * ny;
+        const unsigned int c_off    = pw * nx + pw;
+#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
+        libxsmm_gemmfunction raw1 = p.kxy1.kernel(), raw2 = p.kxy2.kernel();
+        if (raw1 && raw2) {
+            libxsmm_gemm_param a1, a2;
+            a1.a.primary = (void *)(Dxs + pw);
+            a1.c.primary = (void *)tmp;
+            a2.a.primary = (void *)tmp;
+            a2.b.primary = (void *)(Dys + pw);
+            for (unsigned int k = pw; k < nz - pw; k++) {
+                a1.b.primary = (void *)(u + k * slice_sz);
+                raw1(&a1);
+                a2.c.primary = (void *)(w + k * slice_sz + c_off);
+                raw2(&a2);
+            }
+            return;
+        }
+#endif
+        for (unsigned int k = pw; k < nz - pw; k++) {
+            p.kxy1(Dxs + pw, u + k * slice_sz, tmp);
+            p.kxy2(tmp, Dys + pw, w + k * slice_sz + c_off);
+        }
+    }
+
+    void do_grad_xz_last(double *const w, const double *const u,
+                         const double dx, const double dz,
+                         const unsigned int *sz, const unsigned int bflag) {
+        static_assert(DerivOrder == 1,
+                      "do_grad_xz_last is only for 1st-order MatrixCompactDerivs");
+        const unsigned int nx = sz[0], ny = sz[1], nz = sz[2], pw = this->p_pw;
+        auto *Dx = get_deriv_mat_by_bflag_x(this->get_storage_for_size(nx), bflag);
+        auto *Dz = get_deriv_mat_by_bflag_z(this->get_storage_for_size(nz), bflag);
+        const double *Dxs   = scaled_op(0, Dx, 1.0 / dx, nx);
+        const double *Dzs   = scaled_op(2, Dz, 1.0 / dz, nz);
+        const MatmulPlan &p = plan_for(sz);
+        if (!p.kxz1 || !p.kxz2) {
+            fused_tmp_.resize((size_t)nx * ny * nz);
+            this->do_grad_x(fused_tmp_.data(), u, dx, sz, bflag);
+            this->do_grad_z(w, fused_tmp_.data(), dz, sz, bflag);
+            return;
+        }
+        fused_tmp_.resize((size_t)p.ma * nz);
+        double *tmp              = fused_tmp_.data();
+        const unsigned int ld_3d = nx * ny;
+        const unsigned int c_off = pw + pw * ld_3d;
+#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
+        libxsmm_gemmfunction raw1 = p.kxz1.kernel(), raw2 = p.kxz2.kernel();
+        if (raw1 && raw2) {
+            libxsmm_gemm_param a1, a2;
+            a1.a.primary = (void *)(Dxs + pw);
+            a1.c.primary = (void *)tmp;
+            a2.a.primary = (void *)tmp;
+            a2.b.primary = (void *)(Dzs + pw);
+            for (unsigned int j = pw; j < ny - pw; j++) {
+                a1.b.primary = (void *)(u + j * nx);
+                raw1(&a1);
+                a2.c.primary = (void *)(w + j * nx + c_off);
+                raw2(&a2);
+            }
+            return;
+        }
+#endif
+        for (unsigned int j = pw; j < ny - pw; j++) {
+            p.kxz1(Dxs + pw, u + j * nx, tmp);
+            p.kxz2(tmp, Dzs + pw, w + j * nx + c_off);
+        }
+    }
+
     void do_grad_yz_last(double *const w, const double *const u,
                          const double dy, const double dz,
                          const unsigned int *sz, const unsigned int bflag) {
         static_assert(DerivOrder == 1,
                       "do_grad_yz_last is only for 1st-order MatrixCompactDerivs");
-        const unsigned int nx = sz[0];
-        const unsigned int ny = sz[1];
-        const unsigned int nz = sz[2];
-        const unsigned int pw = this->p_pw;
-
-        auto *sy  = this->get_storage_for_size(ny);
-        auto *sz_s = this->get_storage_for_size(nz);
-        auto *Dy  = get_deriv_mat_by_bflag_y(sy, bflag);
-        auto *Dz  = get_deriv_mat_by_bflag_z(sz_s, bflag);
-
-        const double alpha_y = 1.0 / dy;
-        const double alpha_z = 1.0 / dz;
-        std::vector<double> &Dy_scaled = fused_a_;
-        std::vector<double> &Dz_scaled = fused_b_;
-        Dy_scaled.resize((size_t)ny * ny);
-        Dz_scaled.resize((size_t)nz * nz);
-        for (size_t i = 0; i < (size_t)ny * ny; i++)
-            Dy_scaled[i] = Dy->data()[i] * alpha_y;
-        for (size_t i = 0; i < (size_t)nz * nz; i++)
-            Dz_scaled[i] = Dz->data()[i] * alpha_z;
-
-        const unsigned int y_start   = pw;
-        const unsigned int z_start   = pw;
+        const unsigned int nx = sz[0], ny = sz[1], nz = sz[2], pw = this->p_pw;
+        auto *Dy = get_deriv_mat_by_bflag_y(this->get_storage_for_size(ny), bflag);
+        auto *Dz = get_deriv_mat_by_bflag_z(this->get_storage_for_size(nz), bflag);
+        const double *Dys   = scaled_op(1, Dy, 1.0 / dy, ny);
+        const double *Dzs   = scaled_op(2, Dz, 1.0 / dz, nz);
+        const MatmulPlan &p = plan_for(sz);
+        if (!p.kyz1 || !p.kyz2) {
+            fused_tmp_.resize((size_t)nx * ny * nz);
+            this->do_grad_y(fused_tmp_.data(), u, dy, sz, bflag);
+            this->do_grad_z(w, fused_tmp_.data(), dz, sz, bflag);
+            return;
+        }
+        // tmp(ma, ny_active, nz): the y-derivative at active x rows and active
+        // y columns for every z slice; pass 2 reads it at z-stride slab_sz
         const unsigned int ny_active = ny - 2 * pw;
-        const unsigned int nz_active = nz - 2 * pw;
-        const unsigned int slab_sz   = nx * ny_active;     // per z-slice in tmp
-        const unsigned int ld_3d     = nx * ny;
-
-        std::vector<double> &tmp = fused_tmp_;
-        tmp.resize((size_t)slab_sz * nz);
-
-        // y kernel: tmp_slab(nx, ny_active) = u_slice(nx, ny) * D_y_active^T
-        //   M=nx, N=ny_active, K=ny; LDA=nx, LDB=ny, LDC=nx; TRANS_B
-        KernelType ky_skip(LIBXSMM_GEMM_FLAG_TRANS_B, nx, ny_active, ny,
-                           nx, ny, nx, 1.0, 0.0);
-        // z kernel: w_at_j[:, z_active] = tmp_at_j * D_z^T
-        //   M=nx, N=nz_active, K=nz; LDA=slab_sz (stride in tmp's k dim),
-        //   LDB=nz, LDC=ld_3d (stride in w's k dim); TRANS_B
-        KernelType kz_skip(LIBXSMM_GEMM_FLAG_TRANS_B, nx, nz_active, nz,
-                           slab_sz, nz, ld_3d, 1.0, 0.0);
-
-        if (!ky_skip || !kz_skip) {
-            std::vector<double> chain_tmp((size_t)nx * ny * nz);
-            this->do_grad_y(chain_tmp.data(), u, dy, sz, bflag);
-            this->do_grad_z(w, chain_tmp.data(), dz, sz, bflag);
-            return;
-        }
-
-        // pass 1: full z, y-derivative with output skip → tmp(nx, ny_active, nz)
-        // Per-slice loop (can't be batched into a single GEMM because the
-        // input A = u_slice changes per slice; GEMM has one A). Use raw_fn
-        // dispatch to minimize per-call overhead across the nz iterations.
+        const unsigned int slab_sz   = p.ma * ny_active;
+        fused_tmp_.resize((size_t)slab_sz * nz);
+        double *tmp              = fused_tmp_.data();
+        const unsigned int ld_3d = nx * ny;
+        const unsigned int c_off = pw + pw * ld_3d;
 #if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
-        {
-            libxsmm_gemmfunction raw_ky = ky_skip.kernel();
-            if (raw_ky) {
-                libxsmm_gemm_param args;
-                args.b.primary = (void *)(Dy_scaled.data() + y_start);
-                for (unsigned int k = 0; k < nz; k++) {
-                    args.a.primary = (void *)(u + k * ld_3d);
-                    args.c.primary = (void *)(tmp.data() + k * slab_sz);
-                    raw_ky(&args);
-                }
-            } else {
-                for (unsigned int k = 0; k < nz; k++) {
-                    ky_skip(u + k * ld_3d, Dy_scaled.data() + y_start,
-                            tmp.data() + k * slab_sz);
-                }
+        libxsmm_gemmfunction raw1 = p.kyz1.kernel(), raw2 = p.kyz2.kernel();
+        if (raw1 && raw2) {
+            libxsmm_gemm_param a1, a2;
+            a1.b.primary = (void *)(Dys + pw);
+            for (unsigned int k = 0; k < nz; k++) {
+                a1.a.primary = (void *)(u + k * ld_3d + pw);
+                a1.c.primary = (void *)(tmp + k * slab_sz);
+                raw1(&a1);
             }
-        }
-#else
-        for (unsigned int k = 0; k < nz; k++) {
-            ky_skip(u + k * ld_3d, Dy_scaled.data() + y_start,
-                    tmp.data() + k * slab_sz);
-        }
-#endif
-
-        // pass 2: per active y, z-derivative with output skip and strided
-        //          write into w. Raw dispatch.
-#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
-        libxsmm_gemmfunction raw_kz = kz_skip.kernel();
-        if (raw_kz) {
-            libxsmm_gemm_param args;
-            args.b.primary = (void *)(Dz_scaled.data() + z_start);
+            a2.b.primary = (void *)(Dzs + pw);
             for (unsigned int ja = 0; ja < ny_active; ja++) {
-                const unsigned int j = ja + y_start;
-                args.a.primary = (void *)(tmp.data() + ja * nx);
-                args.c.primary = (void *)(w + j * nx + z_start * ld_3d);
-                raw_kz(&args);
+                a2.a.primary = (void *)(tmp + ja * p.ma);
+                a2.c.primary = (void *)(w + (ja + pw) * nx + c_off);
+                raw2(&a2);
             }
             return;
         }
 #endif
-        for (unsigned int ja = 0; ja < ny_active; ja++) {
-            const unsigned int j  = ja + y_start;
-            const double *tmp_aj  = tmp.data() + ja * nx;
-            double *w_aj_zstart   = w + j * nx + z_start * ld_3d;
-            kz_skip(tmp_aj, Dz_scaled.data() + z_start, w_aj_zstart);
-        }
+        for (unsigned int k = 0; k < nz; k++)
+            p.kyz1(u + k * ld_3d + pw, Dys + pw, tmp + k * slab_sz);
+        for (unsigned int ja = 0; ja < ny_active; ja++)
+            p.kyz2(tmp + ja * p.ma, Dzs + pw, w + (ja + pw) * nx + c_off);
     }
 
     // expose the fused mixed-2nd kernels to the facade (1st-order only;

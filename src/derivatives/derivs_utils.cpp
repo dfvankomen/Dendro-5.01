@@ -373,6 +373,26 @@ MatmulPlan build_matmul_plan(const unsigned int *sz, unsigned int pw) {
     // z: strided, LDA = LDC = nx*ny, active z columns only
     p.kz      = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
                                         nz - 2 * ipw, nz, nx * ny, nz, nx * ny);
+    // fused xy: per active z-slice, tmp(ma, ny) = D_x[pw:, :] * u_slice (LDC =
+    // ma), then w(ma, ny_active) = tmp * D_y^T[active rows] (LDA = ma, LDC = nx)
+    p.kxy1 = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_NONE, ma, ny, nx, nx, nx,
+                                     ma);
+    p.kxy2 = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
+                                     ny - 2 * ipw, ny, ma, ny, nx);
+    // fused xz: per active y-row, tmp(ma, nz) = D_x[pw:, :] * u_at_j (LDB =
+    // nx*ny), then w(ma, nz_active) = tmp * D_z^T[active rows] (LDC = nx*ny)
+    p.kxz1 = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_NONE, ma, nz, nx, nx,
+                                     nx * ny, ma);
+    p.kxz2 = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
+                                     nz - 2 * ipw, nz, ma, nz, nx * ny);
+    // fused yz: pass 1 per z-slice, tmp_slab(ma, ny_active) = u_slice *
+    // D_y^T[active rows] (LDC = ma); pass 2 per active y, w(ma, nz_active) =
+    // tmp_at_j (LDA = ma*ny_active, the z stride in tmp) * D_z^T[active rows]
+    p.kyz1 = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
+                                     ny - 2 * ipw, ny, nx, ny, ma);
+    p.kyz2 = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
+                                     nz - 2 * ipw, nz, ma * (ny - 2 * ipw), nz,
+                                     nx * ny);
     p.valid   = true;
     return p;
 }
