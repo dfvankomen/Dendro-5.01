@@ -445,9 +445,11 @@ using KernelType = libxsmm_mmfunction<double>;
 // the three shape-only caches above can't describe them
 struct KernelKey {
     int flags, M, N, K, lda, ldb, ldc;
+    int accumulate;  // beta = 1 (C += A*B) instead of beta = 0
     bool operator==(const KernelKey &o) const {
         return flags == o.flags && M == o.M && N == o.N && K == o.K &&
-               lda == o.lda && ldb == o.ldb && ldc == o.ldc;
+               lda == o.lda && ldb == o.ldb && ldc == o.ldc &&
+               accumulate == o.accumulate;
     }
 };
 
@@ -460,6 +462,7 @@ struct KernelKeyHash {
         h = h * 1315423911u ^ std::hash<int>{}(k.lda);
         h = h * 1315423911u ^ std::hash<int>{}(k.ldb);
         h = h * 1315423911u ^ std::hash<int>{}(k.ldc);
+        h = h * 1315423911u ^ std::hash<int>{}(k.accumulate);
         return h;
     }
 };
@@ -467,9 +470,12 @@ struct KernelKeyHash {
 extern std::unordered_map<KernelKey, KernelType, KernelKeyHash> kernel_cache_ld;
 extern std::shared_mutex kernel_cache_ld_mutex;
 
+// alpha is always 1.0 (the spacing is folded into the operator copy); beta
+// is 0 for a plain product or 1 for accumulation into C
 inline KernelType get_or_create_kernel_ld(int flags, int M, int N, int K,
-                                          int lda, int ldb, int ldc) {
-    KernelKey key{flags, M, N, K, lda, ldb, ldc};
+                                          int lda, int ldb, int ldc,
+                                          bool accumulate = false) {
+    KernelKey key{flags, M, N, K, lda, ldb, ldc, accumulate ? 1 : 0};
     {
         std::shared_lock<std::shared_mutex> lk(kernel_cache_ld_mutex);
         auto it = kernel_cache_ld.find(key);
@@ -479,7 +485,8 @@ inline KernelType get_or_create_kernel_ld(int flags, int M, int N, int K,
     auto it = kernel_cache_ld.find(key);
     if (it != kernel_cache_ld.end()) return it->second;
 
-    KernelType new_kernel(flags, M, N, K, lda, ldb, ldc, 1.0, 0.0);
+    KernelType new_kernel(flags, M, N, K, lda, ldb, ldc, 1.0,
+                          accumulate ? 1.0 : 0.0);
     if (!new_kernel) {
         kernel_cache_ld[key] = KernelType();
         return KernelType();
@@ -502,6 +509,9 @@ struct MatmulPlan {
     // slice/slab along the first axis into a small L1 intermediate, step 2
     // applies the second axis from it straight into the active output
     KernelType kxy1, kxy2, kxz1, kxz2, kyz1, kyz2;
+    // accumulating (beta = 1) terminal y/z applies, for operators that sum
+    // three axis contributions into one buffer (matrix-form KO dissipation)
+    KernelType ky_last_acc, kz_acc;
     bool valid = false;
 
     bool matches(const unsigned int *sz, unsigned int pw_) const {
@@ -510,6 +520,30 @@ struct MatmulPlan {
 };
 
 MatmulPlan build_matmul_plan(const unsigned int *sz, unsigned int pw);
+
+// per-instance memo of one operator with the 1/h^p spacing folded in:
+// re-scales only when the source operator, the spacing or the size changes
+// (consecutive blocks share all three), so the timestep loop never pays the
+// n*n multiply. instances are per thread under the clone model -> no lock.
+// reset on copy: src keys into the owning instance's operator storage
+struct ScaledOperator {
+    const double *src = nullptr;
+    double alpha      = 0.0;
+    unsigned int n    = 0;
+    std::vector<double> data;
+
+    const double *get(const double *src_, double alpha_, unsigned int n_) {
+        if (src != src_ || alpha != alpha_ || n != n_) {
+            src   = src_;
+            alpha = alpha_;
+            n     = n_;
+            data.resize((size_t)n * n);
+            for (size_t i = 0; i < (size_t)n * n; i++) data[i] = src[i] * alpha;
+        }
+        return data.data();
+    }
+    void reset() { src = nullptr; }
+};
 
 // apply routines: take a kernel from the plan and an operator that already
 // has the 1/h^p spacing folded in (Ds = alpha * D). return false when the

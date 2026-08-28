@@ -8,6 +8,7 @@
 #include "derivatives.h"
 #include "derivatives/derivs_explicit.h"
 #include "derivatives/filt_kodiss_explicit.h"
+#include "derivatives/filt_kodiss_matrix.h"
 #include "derivatives/impl_boris.h"
 #include "derivatives/impl_bradylivescu.h"
 #include "derivatives/impl_byuderivs.h"
@@ -650,6 +651,26 @@ class FilterFactory {
         } else if (name == "KO8") {
             return std::make_unique<ExplicitKODissO8>(
                 std::forward<Args>(args)...);
+        }
+        // matrix-form KO: the same stencil assembled as a dense per-axis
+        // operator and applied through the libxsmm plan (2.5-3.4x faster per
+        // call at n=13; agrees with the stencil to roundoff, not bit-for-bit)
+        else if (name == "KO2Matrix") {
+            return std::make_unique<MatrixKODiss>(
+                args..., std::make_unique<ExplicitKODissO2>(args...),
+                "KO2Matrix");
+        } else if (name == "KO4Matrix") {
+            return std::make_unique<MatrixKODiss>(
+                args..., std::make_unique<ExplicitKODissO4>(args...),
+                "KO4Matrix");
+        } else if (name == "KO6Matrix") {
+            return std::make_unique<MatrixKODiss>(
+                args..., std::make_unique<ExplicitKODissO6>(args...),
+                "KO6Matrix");
+        } else if (name == "KO8Matrix") {
+            return std::make_unique<MatrixKODiss>(
+                args..., std::make_unique<ExplicitKODissO8>(args...),
+                "KO8Matrix");
         }
         return nullptr;
     }

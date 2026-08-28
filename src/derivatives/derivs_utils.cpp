@@ -372,6 +372,12 @@ MatmulPlan build_matmul_plan(const unsigned int *sz, unsigned int pw) {
     p.kyz2 = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
                                      nz - 2 * ipw, nz, ma * (ny - 2 * ipw), nz,
                                      nx * ny);
+    // accumulating terminal y / z (C += ...) for summed-axis operators
+    p.ky_last_acc = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
+                                            ny - 2 * ipw, ny, nx, ny, nx, true);
+    p.kz_acc      = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
+                                            nz - 2 * ipw, nz, nx * ny, nz,
+                                            nx * ny, true);
     p.valid   = true;
     return p;
 }

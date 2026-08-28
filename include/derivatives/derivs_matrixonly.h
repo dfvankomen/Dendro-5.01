@@ -114,13 +114,7 @@ class MatrixCompactDerivs : public CompactDerivs {
     // re-scale stay off the timestep loop. reset on copy: the src pointers
     // key into THIS instance's D storage
     MatmulPlan plan_;
-    struct ScaledOp {
-        const double *src = nullptr;
-        double alpha      = 0.0;
-        unsigned int n    = 0;
-        std::vector<double> data;
-    };
-    ScaledOp sop_[3];
+    ScaledOperator sop_[3];
 
     const MatmulPlan &plan_for(const unsigned int *sz) {
         if (!plan_.matches(sz, p_pw)) plan_ = build_matmul_plan(sz, p_pw);
@@ -129,16 +123,7 @@ class MatrixCompactDerivs : public CompactDerivs {
 
     const double *scaled_op(int axis, const std::vector<double> *D,
                             double alpha, unsigned int n) {
-        ScaledOp &s = sop_[axis];
-        if (s.src != D->data() || s.alpha != alpha || s.n != n) {
-            s.src   = D->data();
-            s.alpha = alpha;
-            s.n     = n;
-            s.data.resize((size_t)n * n);
-            for (size_t i = 0; i < (size_t)n * n; i++)
-                s.data[i] = s.src[i] * alpha;
-        }
-        return s.data.data();
+        return sop_[axis].get(D->data(), alpha, n);
     }
 
     static constexpr double spacing_alpha(double dx) {

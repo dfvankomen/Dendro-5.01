@@ -141,6 +141,18 @@ int main(int argc, char **argv) {
             dd.filter_cako(wk.u[0].data(), out.data(), wx.data(), wy.data(), wz.data(), dx, dx, dx, coeff.data(), sz, bf);
         }, iters);
         std::printf("  KO filter_cako             : %8.2f us/call  (x%d = %.1f us/block)\n", t_ko, NV, NV * t_ko);
+        // matrix-form KO of the same order (opt-in filter name)
+        try {
+            DendroDerivatives dm(s1, s2, eo, std::vector<double>(), std::vector<double>(), 0u, 0u, "none", "none",
+                                 std::vector<double>(), std::vector<double>(), "KO4Matrix");
+            dm.set_maximum_block_size(tot);
+            const double t_km = time_us([&]() {
+                dm.filter_cako(wk.u[0].data(), out.data(), wx.data(), wy.data(), wz.data(), dx, dx, dx, coeff.data(), sz, bf);
+            }, iters);
+            std::printf("  KO4Matrix filter_cako      : %8.2f us/call  (x%d = %.1f us/block, %.2fx)\n", t_km, NV, NV * t_km, t_ko / t_km);
+        } catch (const std::exception &e) {
+            std::printf("  KO4Matrix: unavailable (%s)\n", e.what());
+        }
     }
 
     std::printf("OMP scaling, one facade clone + workspace per thread (us/block/thread):\n");
