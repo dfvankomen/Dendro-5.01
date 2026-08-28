@@ -11,37 +11,16 @@
 
 namespace dendroderivs {
 
-using KernelType = libxsmm_mmfunction<double>;
-
-std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
-    kernel_cache_x;
-std::shared_mutex kernel_cache_x_mutex;
-std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
-    kernel_cache_yz;
-std::shared_mutex kernel_cache_yz_mutex;
-std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
-    kernel_cache_y_direct;
-std::shared_mutex kernel_cache_y_direct_mutex;
-std::unordered_map<ZDirectKernelKey, KernelType, ZDirectKernelKeyHash>
-    kernel_cache_z_direct;
-std::shared_mutex kernel_cache_z_direct_mutex;
 std::unordered_map<KernelKey, KernelType, KernelKeyHash> kernel_cache_ld;
 std::shared_mutex kernel_cache_ld_mutex;
 
 void prewarm_kernel_cache(const std::vector<BlockShape> &shapes,
                           unsigned int pw) {
     for (const auto &s : shapes) {
-        // X-dim: interior (bflag=0) case uses the full z range
-        get_or_create_kernel_x(s.nx, s.ny * s.nz, s.nx);
-        // X-dim: boundary variants shrink the active z range by pw on one
-        // or both sides. skip if pw=0 or if the variant would be degenerate
-        if (pw > 0 && 2u * pw < s.nz) {
-            get_or_create_kernel_x(s.nx, s.ny * (s.nz - pw), s.nx);
-            get_or_create_kernel_x(s.nx, s.ny * (s.nz - 2u * pw), s.nx);
-        }
-        // y-direct and z-direct are bflag-independent
-        get_or_create_kernel_y_direct(s.nx, s.ny);
-        get_or_create_kernel_z_direct(s.nx, s.ny, s.nz);
+        // the plan is what every Derivs instance dispatches from; building
+        // it here populates the shared cache with exactly those kernels
+        const unsigned int sz[3] = {s.nx, s.ny, s.nz};
+        (void)build_matmul_plan(sz, pw);
     }
 }
 

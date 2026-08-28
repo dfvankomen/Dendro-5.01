@@ -437,154 +437,7 @@ inline unsigned int active_m_padded(unsigned int n, unsigned int pw) {
     return (pw + mp <= n) ? mp : na;
 }
 
-// libxsmm stuff
-struct KernelDimensions {
-    int M, N, K;
-    bool operator==(const KernelDimensions &other) const {
-        return M == other.M && N == other.N && K == other.K;
-    }
-};
-
-struct KernelDimensionsHash {
-    std::size_t operator()(const KernelDimensions &k) const {
-        return ((std::hash<int>()(k.M) ^ (std::hash<int>()(k.N) << 1)) >> 1) ^
-               (std::hash<int>()(k.K) << 1);
-    }
-};
-
 using KernelType = libxsmm_mmfunction<double>;
-
-// kernel caches are process-wide globals shared across every Derivs instance.
-// wrap each with a shared_mutex: concurrent readers take a shared lock on the
-// fast path (cache hit); a miss upgrades to an exclusive lock to JIT + insert.
-// double-check inside the exclusive critical section handles the case where
-// a second thread finishes inserting while we were waiting for the lock
-extern std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
-    kernel_cache_x;
-extern std::shared_mutex kernel_cache_x_mutex;
-extern std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
-    kernel_cache_yz;
-extern std::shared_mutex kernel_cache_yz_mutex;
-
-inline KernelType get_or_create_kernel_x(int M, int N, int K) {
-    KernelDimensions dims{M, N, K};
-    {
-        std::shared_lock<std::shared_mutex> lk(kernel_cache_x_mutex);
-        auto it = kernel_cache_x.find(dims);
-        if (it != kernel_cache_x.end()) return it->second;
-    }
-    // miss — upgrade to exclusive lock and re-check
-    std::unique_lock<std::shared_mutex> lk(kernel_cache_x_mutex);
-    auto it = kernel_cache_x.find(dims);
-    if (it != kernel_cache_x.end()) return it->second;
-
-    KernelType new_kernel(LIBXSMM_GEMM_FLAG_NONE, M, N, K, 1.0, 0.0);
-    if (!new_kernel) {
-        std::cout << "FAILED TO BUILD A KERNEL in X!" << std::endl;
-        kernel_cache_x[dims] = KernelType();
-        return KernelType();
-    }
-    kernel_cache_x[dims] = new_kernel;
-    return new_kernel;
-}
-
-inline KernelType get_or_create_kernel_yz(int M, int N, int K) {
-    KernelDimensions dims{M, N, K};
-    {
-        std::shared_lock<std::shared_mutex> lk(kernel_cache_yz_mutex);
-        auto it = kernel_cache_yz.find(dims);
-        if (it != kernel_cache_yz.end()) return it->second;
-    }
-    std::unique_lock<std::shared_mutex> lk(kernel_cache_yz_mutex);
-    auto it = kernel_cache_yz.find(dims);
-    if (it != kernel_cache_yz.end()) return it->second;
-
-    KernelType new_kernel(LIBXSMM_GEMM_FLAG_TRANS_B, M, N, K, M, N, M, 1.0,
-                          0.0);
-    if (!new_kernel) {
-        std::cout << "FAILED TO BUILD A KERNEL in YZ!" << std::endl;
-        kernel_cache_yz[dims] = KernelType();
-        return KernelType();
-    }
-    kernel_cache_yz[dims] = new_kernel;
-    return new_kernel;
-}
-
-// y-dim direct-output kernel: computes C(nx,ny) = U(nx,ny) * D^T(ny,ny)
-// this writes directly to the output buffer, eliminating the transpose step
-extern std::unordered_map<KernelDimensions, KernelType, KernelDimensionsHash>
-    kernel_cache_y_direct;
-extern std::shared_mutex kernel_cache_y_direct_mutex;
-
-inline KernelType get_or_create_kernel_y_direct(int nx, int ny) {
-    KernelDimensions dims{nx, ny, ny};
-    {
-        std::shared_lock<std::shared_mutex> lk(kernel_cache_y_direct_mutex);
-        auto it = kernel_cache_y_direct.find(dims);
-        if (it != kernel_cache_y_direct.end()) return it->second;
-    }
-    std::unique_lock<std::shared_mutex> lk(kernel_cache_y_direct_mutex);
-    auto it = kernel_cache_y_direct.find(dims);
-    if (it != kernel_cache_y_direct.end()) return it->second;
-
-    // C(nx,ny) = A(nx,ny) * B^T(ny,ny), LDA=nx, LDB=ny, LDC=nx
-    KernelType new_kernel(LIBXSMM_GEMM_FLAG_TRANS_B, nx, ny, ny, nx, ny, nx,
-                          1.0, 0.0);
-    if (!new_kernel) {
-        std::cout << "FAILED TO BUILD A KERNEL in Y_DIRECT!" << std::endl;
-        kernel_cache_y_direct[dims] = KernelType();
-        return KernelType();
-    }
-    kernel_cache_y_direct[dims] = new_kernel;
-    return new_kernel;
-}
-
-// z-dim direct kernel: reads/writes with stride nx*ny so we can skip the
-// gather/scatter transposes entirely. computes C(nx,nz) = U(nx,nz) * D^T(nz,nz)
-// with LDA=LDC=nx*ny (the z-stride in the 3D array)
-struct ZDirectKernelKey {
-    int nx, ny, nz;
-    bool operator==(const ZDirectKernelKey &o) const {
-        return nx == o.nx && ny == o.ny && nz == o.nz;
-    }
-};
-
-struct ZDirectKernelKeyHash {
-    size_t operator()(const ZDirectKernelKey &k) const {
-        size_t h = std::hash<int>{}(k.nx);
-        h ^= std::hash<int>{}(k.ny) << 1;
-        h ^= std::hash<int>{}(k.nz) << 2;
-        return h;
-    }
-};
-
-extern std::unordered_map<ZDirectKernelKey, KernelType, ZDirectKernelKeyHash>
-    kernel_cache_z_direct;
-extern std::shared_mutex kernel_cache_z_direct_mutex;
-
-inline KernelType get_or_create_kernel_z_direct(int nx, int ny, int nz) {
-    ZDirectKernelKey key{nx, ny, nz};
-    {
-        std::shared_lock<std::shared_mutex> lk(kernel_cache_z_direct_mutex);
-        auto it = kernel_cache_z_direct.find(key);
-        if (it != kernel_cache_z_direct.end()) return it->second;
-    }
-    std::unique_lock<std::shared_mutex> lk(kernel_cache_z_direct_mutex);
-    auto it = kernel_cache_z_direct.find(key);
-    if (it != kernel_cache_z_direct.end()) return it->second;
-
-    // C(nx,nz) = A(nx,nz) * B^T(nz,nz), LDA=nx*ny, LDB=nz, LDC=nx*ny
-    // the large LDA/LDC lets BLAS read/write at z-stride in the 3D array
-    int ld_3d = nx * ny;
-    KernelType new_kernel(LIBXSMM_GEMM_FLAG_TRANS_B, nx, nz, nz, ld_3d, nz,
-                          ld_3d, 1.0, 0.0);
-    if (!new_kernel) {
-        kernel_cache_z_direct[key] = KernelType();
-        return KernelType();
-    }
-    kernel_cache_z_direct[key] = new_kernel;
-    return new_kernel;
-}
 
 // general kernel cache keyed on the full GEMM description (flags + shape +
 // leading dimensions). the active-region paths need LDA/LDB/LDC that differ
@@ -775,21 +628,18 @@ inline bool matmul_z_apply(const KernelType &kernel,
 // ----------------------------------------------------------------------
 // thread-safety helper: prewarm_kernel_cache
 // ----------------------------------------------------------------------
-// the kernel caches above are shared-mutex-protected, so concurrent lazy
-// creation is safe — but the first-touch of each new shape still serializes
-// on the write lock. call this once at mesh setup (before any threading
-// begins) to populate every kernel the solver will need, so the hot path
-// only ever takes the shared read lock.
+// the kernel cache is shared-mutex-protected, so concurrent lazy creation is
+// safe — but the first touch of each new shape still JITs under the write
+// lock. call this once at mesh setup (before any threading begins) to build
+// every kernel the matrix path dispatches for the given block shapes (the
+// full MatmulPlan: x/y/z, last and intermediate, and the fused mixed pairs),
+// so a thread's first plan_for() is a cache hit under the shared read lock.
 struct BlockShape {
     unsigned int nx;
     unsigned int ny;
     unsigned int nz;
 };
 
-// populate x / y_direct / z_direct kernel caches for each given block
-// shape. pw is the ghost padding width; used to also prewarm the three
-// boundary variants of the X kernel (back, front, back+front skip one
-// or two padding bands in z)
 void prewarm_kernel_cache(const std::vector<BlockShape> &shapes,
                           unsigned int pw);
 
