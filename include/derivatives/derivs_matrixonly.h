@@ -106,6 +106,83 @@ class MatrixCompactDerivs : public CompactDerivs {
     mutable unsigned int _cached_sz = 0;
     mutable DerivMatrixStorage *_cached_storage = nullptr;
 
+    // hot-path memo. an instance is per-thread under the clone model, so
+    // these need no lock: the kernel plan for the last block shape, and the
+    // alpha-scaled operator for the last (D, alpha) seen on each axis. blocks
+    // arrive in Morton order, so consecutive blocks nearly always share both,
+    // and the shared kernel cache (shared_mutex + hash) and the per-call
+    // re-scale stay off the timestep loop. reset on copy: the src pointers
+    // key into THIS instance's D storage
+    MatmulPlan plan_;
+    struct ScaledOp {
+        const double *src = nullptr;
+        double alpha      = 0.0;
+        unsigned int n    = 0;
+        std::vector<double> data;
+    };
+    ScaledOp sop_[3];
+
+    const MatmulPlan &plan_for(const unsigned int *sz) {
+        if (!plan_.matches(sz, p_pw)) plan_ = build_matmul_plan(sz, p_pw);
+        return plan_;
+    }
+
+    const double *scaled_op(int axis, const std::vector<double> *D,
+                            double alpha, unsigned int n) {
+        ScaledOp &s = sop_[axis];
+        if (s.src != D->data() || s.alpha != alpha || s.n != n) {
+            s.src   = D->data();
+            s.alpha = alpha;
+            s.n     = n;
+            s.data.resize((size_t)n * n);
+            for (size_t i = 0; i < (size_t)n * n; i++)
+                s.data[i] = s.src[i] * alpha;
+        }
+        return s.data.data();
+    }
+
+    static constexpr double spacing_alpha(double dx) {
+        return (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
+    }
+
+    // the three axis applies behind do_grad_* / _last / _batch. fall back to
+    // the BLAS path with the already-scaled operator if a kernel failed to JIT
+    void apply_x(double *const du, const double *const u, const double dx,
+                 const unsigned int *sz, const unsigned int bflag, bool last) {
+        auto *storage       = get_storage_for_size(sz[0]);
+        auto *D_use         = get_deriv_mat_by_bflag_x(storage, bflag);
+        const double *Ds    = scaled_op(0, D_use, spacing_alpha(dx), sz[0]);
+        const MatmulPlan &p = plan_for(sz);
+        if (!matmul_x_apply(last ? p.kx_last : p.kx_int, Ds, du, u, sz, p_pw,
+                            last))
+            matmul_x_dim_old(Ds, du, u, 1.0, sz, bflag, p_pw);
+    }
+    void apply_y(double *const du, const double *const u, const double dx,
+                 const unsigned int *sz, const unsigned int bflag, bool last) {
+        auto *storage       = get_storage_for_size(sz[1]);
+        auto *D_use         = get_deriv_mat_by_bflag_y(storage, bflag);
+        const double *Ds    = scaled_op(1, D_use, spacing_alpha(dx), sz[1]);
+        const MatmulPlan &p = plan_for(sz);
+        if (!matmul_y_apply(last ? p.ky_last : p.ky_int, Ds, du, u, sz, p_pw,
+                            last)) {
+            ensure_workspace_for(sz);
+            matmul_y_dim_old(Ds, du, u, 1.0, sz, workspace_.data(), bflag,
+                             p_pw);
+        }
+    }
+    void apply_z(double *const du, const double *const u, const double dx,
+                 const unsigned int *sz, const unsigned int bflag) {
+        auto *storage       = get_storage_for_size(sz[2]);
+        auto *D_use         = get_deriv_mat_by_bflag_z(storage, bflag);
+        const double *Ds    = scaled_op(2, D_use, spacing_alpha(dx), sz[2]);
+        const MatmulPlan &p = plan_for(sz);
+        if (!matmul_z_apply(p.kz, Ds, du, u, sz, p_pw)) {
+            ensure_workspace_for(sz);
+            matmul_z_dim_old(Ds, du, u, 1.0, sz, workspace_.data(), bflag,
+                             p_pw);
+        }
+    }
+
     // interior and bounded entries for each P and Q matrix
     MatrixDiagonalEntries *diagEntries = nullptr;
 
@@ -234,69 +311,31 @@ class MatrixCompactDerivs : public CompactDerivs {
 
     void do_grad_x(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) {
-        auto *storage = get_storage_for_size(sz[0]);
-        auto *D_use   = get_deriv_mat_by_bflag_x(storage, bflag);
-
-        if constexpr (DerivOrder == 1) {
-            matmul_x_dim(D_use->data(), du, u, 1.0 / dx, sz, bflag, p_pw);
-        } else {
-            matmul_x_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz, bflag,
-                         p_pw);
-        }
+        apply_x(du, u, dx, sz, bflag, /*last=*/false);
     }
 
     void do_grad_y(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) {
-        auto *storage = get_storage_for_size(sz[1]);
-        auto *D_use   = get_deriv_mat_by_bflag_y(storage, bflag);
-        ensure_workspace_for(sz);
-
-        if constexpr (DerivOrder == 1) {
-            matmul_y_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data(),
-                         bflag, p_pw);
-        } else {
-            matmul_y_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz,
-                         workspace_.data(), bflag, p_pw);
-        }
+        apply_y(du, u, dx, sz, bflag, /*last=*/false);
     }
 
     void do_grad_z(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) {
-        auto *storage = get_storage_for_size(sz[2]);
-        auto *D_use   = get_deriv_mat_by_bflag_z(storage, bflag);
-        ensure_workspace_for(sz);
-
-        if constexpr (DerivOrder == 1) {
-            matmul_z_dim(D_use->data(), du, u, 1.0 / dx, sz, workspace_.data(),
-                         bflag, p_pw);
-        } else {
-            matmul_z_dim(D_use->data(), du, u, 1.0 / (dx * dx), sz,
-                         workspace_.data(), bflag, p_pw);
-        }
+        apply_z(du, u, dx, sz, bflag);
     }
 
-    // "_last" overrides: pass is_last_op=true to the matmul so it can
-    // skip the y/z output padding. See the contract in
-    // derivatives.h::do_grad_x_last.
+    // "_last" overrides: the output is terminal, so the kernel skips the y/z
+    // output padding too. See the contract in derivatives.h::do_grad_x_last.
     void do_grad_x_last(double *const du, const double *const u,
                         const double dx, const unsigned int *sz,
                         const unsigned int bflag) override {
-        auto *storage      = get_storage_for_size(sz[0]);
-        auto *D_use        = get_deriv_mat_by_bflag_x(storage, bflag);
-        const double alpha = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
-        matmul_x_dim(D_use->data(), du, u, alpha, sz, bflag, p_pw,
-                     /*is_last_op=*/true);
+        apply_x(du, u, dx, sz, bflag, /*last=*/true);
     }
 
     void do_grad_y_last(double *const du, const double *const u,
                         const double dx, const unsigned int *sz,
                         const unsigned int bflag) override {
-        auto *storage      = get_storage_for_size(sz[1]);
-        auto *D_use        = get_deriv_mat_by_bflag_y(storage, bflag);
-        const double alpha = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
-        ensure_workspace_for(sz);
-        matmul_y_dim(D_use->data(), du, u, alpha, sz, workspace_.data(),
-                     bflag, p_pw, /*is_last_op=*/true);
+        apply_y(du, u, dx, sz, bflag, /*last=*/true);
     }
 
     // Fused d^2u/dxdy in a single call. Per active z-slice (k in [pw, nz-pw))
@@ -653,47 +692,30 @@ class MatrixCompactDerivs : public CompactDerivs {
         return false;
     }
 
-    // batch overrides: pre-scale D once and apply to all variables,
-    // keeping the scaled matrix and kernel hot in cache
+    // batch overrides: the scaled operator and the kernel plan are memoized
+    // on the instance, so every variable after the first is just the apply
     void do_grad_x_batch(double **du_arr, const double **u_arr,
                          unsigned int n_vars, const double dx,
                          const unsigned int *sz,
                          const unsigned int bflag) override {
-        auto *storage = get_storage_for_size(sz[0]);
-        auto *D_use   = get_deriv_mat_by_bflag_x(storage, bflag);
-        const double alpha = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
-
         for (unsigned int v = 0; v < n_vars; v++)
-            matmul_x_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz, bflag,
-                         p_pw);
+            apply_x(du_arr[v], u_arr[v], dx, sz, bflag, /*last=*/false);
     }
 
     void do_grad_y_batch(double **du_arr, const double **u_arr,
                          unsigned int n_vars, const double dx,
                          const unsigned int *sz,
                          const unsigned int bflag) override {
-        auto *storage = get_storage_for_size(sz[1]);
-        auto *D_use   = get_deriv_mat_by_bflag_y(storage, bflag);
-        const double alpha = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
-        this->ensure_workspace_for(sz);
-
         for (unsigned int v = 0; v < n_vars; v++)
-            matmul_y_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz,
-                         workspace_.data(), bflag, p_pw);
+            apply_y(du_arr[v], u_arr[v], dx, sz, bflag, /*last=*/false);
     }
 
     void do_grad_z_batch(double **du_arr, const double **u_arr,
                          unsigned int n_vars, const double dx,
                          const unsigned int *sz,
                          const unsigned int bflag) override {
-        auto *storage = get_storage_for_size(sz[2]);
-        auto *D_use   = get_deriv_mat_by_bflag_z(storage, bflag);
-        const double alpha = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
-        this->ensure_workspace_for(sz);
-
         for (unsigned int v = 0; v < n_vars; v++)
-            matmul_z_dim(D_use->data(), du_arr[v], u_arr[v], alpha, sz,
-                         workspace_.data(), bflag, p_pw);
+            apply_z(du_arr[v], u_arr[v], dx, sz, bflag);
     }
 
     void init();

@@ -636,6 +636,139 @@ inline KernelType get_or_create_kernel_ld(int flags, int M, int N, int K,
 }
 
 // ----------------------------------------------------------------------
+// per-shape kernel plan + apply routines (the matrix-path hot loop)
+// ----------------------------------------------------------------------
+// the five kernels one block shape needs. built from the shared cache once
+// per shape and then memoized per Derivs instance (one instance per thread
+// under the clone model), so the timestep loop never takes the cache's
+// shared_mutex or hashes a key. see MatrixCompactDerivs::plan_for
+struct MatmulPlan {
+    unsigned int nx = 0, ny = 0, nz = 0, pw = 0, ma = 0;
+    KernelType kx_last, kx_int, ky_last, ky_int, kz;
+    bool valid = false;
+
+    bool matches(const unsigned int *sz, unsigned int pw_) const {
+        return valid && nx == sz[0] && ny == sz[1] && nz == sz[2] && pw == pw_;
+    }
+};
+
+MatmulPlan build_matmul_plan(const unsigned int *sz, unsigned int pw);
+
+// apply routines: take a kernel from the plan and an operator that already
+// has the 1/h^p spacing folded in (Ds = alpha * D). return false when the
+// kernel is empty (JIT failure) so the caller can fall back to the BLAS path
+// with the same Ds and alpha = 1.0. the addressing here IS the active-region
+// contract documented above matmul_x_dim; the matmul_*_dim wrappers and the
+// Derivs instances both route through these so there is one implementation
+inline bool matmul_x_apply(const KernelType &kernel,
+                           const double *__restrict__ Ds,
+                           double *__restrict__ Dxu,
+                           const double *__restrict__ u, const unsigned int *sz,
+                           const unsigned int pw, bool is_last_op) {
+    if (!kernel) return false;
+    const unsigned int nx       = sz[0];
+    const unsigned int ny       = sz[1];
+    const unsigned int nz       = sz[2];
+    const unsigned int slice_sz = nx * ny;
+    const double *A             = Ds + pw;  // rows [pw, pw+ma), LDA = nx
+
+    if (!is_last_op) {
+        // chain intermediate: every y column and z slice, active x rows
+        kernel(A, u, Dxu + pw);
+        return true;
+    }
+    // terminal: active y columns of the active z slices only
+    const unsigned int y_off = pw * nx;
+#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
+    libxsmm_gemmfunction raw_fn = kernel.kernel();
+    if (raw_fn) {
+        libxsmm_gemm_param args;
+        args.a.primary = (void *)A;
+        for (unsigned int k = pw; k < nz - pw; k++) {
+            args.b.primary = (void *)(u + k * slice_sz + y_off);
+            args.c.primary = (void *)(Dxu + k * slice_sz + y_off + pw);
+            raw_fn(&args);
+        }
+        return true;
+    }
+#endif
+    for (unsigned int k = pw; k < nz - pw; k++) {
+        kernel(A, u + k * slice_sz + y_off, Dxu + k * slice_sz + y_off + pw);
+    }
+    return true;
+}
+
+inline bool matmul_y_apply(const KernelType &kernel,
+                           const double *__restrict__ Ds,
+                           double *__restrict__ Dyu,
+                           const double *__restrict__ u, const unsigned int *sz,
+                           const unsigned int pw, bool is_last_op) {
+    if (!kernel) return false;
+    const unsigned int nx         = sz[0];
+    const unsigned int ny         = sz[1];
+    const unsigned int nz         = sz[2];
+    const unsigned int slice_size = nx * ny;
+    // per z-slice C(ma, N) = U(ma, ny) * D^T[rows y_start..]: A = slice + pw
+    // (active x rows, LDA = nx), B = Ds + y_start with TRANS_B selecting the
+    // output y columns, C at the same rows/columns. last op: active y and z
+    // only; intermediate: all y columns and all z slices
+    const unsigned int z_start = is_last_op ? pw : 0u;
+    const unsigned int z_end   = is_last_op ? nz - pw : nz;
+    const unsigned int y_start = is_last_op ? pw : 0u;
+    const double *B            = Ds + y_start;
+    const unsigned int c_off   = y_start * nx + pw;
+#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
+    libxsmm_gemmfunction raw_fn = kernel.kernel();
+    if (raw_fn) {
+        libxsmm_gemm_param args;
+        args.b.primary = (void *)B;
+        for (unsigned int k = z_start; k < z_end; k++) {
+            args.a.primary = (void *)(u + k * slice_size + pw);
+            args.c.primary = (void *)(Dyu + k * slice_size + c_off);
+            raw_fn(&args);
+        }
+        return true;
+    }
+#endif
+    for (unsigned int k = z_start; k < z_end; k++) {
+        kernel(u + k * slice_size + pw, B, Dyu + k * slice_size + c_off);
+    }
+    return true;
+}
+
+inline bool matmul_z_apply(const KernelType &kernel,
+                           const double *__restrict__ Ds,
+                           double *__restrict__ Dzu,
+                           const double *__restrict__ u, const unsigned int *sz,
+                           const unsigned int pw) {
+    if (!kernel) return false;
+    const unsigned int nx    = sz[0];
+    const unsigned int ny    = sz[1];
+    const unsigned int ld_3d = nx * ny;
+    // z is always last: per active y-row, C(ma, nz_active) = U(ma, nz) *
+    // D^T[active rows] with LDA = LDC = nx*ny (z-stride in the 3D array)
+    const double *B          = Ds + pw;
+    const unsigned int c_off = pw + pw * ld_3d;
+#if DENDRO_DERIVS_USE_RAW_XSMM_DISPATCH
+    libxsmm_gemmfunction raw_fn = kernel.kernel();
+    if (raw_fn) {
+        libxsmm_gemm_param args;
+        args.b.primary = (void *)B;
+        for (unsigned int j = pw; j < ny - pw; j++) {
+            args.a.primary = (void *)(u + j * nx + pw);
+            args.c.primary = (void *)(Dzu + j * nx + c_off);
+            raw_fn(&args);
+        }
+        return true;
+    }
+#endif
+    for (unsigned int j = pw; j < ny - pw; j++) {
+        kernel(u + j * nx + pw, B, Dzu + j * nx + c_off);
+    }
+    return true;
+}
+
+// ----------------------------------------------------------------------
 // thread-safety helper: prewarm_kernel_cache
 // ----------------------------------------------------------------------
 // the kernel caches above are shared-mutex-protected, so concurrent lazy
