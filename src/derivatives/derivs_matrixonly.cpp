@@ -331,6 +331,23 @@ createMatrixSystemForSingleSizeAllUniqueDiags<1>(
     const MatrixDiagonalEntries* diagEntriesLeftRight,
     const bool skip_leftright);
 
+// explicit instantiations: the header's build_storage_for_size calls these
+// from other TUs, and the implicit ones inside init() can be inlined away
+template std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize<1>(
+    const unsigned int, const unsigned int, const MatrixDiagonalEntries*,
+    const bool);
+template std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize<2>(
+    const unsigned int, const unsigned int, const MatrixDiagonalEntries*,
+    const bool);
+template std::unique_ptr<DerivMatrixStorage>
+createMatrixSystemForSingleSizeInMatrixFilter<1>(
+    const unsigned int, const unsigned int, const MatrixDiagonalEntries*,
+    const MatrixDiagonalEntries*, const bool, const InMatFilterType);
+template std::unique_ptr<DerivMatrixStorage>
+createMatrixSystemForSingleSizeInMatrixFilter<2>(
+    const unsigned int, const unsigned int, const MatrixDiagonalEntries*,
+    const MatrixDiagonalEntries*, const bool, const InMatFilterType);
+
 template <unsigned int DerivOrder>
 void MatrixCompactDerivs<DerivOrder>::init() {
     // so we need to create for a specific number of blocks
