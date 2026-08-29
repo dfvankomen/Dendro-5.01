@@ -167,6 +167,9 @@ class MatrixCompactDerivs : public CompactDerivs {
     MatrixDiagonalEntries *diagEntries = nullptr;
 
     std::unique_ptr<InMatrixFilter> in_matrix_filter_;
+    // kept so a copy can rebuild its own filter (InMatrixFilter has no clone)
+    std::string in_matrix_filter_name_;
+    std::vector<double> in_matrix_filter_coeffs_;
 
    public:
     MatrixCompactDerivs(unsigned int ele_order,
@@ -179,9 +182,10 @@ class MatrixCompactDerivs : public CompactDerivs {
         workspace_        = std::vector<double>(workspace_size_calc, 0.0);
         workspace_tot_    = workspace_size_calc;
 
-        // then call and build up the in_matrix_filter_
-        in_matrix_filter_ = createInMatrixFilterByType(in_matrix_filter,
-                                                       in_matrix_filter_coeffs);
+        in_matrix_filter_name_   = in_matrix_filter;
+        in_matrix_filter_coeffs_ = in_matrix_filter_coeffs;
+        in_matrix_filter_        = createInMatrixFilterByType(
+            in_matrix_filter_name_, in_matrix_filter_coeffs_);
     }
 
     ~MatrixCompactDerivs() {
@@ -255,7 +259,15 @@ class MatrixCompactDerivs : public CompactDerivs {
             diagEntries = nullptr;
         }
 
-        workspace_ = obj.workspace_;
+        workspace_     = obj.workspace_;
+        workspace_tot_ = obj.workspace_tot_;
+
+        // the copy must own a live filter: a lazily built D for a block size
+        // first seen after a remesh dereferences it (per-thread clones)
+        in_matrix_filter_name_   = obj.in_matrix_filter_name_;
+        in_matrix_filter_coeffs_ = obj.in_matrix_filter_coeffs_;
+        in_matrix_filter_        = createInMatrixFilterByType(
+            in_matrix_filter_name_, in_matrix_filter_coeffs_);
 
         for (const auto &pair : obj.D_storage_map_) {
             D_storage_map_[pair.first] =
