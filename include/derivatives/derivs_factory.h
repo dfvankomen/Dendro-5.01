@@ -10,6 +10,7 @@
 #include "derivatives/derivs_explicit_simd.h"
 #include "derivatives/filt_kodiss_explicit.h"
 #include "derivatives/filt_kodiss_matrix.h"
+#include "derivatives/filt_kodiss_simd.h"
 #include "derivatives/impl_boris.h"
 #include "derivatives/impl_bradylivescu.h"
 #include "derivatives/impl_byuderivs.h"
@@ -678,6 +679,22 @@ class FilterFactory {
             return std::make_unique<MatrixKODiss>(
                 args..., std::make_unique<ExplicitKODissO8>(args...),
                 "KO8Matrix");
+        }
+        // span-vectorized KO: one fused pass accumulating coeff * (Dx + Dy +
+        // Dz) u, same term order as the stencil loops; agrees to roundoff
+        // (FMA contraction differs between the vectorized and scalar loops)
+        else if (name == "KO2Simd") {
+            return std::make_unique<SimdKODiss<2>>(
+                args..., std::make_unique<ExplicitKODissO2>(args...));
+        } else if (name == "KO4Simd") {
+            return std::make_unique<SimdKODiss<4>>(
+                args..., std::make_unique<ExplicitKODissO4>(args...));
+        } else if (name == "KO6Simd") {
+            return std::make_unique<SimdKODiss<6>>(
+                args..., std::make_unique<ExplicitKODissO6>(args...));
+        } else if (name == "KO8Simd") {
+            return std::make_unique<SimdKODiss<8>>(
+                args..., std::make_unique<ExplicitKODissO8>(args...));
         }
         return nullptr;
     }
