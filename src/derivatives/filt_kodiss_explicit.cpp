@@ -7,6 +7,43 @@ namespace dendroderivs {
  *
  *
  *----------------------------------------------------------------------*/
+// ---------------------------------------------------------------------------
+// Physical-face closures for KO2 and KO6 (rewritten 2026-08-29: the previous
+// rows were anti-dissipative on the Nyquist mode, see testKOSign). `p0` is the
+// first active point on the face, `s` the stride pointing INTO the domain
+// (negative on the high face), `h` the spacing. Every row must be dissipative:
+// testKOSign checks the Nyquist sign and the spectrum of the assembled 1-D
+// operator with both faces closed.
+// ---------------------------------------------------------------------------
+
+// KO2: the summation-by-parts form -H^{-1} D2^T D2 / 16 with the second-order
+// norm H = diag(1/2, 1, ...) — rows 0..2 one-sided, the centred 4th difference
+// from row 3. Negative semi-definite in the H inner product by construction
+// (<u, A u>_H = -|D2 u|^2 / 16).
+static inline void ko2_face_rows(double *const Du, const double *const u,
+                                 const long p0, const long s, const double h) {
+    const double f  = 1.0 / (16.0 * h);
+    const double u0 = u[p0], u1 = u[p0 + s], u2 = u[p0 + 2 * s], u3 = u[p0 + 3 * s], u4 = u[p0 + 4 * s];
+    Du[p0]         = f * (-4.0 * u0 + 8.0 * u1 - 4.0 * u2);
+    Du[p0 + s]     = f * (4.0 * u0 - 9.0 * u1 + 6.0 * u2 - u3);
+    Du[p0 + 2 * s] = f * (-2.0 * u0 + 6.0 * u1 - 7.0 * u2 + 4.0 * u3 - u4);
+}
+
+// KO6: the layering ko_deriv8 uses — the production KO4 one-sided rows
+// (ko_deriv42, unchanged) on the first three points, the centred KO4 stencil
+// on the fourth, and KO6 proper from the fifth, where its 9-point stencil
+// reads active points only.
+static inline void ko6_face_rows(double *const Du, const double *const u,
+                                 const long p0, const long s, const double h) {
+    const double smr3 = 59.0 / 48.0 * 64 * h, smr2 = 43.0 / 48.0 * 64 * h, smr1 = 49.0 / 48.0 * 64 * h;
+    const double u0 = u[p0], u1 = u[p0 + s], u2 = u[p0 + 2 * s], u3 = u[p0 + 3 * s];
+    const double u4 = u[p0 + 4 * s], u5 = u[p0 + 5 * s], u6 = u[p0 + 6 * s];
+    Du[p0]         = (u3 - 3.0 * u2 + 3.0 * u1 - u0) / smr3;
+    Du[p0 + s]     = (u4 - 6.0 * u3 + 12.0 * u2 - 10.0 * u1 + 3.0 * u0) / smr2;
+    Du[p0 + 2 * s] = (u5 - 6.0 * u4 + 15.0 * u3 - 19.0 * u2 + 12.0 * u1 - 3.0 * u0) / smr1;
+    Du[p0 + 3 * s] = (-1.0 / 64.0 / h) * (-u0 + 6.0 * u1 - 15.0 * u2 + 20.0 * u3 - 15.0 * u4 + 6.0 * u5 - u6);
+}
+
 template <unsigned int P>
 void ko_deriv21_x(double *const Du, const double *const u, const double dx,
                   const unsigned int *sz, unsigned bflag) {
@@ -18,10 +55,6 @@ void ko_deriv21_x(double *const Du, const double *const u, const double dx,
     // will be negative
     double pre_factor_6_dx  = -1.0 / 16.0 / dx;
 
-    double smr2             = 4 * dx;
-    double smr1             = 4 * dx;
-    double spr2             = smr2;
-    double spr1             = smr1;
 
     const int nx            = sz[0];
     const int ny            = sz[1];
@@ -52,48 +85,13 @@ void ko_deriv21_x(double *const Du, const double *const u, const double dx,
     }
 
     if (bflag & (1u << OCT_DIR_LEFT)) {
-        for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int j = jb; j < je; j++) {
-                Du[IDX(ib, j, k)] =
-                    (u[IDX(ib, j, k)] - 2.0 * u[IDX(ib + 1, j, k)] +
-                     u[IDX(ib + 2, j, k)]) /
-                    smr2;
-                Du[IDX(ib, j, k)] =
-                    (u[IDX(ib, j, k)] - 2.0 * u[IDX(ib + 1, j, k)] +
-                     u[IDX(ib + 2, j, k)]) /
-                    smr1;
-            }
-        }
+        for (int k = kb; k < ke; k++)
+            for (int j = jb; j < je; j++) ko2_face_rows(Du, u, IDX(ib, j, k), 1, dx);
     }
-
     if (bflag & (1u << OCT_DIR_RIGHT)) {
-        for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int j = jb; j < je; j++) {
-                Du[IDX(ie - 2, j, k)] =
-                    (u[IDX(ie - 3, j, k)] - 2.0 * u[IDX(ie - 2, j, k)] +
-                     u[IDX(ie - 1, j, k)]) /
-                    spr1;
-
-                Du[IDX(ie - 1, j, k)] =
-                    (u[IDX(ie - 3, j, k)] - 2.0 * u[IDX(ie - 2, j, k)] +
-                     u[IDX(ie - 1, j, k)]) /
-                    spr2;
-            }
-        }
+        for (int k = kb; k < ke; k++)
+            for (int j = jb; j < je; j++) ko2_face_rows(Du, u, IDX(ie - 1, j, k), -1, dx);
     }
-
 #ifdef DEBUG_DERIVS_COMP
 #pragma message("DEBUG_DERIVS_COMP: ON")
     for (int k = kb; k < ke; k++) {
@@ -126,10 +124,6 @@ void ko_deriv21_y(double *const Du, const double *const u, const double dy,
     // will be negative
     double pre_factor_6_dy  = -1.0 / 16.0 / dy;
 
-    double smr2             = 4 * dy;
-    double smr1             = 4 * dy;
-    double spr2             = smr2;
-    double spr1             = smr1;
 
     const int nx            = sz[0];
     const int ny            = sz[1];
@@ -161,48 +155,13 @@ void ko_deriv21_y(double *const Du, const double *const u, const double dy,
     }
 
     if (bflag & (1u << OCT_DIR_DOWN)) {
-        for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int i = ib; i < ie; i++) {
-                Du[IDX(i, jb, k)] =
-                    (u[IDX(i, jb, k)] - 2.0 * u[IDX(i, jb + 1, k)] +
-                     u[IDX(i, jb + 2, k)]) /
-                    smr2;
-                Du[IDX(i, jb + 1, k)] =
-                    (u[IDX(i, jb, k)] - 2.0 * u[IDX(i, jb + 1, k)] +
-                     u[IDX(i, jb + 2, k)]) /
-                    smr1;
-            }
-        }
+        for (int k = kb; k < ke; k++)
+            for (int i = ib; i < ie; i++) ko2_face_rows(Du, u, IDX(i, jb, k), nx, dy);
     }
-
     if (bflag & (1u << OCT_DIR_UP)) {
-        for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int i = ib; i < ie; i++) {
-                Du[IDX(i, je - 2, k)] =
-                    (u[IDX(i, je - 3, k)] - 2.0 * u[IDX(i, je - 2, k)] +
-                     u[IDX(i, je - 1, k)]) /
-                    spr1;
-
-                Du[IDX(i, je - 1, k)] =
-                    (u[IDX(i, je - 3, k)] - 2.0 * u[IDX(i, je - 2, k)] +
-                     u[IDX(i, je - 1, k)]) /
-                    spr2;
-            }
-        }
+        for (int k = kb; k < ke; k++)
+            for (int i = ib; i < ie; i++) ko2_face_rows(Du, u, IDX(i, je - 1, k), -nx, dy);
     }
-
 #ifdef DEBUG_DERIVS_COMP
 #pragma message("DEBUG_DERIVS_COMP: ON")
     for (int k = kb; k < ke; k++) {
@@ -235,10 +194,6 @@ void ko_deriv21_z(double *const Du, const double *const u, const double dz,
     // will be negative
     double pre_factor_6_dz  = -1.0 / 16.0 / dz;
 
-    double smr2             = 4 * dz;
-    double smr1             = 4 * dz;
-    double spr2             = smr2;
-    double spr1             = smr1;
 
     const int nx            = sz[0];
     const int ny            = sz[1];
@@ -272,48 +227,13 @@ void ko_deriv21_z(double *const Du, const double *const u, const double dz,
     }
 
     if (bflag & (1u << OCT_DIR_BACK)) {
-        for (int j = jb; j < je; j++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int i = ib; i < ie; i++) {
-                Du[IDX(i, j, kb)] =
-                    (u[IDX(i, j, kb)] - 2.0 * u[IDX(i, j, kb + 1)] +
-                     u[IDX(i, j, kb + 2)]) /
-                    smr2;
-                Du[IDX(i, j, kb + 1)] =
-                    (u[IDX(i, j, kb)] - 2.0 * u[IDX(i, j, kb + 1)] +
-                     u[IDX(i, j, kb + 2)]) /
-                    smr1;
-            }
-        }
+        for (int j = jb; j < je; j++)
+            for (int i = ib; i < ie; i++) ko2_face_rows(Du, u, IDX(i, j, kb), (long)nx * ny, dz);
     }
-
     if (bflag & (1u << OCT_DIR_FRONT)) {
-        for (int j = jb; j < je; j++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int i = ib; i < ie; i++) {
-                Du[IDX(i, j, ke - 2)] =
-                    (u[IDX(i, j, ke - 3)] - 2.0 * u[IDX(i, j, ke - 2)] +
-                     u[IDX(i, j, ke - 1)]) /
-                    spr1;
-
-                Du[IDX(i, j, ke - 1)] =
-                    (u[IDX(i, j, ke - 3)] - 2.0 * u[IDX(i, j, ke - 2)] +
-                     u[IDX(i, j, ke - 1)]) /
-                    spr2;
-            }
-        }
+        for (int j = jb; j < je; j++)
+            for (int i = ib; i < ie; i++) ko2_face_rows(Du, u, IDX(i, j, ke - 1), -(long)nx * ny, dz);
     }
-
 #ifdef DEBUG_DERIVS_COMP
 #pragma message("DEBUG_DERIVS_COMP: ON")
     for (int k = kb; k < ke; k++) {
@@ -771,14 +691,6 @@ void ko_deriv64_x(double *const Du, const double *const u, const double dx,
     static_assert(P >= 4 && P <= 5, "P must be between 2 and 5 (for now)!");
     double pre_factor_8_dx  = -1.0 / 256.0 / dx;
 
-    double smr4             = 17.0 / 48.0 * 256 * dx;
-    double smr3             = 59.0 / 48.0 * 256 * dx;
-    double smr2             = 43.0 / 48.0 * 256 * dx;
-    double smr1             = 49.0 / 48.0 * 256 * dx;
-    double spr4             = smr4;
-    double spr3             = smr3;
-    double spr2             = smr2;
-    double spr1             = smr1;
 
     const int nx            = sz[0];
     const int ny            = sz[1];
@@ -811,79 +723,13 @@ void ko_deriv64_x(double *const Du, const double *const u, const double dx,
     }
 
     if (bflag & (1u << OCT_DIR_LEFT)) {
-        for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int j = jb; j < je; j++) {
-                Du[IDX(ib, j, k)] =
-                    (-u[IDX(ib, j, k)] + 4.0 * u[IDX(ib + 1, j, k)] -
-                     6.0 * u[IDX(ib + 2, j, k)] + 4.0 * u[IDX(ib + 3, j, k)] -
-                     u[IDX(ib + 4, j, k)]) /
-                    smr4;
-
-                Du[IDX(ib + 1, j, k)] =
-                    (3.0 * u[IDX(ib, j, k)] - 11.0 * u[IDX(ib + 1, j, k)] +
-                     15.0 * u[IDX(ib + 2, j, k)] - 9.0 * u[IDX(ib + 3, j, k)] +
-                     2.0 * u[IDX(ib + 4, j, k)]) /
-                    smr3;
-
-                Du[IDX(ib + 2, j, k)] =
-                    (-3.0 * u[IDX(ib, j, k)] + 9.0 * u[IDX(ib + 1, j, k)] -
-                     8.0 * u[IDX(ib + 2, j, k)] + 3.0 * u[IDX(ib + 4, j, k)] -
-                     u[IDX(ib + 5, j, k)]) /
-                    smr2;
-
-                Du[IDX(ib + 3, j, k)] =
-                    (u[IDX(ib, j, k)] - u[IDX(ib + 1, j, k)] -
-                     6.0 * u[IDX(ib + 2, j, k)] + 15.0 * u[IDX(ib + 3, j, k)] -
-                     14.0 * u[IDX(ib + 4, j, k)] + 6.0 * u[IDX(ib + 5, j, k)] -
-                     u[IDX(ib + 6, j, k)]) /
-                    smr1;
-            }
-        }
+        for (int k = kb; k < ke; k++)
+            for (int j = jb; j < je; j++) ko6_face_rows(Du, u, IDX(ib, j, k), 1, dx);
     }
-
     if (bflag & (1u << OCT_DIR_RIGHT)) {
-        for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int j = jb; j < je; j++) {
-                Du[IDX(ie - 4, j, k)] =
-                    (-u[IDX(ie - 7, j, k)] + 6.0 * u[IDX(ie - 6, j, k)] -
-                     14.0 * u[IDX(ie - 5, j, k)] + 15.0 * u[IDX(ie - 4, j, k)] -
-                     6.0 * u[IDX(ie - 3, j, k)] - u[IDX(ie - 2, j, k)] +
-                     u[IDX(ie - 1, j, k)]) /
-                    spr1;
-
-                Du[IDX(ie - 3, j, k)] =
-                    (-u[IDX(ie - 6, j, k)] + 3.0 * u[IDX(ie - 5, j, k)] -
-                     8.0 * u[IDX(ie - 3, j, k)] + 9.0 * u[IDX(ie - 2, j, k)] -
-                     3.0 * u[IDX(ie - 1, j, k)]) /
-                    spr2;
-
-                Du[IDX(ie - 2, j, k)] =
-                    (2.0 * u[IDX(ie - 5, j, k)] - 9.0 * u[IDX(ie - 4, j, k)] +
-                     15.0 * u[IDX(ie - 3, j, k)] - 11.0 * u[IDX(ie - 2, j, k)] +
-                     3.0 * u[IDX(ie - 1, j, k)]) /
-                    spr3;
-
-                Du[IDX(ie - 1, j, k)] =
-                    (-u[IDX(ie - 5, j, k)] + 4.0 * u[IDX(ie - 4, j, k)] -
-                     6.0 * u[IDX(ie - 3, j, k)] + 4.0 * u[IDX(ie - 2, j, k)] -
-                     u[IDX(ie - 1, j, k)]) /
-                    spr4;
-            }
-        }
+        for (int k = kb; k < ke; k++)
+            for (int j = jb; j < je; j++) ko6_face_rows(Du, u, IDX(ie - 1, j, k), -1, dx);
     }
-
 #ifdef DEBUG_DERIVS_COMP
 #pragma message("DEBUG_DERIVS_COMP: ON")
     for (int k = kb; k < ke; k++) {
@@ -910,14 +756,6 @@ void ko_deriv64_y(double *const Du, const double *const u, const double dy,
                   const unsigned int *sz, unsigned bflag) {
     double pre_factor_8_dy  = -1.0 / 256.0 / dy;
 
-    double smr4             = 17.0 / 48.0 * 256 * dy;
-    double smr3             = 59.0 / 48.0 * 256 * dy;
-    double smr2             = 43.0 / 48.0 * 256 * dy;
-    double smr1             = 49.0 / 48.0 * 256 * dy;
-    double spr4             = smr4;
-    double spr3             = smr3;
-    double spr2             = smr2;
-    double spr1             = smr1;
 
     const int nx            = sz[0];
     const int ny            = sz[1];
@@ -954,79 +792,13 @@ void ko_deriv64_y(double *const Du, const double *const u, const double dy,
     }
 
     if (bflag & (1u << OCT_DIR_DOWN)) {
-        for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int i = ib; i < ie; i++) {
-                Du[IDX(i, jb, k)] =
-                    (-u[IDX(i, jb, k)] + 4.0 * u[IDX(i, jb + 1, k)] -
-                     6.0 * u[IDX(i, jb + 2, k)] + 4.0 * u[IDX(i, jb + 3, k)] -
-                     u[IDX(i, jb + 4, k)]) /
-                    smr4;
-
-                Du[IDX(i, jb + 1, k)] =
-                    (3.0 * u[IDX(i, jb, k)] - 11.0 * u[IDX(i, jb + 1, k)] +
-                     15.0 * u[IDX(i, jb + 2, k)] - 9.0 * u[IDX(i, jb + 3, k)] +
-                     2.0 * u[IDX(i, jb + 4, k)]) /
-                    smr3;
-
-                Du[IDX(i, jb + 2, k)] =
-                    (-3.0 * u[IDX(i, jb, k)] + 9.0 * u[IDX(i, jb + 1, k)] -
-                     8.0 * u[IDX(i, jb + 2, k)] + 3.0 * u[IDX(i, jb + 4, k)] -
-                     u[IDX(i, jb + 5, k)]) /
-                    smr2;
-
-                Du[IDX(i, jb + 3, k)] =
-                    (u[IDX(i, jb, k)] - u[IDX(i, jb + 1, k)] -
-                     6.0 * u[IDX(i, jb + 2, k)] + 15.0 * u[IDX(i, jb + 3, k)] -
-                     14.0 * u[IDX(i, jb + 4, k)] + 6.0 * u[IDX(i, jb + 5, k)] -
-                     u[IDX(i, jb + 6, k)]) /
-                    smr1;
-            }
-        }
+        for (int k = kb; k < ke; k++)
+            for (int i = ib; i < ie; i++) ko6_face_rows(Du, u, IDX(i, jb, k), nx, dy);
     }
-
     if (bflag & (1u << OCT_DIR_UP)) {
-        for (int k = kb; k < ke; k++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int i = ib; i < ie; i++) {
-                Du[IDX(i, je - 4, k)] =
-                    (-u[IDX(i, je - 7, k)] + 6.0 * u[IDX(i, je - 6, k)] -
-                     14.0 * u[IDX(i, je - 5, k)] + 15.0 * u[IDX(i, je - 4, k)] -
-                     6.0 * u[IDX(i, je - 3, k)] - u[IDX(i, je - 2, k)] +
-                     u[IDX(i, je - 1, k)]) /
-                    spr1;
-
-                Du[IDX(i, je - 3, k)] =
-                    (-u[IDX(i, je - 6, k)] + 3.0 * u[IDX(i, je - 5, k)] -
-                     8.0 * u[IDX(i, je - 3, k)] + 9.0 * u[IDX(i, je - 2, k)] -
-                     3.0 * u[IDX(i, je - 1, k)]) /
-                    spr2;
-
-                Du[IDX(i, je - 2, k)] =
-                    (2.0 * u[IDX(i, je - 5, k)] - 9.0 * u[IDX(i, je - 4, k)] +
-                     15.0 * u[IDX(i, je - 3, k)] - 11.0 * u[IDX(i, je - 2, k)] +
-                     3.0 * u[IDX(i, je - 1, k)]) /
-                    spr3;
-
-                Du[IDX(i, je - 1, k)] =
-                    (-u[IDX(i, je - 5, k)] + 4.0 * u[IDX(i, je - 4, k)] -
-                     6.0 * u[IDX(i, je - 3, k)] + 4.0 * u[IDX(i, je - 2, k)] -
-                     u[IDX(i, je - 1, k)]) /
-                    spr4;
-            }
-        }
+        for (int k = kb; k < ke; k++)
+            for (int i = ib; i < ie; i++) ko6_face_rows(Du, u, IDX(i, je - 1, k), -nx, dy);
     }
-
 #ifdef DEBUG_DERIVS_COMP
 #pragma message("DEBUG_DERIVS_COMP: ON")
     for (int k = kb; k < ke; k++) {
@@ -1053,14 +825,6 @@ void ko_deriv64_z(double *const Du, const double *const u, const double dz,
                   const unsigned int *sz, unsigned bflag) {
     double pre_factor_8_dz  = -1.0 / 256.0 / dz;
 
-    double smr4             = 17.0 / 48.0 * 256 * dz;
-    double smr3             = 59.0 / 48.0 * 256 * dz;
-    double smr2             = 43.0 / 48.0 * 256 * dz;
-    double smr1             = 49.0 / 48.0 * 256 * dz;
-    double spr4             = smr4;
-    double spr3             = smr3;
-    double spr2             = smr2;
-    double spr1             = smr1;
 
     const int nx            = sz[0];
     const int ny            = sz[1];
@@ -1097,79 +861,13 @@ void ko_deriv64_z(double *const Du, const double *const u, const double dz,
     }
 
     if (bflag & (1u << OCT_DIR_BACK)) {
-        for (int j = jb; j < je; j++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int i = ib; i < ie; i++) {
-                Du[IDX(i, j, kb)] =
-                    (-u[IDX(i, j, kb)] + 4.0 * u[IDX(i, j, kb + 1)] -
-                     6.0 * u[IDX(i, j, kb + 2)] + 4.0 * u[IDX(i, j, kb + 3)] -
-                     u[IDX(i, j, kb + 4)]) /
-                    smr4;
-
-                Du[IDX(i, j, kb + 1)] =
-                    (3.0 * u[IDX(i, j, jb)] - 11.0 * u[IDX(i, j, kb + 1)] +
-                     15.0 * u[IDX(i, j, kb + 2)] - 9.0 * u[IDX(i, j, kb + 3)] +
-                     2.0 * u[IDX(i, j, kb + 4)]) /
-                    smr3;
-
-                Du[IDX(i, j, kb + 2)] =
-                    (-3.0 * u[IDX(i, j, jb)] + 9.0 * u[IDX(i, j, kb + 1)] -
-                     8.0 * u[IDX(i, j, kb + 2)] + 3.0 * u[IDX(i, j, kb + 4)] -
-                     u[IDX(i, j, kb + 5)]) /
-                    smr2;
-
-                Du[IDX(i, j, kb + 3)] =
-                    (u[IDX(i, j, jb)] - u[IDX(i, j, kb + 1)] -
-                     6.0 * u[IDX(i, j, kb + 2)] + 15.0 * u[IDX(i, j, kb + 3)] -
-                     14.0 * u[IDX(i, j, kb + 4)] + 6.0 * u[IDX(i, j, kb + 5)] -
-                     u[IDX(i, j, kb + 6)]) /
-                    smr1;
-            }
-        }
+        for (int j = jb; j < je; j++)
+            for (int i = ib; i < ie; i++) ko6_face_rows(Du, u, IDX(i, j, kb), (long)nx * ny, dz);
     }
-
     if (bflag & (1u << OCT_DIR_FRONT)) {
-        for (int j = jb; j < je; j++) {
-#ifdef DERIV_ENABLE_AVX
-#ifdef __INTEL_COMPILER
-#pragma vector vectorlength(__DERIV_AVX_SIMD_LEN__) vecremainder
-#pragma ivdep
-#endif
-#endif
-            for (int i = ib; i < ie; i++) {
-                Du[IDX(i, j, ke - 4)] =
-                    (-u[IDX(i, j, ke - 7)] + 6.0 * u[IDX(i, j, ke - 6)] -
-                     14.0 * u[IDX(i, j, ke - 5)] + 15.0 * u[IDX(i, j, ke - 4)] -
-                     6.0 * u[IDX(i, j, ke - 3)] - u[IDX(i, j, ke - 2)] +
-                     u[IDX(i, j, ke - 1)]) /
-                    spr1;
-
-                Du[IDX(i, j, ke - 3)] =
-                    (-u[IDX(i, j, ke - 6)] + 3.0 * u[IDX(i, j, ke - 5)] -
-                     8.0 * u[IDX(i, j, ke - 3)] + 9.0 * u[IDX(i, j, ke - 2)] -
-                     3.0 * u[IDX(i, j, ke - 1)]) /
-                    spr2;
-
-                Du[IDX(i, j, ke - 2)] =
-                    (2.0 * u[IDX(i, j, ke - 5)] - 9.0 * u[IDX(i, j, ke - 4)] +
-                     15.0 * u[IDX(i, j, ke - 3)] - 11.0 * u[IDX(i, j, ke - 2)] +
-                     3.0 * u[IDX(i, j, ke - 1)]) /
-                    spr3;
-
-                Du[IDX(i, j, ke - 1)] =
-                    (-u[IDX(i, j, ke - 5)] + 4.0 * u[IDX(i, j, ke - 4)] -
-                     6.0 * u[IDX(i, j, ke - 3)] + 4.0 * u[IDX(i, j, ke - 2)] -
-                     u[IDX(i, j, ke - 1)]) /
-                    spr4;
-            }
-        }
+        for (int j = jb; j < je; j++)
+            for (int i = ib; i < ie; i++) ko6_face_rows(Du, u, IDX(i, j, ke - 1), -(long)nx * ny, dz);
     }
-
 #ifdef DEBUG_DERIVS_COMP
 #pragma message("DEBUG_DERIVS_COMP: ON")
     for (int k = kb; k < ke; k++) {
@@ -1215,10 +913,14 @@ void ko_deriv8_x(double *const Du, const double *const u, const double dx,
                  const unsigned int *sz, unsigned bflag) {
     static_assert(P >= 4 && P <= 5, "P must be between 4 and 5 (for now)!");
 
-    const double pref8 = -1.0 / (1024.0 * dx); // KO8 radius-5 interior
-    const double pref6 = -1.0 / (   64.0 * dx); // KO6 one layer
+    // sign convention (2026-08-29): every layer must return -u/h on the
+    // Nyquist mode like KO2/4/6 do; delta^10 gives -1024 u there, +delta^6
+    // gives -64 u and the one-sided 3-point second difference +4 u, hence
+    // the signs below (they were anti-dissipative before, gate: testKOSign)
+    const double pref8 = +1.0 / (1024.0 * dx); // KO8 radius-5 interior
+    const double pref6 = +1.0 / (   64.0 * dx); // KO6 one layer
     const double pref4 = -1.0 / (   16.0 * dx); // KO4 inner layer
-    const double inv_s2 = 1.0 / (4.0 * dx);     // KO2 outer layer (3-pt)
+    const double inv_s2 = -1.0 / (4.0 * dx);     // KO2 outer layer (3-pt)
 
     const int nx = sz[0];
     const int ny = sz[1];
@@ -1342,10 +1044,10 @@ void ko_deriv8_y(double *const Du, const double *const u, const double dy,
                  const unsigned int *sz, unsigned bflag) {
     static_assert(P >= 4 && P <= 5, "P must be 4 or 5!");
 
-    const double pref8 = -1.0 / (1024.0 * dy);
-    const double pref6 = -1.0 / (   64.0 * dy);
+    const double pref8 = +1.0 / (1024.0 * dy);
+    const double pref6 = +1.0 / (   64.0 * dy);
     const double pref4 = -1.0 / (   16.0 * dy);
-    const double inv_s2 = 1.0 / (4.0 * dy);
+    const double inv_s2 = -1.0 / (4.0 * dy);
 
     const int nx = sz[0], ny = sz[1], nz = sz[2];
 
@@ -1475,10 +1177,10 @@ void ko_deriv8_z(double *const Du, const double *const u, const double dz,
                  const unsigned int *sz, unsigned bflag) {
     static_assert(P >= 4 && P <= 5, "P must be 4 or 5!");
 
-    const double pref8 = -1.0 / (1024.0 * dz);
-    const double pref6 = -1.0 / (   64.0 * dz);
+    const double pref8 = +1.0 / (1024.0 * dz);
+    const double pref6 = +1.0 / (   64.0 * dz);
     const double pref4 = -1.0 / (   16.0 * dz);
-    const double inv_s2 = 1.0 / (4.0 * dz);
+    const double inv_s2 = -1.0 / (4.0 * dz);
 
     const int nx  = sz[0];
     const int ny  = sz[1];
