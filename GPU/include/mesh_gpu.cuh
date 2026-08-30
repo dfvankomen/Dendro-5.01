@@ -2432,6 +2432,30 @@ void MeshGPU::destroyVec(T* vec_ptr) {
     return;
 }
 
+// the zip/unzip kernels are templated on <element order p, pad width PW>, and
+// ot::Block always sets PW = p/2. dispatch on the mesh's real element order --
+// these launches used to hard-code <T,6,3>, which faulted on any other order.
+// order 8 would want (p+1)^2 = 81 threads, past the __launch_bounds__(64) these
+// kernels carry, so it is deliberately not here.
+#define DENDRO_GPU_ZIP_DISPATCH(porder, KERNEL, gb, tb, s, ...)          \
+    do {                                                                 \
+        switch (porder) {                                                \
+            case 2:                                                      \
+                KERNEL<T, 2, 1><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
+                break;                                                   \
+            case 4:                                                      \
+                KERNEL<T, 4, 2><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
+                break;                                                   \
+            case 6:                                                      \
+                KERNEL<T, 6, 3><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
+                break;                                                   \
+            default:                                                     \
+                std::cout << "[MeshGPU]: element order " << (porder)     \
+                          << " is not supported by " #KERNEL << std::endl; \
+                break;                                                   \
+        }                                                                \
+    } while (0)
+
 template <typename T, typename stream>
 void MeshGPU::unzip_dg(const ot::Mesh* const pMesh,
                        const MeshGPU* const dptr_mesh, const T* const dptr_in,
@@ -2449,7 +2473,8 @@ void MeshGPU::unzip_dg(const ot::Mesh* const pMesh,
     //__unzip_dg__3<T,6,3> <<<gb,tb,0,s>>> (dptr_mesh, dptr_in,dptr_out);
     //__block_internal_unzip_dg__2<T,6,3> <<<gb1,tb,0,s>>> (dptr_mesh,
     // dptr_in,dptr_out);
-    __unzip_dg__2<T, 6, 3><<<gb, tb, 0, s>>>(dptr_mesh, dptr_in, dptr_out);
+    DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __unzip_dg__2, gb, tb, s, dptr_mesh,
+                            dptr_in, dptr_out);
     //__unzip_dg__1<T,6,3> <<<gb,tb,0,s>>> (dptr_mesh, dptr_in,dptr_out);
     return;
 }
@@ -2465,11 +2490,12 @@ void MeshGPU::unzip_cg(const ot::Mesh* const pMesh,
     // dim3 gb  = dim3(m_unzip_grid[0],m_unzip_grid[1],dof);
     dim3 gb = dim3(m_unzip_grid[0], 1, dof);
     // dim3 gb1 = dim3(m_num_local_elements,1,dof);
-    dim3 tb = dim3(7, 7, 1);
+    dim3 tb = dim3(m_ele_order + 1, m_ele_order + 1, 1);
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
     //__unzip_cg__2<T,6,3> <<<gb,tb,0,s>>> (dptr_mesh, dptr_in,dptr_out);
-    __unzip_cg1__2<T, 6, 3><<<gb, tb, 0, s>>>(dptr_mesh, dptr_in, dptr_out);
+    DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __unzip_cg1__2, gb, tb, s, dptr_mesh,
+                            dptr_in, dptr_out);
 }
 
 template <typename T, typename stream>
@@ -2480,7 +2506,8 @@ void MeshGPU::zip_dg(const ot::Mesh* const pMesh,
     dim3 tb = dim3(8, 8, 1);
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
-    __zip_dg__<T, 6, 3><<<gb, tb, 0, s>>>(dptr_mesh, dptr_in, dptr_out);
+    DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __zip_dg__, gb, tb, s, dptr_mesh,
+                            dptr_in, dptr_out);
     // the __zip_dg_enforce_c0__ does not work. The hanging node remove
     // duplicates is complicated.
     //__zip_dg_enforce_c0__<T,6,3> <<<gb,tb,0,s>>> (dptr_mesh,dptr_in,dptr_out);
@@ -2495,7 +2522,8 @@ void MeshGPU::zip_cg(const ot::Mesh* const pMesh,
     dim3 tb = dim3(8, 8, 1);
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
-    __zip_cg__<T, 6, 3><<<gb, tb, 0, s>>>(dptr_mesh, dptr_in, dptr_out);
+    DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __zip_cg__, gb, tb, s, dptr_mesh,
+                            dptr_in, dptr_out);
     return;
 }
 
