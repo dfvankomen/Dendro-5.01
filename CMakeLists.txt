@@ -99,17 +99,6 @@ option(DENDRO_UNZIP_SCATTER_FAST
 option(DENDRO_UNZIP_OMP
        "Enable OpenMP block-parallel unzip path (reserved hook; implementation lives on a separate hybrid branch). Implies the unzip/zip speedups."
        OFF)
-# Route Ctx::unzip through Mesh::unzip_scatter_batch instead of Mesh::unzip.
-# Identical results; it only changes how the DG precompute scratch is sized.
-# Mesh::unzip_scatter allocates all_dg as (numTotalElements * dof * nPe) doubles
-# and std::vector value-initializes it -- a per-rank, DRAM-sized buffer that is
-# zero-filled on EVERY call and that the serial path never allocates at all
-# (it uses a dof*nPe element-local temporary). unzip_scatter_batch loops the
-# variables inside one parallel region and reuses a dof=1-sized all_dg, so the
-# scratch shrinks by dof x. Default OFF keeps the current path bit-for-bit.
-option(DENDRO_UNZIP_BATCH
-       "Use Mesh::unzip_scatter_batch in Ctx::unzip (dof x smaller DG scratch, one fork/join per batch; default OFF = unchanged)"
-       OFF)
 option(DENDRO_TENSOR_SIMD
        "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=7 for eO=6)"
        OFF)
@@ -117,8 +106,8 @@ option(DENDRO_TENSOR_SIMD
 # otherwise serial-per-rank -- so under DENDRO_HYBRID_OMP with T threads, T-1 sit
 # idle for the whole of createMesh/ReMesh (measured on production q12/16 nodes:
 # init 91 s at T=1 -> 241 s at T=4; it scales AGAINST T). A separate opt-in flag
-# rather than folding into DENDRO_HYBRID_OMP, mirroring DENDRO_UNZIP_BATCH: it
-# keeps a clean A/B and keeps the default path bit-for-bit unchanged.
+# rather than folding into DENDRO_HYBRID_OMP: it keeps a clean A/B and keeps the
+# default path bit-for-bit unchanged.
 # Scope is deliberately narrow -- see the notes in src/mesh.cpp. buildE2EMap is a
 # multi-round MPI pipeline with data-dependent scatters and is NOT a target.
 option(DENDRO_MESH_OMP
@@ -139,6 +128,39 @@ option(DENDRO_UNZIP_OVERLAP
 option(DENDRO_HYBRID_OMP
        "Enable the hybrid OpenMP/MPI path (OpenMP threading on top of MPI; default OFF = MPI-first)"
        OFF)
+
+# Route Ctx::unzip through Mesh::unzip_scatter_batch instead of Mesh::unzip.
+# Identical results; it only changes how the DG precompute scratch is sized.
+# Mesh::unzip_scatter allocates all_dg as (numTotalElements * dof * nPe) doubles
+# and std::vector value-initializes it -- a per-rank, DRAM-sized buffer that is
+# zero-filled on EVERY call and that the serial path never allocates at all
+# (it uses a dof*nPe element-local temporary). unzip_scatter_batch loops the
+# variables inside one parallel region and reuses a dof=1-sized all_dg, so the
+# scratch shrinks by dof x.
+#
+# Defaults ON under DENDRO_HYBRID_OMP, for the 2.0x unzip speedup: that path
+# forces DENDRO_UNZIP_OMP on, and the OMP unzip is the only one that allocates
+# all_dg at all, so it is the only configuration the batch path can help.
+#
+# NOT a memory fix, despite the size of the buffer. all_dg is nominally
+# 2.11 GiB/rank / 67.6 GiB/node on the production q12 grid at 128 ranks x 4
+# threads, but a flag-only A/B there moved the peak by 4.3 GiB/node in steady
+# state and 0.1 GiB/node across a remesh: std::vector frees it on every call, so
+# it returns to the OS and never coincides with the process peak, and it lives
+# inside a step rather than inside the remesh where memory actually runs out.
+#
+# Declared after DENDRO_HYBRID_OMP so the default can read it; option() still
+# honours an explicit -DDENDRO_UNZIP_BATCH=OFF on a fresh tree, which keeps the
+# A/B available. Not defaulted on with DENDRO_UNZIP_OVERLAP, which is mutually
+# exclusive with it (hard error below).
+if(DENDRO_HYBRID_OMP AND NOT DENDRO_UNZIP_OVERLAP)
+  set(_dendro_unzip_batch_default ON)
+else()
+  set(_dendro_unzip_batch_default OFF)
+endif()
+option(DENDRO_UNZIP_BATCH
+       "Use Mesh::unzip_scatter_batch in Ctx::unzip (dof x smaller DG scratch, one fork/join per batch; default ON under DENDRO_HYBRID_OMP, else OFF)"
+       ${_dendro_unzip_batch_default})
 
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")

@@ -17,6 +17,7 @@
 #include "dendro.h"
 #include "dvec.h"
 #include "mathUtils.h"
+#include "mem_probe.h"
 #include "mesh.h"
 #include "ts.h"
 #ifdef __CUDACC__
@@ -1007,7 +1008,10 @@ int Ctx<DerivedCtx, T, I>::remesh_and_gridtransfer(unsigned int grain_sz,
                                                    unsigned int sf_k) {
     dendro::logger::debug(dendro::logger::Scope{"CTX"},
                           "Now doing full remesh and grid transfer!");
+    dendro::mem_probe("rgt_enter", (int)m_uiTinfo._m_uiStep);
     ot::Mesh* newMesh      = remesh(grain_sz, ld_tol, sf_k);
+    // both meshes are live from here to the swap below.
+    dendro::mem_probe("rgt_after_remesh", (int)m_uiTinfo._m_uiStep);
 
     DendroIntL oldElements = m_uiMesh->getNumLocalMeshElements();
     DendroIntL newElements = newMesh->getNumLocalMeshElements();
@@ -1025,9 +1029,12 @@ int Ctx<DerivedCtx, T, I>::remesh_and_gridtransfer(unsigned int grain_sz,
         m_uiTinfo._m_uiStep, m_uiTinfo._m_uiT, oldElements_g, newElements_g);
 
     this->grid_transfer(newMesh);
+    // old + new state vectors coexist across grid_transfer; this is its peak.
+    dendro::mem_probe("rgt_after_transfer", (int)m_uiTinfo._m_uiStep);
 
     std::swap(newMesh, m_uiMesh);
     delete newMesh;
+    dendro::mem_probe("rgt_after_free_old", (int)m_uiTinfo._m_uiStep);
 
 #ifdef __CUDACC__
     device::MeshGPU*& dptr_mesh = this->get_meshgpu_device_ptr();

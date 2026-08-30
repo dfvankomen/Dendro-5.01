@@ -261,6 +261,26 @@ class ETS {
 
    public:
     /**
+     * @brief Release the RK stage vectors ahead of a remesh.
+     *
+     * The stage vectors and the two temporaries are pure scratch: they carry
+     * nothing between steps (only the Ctx's evolution vector does, and that is
+     * what grid_transfer moves). They are normally freed inside
+     * sync_with_mesh(), which runs AFTER remesh_and_gridtransfer -- so
+     * m_uiNumStages + 2 vectors of the OLD grid stay resident through the whole
+     * window where the old mesh, the new mesh and the intergrid-transfer
+     * buffers coexist. Calling this first takes them out of that peak.
+     *
+     * Marks the ETS unsynced so the following sync_with_mesh() reallocates on
+     * the new mesh. Idempotent, and a no-op if nothing is allocated. Do NOT
+     * call it between stages of a step.
+     */
+    int release_internal_vars() {
+        m_uiAppCtx->set_ets_synced(false);
+        return deallocate_internal_vars();
+    }
+
+    /**
      * @brief Construct a new ETS object
      * @param pMesh : underlying mesh data structure.
      */
