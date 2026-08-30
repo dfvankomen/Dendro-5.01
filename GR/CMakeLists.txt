@@ -5,20 +5,16 @@
 #   - Profile/timer declarations
 #   - TwoPunctures initial data solver
 
-# header-only pieces (bh.h) don't need a source file,
-# but grDataUtils and profile params do
-set(DENDRO_GR_SRC
-    # src/grDataUtils.cpp
-    # src/grProfileParams.cpp
-)
-
 set(DENDRO_GR_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-# for now this is header-only + TwoPunctures
-# uncomment the add_library when we have .cpp sources
-# add_library(dendro_gr STATIC ${DENDRO_GR_SRC})
-# target_include_directories(dendro_gr PUBLIC ${DENDRO_GR_INCLUDE_DIR})
-# target_link_libraries(dendro_gr PUBLIC dendro5)
+# INTERFACE rather than STATIC: everything here is header-only. TwoPunctures
+# has .cpp files but they are deliberately compiled into the *solver* (see
+# below), so this target owns no objects of its own. a STATIC library with an
+# empty source list is a hard CMake error, which is why this used to sit
+# commented out -- consumers reached into GR/include by path instead.
+add_library(dendro_gr INTERFACE)
+target_include_directories(dendro_gr INTERFACE ${DENDRO_GR_INCLUDE_DIR})
+target_link_libraries(dendro_gr INTERFACE dendro5)
 
 # TwoPunctures source files -- compiled as part of the solver, not as
 # a separate library, because they call back into solver-specific code

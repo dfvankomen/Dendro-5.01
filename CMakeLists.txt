@@ -396,6 +396,12 @@ target_include_directories(dendro_config INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include
     ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc
 )
+# NOTE: GR/include is deliberately NOT added here. Six of its headers share a
+# name with a solver-local copy (adm2bssn.h, gwExtract.h, sph.h, swsh.h,
+# TPUtilities.h, TwoPunctures.h) while the solvers migrate onto the shared
+# module, so putting it on every dendro5 consumer would decide those by include
+# order. Link the `dendro_gr` target instead -- it carries GR/include as a
+# usage requirement, so reaching for GR headers is opt-in and explicit.
 
 target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m)
 

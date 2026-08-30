@@ -1,5 +1,5 @@
 /**
- * @file gwExtract.h
+ * @file gw_extract.h
  * @brief Gravitational wave extraction via Psi4 decomposition.
  *
  * @author Milinda Fernando (original), refactored for generic use.
@@ -35,6 +35,19 @@ namespace dendro_gr {
 #include "nrswsh.h"
 
 /**
+ * @brief Index of mode (l, m) in the shipped LEBEDEV_SWSH table.
+ *
+ * The table stores l = 2 .. lmax contiguously with (2l+1) entries each, so the
+ * modes preceding l number sum_{l'=2}^{l-1}(2l'+1) = l*l - 4.
+ *
+ * @param l polar mode, >= 2
+ * @param m_shifted azimuthal index in [0, 2l], i.e. m + l
+ */
+inline unsigned int swshTableIndex(unsigned int l, unsigned int m_shifted) {
+    return (l * l - 4u) + m_shifted;
+}
+
+/**
  * @brief Extract far-field Psi4 at extraction spheres and decompose into
  *        spin-weighted spherical harmonic modes.
  *
@@ -63,6 +76,10 @@ void extractFarFieldPsi4(const ot::Mesh* mesh, const T** cVar,
         totalModes += 2 * config.l_modes[l] + 1;
 
     const unsigned int TOTAL_MODES = totalModes;
+
+    // nothing configured to extract -- bail before lmOffset[0] below, which
+    // would index an empty vector
+    if (!numRadii || !numLModes) return;
 
     // allocate coefficient arrays
     DendroComplex* swsh_coeff = new DendroComplex[numRadii * TOTAL_MODES];
@@ -143,8 +160,15 @@ void extractFarFieldPsi4(const ot::Mesh* mesh, const T** cVar,
                     for (unsigned int index = 0; index < validIndex.size(); index++) {
                         DendroComplex psi4(psi4_real[validIndex[index]],
                                            psi4_imag[validIndex[index]]);
+                        // lmOffset indexes the *packed output*; the table is
+                        // indexed by the absolute (l,m) slot. these agree only
+                        // when l_modes runs 2,3,4,... -- for any other list the
+                        // old shared-index form read the wrong harmonic.
                         swsh_coeff[k * TOTAL_MODES + lmOffset[l] + m] +=
-                            psi4 * std::conj(LEBEDEV_SWSH[lmOffset[l] + m][validIndex[index]]) *
+                            psi4 *
+                            std::conj(
+                                LEBEDEV_SWSH[swshTableIndex(config.l_modes[l], m)]
+                                            [validIndex[index]]) *
                             LEBEDEV_W[validIndex[index]];
                     }
                     swsh_coeff[k * TOTAL_MODES + lmOffset[l] + m] *= (4 * M_PI);

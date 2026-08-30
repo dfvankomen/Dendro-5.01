@@ -19,10 +19,13 @@ struct GWExtractionConfig {
     unsigned int psi4_real_idx;
     unsigned int psi4_imag_idx;
 
-    // extraction radii (in code units)
-    std::vector<unsigned int> radii;
+    // extraction radii (in code units). double, not unsigned: par files parse
+    // these with as_floating() and fractional radii are legal.
+    std::vector<double> radii;
 
-    // l-modes to extract (m ranges from -l to +l for each)
+    // l-modes to extract (m ranges from -l to +l for each). the SWSH table
+    // ships l = 2 .. lmax, so every entry must be >= 2 and <= that lmax, but
+    // the list itself need not be contiguous.
     std::vector<unsigned int> l_modes;
 
     // output file prefix
