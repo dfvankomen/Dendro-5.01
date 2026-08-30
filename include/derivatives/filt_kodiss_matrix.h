@@ -196,6 +196,29 @@ class MatrixKODiss : public Filters {
             }
     }
 
+    // rhs += coeff * (D_x + D_y + D_z) u with coeff folded into the scaled
+    // operators: three beta = 1 GEMMs into rhs, no workspace and no add pass
+    bool do_accumulate(double *const rhs, const double *const u,
+                       const double coeff, const double dx, const double dy,
+                       const double dz, const unsigned int *sz,
+                       const unsigned int bflag) override {
+        const MatmulPlan &p = plan_for(sz);
+        if (!p.kx_last_acc || !p.ky_last_acc || !p.kz_acc) return false;
+        const double *Dx = sop_[0].get(
+            get_deriv_mat_by_bflag_x(storage(0, sz[0]), bflag)->data(),
+            coeff / dx, sz[0]);
+        const double *Dy = sop_[1].get(
+            get_deriv_mat_by_bflag_y(storage(1, sz[1]), bflag)->data(),
+            coeff / dy, sz[1]);
+        const double *Dz = sop_[2].get(
+            get_deriv_mat_by_bflag_z(storage(2, sz[2]), bflag)->data(),
+            coeff / dz, sz[2]);
+        bool ok = matmul_x_apply(p.kx_last_acc, Dx, rhs, u, sz, p_pw, true);
+        ok = matmul_y_apply(p.ky_last_acc, Dy, rhs, u, sz, p_pw, true) && ok;
+        ok = matmul_z_apply(p.kz_acc, Dz, rhs, u, sz, p_pw) && ok;
+        return ok;
+    }
+
     std::string toString() const override { return name_; }
     bool do_filter_before() const override { return stencil_->do_filter_before(); }
     void set_maximum_block_size(size_t block_size) override {

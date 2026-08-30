@@ -501,8 +501,8 @@ struct MatmulPlan {
     KernelType kx_last, kx_int, ky_last, ky_int, kz;
     // fused mixed derivatives: axis 1 into an L1 intermediate, axis 2 from it
     KernelType kxy1, kxy2, kxz1, kxz2, kyz1, kyz2;
-    // beta = 1 terminal y/z applies (summed-axis operators such as matrix KO)
-    KernelType ky_last_acc, kz_acc;
+    // beta = 1 terminal applies (summed-axis operators such as matrix KO)
+    KernelType kx_last_acc, ky_last_acc, kz_acc;
     bool valid = false;
 
     bool matches(const unsigned int *sz, unsigned int pw_) const {

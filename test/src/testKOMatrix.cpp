@@ -94,6 +94,27 @@ int main() {
                 worst = std::max(worst, rel);
                 if (rel > REL_TOL) { bad++; std::printf("  MISMATCH %sMatrix n=%u bflag=%u cako rel=%g\n", order.c_str(), n, bf, rel); }
                 if (mdc != 0.0) { bad++; std::printf("  MISMATCH %sMatrix n=%u bflag=%u clone differs by %g\n", order.c_str(), n, bf, mdc); }
+                // uniform coefficient: ko_accumulate (three beta = 1 GEMMs into rhs)
+                // against the stencil's uniform-sigma filter and the matrix filter_cako
+                std::vector<double> ru(tot, 0.1), ra(base), rsu(base), rmu(base);
+                ds->filter(u.data(), rsu.data(), wx.data(), wy.data(), wz.data(), dx, dy, dz, 0.1, sz, bf);
+                dm->filter_cako(u.data(), rmu.data(), wx.data(), wy.data(), wz.data(), dx, dy, dz, ru.data(), sz, bf);
+                const bool did = dm->ko_accumulate(ra.data(), u.data(), 0.1, dx, dy, dz, sz, bf);
+                double mda = 0.0, mdm = 0.0, sca = 0.0;
+                for (unsigned int k = pw; k < n - pw; k++)
+                    for (unsigned int j = pw; j < n - pw; j++)
+                        for (unsigned int i = pw; i < n - pw; i++) {
+                            const size_t p = i + n * (j + n * k);
+                            mda = std::max(mda, std::fabs(ra[p] - rsu[p]));
+                            mdm = std::max(mdm, std::fabs(ra[p] - rmu[p]));
+                            sca = std::max(sca, std::fabs(rsu[p] - base[p]));
+                        }
+                checked += 2;
+                const double rela = sca > 0 ? mda / sca : mda, relm = sca > 0 ? mdm / sca : mdm;
+                worst = std::max(worst, rela);
+                if (!did) { bad++; std::printf("  MISMATCH %sMatrix n=%u bflag=%u ko_accumulate declined\n", order.c_str(), n, bf); }
+                if (rela > REL_TOL) { bad++; std::printf("  MISMATCH %sMatrix n=%u bflag=%u accumulate vs stencil rel=%g\n", order.c_str(), n, bf, rela); }
+                if (relm > REL_TOL) { bad++; std::printf("  MISMATCH %sMatrix n=%u bflag=%u accumulate vs matrix rel=%g\n", order.c_str(), n, bf, relm); }
             }
             const double t_s = time_ns([&]() { ds->filter_cako(u.data(), rs.data(), wx.data(), wy.data(), wz.data(), dx, dy, dz, coeff.data(), sz, 0); }, 3000);
             const double t_m = time_ns([&]() { dm->filter_cako(u.data(), rm.data(), wx.data(), wy.data(), wz.data(), dx, dy, dz, coeff.data(), sz, 0); }, 3000);

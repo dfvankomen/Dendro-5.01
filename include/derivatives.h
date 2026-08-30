@@ -1008,6 +1008,14 @@ class DendroDerivatives {
                                       bflag);
     }
 
+    /// rhs += coeff * KO(u) on the active region in one pass (matrix-form KO
+    /// only); false means nothing was done and filter_cako is the path.
+    bool ko_accumulate(double *rhs, const double *u, double coeff, double dx,
+                       double dy, double dz, const unsigned int *sz,
+                       unsigned int bflag) {
+        return _filter->do_accumulate(rhs, u, coeff, dx, dy, dz, sz, bflag);
+    }
+
     bool inline do_filter_before() { return _filter->do_filter_before(); }
 
     void set_maximum_block_size(size_t block_size) {

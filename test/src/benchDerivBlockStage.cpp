@@ -150,6 +150,23 @@ int main(int argc, char **argv) {
                 dm.filter_cako(wk.u[0].data(), out.data(), wx.data(), wy.data(), wz.data(), dx, dx, dx, coeff.data(), sz, bf);
             }, iters);
             std::printf("  KO4Matrix filter_cako      : %8.2f us/call  (x%d = %.1f us/block, %.2fx)\n", t_km, NV, NV * t_km, t_ko / t_km);
+            // accumulate straight into the rhs with the coefficient folded in
+            std::vector<double> rhs_a(tot, 1.0), rhs_b(tot, 1.0);
+            dm.filter_cako(wk.u[0].data(), rhs_a.data(), wx.data(), wy.data(), wz.data(), dx, dx, dx, coeff.data(), sz, bf);
+            const bool did = dm.ko_accumulate(rhs_b.data(), wk.u[0].data(), 0.1, dx, dx, dx, sz, bf);
+            double md = 0.0, sc = 0.0;
+            // active region only: like every active-region kernel it also writes the M-padding rows
+            for (unsigned int k = pw; k < n - pw; k++)
+                for (unsigned int j = pw; j < n - pw; j++)
+                    for (unsigned int i = pw; i < n - pw; i++) {
+                        const size_t a = i + n * (j + n * k);
+                        md = std::max(md, std::fabs(rhs_a[a] - rhs_b[a])); sc = std::max(sc, std::fabs(rhs_a[a] - 1.0));
+                    }
+            const double t_ka = time_us([&]() {
+                dm.ko_accumulate(rhs_b.data(), wk.u[0].data(), 0.1, dx, dx, dx, sz, bf);
+            }, iters);
+            std::printf("  KO4Matrix ko_accumulate    : %8.2f us/call  (x%d = %.1f us/block, %.2fx vs stencil, %.2fx vs matrix)  %s rel diff %.1e\n",
+                        t_ka, NV, NV * t_ka, t_ko / t_ka, t_km / t_ka, did ? "done" : "NOT DONE", sc > 0 ? md / sc : md);
         } catch (const std::exception &e) {
             std::printf("  KO4Matrix: unavailable (%s)\n", e.what());
         }

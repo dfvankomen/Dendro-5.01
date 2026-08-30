@@ -344,6 +344,8 @@ MatmulPlan build_matmul_plan(const unsigned int *sz, unsigned int pw) {
                                         ny - 2 * ipw, nx, nx, nx, nx);
     p.kx_int  = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_NONE, ma, ny * nz,
                                         nx, nx, nx, nx);
+    p.kx_last_acc = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_NONE, ma,
+                                            ny - 2 * ipw, nx, nx, nx, nx, true);
     // y: U(ma, ny) * D^T per z-slice, LDA = LDC = nx, LDB = ny
     p.ky_last = get_or_create_kernel_ld(LIBXSMM_GEMM_FLAG_TRANS_B, ma,
                                         ny - 2 * ipw, ny, nx, ny, nx);

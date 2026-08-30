@@ -60,6 +60,14 @@ class Filters {
 
     virtual bool do_filter_before() const                  = 0;
 
+    // rhs += coeff * filter(u) on the active region in one pass, no output
+    // buffer; false if the engine cannot (caller uses do_full_filter)
+    virtual bool do_accumulate(double *const, const double *const, const double,
+                               const double, const double, const double,
+                               const unsigned int *, const unsigned int) {
+        return false;
+    }
+
     virtual void set_maximum_block_size(size_t block_size) = 0;
 
     virtual FilterFamily get_filter_family() const         = 0;
