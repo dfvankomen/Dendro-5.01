@@ -19,7 +19,7 @@ using namespace dendroderivs;
 
 int main() {
     unsigned long bad = 0, checked = 0;
-    for (const std::string order : {"KO2", "KO4", "KO6", "KO8", "KO2Matrix", "KO4Matrix", "KO6Matrix", "KO8Matrix"}) {
+    for (const std::string order : {"KO2", "KO4", "KO6", "KO8", "KO2Matrix", "KO4Matrix", "KO6Matrix", "KO8Matrix", "KO2Simd", "KO4Simd", "KO6Simd", "KO8Simd"}) {
         for (unsigned int eo : {6u, 8u, 10u}) {
             const unsigned int n = 2 * eo + 1, pw = eo / 2;
             const size_t tot = (size_t)n * n * n;
