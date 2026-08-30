@@ -28,6 +28,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
@@ -288,8 +289,12 @@ int main(int argc, char **argv) {
             for (const auto &p : schemes) {
                 PathTiming mat = run_path(p.base_name,   order, "matrix",
                                           eleorder, u, truth);
-                PathTiming bnd = run_path(p.banded_name, order, "banded",
-                                          eleorder, u, truth);
+                // BVX_SKIP_BANDED=1: matrix paths only (the banded solve is
+                // 240-1000x slower and dominates the runtime)
+                static const bool skip_banded = std::getenv("BVX_SKIP_BANDED") != nullptr;
+                PathTiming bnd = skip_banded ? PathTiming{}
+                                             : run_path(p.banded_name, order, "banded",
+                                                        eleorder, u, truth);
                 PathTiming lst = run_path(p.base_name,   order, "matrix_last",
                                           eleorder, u, truth);
                 print_summary_pair(mat, bnd);
