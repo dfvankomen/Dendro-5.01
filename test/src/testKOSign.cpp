@@ -6,6 +6,7 @@
 // a seeded mode at exactly +0.3/step in EM4 (2026-08-29). Also reports, for
 // information, whether an in-matrix filter changes the JTT6 operator at all.
 // Exit code 0 = pass.
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -65,11 +66,81 @@ int main() {
             std::printf("  %-10s n=%2u  out/u on Nyquist = %+.6f  expected %+.6f  -> %s\n", order.c_str(), n, out[(pw) + n * (pw + n * pw)] / u[(pw) + n * (pw + n * pw)], expect, ok ? "ok" : "WRONG SIGN / RATE");
         }
     }
+    // KIMF: gate on the energy form + spectrum and report the transfer
+    // (its Nyquist rate is 1 - G(pi), not the KO normalization)
+    for (unsigned int eo : {6u, 10u}) {
+        const unsigned int n = 2 * eo + 1, pw = eo / 2;
+        const size_t tot = (size_t)n * n * n;
+        const unsigned int sz[3] = {n, n, n};
+        std::unique_ptr<DendroDerivatives> d;
+        try {
+            d = std::make_unique<DendroDerivatives>("E6", "E6", eo, std::vector<double>(), std::vector<double>(), 0u, 0u, "none", "none", std::vector<double>(), std::vector<double>(), "KIMF");
+        } catch (const std::exception &e) {
+            std::printf("  [skip] KIMF at eleorder %u: %s\n", eo, e.what()); continue;
+        }
+        d->set_maximum_block_size(tot);
+        std::vector<double> u(tot), out(tot), wx(tot), wy(tot), wz(tot);
+        const double dx = 1.0;
+        auto response = [&](int period) {  // out/u with coeff 1, dx=dy=dz=1
+            for (unsigned int k = 0; k < n; k++)
+                for (unsigned int j = 0; j < n; j++)
+                    for (unsigned int i = 0; i < n; i++)
+                        u[i + n * (j + (size_t)n * k)] = std::cos(M_PI * 2.0 * (double)(i + j + k) / period);
+            std::fill(out.begin(), out.end(), 0.0);
+            d->filter(u.data(), out.data(), wx.data(), wy.data(), wz.data(), dx, dx, dx, 1.0, sz, 0);
+            const size_t c = (n / 2) + n * ((n / 2) + (size_t)n * (n / 2));
+            return out[c] / u[c];
+        };
+        const double rN = response(2), r4 = response(4);
+        // energy gate <u, Du> <= 0: R^-1 spreads the boundary rows, so an NSD
+        // operator may still respond positively at single points -- pointwise
+        // sign is the wrong test for an implicit filter
+        unsigned long wrong = 0; double worst_pos = 0.0; unsigned int wpi = 0; bool wpb = false;
+        for (unsigned int bfsel = 0; bfsel < 2; bfsel++) {
+            const unsigned int bf = bfsel ? ((1u << OCT_DIR_LEFT) | (1u << OCT_DIR_RIGHT) | (1u << OCT_DIR_DOWN) | (1u << OCT_DIR_UP) | (1u << OCT_DIR_BACK) | (1u << OCT_DIR_FRONT)) : 0u;
+            for (unsigned int k = 0; k < n; k++)
+                for (unsigned int j = 0; j < n; j++)
+                    for (unsigned int i = 0; i < n; i++)
+                        u[i + n * (j + (size_t)n * k)] = ((i + j + k) & 1) ? -1.0 : 1.0;
+            std::fill(out.begin(), out.end(), 0.0);
+            d->filter(u.data(), out.data(), wx.data(), wy.data(), wz.data(), dx, dx, dx, 1.0, sz, bf);
+            double energy = 0.0;
+            for (unsigned int k = pw; k < n - pw; k++)
+                for (unsigned int j = pw; j < n - pw; j++)
+                    for (unsigned int i = pw; i < n - pw; i++) {
+                        const size_t p = i + n * (j + (size_t)n * k);
+                        energy += u[p] * out[p];
+                        const double r = out[p] / u[p];
+                        if (r > worst_pos) { worst_pos = r; wpi = i; wpb = bfsel; }
+                    }
+            checked++;
+            if (energy > 0.0) { wrong++; bad++; std::printf("  KIMF n=%u bflag=%s: <u, Du> = %+.3e > 0 on the Nyquist mode\n", n, bfsel ? "ALL" : "0", energy); }
+        }
+        if (worst_pos > 0.0)
+            std::printf("  KIMF n=%2u  info: largest positive pointwise response %+.3e at i=%u (%s block) -- NSD operator, see spectrum\n",
+                        n, worst_pos, wpi, wpb ? "all-faces" : "interior");
+        std::printf("  KIMF n=%2u  response per axis (coeff 1, h 1): Nyquist %+.4f (KO: -1.0000)  4dx %+.6f (KO4: -0.1250)  ratio %.0fx gentler\n",
+                    n, rN / 3.0, r4 / 3.0, (0.125) / std::max(1e-12, std::fabs(r4 / 3.0)));
+        {
+            // speed: must match matrix KO (same three GEMMs)
+            auto dm = std::make_unique<DendroDerivatives>("E6", "E6", eo, std::vector<double>(), std::vector<double>(), 0u, 0u, "none", "none", std::vector<double>(), std::vector<double>(), "KO4Matrix");
+            dm->set_maximum_block_size(tot);
+            std::vector<double> rhs(tot, 0.0);
+            auto tns = [&](DendroDerivatives &dd) {
+                for (int i = 0; i < 100; i++) dd.ko_accumulate(rhs.data(), u.data(), 0.4, 0.1, 0.1, 0.1, sz, 0);
+                auto t0 = std::chrono::steady_clock::now();
+                for (int i = 0; i < 2000; i++) dd.ko_accumulate(rhs.data(), u.data(), 0.4, 0.1, 0.1, 0.1, sz, 0);
+                return std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t0).count() / 2000;
+            };
+            std::printf("  KIMF n=%2u  ko_accumulate: %6.0f ns  (KO4Matrix: %6.0f ns)\n", n, tns(*d), tns(*dm));
+        }
+    }
+
     // spectral gate: with both faces of an axis physical, the 1-D operator on
     // the active points is square (no padding is read); probe it column by
     // column with unit vectors constant along the other axes (their stencils
     // vanish exactly) and require every eigenvalue to have Re <= 0
-    for (const std::string order : {"KO2", "KO4", "KO6", "KO8"}) {
+    for (const std::string order : {"KO2", "KO4", "KO6", "KO8", "KIMF"}) {
         for (unsigned int eo : {6u, 8u, 10u, 12u, 16u}) {
             const unsigned int n = 2 * eo + 1, pw = eo / 2, na = n - 2 * pw;
             const size_t tot = (size_t)n * n * n;

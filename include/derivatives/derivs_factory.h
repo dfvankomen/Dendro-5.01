@@ -11,6 +11,7 @@
 #include "derivatives/filt_kodiss_explicit.h"
 #include "derivatives/filt_kodiss_matrix.h"
 #include "derivatives/filt_kodiss_simd.h"
+#include "derivatives/filt_pade_matrix.h"
 #include "derivatives/impl_boris.h"
 #include "derivatives/impl_bradylivescu.h"
 #include "derivatives/impl_byuderivs.h"
@@ -695,6 +696,12 @@ class FilterFactory {
         } else if (name == "KO8Simd") {
             return std::make_unique<SimdKODiss<8>>(
                 args..., std::make_unique<ExplicitKODissO8>(args...));
+        }
+        // compact Pade filter as a dissipation term: 8th-order transfer with
+        // a 7-point RHS (fits pw = 3); strength = the per-call coeff
+        else if (name == "KIMF") {
+            return std::make_unique<MatrixPadeFilter>(
+                args..., "KIM", std::vector<double>{1.0, 0.88, 0.25}, "KIMF");
         }
         return nullptr;
     }
