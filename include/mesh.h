@@ -236,6 +236,11 @@ class Mesh {
     /** Element ot Node mapping data for continous Galerkin methods. Array size:
      * [m_uiAllNodes.size()*m_uiNpE];*/
     std::vector<unsigned int> m_uiE2NMapping_CG;
+
+    /** zip() plan: (unzip, CG) index of every locally owned node. */
+    std::vector<DendroIntL> m_uiZipPlanUzIdx;
+    std::vector<unsigned int> m_uiZipPlanCgIdx;
+    bool m_uiZipPlanBuilt = false;
     /** Element to Node mapping with DG indexing after removing duplicates. This
      * is used for debugging. */
     std::vector<unsigned int> m_uiE2NMapping_DG;
@@ -696,6 +701,8 @@ class Mesh {
      * */
 
     void buildE2NMap();
+
+    void buildZipPlan();
 
     /**
      * @brief: Builds the Element to nodal mapping for DG computations.
@@ -2249,6 +2256,10 @@ class Mesh {
      * */
     template <typename T>
     void zip(const T *unzippedVec, T *zippedVec);
+
+    /**@brief reference zip for testZipExact; not used by the solver. */
+    template <typename T>
+    void zip_ref(const T *unzippedVec, T *zippedVec);
 
     /**
      * @brief perform block wise zip operation.

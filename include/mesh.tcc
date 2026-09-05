@@ -4802,6 +4802,80 @@ template <typename T>
 void Mesh::zip(const T* unzippedVec, T* zippedVec) {
     if (!m_uiIsActive) return;
 
+#if defined(DENDRO_ZIP_PLAN)
+    if (!m_uiZipPlanBuilt) buildZipPlan();
+    const size_t np                = m_uiZipPlanUzIdx.size();
+    const DendroIntL* const pu     = m_uiZipPlanUzIdx.data();
+    const unsigned int* const pc   = m_uiZipPlanCgIdx.data();
+#if defined(DENDRO_UNZIP_OMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for (size_t n = 0; n < np; n++) zippedVec[pc[n]] = unzippedVec[pu[n]];
+#else
+    const ot::TreeNode* pNodes       = m_uiAllElements.data();
+    const ot::Block* blkList         = m_uiLocalBlockList.data();
+    const size_t n_blocks            = m_uiLocalBlockList.size();
+    const unsigned int eO            = m_uiElementOrder;
+    const unsigned int npE           = m_uiNpE;
+    const unsigned int eOp1          = eO + 1;
+    const unsigned int eOp1Sq        = eOp1 * eOp1;
+    const unsigned int* const e2n_dg = m_uiE2NMapping_DG.data();
+    const unsigned int* const e2n_cg = m_uiE2NMapping_CG.data();
+
+#if defined(DENDRO_UNZIP_OMP)
+#pragma omp parallel for schedule(static)
+#endif
+    for (size_t blk = 0; blk < n_blocks; blk++) {
+        const ot::TreeNode blkNode   = blkList[blk].getBlockNode();
+        const unsigned int regLev    = blkList[blk].getRegularGridLev();
+        const unsigned int lx        = blkList[blk].getAllocationSzX();
+        const unsigned int ly        = blkList[blk].getAllocationSzY();
+        const DendroIntL offset      = blkList[blk].getOffset();
+        const unsigned int paddWidth = blkList[blk].get1DPadWidth();
+        const unsigned int lxly      = lx * ly;
+        const unsigned int shift     = m_uiMaxDepth - regLev;
+
+        for (unsigned int elem = blkList[blk].getLocalElementBegin();
+             elem < blkList[blk].getLocalElementEnd(); elem++) {
+            const unsigned int ei =
+                (pNodes[elem].getX() - blkNode.getX()) >> shift;
+            const unsigned int ej =
+                (pNodes[elem].getY() - blkNode.getY()) >> shift;
+            const unsigned int ek =
+                (pNodes[elem].getZ() - blkNode.getZ()) >> shift;
+            assert(pNodes[elem].getLevel() == regLev);
+
+            // dg/npE == elem  <=>  (dg - elem*npE) < npE as unsigned
+            const unsigned int e_base      = elem * npE;
+            const unsigned int* const dg_e = e2n_dg + e_base;
+            const unsigned int* const cg_e = e2n_cg + e_base;
+            const DendroIntL uz_e_base =
+                offset + (DendroIntL)(ek * eO + paddWidth) * lxly +
+                (ej * eO + paddWidth) * lx + (ei * eO + paddWidth);
+
+            for (unsigned int k = 0; k < eOp1; k++) {
+                const unsigned int nk = k * eOp1Sq;
+                const DendroIntL uk   = uz_e_base + (DendroIntL)k * lxly;
+                for (unsigned int j = 0; j < eOp1; j++) {
+                    const unsigned int nkj = nk + j * eOp1;
+                    const DendroIntL ukj   = uk + j * lx;
+                    for (unsigned int i = 0; i < eOp1; i++) {
+                        const unsigned int n = nkj + i;
+                        if ((unsigned int)(dg_e[n] - e_base) < npE)
+                            zippedVec[cg_e[n]] = unzippedVec[ukj + i];
+                    }
+                }
+            }
+        }
+    }
+#endif
+}
+
+// Pre-optimization zip, kept as the reference for testZipExact.
+template <typename T>
+void Mesh::zip_ref(const T* unzippedVec, T* zippedVec) {
+    if (!m_uiIsActive) return;
+
     const ot::TreeNode* pNodes = m_uiAllElements.data();
     const ot::Block* blkList   = m_uiLocalBlockList.data();
     const size_t n_blocks      = m_uiLocalBlockList.size();
