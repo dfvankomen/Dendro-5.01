@@ -4749,6 +4749,84 @@ void Mesh::buildE2NMap() {
     // if(!m_uiActiveRank) std::cout<<"E2N Mapping ended"<<std::endl;
 }
 
+void Mesh::buildZipPlan() {
+    if (m_uiZipPlanBuilt) return;
+    m_uiZipPlanBuilt = true;
+    m_uiZipPlanUzIdx.clear();
+    m_uiZipPlanCgIdx.clear();
+    if (!m_uiIsActive) return;
+
+    const ot::TreeNode* pNodes = m_uiAllElements.data();
+    const ot::Block* blkList   = m_uiLocalBlockList.data();
+    const size_t n_blocks      = m_uiLocalBlockList.size();
+    const unsigned int eO      = m_uiElementOrder;
+    const unsigned int npE     = m_uiNpE;
+    const unsigned int eOp1    = eO + 1;
+    const unsigned int eOp1Sq  = eOp1 * eOp1;
+    const unsigned int* const e2n_dg = m_uiE2NMapping_DG.data();
+    const unsigned int* const e2n_cg = m_uiE2NMapping_CG.data();
+
+    // Upper bound: every node of every local block element. ~60-65% actually
+    // pass the ownership filter, so reserve the bound and shrink after.
+    size_t n_pts = 0;
+    for (size_t blk = 0; blk < n_blocks; blk++)
+        n_pts += (size_t)(blkList[blk].getLocalElementEnd() -
+                          blkList[blk].getLocalElementBegin());
+    n_pts *= (size_t)npE;
+    m_uiZipPlanUzIdx.reserve(n_pts);
+    m_uiZipPlanCgIdx.reserve(n_pts);
+
+    // Same traversal order as zip()'s loop nest. Order is not load-bearing
+    // for correctness (each CG node is written exactly once, so the pair list
+    // is a permutation-invariant set of disjoint writes), but keeping it
+    // identical makes the plan trivially comparable against the loop version.
+    for (size_t blk = 0; blk < n_blocks; blk++) {
+        const ot::TreeNode blkNode   = blkList[blk].getBlockNode();
+        const unsigned int regLev    = blkList[blk].getRegularGridLev();
+        const unsigned int lx        = blkList[blk].getAllocationSzX();
+        const unsigned int ly        = blkList[blk].getAllocationSzY();
+        const unsigned int offset    = blkList[blk].getOffset();
+        const unsigned int paddWidth = blkList[blk].get1DPadWidth();
+        const unsigned int lxly      = lx * ly;
+        const unsigned int shift     = m_uiMaxDepth - regLev;
+
+        for (unsigned int elem = blkList[blk].getLocalElementBegin();
+             elem < blkList[blk].getLocalElementEnd(); elem++) {
+            const unsigned int ei =
+                (pNodes[elem].getX() - blkNode.getX()) >> shift;
+            const unsigned int ej =
+                (pNodes[elem].getY() - blkNode.getY()) >> shift;
+            const unsigned int ek =
+                (pNodes[elem].getZ() - blkNode.getZ()) >> shift;
+
+            const unsigned int e_base      = elem * npE;
+            const unsigned int* const dg_e = e2n_dg + e_base;
+            const unsigned int* const cg_e = e2n_cg + e_base;
+            const unsigned int uz_e_base =
+                offset + (ek * eO + paddWidth) * lxly +
+                (ej * eO + paddWidth) * lx + (ei * eO + paddWidth);
+
+            for (unsigned int k = 0; k < eOp1; k++) {
+                const unsigned int nk = k * eOp1Sq;
+                const unsigned int uk = uz_e_base + k * lxly;
+                for (unsigned int j = 0; j < eOp1; j++) {
+                    const unsigned int nkj = nk + j * eOp1;
+                    const unsigned int ukj = uk + j * lx;
+                    for (unsigned int i = 0; i < eOp1; i++) {
+                        const unsigned int n = nkj + i;
+                        if ((unsigned int)(dg_e[n] - e_base) < npE) {
+                            m_uiZipPlanUzIdx.push_back(ukj + i);
+                            m_uiZipPlanCgIdx.push_back(cg_e[n]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    m_uiZipPlanUzIdx.shrink_to_fit();
+    m_uiZipPlanCgIdx.shrink_to_fit();
+}
+
 void Mesh::buildFEM_E2N() {
     // todo we don't need to build the full e2n mapping only for the partition
     // boundary and R1 ghost elements.
@@ -9809,6 +9887,17 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     m_uiIsBlockSetup  = true;
     m_uiCoarsetBlkLev = cLev;
     m_uiLocalBlockList.clear();
+
+    // The zip() plan is derived from the block list, so rebuilding the blocks
+    // invalidates it. ReMesh() hands back a whole new Mesh (which starts with
+    // no plan), but performBlocksSetup() can also be called on an ALREADY
+    // CONSTRUCTED mesh -- see ODE/include/enuts.h, the LTS path -- so drop the
+    // plan here explicitly rather than relying on the object being fresh.
+    m_uiZipPlanBuilt = false;
+    m_uiZipPlanUzIdx.clear();
+    m_uiZipPlanUzIdx.shrink_to_fit();
+    m_uiZipPlanCgIdx.clear();
+    m_uiZipPlanCgIdx.shrink_to_fit();
 
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;

@@ -96,6 +96,19 @@ option(DENDRO_UNZIP_SPEEDUP
 option(DENDRO_UNZIP_SCATTER_FAST
        "Use the integer-index same-level scatter fast path in Mesh::unzip_scatter (Phase 1 optimization)"
        OFF)
+# --- zip() optimizations -------------------------------------------------
+# NOTE: despite its documentation, DENDRO_UNZIP_SPEEDUP gates NO zip code at
+# all -- it is an unzip-only switch. These are the real zip switches.
+#
+# The zip kernel fix (removing the per-point hardware divide from the
+# ownership test) is unconditional: it is bit-exact, costs nothing and needs
+# no memory, so it is not behind a flag.
+#
+# DENDRO_ZIP_PLAN trades memory for speed, so it gets its own switch.
+option(DENDRO_ZIP_PLAN
+       "Precompute zip()'s mesh-invariant ownership filter into a flat (unzip,CG) index plan. Costs ~8 bytes per owned CG node, rebuilt on remesh."
+       ON)
+
 option(DENDRO_UNZIP_OMP
        "Enable OpenMP block-parallel unzip path (reserved hook; implementation lives on a separate hybrid branch). Implies the unzip/zip speedups."
        OFF)
@@ -352,6 +365,8 @@ dendro_add_def(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE DENDRO_UNZIP_SCATTER_FAST)
 dendro_add_def(DENDRO_UNZIP_OMP_EFFECTIVE DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
+dendro_add_def(DENDRO_ZIP_PLAN DENDRO_ZIP_PLAN)
+message(STATUS "Dendro zip() plan (precomputed ownership filter): ${DENDRO_ZIP_PLAN}")
 dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
 dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
 dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
@@ -499,6 +514,13 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(benchUtils test/src/benchUtils.cpp)
   dendro_add_example(benchUnzipSameLevel test/src/benchUnzipSameLevel.cpp)
   dendro_add_example(benchUnzipGather test/src/benchUnzipGather.cpp)
+  dendro_add_example(benchZip test/src/benchZip.cpp)
+  dendro_add_example(testZipExact test/src/testZipExact.cpp)
+  # Sabotage variants: prove the bit-exactness gate can actually FAIL.
+  foreach(SAB 1 2 3)
+    dendro_add_example(testZipExact_sabotage${SAB} test/src/testZipExact.cpp)
+    target_compile_definitions(testZipExact_sabotage${SAB} PRIVATE ZIP_GATE_SABOTAGE=${SAB})
+  endforeach()
   dendro_add_example(testStabilityEvolution test/src/testStabilityEvolution.cpp)
   dendro_add_example(testIsReMeshUnzip test/src/testIsReMeshUnzip.cpp)
 

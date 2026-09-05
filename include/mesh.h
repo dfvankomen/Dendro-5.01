@@ -129,6 +129,19 @@ enum NeighbourLevel { COARSE, SAME, REFINE };
 #define OCT_SPLIT     1u
 #define OCT_COARSE    2u
 
+// Minimum number of local blocks before Mesh::zip() opens an OpenMP region.
+// Below this the fork/join costs more than the threading saves (the hybrid
+// MPI+OMP case, where the MPI decomposition already left few blocks per rank).
+// 0 == always open the region (historical behaviour).
+#ifndef DENDRO_ZIP_OMP_MIN_BLOCKS
+#define DENDRO_ZIP_OMP_MIN_BLOCKS 0
+#endif
+
+// Same idea for the plan-based zip path, counted in owned points.
+#ifndef DENDRO_ZIP_OMP_MIN_POINTS
+#define DENDRO_ZIP_OMP_MIN_POINTS 0
+#endif
+
 namespace ot {
 
 /**@brief Threads OBSERVED INSIDE a threaded Mesh-ctor stage; 0 = none ran.
@@ -236,6 +249,18 @@ class Mesh {
     /** Element ot Node mapping data for continous Galerkin methods. Array size:
      * [m_uiAllNodes.size()*m_uiNpE];*/
     std::vector<unsigned int> m_uiE2NMapping_CG;
+
+    /** @brief Precomputed zip() scatter plan: the flat (unzip index, CG index)
+     * pair list of every node OWNED by one of this rank's local block
+     * elements. The ownership filter zip() applies is mesh-invariant -- it
+     * depends only on the E2N maps and the block layout, never on field data
+     * -- so it is resolved once here instead of per variable, per RK stage,
+     * per step. Built lazily on the first zip() call; ReMesh() returns a
+     * brand-new Mesh object, so a remesh invalidates this automatically.
+     * Costs 8 bytes per owned CG node (~4.9 bytes per element node). */
+    std::vector<unsigned int> m_uiZipPlanUzIdx;
+    std::vector<unsigned int> m_uiZipPlanCgIdx;
+    bool m_uiZipPlanBuilt = false;
     /** Element to Node mapping with DG indexing after removing duplicates. This
      * is used for debugging. */
     std::vector<unsigned int> m_uiE2NMapping_DG;
@@ -696,6 +721,10 @@ class Mesh {
      * */
 
     void buildE2NMap();
+
+    /**@brief Builds the flat zip() scatter plan (m_uiZipPlanUzIdx /
+     * m_uiZipPlanCgIdx). Called lazily by zip(); idempotent. */
+    void buildZipPlan();
 
     /**
      * @brief: Builds the Element to nodal mapping for DG computations.
@@ -2249,6 +2278,18 @@ class Mesh {
      * */
     template <typename T>
     void zip(const T *unzippedVec, T *zippedVec);
+
+    /**@brief Verbatim pre-optimization copy of zip(), kept ONLY as an
+     * in-binary A/B and bit-exactness reference for test/src/testZipExact.cpp
+     * and test/src/benchZip.cpp. Not used by the solver. Do not "optimize".
+     */
+    template <typename T>
+    void zip_ref(const T *unzippedVec, T *zippedVec);
+
+    /**@brief Optimized zip() kernel but with schedule(dynamic,1). A/B control
+     * for isolating the OpenMP schedule change. Not used by the solver. */
+    template <typename T>
+    void zip_dyn(const T *unzippedVec, T *zippedVec);
 
     /**
      * @brief perform block wise zip operation.

@@ -4802,6 +4802,219 @@ template <typename T>
 void Mesh::zip(const T* unzippedVec, T* zippedVec) {
     if (!m_uiIsActive) return;
 
+#if defined(DENDRO_ZIP_PLAN)
+    // The ownership filter is mesh-invariant, so resolve it once into a flat
+    // (unzip index, CG index) pair list and make the hot loop a branchless
+    // gather/scatter. Built lazily; ReMesh() hands back a new Mesh object, so
+    // a remesh invalidates the plan for free, and performBlocksSetup() (the
+    // LTS path, which rebuilds blocks in place) drops it explicitly.
+    if (!m_uiZipPlanBuilt) buildZipPlan();
+    {
+        const size_t np                 = m_uiZipPlanUzIdx.size();
+        const unsigned int* const pu    = m_uiZipPlanUzIdx.data();
+        const unsigned int* const pc    = m_uiZipPlanCgIdx.data();
+        // Every CG node appears exactly once in the plan, so ANY partition of
+        // the pair list is race-free -- and unlike the block loop this gives
+        // perfect load balance for free.
+#if defined(DENDRO_UNZIP_OMP)
+#pragma omp parallel for schedule(static) \
+    if (np >= (size_t)DENDRO_ZIP_OMP_MIN_POINTS)
+#endif
+        for (size_t n = 0; n < np; n++) zippedVec[pc[n]] = unzippedVec[pu[n]];
+    }
+    return;
+#endif
+
+    const ot::TreeNode* pNodes = m_uiAllElements.data();
+    const ot::Block* blkList   = m_uiLocalBlockList.data();
+    const size_t n_blocks      = m_uiLocalBlockList.size();
+    const unsigned int eO      = m_uiElementOrder;
+    const unsigned int npE     = m_uiNpE;
+    const unsigned int eOp1    = eO + 1;
+    const unsigned int eOp1Sq  = eOp1 * eOp1;
+
+    // Hoist the E2N base pointers out of the loop nest. Inside an OpenMP
+    // region these are otherwise reloaded from the shared-variable struct on
+    // every innermost iteration (verified in objdump: a `mov 0x18(%rbp),%rax`
+    // sat inside the 8-instruction inner loop).
+    const unsigned int* const e2n_dg = m_uiE2NMapping_DG.data();
+    const unsigned int* const e2n_cg = m_uiE2NMapping_CG.data();
+
+    // Zip is naturally parallel over blocks: each block's local elements own
+    // a DISJOINT set of CG nodes (the ownership filter guarantees one writer
+    // per CG node across all blocks), and each block reads from its own slice
+    // of unzippedVec. So #pragma omp parallel for over blocks is race-free
+    // without any extra bookkeeping.
+    //
+    // schedule(static) rather than (dynamic,1). NOTE: blocks are NOT uniform
+    // in cost -- measured CV of elements/block is 1.2-1.8 -- so the usual
+    // "static is fine, the work is even" argument does not apply. Static
+    // still wins by ~32% (measured: 8 threads, 29 blocks/thread) because
+    // blocks are TINY (median 1 element = 343 points), so dynamic,1's
+    // per-block synchronization costs more than the imbalance it removes.
+    //
+    // The if() clause is a knob for skipping the fork/join when there is too
+    // little work to amortize it. It defaults to 0 (always parallel): no
+    // measurement so far justifies a nonzero threshold -- this loop still
+    // scaled 6.3x on 8 threads at the block count the BSSN hybrid arm
+    // actually runs (~29 blocks/thread).
+#if defined(DENDRO_UNZIP_OMP)
+#pragma omp parallel for schedule(static) \
+    if (n_blocks >= (size_t)DENDRO_ZIP_OMP_MIN_BLOCKS)
+#endif
+    for (size_t blk = 0; blk < n_blocks; blk++) {
+        const ot::TreeNode blkNode   = blkList[blk].getBlockNode();
+        const unsigned int regLev    = blkList[blk].getRegularGridLev();
+        const unsigned int lx        = blkList[blk].getAllocationSzX();
+        const unsigned int ly        = blkList[blk].getAllocationSzY();
+        const unsigned int offset    = blkList[blk].getOffset();
+        const unsigned int paddWidth = blkList[blk].get1DPadWidth();
+        const unsigned int lxly      = lx * ly;
+        const unsigned int shift     = m_uiMaxDepth - regLev;
+
+        for (unsigned int elem = blkList[blk].getLocalElementBegin();
+             elem < blkList[blk].getLocalElementEnd(); elem++) {
+            const unsigned int ei =
+                (pNodes[elem].getX() - blkNode.getX()) >> shift;
+            const unsigned int ej =
+                (pNodes[elem].getY() - blkNode.getY()) >> shift;
+            const unsigned int ek =
+                (pNodes[elem].getZ() - blkNode.getZ()) >> shift;
+
+            assert(pNodes[elem].getLevel() == regLev);
+
+            // Base of this element's npE-sized slice of the E2N maps. The
+            // ownership test `dg_lookup / npE == elem` is exactly
+            // `elem*npE <= dg_lookup < (elem+1)*npE`, i.e. the single
+            // unsigned compare `dg_lookup - e_base < npE` (an out-of-range
+            // dg_lookup below e_base wraps to a huge unsigned and fails the
+            // compare). e_base is the array index we already have to form, so
+            // this removes a hardware `div` from every one of the (eO+1)^3
+            // points without adding any work.
+            const unsigned int e_base       = elem * npE;
+            const unsigned int* const dg_e  = e2n_dg + e_base;
+            const unsigned int* const cg_e  = e2n_cg + e_base;
+
+            const unsigned int uz_e_base =
+                offset + (ek * eO + paddWidth) * lxly +
+                (ej * eO + paddWidth) * lx + (ei * eO + paddWidth);
+
+            for (unsigned int k = 0; k < eOp1; k++) {
+                const unsigned int nk = k * eOp1Sq;
+                const unsigned int uk = uz_e_base + k * lxly;
+                for (unsigned int j = 0; j < eOp1; j++) {
+                    const unsigned int nkj = nk + j * eOp1;
+                    const unsigned int ukj = uk + j * lx;
+                    for (unsigned int i = 0; i < eOp1; i++) {
+                        const unsigned int n = nkj + i;
+                        if ((unsigned int)(dg_e[n] - e_base) < npE)
+                            zippedVec[cg_e[n]] = unzippedVec[ukj + i];
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// zip_dyn: identical to the optimized zip() above EXCEPT for the OpenMP
+// schedule clause (dynamic,1 instead of static, and no if() guard).
+// Exists purely so benchZip can isolate the schedule change from the
+// kernel change inside a single binary. NOT called by the solver.
+// ---------------------------------------------------------------------
+template <typename T>
+void Mesh::zip_dyn(const T* unzippedVec, T* zippedVec) {
+    if (!m_uiIsActive) return;
+
+    const ot::TreeNode* pNodes = m_uiAllElements.data();
+    const ot::Block* blkList   = m_uiLocalBlockList.data();
+    const size_t n_blocks      = m_uiLocalBlockList.size();
+    const unsigned int eO      = m_uiElementOrder;
+    const unsigned int npE     = m_uiNpE;
+    const unsigned int eOp1    = eO + 1;
+    const unsigned int eOp1Sq  = eOp1 * eOp1;
+
+    // Hoist the E2N base pointers out of the loop nest. Inside an OpenMP
+    // region these are otherwise reloaded from the shared-variable struct on
+    // every innermost iteration (verified in objdump: a `mov 0x18(%rbp),%rax`
+    // sat inside the 8-instruction inner loop).
+    const unsigned int* const e2n_dg = m_uiE2NMapping_DG.data();
+    const unsigned int* const e2n_cg = m_uiE2NMapping_CG.data();
+
+    // Zip is naturally parallel over blocks: each block's local elements own
+    // a DISJOINT set of CG nodes (the ownership filter guarantees one writer
+    // per CG node across all blocks), and each block reads from its own slice
+    // of unzippedVec. So #pragma omp parallel for over blocks is race-free
+    // without any extra bookkeeping.
+    //
+    // NOTE: this copy deliberately keeps schedule(dynamic,1) -- it is the
+    // A/B control that isolates the schedule change from the kernel change.
+#if defined(DENDRO_UNZIP_OMP)
+#pragma omp parallel for schedule(dynamic, 1)
+#endif
+    for (size_t blk = 0; blk < n_blocks; blk++) {
+        const ot::TreeNode blkNode   = blkList[blk].getBlockNode();
+        const unsigned int regLev    = blkList[blk].getRegularGridLev();
+        const unsigned int lx        = blkList[blk].getAllocationSzX();
+        const unsigned int ly        = blkList[blk].getAllocationSzY();
+        const unsigned int offset    = blkList[blk].getOffset();
+        const unsigned int paddWidth = blkList[blk].get1DPadWidth();
+        const unsigned int lxly      = lx * ly;
+        const unsigned int shift     = m_uiMaxDepth - regLev;
+
+        for (unsigned int elem = blkList[blk].getLocalElementBegin();
+             elem < blkList[blk].getLocalElementEnd(); elem++) {
+            const unsigned int ei =
+                (pNodes[elem].getX() - blkNode.getX()) >> shift;
+            const unsigned int ej =
+                (pNodes[elem].getY() - blkNode.getY()) >> shift;
+            const unsigned int ek =
+                (pNodes[elem].getZ() - blkNode.getZ()) >> shift;
+
+            assert(pNodes[elem].getLevel() == regLev);
+
+            // Base of this element's npE-sized slice of the E2N maps. The
+            // ownership test `dg_lookup / npE == elem` is exactly
+            // `elem*npE <= dg_lookup < (elem+1)*npE`, i.e. the single
+            // unsigned compare `dg_lookup - e_base < npE` (an out-of-range
+            // dg_lookup below e_base wraps to a huge unsigned and fails the
+            // compare). e_base is the array index we already have to form, so
+            // this removes a hardware `div` from every one of the (eO+1)^3
+            // points without adding any work.
+            const unsigned int e_base       = elem * npE;
+            const unsigned int* const dg_e  = e2n_dg + e_base;
+            const unsigned int* const cg_e  = e2n_cg + e_base;
+
+            const unsigned int uz_e_base =
+                offset + (ek * eO + paddWidth) * lxly +
+                (ej * eO + paddWidth) * lx + (ei * eO + paddWidth);
+
+            for (unsigned int k = 0; k < eOp1; k++) {
+                const unsigned int nk = k * eOp1Sq;
+                const unsigned int uk = uz_e_base + k * lxly;
+                for (unsigned int j = 0; j < eOp1; j++) {
+                    const unsigned int nkj = nk + j * eOp1;
+                    const unsigned int ukj = uk + j * lx;
+                    for (unsigned int i = 0; i < eOp1; i++) {
+                        const unsigned int n = nkj + i;
+                        if ((unsigned int)(dg_e[n] - e_base) < npE)
+                            zippedVec[cg_e[n]] = unzippedVec[ukj + i];
+                    }
+                }
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// zip_ref: verbatim pre-optimization baseline. Reference for the
+// bit-exactness gate (test/src/testZipExact.cpp) and the in-binary A/B
+// microbenchmark (test/src/benchZip.cpp). NOT called by the solver.
+// ---------------------------------------------------------------------
+template <typename T>
+void Mesh::zip_ref(const T* unzippedVec, T* zippedVec) {
+    if (!m_uiIsActive) return;
+
     const ot::TreeNode* pNodes = m_uiAllElements.data();
     const ot::Block* blkList   = m_uiLocalBlockList.data();
     const size_t n_blocks      = m_uiLocalBlockList.size();
