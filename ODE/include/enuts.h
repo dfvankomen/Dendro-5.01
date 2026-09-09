@@ -303,7 +303,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     ENUTSOp* m_uiECOp = NULL;
 
     /**@brief: store the partial step id for the latest evolution. */
-    unsigned int m_uiPt;
+    unsigned int m_uiPartialStepId;
 
     /**@brief: store the active block IDs evolved by the partial blocks (unzip
      * independent block ids)*/
@@ -2296,11 +2296,11 @@ void ExplicitNUTS<T, Ctx>::evolve() {
             // "<<numBlkEvolved<<" out of "<<blkList.size()<<std::endl;
             this->partial_evolve(pt);
             // this->gts_evolve(pt);
-            m_uiPt                     = pt;
+            m_uiPartialStepId                     = pt;
             const unsigned int pt_freq = std::min(10u, coarset_t);
-            if (m_uiPt % pt_freq == 0) {
+            if (m_uiPartialStepId % pt_freq == 0) {
                 if (!pMesh->getMPIRankGlobal())
-                    std::cout << "[LTS] : local ts: " << m_uiPt << " of total "
+                    std::cout << "[LTS] : local ts: " << m_uiPartialStepId << " of total "
                               << coarset_t << std::endl;
             }
         }
@@ -2355,7 +2355,7 @@ void ExplicitNUTS<T, Ctx>::remesh(unsigned int grain_sz, double ld_tol,
     newMesh->computeMinMaxLevel(lminmax[0], lminmax[1]);
 
     if (!(pMesh->getMPIRankGlobal())) {
-        std::cout << "[LTS]: remesh " << m_uiPt
+        std::cout << "[LTS]: remesh " << m_uiPartialStepId
                   << ": \ttime : " << m_uiTimeInfo._m_uiT
                   << "\told mesh: " << oldElements_g
                   << "\tnew mesh:" << newElements_g << std::endl;
@@ -2463,7 +2463,7 @@ void ExplicitNUTS<T, Ctx>::remesh(unsigned int grain_sz, double ld_tol,
     //         = {eleT.data()};
 
     //         char fname[256];
-    //         int lts_step = this->curr_step() * coarset_t + m_uiPt;
+    //         int lts_step = this->curr_step() * coarset_t + m_uiPartialStepId;
 
     //         sprintf(fname,"remesh_lts_%d",lts_step);
     //         io::vtk::mesh2vtuFine(newMesh,fname,0,NULL,NULL,2,pVarNames,pVarData,1,cVarNames,cVarData,true);
@@ -2796,7 +2796,7 @@ void ExplicitNUTS<T, Ctx>::evolve_with_remesh(unsigned int remesh_freq) {
     }
 
     unsigned int pt = 0;
-    m_uiPt          = pt;
+    m_uiPartialStepId          = pt;
 
     while (pt < coarset_t) {
         pMesh = m_uiAppCtx->get_mesh();
@@ -2804,16 +2804,16 @@ void ExplicitNUTS<T, Ctx>::evolve_with_remesh(unsigned int remesh_freq) {
         this->partial_evolve(pt);
 
         pt++;
-        m_uiPt                     = pt;
+        m_uiPartialStepId                     = pt;
 
         const unsigned int pt_freq = std::min(10u, coarset_t);
-        if (m_uiPt % pt_freq == 0) {
+        if (m_uiPartialStepId % pt_freq == 0) {
             if (!pMesh->getMPIRankGlobal())
-                std::cout << "[LTS] : local ts: " << m_uiPt << " of total "
+                std::cout << "[LTS] : local ts: " << m_uiPartialStepId << " of total "
                           << coarset_t << std::endl;
         }
         // if(!pMesh->getMPIRankGlobal())
-        // std::cout<<"local ts: "<<m_uiPt<<" of total "<<coarset_t<<std::endl;
+        // std::cout<<"local ts: "<<m_uiPartialStepId<<" of total "<<coarset_t<<std::endl;
         // {
         //     blk_vec_to_zipDG(m_uiBVec.data(),m_uiEvarDG,0);
         //     std::vector<double> eleT;
@@ -2831,7 +2831,7 @@ void ExplicitNUTS<T, Ctx>::evolve_with_remesh(unsigned int remesh_freq) {
         //     = {eleT.data()};
 
         //     char fname[256];
-        //     int lts_step = this->curr_step() * coarset_t + m_uiPt;
+        //     int lts_step = this->curr_step() * coarset_t + m_uiPartialStepId;
 
         //     sprintf(fname,"lts_step_%d",lts_step);
         //     io::vtk::mesh2vtuFine(pMesh,fname,0,NULL,NULL,2,pVarNames,pVarData,1,cVarNames,cVarData,true);
