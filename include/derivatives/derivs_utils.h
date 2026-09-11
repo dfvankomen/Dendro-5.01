@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dendro_padding.h"
 #include <cstdint>
 #include <cstring>
 #include <iostream>
@@ -78,6 +79,23 @@ struct DerivMatrixStorage {
     /// False when closures don't fit the reduced matrix; dispatch throws.
     bool leftright_valid = true;
 
+#ifdef DENDRO_WIDE_PADDING
+    /// DENDRO_WIDE_PADDING: operator variants for a face that abuts a FINER
+    /// octant. There the outermost DENDRO_WIDE_PADDING_EXTRA padding rows are
+    /// never filled by unzip, so D is built with those rows/cols trimmed at
+    /// that end (identity rows there, exactly like the physical-boundary trim
+    /// of pw rows). The closure therefore starts eleOrder/2 points outside the
+    /// active region -- the stock (narrow padding) operator on that face.
+    std::vector<double> D_fine_left;           ///< fine left, plain right
+    std::vector<double> D_fine_right;          ///< plain left, fine right
+    std::vector<double> D_fine_leftright;      ///< fine both ends
+    std::vector<double> D_fine_left_bdy_right; ///< fine left, physical right
+    std::vector<double> D_bdy_left_fine_right; ///< physical left, fine right
+    /// False until the five variants above were built (schemes that build D
+    /// their own way and skip them make dispatch throw instead of using zeros).
+    bool fine_valid = false;
+#endif
+
     // Destructor to self-clean
     ~DerivMatrixStorage() {}
 
@@ -126,8 +144,38 @@ inline std::vector<double> *const get_deriv_mat_by_boundary(
     }
 }
 
+#ifdef DENDRO_WIDE_PADDING
+/**
+ * DENDRO_WIDE_PADDING: pick the trimmed variant when either end of the line
+ * abuts a finer octant (DENDRO_FINE_FACE_BIT set for that direction). A
+ * physical boundary on the same face wins (there is no neighbour at all).
+ * Returns nullptr when no fine face is involved so the caller uses the stock
+ * four-way dispatch.
+ */
+inline std::vector<double> *const get_deriv_mat_fine_face(
+    DerivMatrixStorage *dmat, const unsigned int &bflag,
+    const unsigned int dir_lo, const unsigned int dir_hi) {
+    const bool bl = bflag & (1u << dir_lo);
+    const bool br = bflag & (1u << dir_hi);
+    const bool fl = (bflag & DENDRO_FINE_FACE_BIT(dir_lo)) && !bl;
+    const bool fr = (bflag & DENDRO_FINE_FACE_BIT(dir_hi)) && !br;
+    if (!fl && !fr) return nullptr;
+    if (!dmat->fine_valid)
+        throw std::runtime_error(
+            "DENDRO_WIDE_PADDING: fine-face operator variant requested but "
+            "this scheme did not build one (fine_valid == false).");
+    if (fl && fr) return &dmat->D_fine_leftright;
+    if (fl) return br ? &dmat->D_fine_left_bdy_right : &dmat->D_fine_left;
+    return bl ? &dmat->D_bdy_left_fine_right : &dmat->D_fine_right;
+}
+#endif
+
 inline std::vector<double> *const get_deriv_mat_by_bflag_x(
     DerivMatrixStorage *dmat, const unsigned int &bflag) {
+#ifdef DENDRO_WIDE_PADDING
+    if (auto *m = get_deriv_mat_fine_face(dmat, bflag, OCT_DIR_LEFT, OCT_DIR_RIGHT))
+        return m;
+#endif
     if (!(bflag & (1u << OCT_DIR_LEFT)) && !(bflag & (1u << OCT_DIR_RIGHT))) {
         return &dmat->D_original;
     } else if ((bflag & (1u << OCT_DIR_LEFT)) &&
@@ -147,6 +195,10 @@ inline std::vector<double> *const get_deriv_mat_by_bflag_x(
 
 inline std::vector<double> *const get_deriv_mat_by_bflag_y(
     DerivMatrixStorage *dmat, const unsigned int &bflag) {
+#ifdef DENDRO_WIDE_PADDING
+    if (auto *m = get_deriv_mat_fine_face(dmat, bflag, OCT_DIR_DOWN, OCT_DIR_UP))
+        return m;
+#endif
     if (!(bflag & (1u << OCT_DIR_DOWN)) && !(bflag & (1u << OCT_DIR_UP))) {
         return &dmat->D_original;
     } else if ((bflag & (1u << OCT_DIR_DOWN)) &&
@@ -166,6 +218,10 @@ inline std::vector<double> *const get_deriv_mat_by_bflag_y(
 
 inline std::vector<double> *const get_deriv_mat_by_bflag_z(
     DerivMatrixStorage *dmat, const unsigned int &bflag) {
+#ifdef DENDRO_WIDE_PADDING
+    if (auto *m = get_deriv_mat_fine_face(dmat, bflag, OCT_DIR_BACK, OCT_DIR_FRONT))
+        return m;
+#endif
     if (!(bflag & (1u << OCT_DIR_BACK)) && !(bflag & (1u << OCT_DIR_FRONT))) {
         return &dmat->D_original;
     } else if ((bflag & (1u << OCT_DIR_BACK)) &&

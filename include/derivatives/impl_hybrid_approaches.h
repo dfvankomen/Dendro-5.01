@@ -88,7 +88,11 @@ class TestingHybridDerivatives_FirstOrder : public MatrixCompactDerivs<1> {
     void init_true() {
         for (unsigned int i = 1; i <= 5; i++) {
             // calculate the size based on the element order
+#ifdef DENDRO_WIDE_PADDING
+            const unsigned int n = i * p_ele_order + 1 + 2 * p_pw;
+#else
             const unsigned int n = (i + 1) * p_ele_order + 1;
+#endif
 
             D_storage_map_.emplace(
                 n, createMatrixSystemForSingleSizeAllUniqueDiags<1>(
