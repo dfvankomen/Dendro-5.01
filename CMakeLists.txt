@@ -173,6 +173,7 @@ set(DENDRO_SRC
     src/derivatives/impl_boris.cpp
     src/derivatives/impl_hybrid_approaches.cpp
     src/derivatives/filt_kodiss_explicit.cpp
+    src/derivatives/compact_ko.cpp
     src/derivatives/nova_derivs.cpp
 )
 
@@ -352,6 +353,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(meshBench examples/src/meshBenchmark.cpp)
   dendro_add_example(meshE2NCheck examples/src/meshE2NCheck.cpp)
   dendro_add_example(run_all_tests test/src/run_all_tests.cpp)
+  dendro_add_example(testCompactKO test/src/testCompactKO.cpp)
   dendro_add_example(benchUtils test/src/benchUtils.cpp)
 
   dendro_add_example(testLTSBlkVec ODE/examples/testLTSBlkVec.cpp)
