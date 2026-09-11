@@ -16,6 +16,52 @@
 
 namespace dendroderivs {
 
+#ifdef DENDRO_WIDE_PADDING
+namespace {
+/**
+ * DENDRO_WIDE_PADDING: the five "fine face" variants of D. A face that abuts
+ * a finer octant has its outermost DENDRO_WIDE_PADDING_EXTRA padding rows
+ * unfilled, so D is built with that many rows/cols trimmed at that end
+ * (identity there, same mechanism as the physical-boundary trim of pw rows).
+ * `solve(top, bottom, side, D)` builds one variant; the caller supplies it so
+ * the plain, in-matrix-filter and per-side-diagonal builders each keep their
+ * own arithmetic. Any variant that does not fit marks fine_valid = false and
+ * the dispatch throws if it is ever requested.
+ */
+template <typename SolveFn>
+void build_fine_face_variants(DerivMatrixStorage& st, const unsigned int pw,
+                              const unsigned int n, SolveFn&& solve) {
+    const unsigned int ft = DENDRO_WIDE_PADDING_EXTRA;  // trim at a fine face
+    const double nsq      = n * n;
+    struct V {
+        std::vector<double>* D;
+        unsigned int top, bottom;
+        int side;  // per-side diagonal set for the physical end: 0 none,
+                   // 1 left is physical, 2 right is physical
+    };
+    st.D_fine_left           = std::vector<double>(nsq, 0.0);
+    st.D_fine_right          = std::vector<double>(nsq, 0.0);
+    st.D_fine_leftright      = std::vector<double>(nsq, 0.0);
+    st.D_fine_left_bdy_right = std::vector<double>(nsq, 0.0);
+    st.D_bdy_left_fine_right = std::vector<double>(nsq, 0.0);
+    const V variants[]       = {{&st.D_fine_left, ft, 0, 0},
+                                {&st.D_fine_right, 0, ft, 0},
+                                {&st.D_fine_leftright, ft, ft, 0},
+                                {&st.D_fine_left_bdy_right, ft, pw, 2},
+                                {&st.D_bdy_left_fine_right, pw, ft, 1}};
+    st.fine_valid            = true;
+    for (const V& v : variants) {
+        try {
+            solve(v.top, v.bottom, v.side, *v.D);
+        } catch (const std::exception&) {
+            st.fine_valid = false;
+            return;
+        }
+    }
+}
+}  // namespace
+#endif
+
 // TODO: implement do_grad_x, y, and z
 
 template <unsigned int DerivOrder>
@@ -108,6 +154,21 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
             // this should directly solve for the matrix inverse
         }
     }
+
+#ifdef DENDRO_WIDE_PADDING
+    build_fine_face_variants(
+        *derivMatrixPtr, pw, n,
+        [&](unsigned int top, unsigned int bottom, int /*side*/,
+            std::vector<double>& D) {
+            std::vector<double> P_t =
+                create_P_from_diagonals(*diagEntries, n, 1.0, top, bottom);
+            std::vector<double> Q_t = create_Q_from_diagonals(
+                *diagEntries, n, Q_parity, top, bottom);
+            int info = 0;
+            lapack::lapack_DGESV_T(n, n, P_t.data(), n, Q_t.data(), D.data(),
+                                   n, info);
+        });
+#endif
 
     return derivMatrixPtr;
 }
@@ -208,6 +269,47 @@ filt_type == InMatFilterType::IMFT_Kim_08_P2)
         lapack::square_matrix_multiplication(Pinv.data(), QRS.data(),
                                              D_ptr->data(), n);
     }
+
+#ifdef DENDRO_WIDE_PADDING
+    build_fine_face_variants(
+        *derivMatrixPtr, pw, n,
+        [&](unsigned int top, unsigned int bottom, int /*side*/,
+            std::vector<double>& D) {
+            std::vector<double> P_t =
+                create_P_from_diagonals(*diagEntries, n, 1.0, top, bottom);
+            std::vector<double> Q_t = create_Q_from_diagonals(
+                *diagEntries, n, Q_parity, top, bottom);
+            std::vector<double> R_t =
+                create_P_from_diagonals(*filterEntries, n, 1.0, top, bottom);
+            std::vector<double> S_t =
+                create_Q_from_diagonals(*filterEntries, n, 1.0, top, bottom);
+            std::vector<double> Pinv = P_t, Rinv = R_t, R1_S = R_t, QRS = R_t;
+            lapack::iterative_inverse(R_t.data(), Rinv.data(), n);
+            lapack::square_matrix_multiplication(Rinv.data(), S_t.data(),
+                                                 R1_S.data(), n);
+            if (filt_type == InMatFilterType::IMFT_KIM ||
+                filt_type == InMatFilterType::IMFT_KIM_1_P6 ||
+                filt_type == InMatFilterType::IMFT_KIM_2_P6 ||
+                filt_type == InMatFilterType::IMFT_KIM_3_P6 ||
+                filt_type == InMatFilterType::IMFT_KIM_4_P6 ||
+                filt_type == InMatFilterType::IMFT_A4 ||
+                filt_type == InMatFilterType::IMFT_KIM_P6 ||
+                filt_type == InMatFilterType::IMFT_Kim_06_P6 ||
+                filt_type == InMatFilterType::IMFT_Kim_075_P6 ||
+                filt_type == InMatFilterType::IMFT_Kim_08_P6 ||
+                filt_type == InMatFilterType::IMFT_Kim_085_P6 ||
+                filt_type == InMatFilterType::IMFT_Kim_09_P6 ||
+                filt_type == InMatFilterType::IMFT_Kim_09_P2 ||
+                filt_type == InMatFilterType::IMFT_Kim_08_P2) {
+                for (size_t idx = 0; idx < n; ++idx) R1_S[n * idx + idx] += 1.0;
+            }
+            lapack::square_matrix_multiplication(Q_t.data(), R1_S.data(),
+                                                 QRS.data(), n);
+            lapack::iterative_inverse(P_t.data(), Pinv.data(), n);
+            lapack::square_matrix_multiplication(Pinv.data(), QRS.data(),
+                                                 D.data(), n);
+        });
+#endif
     return derivMatrixPtr;
 }
 
@@ -319,6 +421,26 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
         }
     }
 
+#ifdef DENDRO_WIDE_PADDING
+    // a fine face uses the plain closures; a physical face on the other end
+    // uses that side's own diagonal set, as in the stock loop above
+    build_fine_face_variants(
+        *derivMatrixPtr, pw, n,
+        [&](unsigned int top, unsigned int bottom, int side,
+            std::vector<double>& D) {
+            const MatrixDiagonalEntries* de =
+                (side == 1) ? diagEntriesLeft
+                            : (side == 2) ? diagEntriesRight : diagEntries;
+            std::vector<double> P_t =
+                create_P_from_diagonals(*de, n, 1.0, top, bottom);
+            std::vector<double> Q_t =
+                create_Q_from_diagonals(*de, n, Q_parity, top, bottom);
+            int info = 0;
+            lapack::lapack_DGESV_T(n, n, P_t.data(), n, Q_t.data(), D.data(),
+                                   n, info);
+        });
+#endif
+
     return derivMatrixPtr;
 }
 
@@ -354,7 +476,12 @@ void MatrixCompactDerivs<DerivOrder>::init() {
 
     for (unsigned int i = 1; i <= DDERIVS_MAX_BLOCKS_INIT; i++) {
         // calculate the size based on the element order
+#ifdef DENDRO_WIDE_PADDING
+        // block of i elements plus the (wider) padding on both sides
+        const unsigned int n = i * p_ele_order + 1 + 2 * p_pw;
+#else
         const unsigned int n = (i + 1) * p_ele_order + 1;
+#endif
 
         // std::cout << "Creating for n blocks: " << i
         //           << " , which is of size: " << n << std::endl;

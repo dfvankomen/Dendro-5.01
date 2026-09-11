@@ -21,11 +21,19 @@ void inline boris_init_helper(
     MatrixDiagonalEntries* diagEntries, MatrixDiagonalEntries* diagEntriesLeft,
     MatrixDiagonalEntries* diagEntriesRight,
     MatrixDiagonalEntries* diagEntriesLeftRight, unsigned int ele_order) {
+#ifdef DENDRO_WIDE_PADDING
+    const unsigned pw = DENDRO_PAD_WIDTH_FOR_ORDER(ele_order);
+#else
     const unsigned pw = ele_order / 2;
+#endif
     // create up to 5 fused blocks
     for (unsigned int i = 1; i <= 5; i++) {
         // calculate the size based on the element order
+#ifdef DENDRO_WIDE_PADDING
+        const unsigned int n = i * ele_order + 1 + 2 * pw;
+#else
         const unsigned int n = (i + 1) * ele_order + 1;
+#endif
 
         D_storage_map.emplace(
             n, createMatrixSystemForSingleSizeAllUniqueDiags<1>(
