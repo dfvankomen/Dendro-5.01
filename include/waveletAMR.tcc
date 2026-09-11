@@ -34,7 +34,11 @@ double compute_element_wavelet(const ot::Mesh* pMesh, const WaveletEl* wRefEl,
         const unsigned int pw =
             blkList[0]
                 .get1DPadWidth();  // assumes const padd. with for all blocks.
+#ifdef DENDRO_WIDE_PADDING
+        assert(pw == DENDRO_PAD_WIDTH_FOR_ORDER(eOrder));
+#else
         assert(pw == (eOrder >> 1u));
+#endif
 
         const unsigned int sz_per_dof = nx * ny * nz;
         const unsigned int isz[]      = {nx, ny, nz};
@@ -92,7 +96,11 @@ bool compute_wavelet_remesh_flags(
 
         for (unsigned int blk = 0; blk < blkList.size(); blk++) {
             const unsigned int pw = blkList[blk].get1DPadWidth();
+#ifdef DENDRO_WIDE_PADDING
+            if (DENDRO_PAD_WIDTH_FOR_ORDER(eOrder) != pw) {
+#else
             if ((eOrder >> 1u) != pw) {
+#endif
                 std::cout << " padding width should be half the eleOrder for "
                              "generic wavelet computations. "
                           << std::endl;
