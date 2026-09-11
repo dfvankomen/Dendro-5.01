@@ -11291,6 +11291,14 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
 template <typename T>
 void Mesh::fillFineFaceRing(T* out, unsigned int dof, int blk_filter) const {
     if (!m_uiIsActive) return;
+    // timing/debug hook only: DENDRO_WIDE_PADDING_NOFILL=1 skips the fill
+    // (the trimmed operator has an exact-zero column there, so with
+    // DVEC_ZERO_ALLOC buffers the result is unchanged unless a NaN appears)
+    static const bool nofill = [] {
+        const char* e = std::getenv("DENDRO_WIDE_PADDING_NOFILL");
+        return e && e[0] == '1';
+    }();
+    if (nofill) return;
     const unsigned int EX     = DENDRO_WIDE_PADDING_EXTRA;
     const unsigned int unSz   = this->getDegOfFreedomUnZip();
     const ot::Block* blkList  = m_uiLocalBlockList.data();
@@ -11319,30 +11327,26 @@ void Mesh::fillFineFaceRing(T* out, unsigned int dof, int blk_filter) const {
                         for (unsigned int i = lx - EX; i < lx; i++)
                             u[k * lx * ly + j * lx + i] =
                                 u[k * lx * ly + j * lx + (lx - EX - 1)];
+            // y/z planes and rows are contiguous: copy them as blocks
             if (fflag & (1u << OCT_DIR_DOWN))
                 for (unsigned int k = 0; k < lz; k++)
                     for (unsigned int j = 0; j < EX; j++)
-                        for (unsigned int i = 0; i < lx; i++)
-                            u[k * lx * ly + j * lx + i] =
-                                u[k * lx * ly + EX * lx + i];
+                        std::memcpy(u + k * lx * ly + j * lx,
+                                    u + k * lx * ly + EX * lx, lx * sizeof(T));
             if (fflag & (1u << OCT_DIR_UP))
                 for (unsigned int k = 0; k < lz; k++)
                     for (unsigned int j = ly - EX; j < ly; j++)
-                        for (unsigned int i = 0; i < lx; i++)
-                            u[k * lx * ly + j * lx + i] =
-                                u[k * lx * ly + (ly - EX - 1) * lx + i];
+                        std::memcpy(u + k * lx * ly + j * lx,
+                                    u + k * lx * ly + (ly - EX - 1) * lx,
+                                    lx * sizeof(T));
             if (fflag & (1u << OCT_DIR_BACK))
                 for (unsigned int k = 0; k < EX; k++)
-                    for (unsigned int j = 0; j < ly; j++)
-                        for (unsigned int i = 0; i < lx; i++)
-                            u[k * lx * ly + j * lx + i] =
-                                u[EX * lx * ly + j * lx + i];
+                    std::memcpy(u + k * lx * ly, u + EX * lx * ly,
+                                lx * ly * sizeof(T));
             if (fflag & (1u << OCT_DIR_FRONT))
                 for (unsigned int k = lz - EX; k < lz; k++)
-                    for (unsigned int j = 0; j < ly; j++)
-                        for (unsigned int i = 0; i < lx; i++)
-                            u[k * lx * ly + j * lx + i] =
-                                u[(lz - EX - 1) * lx * ly + j * lx + i];
+                    std::memcpy(u + k * lx * ly, u + (lz - EX - 1) * lx * ly,
+                                lx * ly * sizeof(T));
         }
     }
 }
