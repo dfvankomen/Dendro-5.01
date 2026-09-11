@@ -2669,7 +2669,13 @@ bool Mesh::isReMeshUnzip(
             for (size_t blk = 0; blk < n_blocks; blk++) {
 #endif
                 const unsigned int pw = blkList[blk].get1DPadWidth();
+#ifdef DENDRO_WIDE_PADDING
+                // the wavelet cube is still eOrder/2 deep; the extraction in
+                // getUnzipElementalNodalValues skips the extra ring
+                if (DENDRO_PAD_WIDTH_FOR_ORDER(eOrder) != pw) {
+#else
                 if ((eOrder >> 1u) != pw) {
+#endif
                     std::cout
                         << " padding width should be half the eleOrder for "
                            "generic wavelet computations. "
@@ -9223,6 +9229,15 @@ template <typename T>
 void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                  unsigned int numblks, unsigned int dof) {
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
+#ifdef DENDRO_WIDE_PADDING
+    // the per-direction legacy unzip assumes pw == eOrder/2 in its
+    // neighbour-of-neighbour bookkeeping; only unzip_scatter is wide-padding
+    // aware. Solvers reach unzip_scatter through unzip(in,out,dof,blk_filter).
+    std::cerr << "[DENDRO_WIDE_PADDING] legacy Mesh::unzip(blkIDs) is not "
+                 "wide-padding aware; use unzip(in,out,dof) / unzip_scatter."
+              << std::endl;
+    MPI_Abort(m_uiCommActive, 0);
+#endif
 
     ot::TreeNode blkNode;
     unsigned int ei, ej, ek;  // element wise xyz coordinates.
@@ -11272,6 +11287,67 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
     delete[] eleVec_valid;
 }
 
+#ifdef DENDRO_WIDE_PADDING
+template <typename T>
+void Mesh::fillFineFaceRing(T* out, unsigned int dof, int blk_filter) const {
+    if (!m_uiIsActive) return;
+    const unsigned int EX     = DENDRO_WIDE_PADDING_EXTRA;
+    const unsigned int unSz   = this->getDegOfFreedomUnZip();
+    const ot::Block* blkList  = m_uiLocalBlockList.data();
+    const unsigned int nBlk   = m_uiLocalBlockList.size();
+    for (unsigned int blk = 0; blk < nBlk; blk++) {
+        const unsigned int fflag = blkList[blk].getBlkFineFaceFlag();
+        if (fflag == 0) continue;
+        if (blk_filter >= 0 && (int)blkList[blk].getBlockType() != blk_filter)
+            continue;
+        const unsigned int lx     = blkList[blk].getAllocationSzX();
+        const unsigned int ly     = blkList[blk].getAllocationSzY();
+        const unsigned int lz     = blkList[blk].getAllocationSzZ();
+        const unsigned int offset = blkList[blk].getOffset();
+        for (unsigned int v = 0; v < dof; v++) {
+            T* u = out + v * unSz + offset;
+            // x planes: copy plane EX -> [0,EX) and plane lx-EX-1 -> [lx-EX,lx)
+            if (fflag & (1u << OCT_DIR_LEFT))
+                for (unsigned int k = 0; k < lz; k++)
+                    for (unsigned int j = 0; j < ly; j++)
+                        for (unsigned int i = 0; i < EX; i++)
+                            u[k * lx * ly + j * lx + i] =
+                                u[k * lx * ly + j * lx + EX];
+            if (fflag & (1u << OCT_DIR_RIGHT))
+                for (unsigned int k = 0; k < lz; k++)
+                    for (unsigned int j = 0; j < ly; j++)
+                        for (unsigned int i = lx - EX; i < lx; i++)
+                            u[k * lx * ly + j * lx + i] =
+                                u[k * lx * ly + j * lx + (lx - EX - 1)];
+            if (fflag & (1u << OCT_DIR_DOWN))
+                for (unsigned int k = 0; k < lz; k++)
+                    for (unsigned int j = 0; j < EX; j++)
+                        for (unsigned int i = 0; i < lx; i++)
+                            u[k * lx * ly + j * lx + i] =
+                                u[k * lx * ly + EX * lx + i];
+            if (fflag & (1u << OCT_DIR_UP))
+                for (unsigned int k = 0; k < lz; k++)
+                    for (unsigned int j = ly - EX; j < ly; j++)
+                        for (unsigned int i = 0; i < lx; i++)
+                            u[k * lx * ly + j * lx + i] =
+                                u[k * lx * ly + (ly - EX - 1) * lx + i];
+            if (fflag & (1u << OCT_DIR_BACK))
+                for (unsigned int k = 0; k < EX; k++)
+                    for (unsigned int j = 0; j < ly; j++)
+                        for (unsigned int i = 0; i < lx; i++)
+                            u[k * lx * ly + j * lx + i] =
+                                u[EX * lx * ly + j * lx + i];
+            if (fflag & (1u << OCT_DIR_FRONT))
+                for (unsigned int k = lz - EX; k < lz; k++)
+                    for (unsigned int j = 0; j < ly; j++)
+                        for (unsigned int i = 0; i < lx; i++)
+                            u[k * lx * ly + j * lx + i] =
+                                u[(lz - EX - 1) * lx * ly + j * lx + i];
+        }
+    }
+}
+#endif
+
 template <typename T>
 void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                          int blk_filter) {
@@ -11502,6 +11578,9 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
             }
         }
     }  // omp parallel
+#ifdef DENDRO_WIDE_PADDING
+    this->fillFineFaceRing(out, dof, blk_filter);
+#endif
     return;
 #endif
 
@@ -11841,6 +11920,9 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
             }
         }
     }
+#ifdef DENDRO_WIDE_PADDING
+    this->fillFineFaceRing(out, dof, blk_filter);
+#endif
 }
 
 template <typename T>
@@ -12542,6 +12624,94 @@ void Mesh::getUnzipElementalNodalValues(const T* uzipVec, unsigned int blkID,
                             (m_uiMaxDepth - regLev);
     const unsigned int eleIDMax = m_uiLocalBlockList[blkID].getElemSz1D();
 
+#ifdef DENDRO_WIDE_PADDING
+    if (isPadded) {
+        // The wavelet reference element is written for a cube of
+        // (eOrder+1) + 2*(eOrder/2) = 2*eOrder+1 points per axis. With wide
+        // padding the block carries paddWidth > eOrder/2, so start the cube
+        // (paddWidth - wpw) points in from the block's own padding edge and
+        // keep everything else (including the domain-boundary fill) in terms
+        // of wpw. The extra ring is never read here.
+        const unsigned int wpw = DENDRO_NATIVE_PAD_WIDTH(m_uiElementOrder);
+        const unsigned int skip = paddWidth - wpw;
+        const unsigned int ib = ei * m_uiElementOrder + skip;
+        const unsigned int ie = ib + (m_uiElementOrder + 1) + 2 * wpw;
+
+        const unsigned int jb = ej * m_uiElementOrder + skip;
+        const unsigned int je = jb + (m_uiElementOrder + 1) + 2 * wpw;
+
+        const unsigned int kb = ek * m_uiElementOrder + skip;
+        const unsigned int ke = kb + (m_uiElementOrder + 1) + 2 * wpw;
+
+        const unsigned int en[3] = {(m_uiElementOrder + 1) + 2 * wpw,
+                                    (m_uiElementOrder + 1) + 2 * wpw,
+                                    (m_uiElementOrder + 1) + 2 * wpw};
+
+        for (unsigned int k = kb; k < ke; k++)
+            for (unsigned int j = jb; j < je; j++)
+                for (unsigned int i = ib; i < ie; i++)
+                    out[(k - kb) * en[1] * en[0] + (j - jb) * en[1] +
+                        (i - ib)] = uzipVec[offset + k * ly * lx + j * lx + i];
+
+        // copy the unzip element first/last active point into the cube's
+        // padding on domain-boundary faces (same as the stock branch)
+        if (m_uiAllElements[ele].minX() == 0) {
+            assert(ei == 0);
+            for (unsigned int k = kb; k < ke; k++)
+                for (unsigned int j = jb; j < je; j++)
+                    for (unsigned int i = ib; i < ib + wpw; i++)
+                        out[(k - kb) * en[1] * en[0] + (j - jb) * en[1] +
+                            (i - ib)] =
+                            uzipVec[offset + k * ly * lx + j * lx + (ib + wpw)];
+        }
+        if (m_uiAllElements[ele].minY() == 0) {
+            assert(ej == 0);
+            for (unsigned int k = kb; k < ke; k++)
+                for (unsigned int j = jb; j < jb + wpw; j++)
+                    for (unsigned int i = ib; i < ie; i++)
+                        out[(k - kb) * en[1] * en[0] + (j - jb) * en[1] +
+                            (i - ib)] =
+                            uzipVec[offset + k * ly * lx + (jb + wpw) * lx + i];
+        }
+        if (m_uiAllElements[ele].minZ() == 0) {
+            assert(ek == 0);
+            for (unsigned int k = kb; k < kb + wpw; k++)
+                for (unsigned int j = jb; j < je; j++)
+                    for (unsigned int i = ib; i < ie; i++)
+                        out[(k - kb) * en[1] * en[0] + (j - jb) * en[1] +
+                            (i - ib)] =
+                            uzipVec[offset + (kb + wpw) * ly * lx + j * lx + i];
+        }
+        if (m_uiAllElements[ele].maxX() == (1u << m_uiMaxDepth)) {
+            assert(ei == (eleIDMax - 1));
+            for (unsigned int k = kb; k < ke; k++)
+                for (unsigned int j = jb; j < je; j++)
+                    for (unsigned int i = (ie - wpw); i < ie; i++)
+                        out[(k - kb) * en[1] * en[0] + (j - jb) * en[1] +
+                            (i - ib)] = uzipVec[offset + k * ly * lx + j * lx +
+                                                (ie - wpw - 1)];
+        }
+        if (m_uiAllElements[ele].maxY() == (1u << m_uiMaxDepth)) {
+            assert(ej == (eleIDMax - 1));
+            for (unsigned int k = kb; k < ke; k++)
+                for (unsigned int j = (je - wpw); j < je; j++)
+                    for (unsigned int i = ib; i < ie; i++)
+                        out[(k - kb) * en[1] * en[0] + (j - jb) * en[1] +
+                            (i - ib)] = uzipVec[offset + k * ly * lx +
+                                                (je - wpw - 1) * lx + i];
+        }
+        if (m_uiAllElements[ele].maxZ() == (1u << m_uiMaxDepth)) {
+            assert(ek == (eleIDMax - 1));
+            for (unsigned int k = (ke - wpw); k < ke; k++)
+                for (unsigned int j = jb; j < je; j++)
+                    for (unsigned int i = ib; i < ie; i++)
+                        out[(k - kb) * en[1] * en[0] + (j - jb) * en[1] +
+                            (i - ib)] =
+                            uzipVec[offset + (ke - wpw - 1) * ly * lx +
+                                    j * lx + i];
+        }
+
+#else
     if (isPadded) {
         const unsigned int ib = ei * m_uiElementOrder;
         const unsigned int ie =
@@ -12633,6 +12803,7 @@ void Mesh::getUnzipElementalNodalValues(const T* uzipVec, unsigned int blkID,
                                     j * lx + i];
         }
 
+#endif
     } else {
         const unsigned int ib = ei * m_uiElementOrder + paddWidth;
         const unsigned int ie = ei * m_uiElementOrder + (m_uiElementOrder + 1);

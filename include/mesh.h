@@ -2795,6 +2795,28 @@ class Mesh {
      */
     void blkUnzipElementIDs(unsigned int blk,
                             std::vector<unsigned int> &eid) const;
+
+#ifdef DENDRO_WIDE_PADDING
+    /**
+     * @brief DENDRO_WIDE_PADDING: mark, per block, the faces beyond which some
+     * padding element is FINER than the block (see Block::getBlkFineFaceFlag).
+     * Uses the same element set as blkUnzipElementIDs (face, edge and vertex
+     * neighbours), so an edge/vertex-only finer neighbour flags both faces it
+     * touches. Called right after buildE2BlockMap.
+     */
+    void computeBlkFineFaceFlags();
+
+    /**
+     * @brief DENDRO_WIDE_PADDING: after unzip, the outermost
+     * DENDRO_WIDE_PADDING_EXTRA padding planes of a flagged face hold no data.
+     * Fill them by copying the nearest filled plane inward-to-outward (x, then
+     * y, then z) so the buffer is finite everywhere; the trimmed derivative
+     * operator never reads those planes, this only keeps NaN/garbage out of
+     * the GEMM (0 * NaN is NaN) and out of diagnostics.
+     */
+    template <typename T>
+    void fillFineFaceRing(T *out, unsigned int dof, int blk_filter) const;
+#endif
 };
 
 template <>

@@ -24,6 +24,8 @@
 
 #include "mesh.h"
 
+#include <cstdlib>
+
 #ifdef DENDRO_MESH_OMP
 // Don't rely on these arriving transitively: omp.h reaches here only via
 // profiler.h, and ompUtils.h only via sfcSort.h. Both are accidents of the
@@ -260,6 +262,9 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             performBlocksSetup(m_uiCoarsetBlkLev, NULL, 0);
             // computeSMSpecialPts();
             buildE2BlockMap();
+#ifdef DENDRO_WIDE_PADDING
+            computeBlkFineFaceFlags();
+#endif
         }
 
         double t_blk_end = MPI_Wtime();
@@ -559,6 +564,9 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             performBlocksSetup(m_uiCoarsetBlkLev, blk_tags, blk_tags_sz);
             // computeSMSpecialPts();
             buildE2BlockMap();
+#ifdef DENDRO_WIDE_PADDING
+            computeBlkFineFaceFlags();
+#endif
         }
 
         double t_blk_end = MPI_Wtime();
@@ -14240,6 +14248,54 @@ void Mesh::computeTreeNodeOwnerProc(const ot::TreeNode *pNodes, unsigned int n,
 
     return;
 }
+
+#ifdef DENDRO_WIDE_PADDING
+void Mesh::computeBlkFineFaceFlags() {
+    if (!m_uiIsActive) return;
+    const ot::TreeNode *pNodes = m_uiAllElements.data();
+    std::vector<unsigned int> eid;
+    unsigned int n_flagged = 0, n_faces = 0;
+    // Equivalence test hook: DENDRO_WIDE_PADDING_FORCE_FINE=1 in the
+    // environment flags EVERY face as fine, so every operator is the trimmed
+    // (eleOrder/2-deep) one and a wide-padding build must reproduce the stock
+    // build to round-off. Never set in production.
+    static const bool force_fine = [] {
+        const char *e = std::getenv("DENDRO_WIDE_PADDING_FORCE_FINE");
+        return e && e[0] == '1';
+    }();
+    for (unsigned int blk = 0; blk < m_uiLocalBlockList.size(); blk++) {
+        ot::Block &b               = m_uiLocalBlockList[blk];
+        const ot::TreeNode blkNode = b.getBlockNode();
+        const unsigned int regLev  = b.getRegularGridLev();
+        unsigned int flag          = 0;
+        if (force_fine) {
+            b.setBlkFineFaceFlag((1u << NUM_FACES) - 1u);
+            n_flagged += NUM_FACES;
+            n_faces += NUM_FACES;
+            continue;
+        }
+        this->blkUnzipElementIDs(blk, eid);
+        for (const unsigned int e : eid) {
+            // same-level and coarser neighbours fill the whole (wide) ring
+            if (pNodes[e].getLevel() <= regLev) continue;
+            // finer neighbour: flag every block face plane it lies beyond
+            if (pNodes[e].maxX() <= blkNode.minX()) flag |= (1u << OCT_DIR_LEFT);
+            if (pNodes[e].minX() >= blkNode.maxX()) flag |= (1u << OCT_DIR_RIGHT);
+            if (pNodes[e].maxY() <= blkNode.minY()) flag |= (1u << OCT_DIR_DOWN);
+            if (pNodes[e].minY() >= blkNode.maxY()) flag |= (1u << OCT_DIR_UP);
+            if (pNodes[e].maxZ() <= blkNode.minZ()) flag |= (1u << OCT_DIR_BACK);
+            if (pNodes[e].minZ() >= blkNode.maxZ()) flag |= (1u << OCT_DIR_FRONT);
+        }
+        b.setBlkFineFaceFlag(flag);
+        n_flagged += __builtin_popcount(flag);
+        n_faces += NUM_FACES;
+    }
+    dendro::logger::debug(dendro::logger::Scope{"MESH"},
+                          "wide padding: {} of {} local block faces abut a "
+                          "finer octant (trimmed closure there)",
+                          n_flagged, n_faces);
+}
+#endif
 
 void Mesh::blkUnzipElementIDs(unsigned int blk,
                               std::vector<unsigned int> &eid) const {
