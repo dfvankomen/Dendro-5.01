@@ -9,6 +9,8 @@
 
 #include "block.h"
 
+#include "dendro_padding.h"
+
 ot::Block::Block() {
     m_uiBlockNode         = ot::TreeNode(m_uiDim, m_uiMaxDepth);
     m_uiRegGridLev        = 0;
@@ -16,6 +18,9 @@ ot::Block::Block() {
     m_uiLocalElementEnd   = 0;
 
     m_uiPaddingWidth      = 0;
+#ifdef DENDRO_WIDE_PADDING
+    m_uiFineFaceFlag      = 0;
+#endif
 
     m_uiEleOrder          = 0;
     m_uiSize1D            = 0;
@@ -39,10 +44,16 @@ ot::Block::Block(ot::TreeNode pNode, unsigned int rotID, unsigned int regLev,
     m_uiLocalElementBegin = regEleBegin;
     m_uiLocalElementEnd   = regEleEnd;
 
+#ifdef DENDRO_WIDE_PADDING
+    // prototype: one extra ghost ring per face, see include/dendro_padding.h
+    m_uiPaddingWidth = DENDRO_PAD_WIDTH_FOR_ORDER(eleOrder);
+    m_uiFineFaceFlag = 0;
+#else
     m_uiPaddingWidth =
         (eleOrder >>
          1u);  // GHOST_WIDTH set to 1/2 of the element order (currently unzip
                // mainly tested with even element orders);
+#endif
 
     m_uiEleOrder = eleOrder;
     m_uiSize1D =

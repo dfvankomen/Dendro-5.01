@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dendro_padding.h"
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -17,8 +18,13 @@ class Filters {
     unsigned int p_ele_order;
 
     Filters(unsigned int ele_order) : p_ele_order{ele_order} {
+#ifdef DENDRO_WIDE_PADDING
+        p_pw = DENDRO_PAD_WIDTH_FOR_ORDER(p_ele_order);
+        p_n  = p_ele_order + 1 + 2 * p_pw;
+#else
         p_n  = p_ele_order * 2 + 1;
         p_pw = p_ele_order / 2;
+#endif
     }
 
     Filters(const Filters &obj)

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "dendro_padding.h"
 #include <algorithm>
 #include <functional>
 #include <memory>
@@ -481,8 +482,14 @@ class Derivs {
      * stored n vs incoming n to avoid any errors.
      */
     Derivs(unsigned int ele_order) : p_ele_order{ele_order} {
+#ifdef DENDRO_WIDE_PADDING
+        // must match ot::Block's padding (see include/dendro_padding.h)
+        p_pw = DENDRO_PAD_WIDTH_FOR_ORDER(p_ele_order);
+        p_n  = p_ele_order + 1 + 2 * p_pw;  // one-element block size
+#else
         p_n  = p_ele_order * 2 + 1;
         p_pw = p_ele_order / 2;
+#endif
     }
 
     /**

@@ -16,6 +16,7 @@
 #ifndef SFCSORTBENCH_BLOCK_H
 #define SFCSORTBENCH_BLOCK_H
 
+#include "dendro_padding.h"
 #include <assert.h>
 #include <treenode2vtk.h>
 
@@ -59,6 +60,16 @@ class Block {
 
     /**padding width (1D) used for pad the block for neighbour blocks. */
     unsigned int m_uiPaddingWidth;
+
+#ifdef DENDRO_WIDE_PADDING
+    /** DENDRO_WIDE_PADDING: bit (OCT_DIR_x) set when ANY element beyond that
+     * block face (face, edge or vertex neighbour touching the face plane) is
+     * FINER than the block. On such a face only eleOrder/2 padding points can
+     * be filled at block spacing, so the outermost ring is invalid and the
+     * derivative operator must use its trimmed variant. Computed in
+     * Mesh::computeBlkFineFaceFlags after the block list is built. */
+    unsigned int m_uiFineFaceFlag;
+#endif
 
     /**element order */
     unsigned int m_uiEleOrder;
@@ -172,6 +183,14 @@ class Block {
     inline unsigned int getBlkNodeFlag() const {
         return (m_uiBlockNode.getFlag() >> NUM_LEVEL_BITS);
     };
+
+#ifdef DENDRO_WIDE_PADDING
+    /**@brief DENDRO_WIDE_PADDING: faces whose outer padding ring is unfilled
+     * because the neighbour there is finer. Bits use OCT_DIR_* indices
+     * (unshifted); see DENDRO_FINE_FACE_BIT for the derivative-dispatch form. */
+    inline unsigned int getBlkFineFaceFlag() const { return m_uiFineFaceFlag; }
+    inline void setBlkFineFaceFlag(unsigned int f) { m_uiFineFaceFlag = f; }
+#endif
 
     /** @brief get offset*/
     inline DendroIntL getOffset() const { return m_uiOffset; }

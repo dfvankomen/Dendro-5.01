@@ -107,6 +107,13 @@ option(DENDRO_UNZIP_OMP
 # (it uses a dof*nPe element-local temporary). unzip_scatter_batch loops the
 # variables inside one parallel region and reuses a dof=1-sized all_dg, so the
 # scratch shrinks by dof x. Default OFF keeps the current path bit-for-bit.
+# DENDRO_WIDE_PADDING: prototype -- one extra ghost ring per block face
+# (pw = eleOrder/2 + 1) filled from data already on-rank, with a per-block
+# "fine face" flag so faces abutting a finer octant fall back to the
+# eleOrder/2 closure. See include/dendro_padding.h. OFF = stock behaviour.
+option(DENDRO_WIDE_PADDING
+       "Prototype: block padding eleOrder/2+1 (zero extra comm); fine faces fall back to eleOrder/2 closures"
+       OFF)
 option(DENDRO_UNZIP_BATCH
        "Use Mesh::unzip_scatter_batch in Ctx::unzip (dof x smaller DG scratch, one fork/join per batch; default OFF = unchanged)"
        OFF)
@@ -354,6 +361,7 @@ dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
 dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
 dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
+dendro_add_def(DENDRO_WIDE_PADDING DENDRO_WIDE_PADDING)
 dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
 
 if(ALLTOALLV_FIX)
