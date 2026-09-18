@@ -501,6 +501,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(benchUnzipGather test/src/benchUnzipGather.cpp)
   dendro_add_example(testStabilityEvolution test/src/testStabilityEvolution.cpp)
   dendro_add_example(testIsReMeshUnzip test/src/testIsReMeshUnzip.cpp)
+  dendro_add_example(testInterpFaceClamp test/src/testInterpFaceClamp.cpp)
 
   # compile-checks GR/ and pins the Lebedev/SWSH table invariants
   if(TARGET dendro_gr)
