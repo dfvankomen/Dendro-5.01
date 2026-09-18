@@ -14250,6 +14250,20 @@ void Mesh::computeTreeNodeOwnerProc(const ot::TreeNode *pNodes, unsigned int n,
 }
 
 #ifdef DENDRO_WIDE_PADDING
+}  // namespace ot
+namespace dendro {
+static bool g_wide_padding_trim_coarse = true;
+void setWidePaddingTrimCoarse(bool on) { g_wide_padding_trim_coarse = on; }
+bool widePaddingTrimCoarse() {
+    static const int env = [] {
+        const char *e = std::getenv("DENDRO_WIDE_PADDING_TRIM_COARSE");
+        return e ? (e[0] == '1' ? 1 : 0) : -1;
+    }();
+    return env < 0 ? g_wide_padding_trim_coarse : (env == 1);
+}
+}  // namespace dendro
+namespace ot {
+
 void Mesh::computeBlkFineFaceFlags() {
     if (!m_uiIsActive) return;
     const ot::TreeNode *pNodes = m_uiAllElements.data();
@@ -14263,13 +14277,10 @@ void Mesh::computeBlkFineFaceFlags() {
         const char *e = std::getenv("DENDRO_WIDE_PADDING_FORCE_FINE");
         return e && e[0] == '1';
     }();
-    // DENDRO_WIDE_PADDING_TRIM_COARSE=1: also use the trimmed closure on faces
-    // whose neighbour is coarser (ring stays prolongated and filled; only the
-    // operator dispatch changes).
-    static const bool trim_coarse = [] {
-        const char *e = std::getenv("DENDRO_WIDE_PADDING_TRIM_COARSE");
-        return e && e[0] == '1';
-    }();
+    // trimmed closure also on faces whose neighbour is coarser (ring stays
+    // prolongated and filled; only the operator dispatch changes). Solver
+    // parameter via dendro::setWidePaddingTrimCoarse, env override.
+    const bool trim_coarse = dendro::widePaddingTrimCoarse();
     unsigned int n_trim = 0;
     for (unsigned int blk = 0; blk < m_uiLocalBlockList.size(); blk++) {
         ot::Block &b               = m_uiLocalBlockList[blk];
