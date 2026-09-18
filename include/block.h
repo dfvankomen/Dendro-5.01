@@ -69,6 +69,7 @@ class Block {
      * derivative operator must use its trimmed variant. Computed in
      * Mesh::computeBlkFineFaceFlags after the block list is built. */
     unsigned int m_uiFineFaceFlag;
+    unsigned int m_uiTrimFaceFlag;
 #endif
 
     /**element order */
@@ -190,6 +191,13 @@ class Block {
      * (unshifted); see DENDRO_FINE_FACE_BIT for the derivative-dispatch form. */
     inline unsigned int getBlkFineFaceFlag() const { return m_uiFineFaceFlag; }
     inline void setBlkFineFaceFlag(unsigned int f) { m_uiFineFaceFlag = f; }
+    /**@brief DENDRO_WIDE_PADDING: faces where the derivative uses the trimmed
+     * (eleOrder/2-deep) closure. Always includes the fine faces; with
+     * DENDRO_WIDE_PADDING_TRIM_COARSE=1 also faces whose neighbour is coarser
+     * (the outer ring there is prolongated, and a 4th prolongated point hurts
+     * more than it helps). Same OCT_DIR_* bit layout as the fine flag. */
+    inline unsigned int getBlkTrimFaceFlag() const { return m_uiTrimFaceFlag; }
+    inline void setBlkTrimFaceFlag(unsigned int f) { m_uiTrimFaceFlag = f; }
 #endif
 
     /** @brief get offset*/
