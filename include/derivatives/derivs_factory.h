@@ -701,16 +701,21 @@ class FilterFactory {
         // compact Pade filter as a dissipation term: 8th-order transfer with
         // a 7-point RHS (fits pw = 3); strength = the per-call coeff
         else if (name == "KIMF") {
-            // cutoff kc (fraction of pi) and closure-row cutoff reduction eps;
-            // DENDRO_KIMF_KC / DENDRO_KIMF_EPS in the environment override the
-            // shipped 0.88 / 0.25 (experiment hook, read once)
+            // cutoff kc (fraction of pi) and closure-row cutoff reduction eps.
+            // Defaults 0.88 / 0: the closure rows keep the interior cutoff.
+            // The Kim-paper eps = 0.25 lowers it in the three rows next to
+            // every block face and over-damps the resolved band there; on
+            // EM4 (2026-09-18) eps 0 halved the face-adjacent error of E6 and
+            // A6 alike at maxdepth 10, and kc 0.80 was 10-30 % worse than
+            // 0.88. DENDRO_KIMF_KC / DENDRO_KIMF_EPS in the environment
+            // override (experiment hook, read once).
             static const double kimf_kc = [] {
                 const char *e = std::getenv("DENDRO_KIMF_KC");
                 return e ? std::atof(e) : 0.88;
             }();
             static const double kimf_eps = [] {
                 const char *e = std::getenv("DENDRO_KIMF_EPS");
-                return e ? std::atof(e) : 0.25;
+                return e ? std::atof(e) : 0.0;
             }();
             return std::make_unique<MatrixPadeFilter>(
                 args..., "KIM", std::vector<double>{1.0, kimf_kc, kimf_eps},
