@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdlib>
 
 #include <memory>
 #include <stdexcept>
@@ -700,8 +701,20 @@ class FilterFactory {
         // compact Pade filter as a dissipation term: 8th-order transfer with
         // a 7-point RHS (fits pw = 3); strength = the per-call coeff
         else if (name == "KIMF") {
+            // cutoff kc (fraction of pi) and closure-row cutoff reduction eps;
+            // DENDRO_KIMF_KC / DENDRO_KIMF_EPS in the environment override the
+            // shipped 0.88 / 0.25 (experiment hook, read once)
+            static const double kimf_kc = [] {
+                const char *e = std::getenv("DENDRO_KIMF_KC");
+                return e ? std::atof(e) : 0.88;
+            }();
+            static const double kimf_eps = [] {
+                const char *e = std::getenv("DENDRO_KIMF_EPS");
+                return e ? std::atof(e) : 0.25;
+            }();
             return std::make_unique<MatrixPadeFilter>(
-                args..., "KIM", std::vector<double>{1.0, 0.88, 0.25}, "KIMF");
+                args..., "KIM", std::vector<double>{1.0, kimf_kc, kimf_eps},
+                "KIMF");
         }
         return nullptr;
     }
