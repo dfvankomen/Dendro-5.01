@@ -14322,6 +14322,61 @@ void Mesh::computeBlkFineFaceFlags() {
 }
 #endif
 
+void Mesh::printBlockFaceCensus(const char *tag) const {
+    if (!m_uiIsActive) return;
+    const std::vector<ot::Block> &blks   = m_uiLocalBlockList;
+    const std::vector<ot::TreeNode> &AE  = m_uiAllElements;
+    const std::vector<unsigned int> &e2e = m_uiE2EMapping;
+    const unsigned int nd                = m_uiNumDirections;
+    const unsigned int FAC[6] = {OCT_DIR_LEFT, OCT_DIR_RIGHT, OCT_DIR_DOWN,
+                                 OCT_DIR_UP,   OCT_DIR_BACK,  OCT_DIR_FRONT};
+    constexpr int NT = 4, NL = 24;  // S, C, F, B
+    std::vector<long> census(NL * NT, 0);
+    long blkc[2] = {0, 0};  // one-element, multi-element blocks
+    for (size_t b = 0; b < blks.size(); b++) {
+        const unsigned int lev = blks[b].getRegularGridLev();
+        const unsigned int bfl = blks[b].getBlkNodeFlag();
+        blkc[blks[b].getElemSz1D() == 1 ? 0 : 1]++;
+        if (lev >= (unsigned int)NL) continue;
+        bool coarser[6] = {false, false, false, false, false, false};
+        bool finer[6]   = {false, false, false, false, false, false};
+        for (DendroIntL e = blks[b].getLocalElementBegin();
+             e < blks[b].getLocalElementEnd(); e++)
+            for (int d = 0; d < 6; d++) {
+                const unsigned int nb = e2e[(size_t)e * nd + FAC[d]];
+                if (nb == LOOK_UP_TABLE_DEFAULT || nb >= AE.size()) continue;
+                if (AE[nb].getLevel() < AE[e].getLevel()) coarser[d] = true;
+                else if (AE[nb].getLevel() > AE[e].getLevel()) finer[d] = true;
+            }
+        for (int d = 0; d < 6; d++) {
+            const int ty = (bfl & (1u << FAC[d])) ? 3 : coarser[d] ? 1 : finer[d] ? 2 : 0;
+            census[lev * NT + ty]++;
+        }
+    }
+    std::vector<long> g(NL * NT);
+    long gblkc[2];
+    MPI_Allreduce(census.data(), g.data(), NL * NT, MPI_LONG, MPI_SUM, m_uiCommActive);
+    MPI_Allreduce(blkc, gblkc, 2, MPI_LONG, MPI_SUM, m_uiCommActive);
+    if (m_uiActiveRank) return;
+    long tot[NT] = {0, 0, 0, 0};
+    std::printf("[census] %s | block faces by type (S same-level, C coarser nbr, F finer nbr, B physical); blocks: %ld single-elem, %ld multi-elem\n",
+                tag ? tag : "", gblkc[0], gblkc[1]);
+    for (int l = 0; l < NL; l++) {
+        long n_l = 0;
+        for (int ty = 0; ty < NT; ty++) n_l += g[l * NT + ty];
+        if (!n_l) continue;
+        std::printf("[census] lvl %2d | S %ld | C %ld | F %ld | B %ld | S+F %.1f%%\n", l,
+                    g[l * NT], g[l * NT + 1], g[l * NT + 2], g[l * NT + 3],
+                    100.0 * (g[l * NT] + g[l * NT + 2]) / (double)n_l);
+        for (int ty = 0; ty < NT; ty++) tot[ty] += g[l * NT + ty];
+    }
+    const long n_all = tot[0] + tot[1] + tot[2] + tot[3];
+    if (n_all)
+        std::printf("[census] all    | S %ld | C %ld | F %ld | B %ld | S+F %.1f%%\n",
+                    tot[0], tot[1], tot[2], tot[3], 100.0 * (tot[0] + tot[2]) / (double)n_all);
+    std::fflush(stdout);
+}
+
 void Mesh::blkUnzipElementIDs(unsigned int blk,
                               std::vector<unsigned int> &eid) const {
     eid.clear();

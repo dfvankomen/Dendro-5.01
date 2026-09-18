@@ -2817,6 +2817,19 @@ class Mesh {
     template <typename T>
     void fillFineFaceRing(T *out, unsigned int dof, int blk_filter) const;
 #endif
+
+    /**
+     * @brief Print a census of local block faces by neighbour type (S same
+     * level, C coarser, F finer, B physical boundary), per block level and
+     * in total, plus the single-/multi-element block counts. Collective on
+     * the active communicator; rank 0 prints "[census] ..." lines. Used to
+     * measure how much of a production mesh the wide-padding ring can
+     * serve (the compact closure keeps its full depth only on S faces).
+     * @param tag  free text prefixed to the header line (e.g. "step 120").
+     */
+    void printBlockFaceCensus(const char *tag) const;
+#ifdef DENDRO_WIDE_PADDING
+#endif
 };
 
 template <>
