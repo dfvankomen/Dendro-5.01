@@ -48,3 +48,14 @@
 #define DENDRO_FINE_FACE_SHIFT 6u
 #define DENDRO_BFLAG_PHYS_MASK 0x3Fu
 #define DENDRO_FINE_FACE_BIT(dir) (1u << ((dir) + DENDRO_FINE_FACE_SHIFT))
+
+namespace dendro {
+/** DENDRO_WIDE_PADDING: use the trimmed (eleOrder/2-deep) closure also on block
+ * faces whose neighbour is coarser (the ring there is prolongated; a 4th
+ * prolongated point costs accuracy). Default true; the environment variable
+ * DENDRO_WIDE_PADDING_TRIM_COARSE=0/1 overrides whatever the solver set.
+ * Must be set before the first Mesh is built (the flags are computed in the
+ * Mesh constructor). */
+void setWidePaddingTrimCoarse(bool on);
+bool widePaddingTrimCoarse();
+}  // namespace dendro
