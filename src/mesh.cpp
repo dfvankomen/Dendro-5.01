@@ -14263,6 +14263,14 @@ void Mesh::computeBlkFineFaceFlags() {
         const char *e = std::getenv("DENDRO_WIDE_PADDING_FORCE_FINE");
         return e && e[0] == '1';
     }();
+    // DENDRO_WIDE_PADDING_TRIM_COARSE=1: also use the trimmed closure on faces
+    // whose neighbour is coarser (ring stays prolongated and filled; only the
+    // operator dispatch changes).
+    static const bool trim_coarse = [] {
+        const char *e = std::getenv("DENDRO_WIDE_PADDING_TRIM_COARSE");
+        return e && e[0] == '1';
+    }();
+    unsigned int n_trim = 0;
     for (unsigned int blk = 0; blk < m_uiLocalBlockList.size(); blk++) {
         ot::Block &b               = m_uiLocalBlockList[blk];
         const ot::TreeNode blkNode = b.getBlockNode();
@@ -14270,30 +14278,36 @@ void Mesh::computeBlkFineFaceFlags() {
         unsigned int flag          = 0;
         if (force_fine) {
             b.setBlkFineFaceFlag((1u << NUM_FACES) - 1u);
+            b.setBlkTrimFaceFlag((1u << NUM_FACES) - 1u);
             n_flagged += NUM_FACES;
             n_faces += NUM_FACES;
             continue;
         }
+        unsigned int cflag = 0;
         this->blkUnzipElementIDs(blk, eid);
         for (const unsigned int e : eid) {
-            // same-level and coarser neighbours fill the whole (wide) ring
-            if (pNodes[e].getLevel() <= regLev) continue;
-            // finer neighbour: flag every block face plane it lies beyond
-            if (pNodes[e].maxX() <= blkNode.minX()) flag |= (1u << OCT_DIR_LEFT);
-            if (pNodes[e].minX() >= blkNode.maxX()) flag |= (1u << OCT_DIR_RIGHT);
-            if (pNodes[e].maxY() <= blkNode.minY()) flag |= (1u << OCT_DIR_DOWN);
-            if (pNodes[e].minY() >= blkNode.maxY()) flag |= (1u << OCT_DIR_UP);
-            if (pNodes[e].maxZ() <= blkNode.minZ()) flag |= (1u << OCT_DIR_BACK);
-            if (pNodes[e].minZ() >= blkNode.maxZ()) flag |= (1u << OCT_DIR_FRONT);
+            // same-level neighbours fill the whole (wide) ring with own data
+            if (pNodes[e].getLevel() == regLev) continue;
+            // finer neighbour: the outer ring is unfilled -> fine flag;
+            // coarser neighbour: the ring is prolongated -> coarse flag.
+            unsigned int &f = (pNodes[e].getLevel() > regLev) ? flag : cflag;
+            if (pNodes[e].maxX() <= blkNode.minX()) f |= (1u << OCT_DIR_LEFT);
+            if (pNodes[e].minX() >= blkNode.maxX()) f |= (1u << OCT_DIR_RIGHT);
+            if (pNodes[e].maxY() <= blkNode.minY()) f |= (1u << OCT_DIR_DOWN);
+            if (pNodes[e].minY() >= blkNode.maxY()) f |= (1u << OCT_DIR_UP);
+            if (pNodes[e].maxZ() <= blkNode.minZ()) f |= (1u << OCT_DIR_BACK);
+            if (pNodes[e].minZ() >= blkNode.maxZ()) f |= (1u << OCT_DIR_FRONT);
         }
         b.setBlkFineFaceFlag(flag);
+        b.setBlkTrimFaceFlag(trim_coarse ? (flag | cflag) : flag);
         n_flagged += __builtin_popcount(flag);
+        n_trim += __builtin_popcount(b.getBlkTrimFaceFlag());
         n_faces += NUM_FACES;
     }
     dendro::logger::debug(dendro::logger::Scope{"MESH"},
                           "wide padding: {} of {} local block faces abut a "
-                          "finer octant (trimmed closure there)",
-                          n_flagged, n_faces);
+                          "finer octant; trimmed closure on {} faces",
+                          n_flagged, n_faces, n_trim);
 }
 #endif
 

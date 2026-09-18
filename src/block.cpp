@@ -20,6 +20,7 @@ ot::Block::Block() {
     m_uiPaddingWidth      = 0;
 #ifdef DENDRO_WIDE_PADDING
     m_uiFineFaceFlag      = 0;
+    m_uiTrimFaceFlag      = 0;
 #endif
 
     m_uiEleOrder          = 0;
@@ -48,6 +49,7 @@ ot::Block::Block(ot::TreeNode pNode, unsigned int rotID, unsigned int regLev,
     // prototype: one extra ghost ring per face, see include/dendro_padding.h
     m_uiPaddingWidth = DENDRO_PAD_WIDTH_FOR_ORDER(eleOrder);
     m_uiFineFaceFlag = 0;
+    m_uiTrimFaceFlag = 0;
 #else
     m_uiPaddingWidth =
         (eleOrder >>
