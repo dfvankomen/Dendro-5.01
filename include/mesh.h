@@ -1372,8 +1372,8 @@ class Mesh {
     }
 
     /**@brief returns the dof DG for a partition. (grid points) */
-    inline unsigned int getDegOfFreedomDG() const {
-        return m_uiNumTotalElements * m_uiNpE;
+    inline DendroIntL getDegOfFreedomDG() const {
+        return (DendroIntL)m_uiNumTotalElements * m_uiNpE;
     }
 
     /**@brief returns the pointer to All elements array. */
