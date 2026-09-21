@@ -838,7 +838,7 @@ void ExplicitNUTS<T, Ctx>::blk_vec_to_unzipDG(
         T* d_ptr = vecUzip.get_vec_ptr() + v * pMesh->getDegOfFreedomUnZip();
 
         for (unsigned int blk = 0; blk < blkList.size(); blk++) {
-            const unsigned int offset = blkList[blk].getOffset();
+            const DendroIntL offset = blkList[blk].getOffset();
 
             const unsigned int lx     = blkList[blk].getAllocationSzX();
             const unsigned int ly     = blkList[blk].getAllocationSzY();
@@ -966,7 +966,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     const unsigned int lx       = blkList[blk].getAllocationSzX();
     const unsigned int ly       = blkList[blk].getAllocationSzY();
     const unsigned int lz       = blkList[blk].getAllocationSzZ();
-    const unsigned int offset   = blkList[blk].getOffset();
+    const DendroIntL offset   = blkList[blk].getOffset();
 
     const unsigned int dgSz =
         pMesh->getAllElements().size() * pMesh->getNumNodesPerElement();

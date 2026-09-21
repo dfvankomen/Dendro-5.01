@@ -1724,9 +1724,9 @@ void Mesh::applyStencil(const std::vector<T>& in, std::vector<T>& out,
     unsigned int regLev = 0;
     ot::TreeNode blkNode;
 
-    unsigned int centeredOffset = centered.getOffset();
-    unsigned int backwardOffset = backward.getOffset();
-    unsigned int forwardOffset  = forward.getOffset();
+    DendroIntL centeredOffset = centered.getOffset();
+    DendroIntL backwardOffset = backward.getOffset();
+    DendroIntL forwardOffset  = forward.getOffset();
 
     // all the 3 stencil directions should be in the same.
     assert(centered.getStencilDirection() == forward.getStencilDirection());
@@ -4602,7 +4602,7 @@ void Mesh::zip(const T* unzippedVec, T* zippedVec) {
         const unsigned int ly               = blkList[blk].getAllocationSzY();
         const unsigned int /*lz*/ lz_unused = blkList[blk].getAllocationSzZ();
         (void)lz_unused;
-        const unsigned int offset    = blkList[blk].getOffset();
+        const DendroIntL offset    = blkList[blk].getOffset();
         const unsigned int paddWidth = blkList[blk].get1DPadWidth();
 
         for (unsigned int elem = blkList[blk].getLocalElementBegin();
@@ -4649,7 +4649,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -4900,7 +4900,7 @@ void Mesh::OCT_DIR_LEFT_UP_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -5146,7 +5146,7 @@ void Mesh::OCT_DIR_LEFT_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -5393,7 +5393,7 @@ void Mesh::OCT_DIR_LEFT_FRONT_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -5640,7 +5640,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -5889,7 +5889,7 @@ void Mesh::OCT_DIR_RIGHT_UP_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -6133,7 +6133,7 @@ void Mesh::OCT_DIR_RIGHT_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -6380,7 +6380,7 @@ void Mesh::OCT_DIR_RIGHT_FRONT_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -6626,7 +6626,7 @@ void Mesh::OCT_DIR_DOWN_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -6874,7 +6874,7 @@ void Mesh::OCT_DIR_DOWN_FRONT_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -7120,7 +7120,7 @@ void Mesh::OCT_DIR_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -7368,7 +7368,7 @@ void Mesh::OCT_DIR_UP_FRONT_Unzip(const ot::Block& blk, const T* zippedVec,
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
     const unsigned int paddWidth  = blk.get1DPadWidth();
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int lx         = blk.getAllocationSzX();
     const unsigned int ly         = blk.getAllocationSzY();
     const unsigned int lz         = blk.getAllocationSzZ();
@@ -7616,7 +7616,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_BACK_Unzip(const ot::Block& blk,
 
     const unsigned int regLev    = blk.getRegularGridLev();
     const ot::TreeNode* pNodes   = &(*(m_uiAllElements.begin()));
-    const unsigned int offset    = blk.getOffset();
+    const DendroIntL offset    = blk.getOffset();
 
     const unsigned int paddWidth = blk.get1DPadWidth();
     const unsigned int sz        = 1u << (m_uiMaxDepth - regLev);
@@ -7777,7 +7777,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_BACK_Unzip(const ot::Block& blk,
 
     const unsigned int regLev     = blk.getRegularGridLev();
     const ot::TreeNode* pNodes    = &(*(m_uiAllElements.begin()));
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
 
@@ -7940,7 +7940,7 @@ void Mesh::OCT_DIR_LEFT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
 
     const unsigned int regLev     = blk.getRegularGridLev();
     const ot::TreeNode* pNodes    = &(*(m_uiAllElements.begin()));
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
 
@@ -8103,7 +8103,7 @@ void Mesh::OCT_DIR_RIGHT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
 
     const unsigned int regLev     = blk.getRegularGridLev();
     const ot::TreeNode* pNodes    = &(*(m_uiAllElements.begin()));
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
 
@@ -8266,7 +8266,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_FRONT_Unzip(const ot::Block& blk,
 
     const unsigned int regLev     = blk.getRegularGridLev();
     const ot::TreeNode* pNodes    = &(*(m_uiAllElements.begin()));
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
 
     const unsigned int paddWidth  = blk.get1DPadWidth();
     const unsigned int sz         = 1u << (m_uiMaxDepth - regLev);
@@ -8430,7 +8430,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_FRONT_Unzip(const ot::Block& blk,
 
     const unsigned int regLev     = blk.getRegularGridLev();
     const ot::TreeNode* pNodes    = &(*(m_uiAllElements.begin()));
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
 
@@ -8593,7 +8593,7 @@ void Mesh::OCT_DIR_LEFT_UP_FRONT_Unzip(const ot::Block& blk, const T* zippedVec,
 
     const unsigned int regLev     = blk.getRegularGridLev();
     const ot::TreeNode* pNodes    = &(*(m_uiAllElements.begin()));
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
 
@@ -8756,7 +8756,7 @@ void Mesh::OCT_DIR_RIGHT_UP_FRONT_Unzip(const ot::Block& blk,
 
     const unsigned int regLev     = blk.getRegularGridLev();
     const ot::TreeNode* pNodes    = &(*(m_uiAllElements.begin()));
-    const unsigned int offset     = blk.getOffset();
+    const DendroIntL offset     = blk.getOffset();
     const unsigned int blkElem_1D = 1u
                                     << (regLev - blk.getBlockNode().getLevel());
 
@@ -9317,7 +9317,7 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                                     const unsigned int lz_fd =
                                         blk_fd.getAllocationSzZ();
 
-                                    const unsigned int offset_fd =
+                                    const DendroIntL offset_fd =
                                         blk_fd.getOffset();
 
                                     const unsigned int ei_fd =
@@ -9625,7 +9625,7 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                                     const unsigned int lz_fd =
                                         blk_fd.getAllocationSzZ();
 
-                                    const unsigned int offset_fd =
+                                    const DendroIntL offset_fd =
                                         blk_fd.getOffset();
 
                                     const unsigned int ei_fd =
@@ -9933,7 +9933,7 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                                     const unsigned int lz_fd =
                                         blk_fd.getAllocationSzZ();
 
-                                    const unsigned int offset_fd =
+                                    const DendroIntL offset_fd =
                                         blk_fd.getOffset();
 
                                     const unsigned int ei_fd =
@@ -10236,7 +10236,7 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                                     const unsigned int lz_fd =
                                         blk_fd.getAllocationSzZ();
 
-                                    const unsigned int offset_fd =
+                                    const DendroIntL offset_fd =
                                         blk_fd.getOffset();
 
                                     const unsigned int ei_fd =
@@ -10543,7 +10543,7 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                                     const unsigned int lz_fd =
                                         blk_fd.getAllocationSzZ();
 
-                                    const unsigned int offset_fd =
+                                    const DendroIntL offset_fd =
                                         blk_fd.getOffset();
 
                                     const unsigned int ei_fd =
@@ -10848,7 +10848,7 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                                     const unsigned int lz_fd =
                                         blk_fd.getAllocationSzZ();
 
-                                    const unsigned int offset_fd =
+                                    const DendroIntL offset_fd =
                                         blk_fd.getOffset();
 
                                     const unsigned int ei_fd =
@@ -11138,7 +11138,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
             const unsigned int lx      = blkList[blk].getAllocationSzX();
             const unsigned int ly      = blkList[blk].getAllocationSzY();
             const unsigned int lz      = blkList[blk].getAllocationSzZ();
-            const unsigned int offset  = blkList[blk].getOffset();
+            const DendroIntL offset  = blkList[blk].getOffset();
             const unsigned int bLev =
                 pNodes[blkList[blk].getLocalElementBegin()].getLevel();
 
@@ -11307,7 +11307,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
             const unsigned int lx       = blkList[blk].getAllocationSzX();
             const unsigned int ly       = blkList[blk].getAllocationSzY();
             const unsigned int lz       = blkList[blk].getAllocationSzZ();
-            const unsigned int offset   = blkList[blk].getOffset();
+            const DendroIntL offset   = blkList[blk].getOffset();
 
             const unsigned int bLev =
                 pNodes[blkList[blk].getLocalElementBegin()].getLevel();
@@ -11698,7 +11698,7 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
                 const unsigned int lx      = blkList[blk].getAllocationSzX();
                 const unsigned int ly      = blkList[blk].getAllocationSzY();
                 const unsigned int lz      = blkList[blk].getAllocationSzZ();
-                const unsigned int offset  = blkList[blk].getOffset();
+                const DendroIntL offset  = blkList[blk].getOffset();
                 const unsigned int bLev =
                     pNodes[blkList[blk].getLocalElementBegin()].getLevel();
 
@@ -12290,7 +12290,7 @@ void Mesh::getUnzipElementalNodalValues(const T* uzipVec, unsigned int blkID,
     const unsigned int lx        = block.getAllocationSzX();
     const unsigned int ly        = block.getAllocationSzY();
     const unsigned int lz        = block.getAllocationSzZ();
-    const unsigned int offset    = block.getOffset();
+    const DendroIntL offset    = block.getOffset();
     const unsigned int paddWidth = block.get1DPadWidth();
 
     const unsigned int ei = (m_uiAllElements[ele].getX() - blkNode.getX()) >>
@@ -12496,7 +12496,7 @@ void Mesh::unzipDG(const T* in, T* out, const unsigned int* blkIDs,
     const unsigned int eOrder  = m_uiElementOrder;
     const unsigned int nPe     = m_uiNpE;
 
-    const unsigned int dgSz    = m_uiAllElements.size() * nPe;
+    const DendroIntL dgSz      = (DendroIntL)m_uiAllElements.size() * nPe;
     const unsigned int cgSz    = this->getDegOfFreedom();
     const DendroIntL unSz      = this->getDegOfFreedomUnZip();
 
@@ -12515,7 +12515,7 @@ void Mesh::unzipDG(const T* in, T* out, const unsigned int* blkIDs,
         const unsigned int lx       = blkList[blk].getAllocationSzX();
         const unsigned int ly       = blkList[blk].getAllocationSzY();
         const unsigned int lz       = blkList[blk].getAllocationSzZ();
-        const unsigned int offset   = blkList[blk].getOffset();
+        const DendroIntL offset   = blkList[blk].getOffset();
 
         const unsigned int bLev =
             pNodes[blkList[blk].getLocalElementBegin()].getLevel();
@@ -12781,7 +12781,7 @@ void Mesh::unzipDG_scatter(const T* in, T* out, unsigned int dof) {
     const unsigned int eOrder  = m_uiElementOrder;
     const unsigned int nPe     = m_uiNpE;
 
-    const unsigned int dgSz    = m_uiAllElements.size() * nPe;
+    const DendroIntL dgSz      = (DendroIntL)m_uiAllElements.size() * nPe;
     const unsigned int cgSz    = this->getDegOfFreedom();
     const DendroIntL unSz      = this->getDegOfFreedomUnZip();
 
@@ -12819,7 +12819,7 @@ void Mesh::unzipDG_scatter(const T* in, T* out, unsigned int dof) {
             const unsigned int lx       = blkList[blk].getAllocationSzX();
             const unsigned int ly       = blkList[blk].getAllocationSzY();
             const unsigned int lz       = blkList[blk].getAllocationSzZ();
-            const unsigned int offset   = blkList[blk].getOffset();
+            const DendroIntL offset   = blkList[blk].getOffset();
 
             const unsigned int bLev =
                 pNodes[blkList[blk].getLocalElementBegin()].getLevel();
