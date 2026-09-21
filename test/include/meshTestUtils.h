@@ -2713,7 +2713,7 @@ bool ot::test::isSubScatterMapValid(ot::Mesh* const pMesh,
 
         unsigned int sz[3], bflag, pwidth;
         for (unsigned int blk = 0; blk < blkList.size(); blk++) {
-            const unsigned int offset = blkList[blk].getOffset();
+            const DendroIntL offset = blkList[blk].getOffset();
             sz[0]                     = blkList[blk].getAllocationSzX();
             sz[1]                     = blkList[blk].getAllocationSzY();
             sz[2]                     = blkList[blk].getAllocationSzZ();
