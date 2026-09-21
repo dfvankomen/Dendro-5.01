@@ -305,6 +305,9 @@ dendro_add_def(ALLTOALL_SPARSE ALLTOALL_SPARSE)
 dendro_add_def(RK_SOLVER_OVERLAP_COMM_AND_COMP RK_SOLVER_OVERLAP_COMM_AND_COMP)
 dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
+dendro_add_def(DENDRO_UNZIP_SCATTER_FAST DENDRO_UNZIP_SCATTER_FAST)
+dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
+dendro_add_def(DENDRO_TENSOR_SIMD DENDRO_TENSOR_SIMD)
 
 # Resolve the effective unzip/zip + threading flags. DENDRO_HYBRID_OMP is the
 # umbrella for all intra-rank OpenMP threading: it implies the block-parallel
