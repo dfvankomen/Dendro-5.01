@@ -134,7 +134,7 @@ class MeshTICtx : public ts::Ctx<MeshTICtx, DendroScalar, unsigned int> {
         m_unz.to_2d(&uUnz);
         m_dudx_unz.to_2d(&dUnz);
         for (const auto& b : m_uiMesh->getLocalBlockList()) {
-            const unsigned int off = b.getOffset();
+            const DendroIntL off   = b.getOffset();
             unsigned int s[3] = {b.getAllocationSzX(), b.getAllocationSzY(),
                                  b.getAllocationSzZ()};
             const double dx = b.computeDx(m_pmin, m_pmax);
