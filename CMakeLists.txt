@@ -220,9 +220,8 @@ if(WITH_CUDA)
   endif()
 
   # define the target GPU architectures (e.g., 70=Volta, 75=Turing, 80=Ampere, 89=Ada, 90=Hopper)
-  # NOTE: no FORCE — let the consuming build / -DCMAKE_CUDA_ARCHITECTURES pick the
-  # arch (A100=80, RTX3060=86). A forced multi-arch list also breaks the device
-  # link of the refel_1d __constant__ across the dendro5 static-lib boundary.
+  # no FORCE: an explicitly requested arch must win. A forced multi-arch list
+  # also breaks the device link of the refel_1d __constant__ across the lib.
   if(NOT CMAKE_CUDA_ARCHITECTURES)
     set(CMAKE_CUDA_ARCHITECTURES 75 80 CACHE STRING "CUDA Architectures")
   endif()
