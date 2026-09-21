@@ -11059,7 +11059,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
     const unsigned int nPe     = m_uiNpE;
 
     const unsigned int cgSz    = this->getDegOfFreedom();
-    const unsigned int unSz    = this->getDegOfFreedomUnZip();
+    const DendroIntL unSz      = this->getDegOfFreedomUnZip();
 
     const unsigned int* e2n    = this->getE2NMapping().data();
     const unsigned int* e2e    = this->getE2EMapping().data();
@@ -11620,7 +11620,7 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
     const unsigned int eOrder  = m_uiElementOrder;
     const unsigned int nPe     = m_uiNpE;
     const unsigned int cgSz    = this->getDegOfFreedom();
-    const unsigned int unSz    = this->getDegOfFreedomUnZip();
+    const DendroIntL unSz      = this->getDegOfFreedomUnZip();
     const unsigned int dgSz    = nPe;
 
     // Build b2e map ONCE (mesh structure doesn't change across variables)
@@ -12498,7 +12498,7 @@ void Mesh::unzipDG(const T* in, T* out, const unsigned int* blkIDs,
 
     const unsigned int dgSz    = m_uiAllElements.size() * nPe;
     const unsigned int cgSz    = this->getDegOfFreedom();
-    const unsigned int unSz    = this->getDegOfFreedomUnZip();
+    const DendroIntL unSz      = this->getDegOfFreedomUnZip();
 
     const unsigned int* e2n    = this->getE2NMapping().data();
     const unsigned int* e2e    = this->getE2EMapping().data();
@@ -12783,7 +12783,7 @@ void Mesh::unzipDG_scatter(const T* in, T* out, unsigned int dof) {
 
     const unsigned int dgSz    = m_uiAllElements.size() * nPe;
     const unsigned int cgSz    = this->getDegOfFreedom();
-    const unsigned int unSz    = this->getDegOfFreedomUnZip();
+    const DendroIntL unSz      = this->getDegOfFreedomUnZip();
 
     const unsigned int* e2n    = this->getE2NMapping().data();
     const unsigned int* e2e    = this->getE2EMapping().data();
