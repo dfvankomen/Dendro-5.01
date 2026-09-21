@@ -413,6 +413,8 @@ get_first_order_registry() {
         // jonathan tyler compact schemes
         {"JTT4", make_generic<1, createJTT4DiagonalsFirstOrder, DerivType::D_JTT4>},
         {"JTT6", make_generic<1, createJTT6DiagonalsFirstOrder, DerivType::D_JTT6>},
+        {"JTT6X7",
+         make_generic<1, createJTT6X7DiagonalsFirstOrder, DerivType::D_JTT6X7>},
         {"JTP6", make_generic<1, createJTP6DiagonalsFirstOrder, DerivType::D_JTP6>},
 
         // combined compact (CCFD) — same DiagFn as the 2nd-order entry below
@@ -471,6 +473,10 @@ get_second_order_registry() {
         // jonathan tyler
         {"JTT4", make_generic<2, createJTT4DiagonalsSecondOrder, DerivType::D_JTT4>},
         {"JTT6", make_generic<2, createJTT6DiagonalsSecondOrder, DerivType::D_JTT6>},
+        // JTT6X7 is a first-derivative-only change; its 2nd-derivative entry is
+        // deliberately the stock JTT6 one so an A/B isolates the 1st-deriv closure.
+        {"JTT6X7",
+         make_generic<2, createJTT6DiagonalsSecondOrder, DerivType::D_JTT6X7>},
         {"JTP6", make_generic<2, createJTP6DiagonalsSecondOrder, DerivType::D_JTP6>},
 
         // combined compact (CCFD) — same DiagFn as the 1st-order entry above;

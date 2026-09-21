@@ -173,6 +173,45 @@ MatrixDiagonalEntries* createJTT6DiagonalsFirstOrder() {
     return diagEntries;
 }
 
+MatrixDiagonalEntries* createJTT6X7DiagonalsFirstOrder() {
+    // JTT6 with the two closure rows re-derived to be exact through x^7 rather
+    // than x^6. P is unchanged; only Q's closure rows widen, 6 -> 8 columns.
+    //
+    // Motivation: stock JTT6's closure rows are exact to x^6 like the interior,
+    // but their leading 7th-moment constant is ~30x the interior's, and a dense
+    // P^-1 carries that inward to the active rows. Annihilating the x^7 term on
+    // the closure rows drops the block's leading constant 1.443e-3 -> 5.646e-4
+    // (2.56x), against an oracle floor of 4.634e-4 for a perfect closure.
+    //
+    // Exactness verified to p=7 in exact rational arithmetic; first nonzero
+    // residual at p=8 (row 0: -1440, row 1: -90). Going a further order (x^8)
+    // recovers no more and destabilises: max Re(eig) +8.9e-2 on a periodic
+    // block chain, versus 1.7e-15 here.
+    //
+    // NOTE: this is a first-derivative-only change. JTT6's second-derivative
+    // closures are ALREADY exact to x^7, so there is no excess to remove there
+    // and raising their order makes the leading constant 0.79x worse; the
+    // second-order entry deliberately reuses the stock diagonals.
+    //
+    // Derivation + evidence:
+    //   cfd_methods_paper/data/runs/X10-closure-and-prolongation/
+    //       local-Poipole/2026-09-21-local/{highorder_closures,closure_design}.py
+    std::vector<std::vector<double>> P1DiagBoundary{
+        {1.0, 5.0, 0.0}, {1.0 / 8.0, 1.0, 3.0 / 4.0}};
+    std::vector<double> P1DiagInterior{1.0 / 3.0, 1.0, 1.0 / 3.0};
+    std::vector<std::vector<double>> Q1DiagBoundary{
+        {-463.0 / 140.0, -1.0 / 4.0, 9.0 / 2.0, -5.0 / 6.0, -5.0 / 12.0,
+         9.0 / 20.0, -1.0 / 6.0, 1.0 / 42.0},
+        {-503.0 / 1120.0, -33.0 / 40.0, 11.0 / 10.0, 5.0 / 24.0, -5.0 / 96.0,
+         1.0 / 40.0, -1.0 / 120.0, 1.0 / 840.0}};
+    std::vector<double> Q1DiagInterior{-1.0 / 36.0, -7.0 / 9.0, 0.0, 7.0 / 9.0,
+                                       1.0 / 36.0};
+    MatrixDiagonalEntries* diagEntries = new MatrixDiagonalEntries{
+        P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary};
+
+    return diagEntries;
+}
+
 MatrixDiagonalEntries* createJTT6DiagonalsSecondOrder() {
     // boundary elements for P matrix for 2nd derivative
     std::vector<std::vector<double>> P2DiagBoundary{

@@ -29,6 +29,8 @@ enum DerivType {
     // Jonathan Tyler tridiagonal schemes (compact)
     D_JTT4,
     D_JTT6,
+    // JTT6 with closure rows exact to x^7 (interior unchanged, 6th order)
+    D_JTT6X7,
     D_JTT8,
     D_JTT10,
     // Jonathan Tyler pentadiagonal schemes (compact)

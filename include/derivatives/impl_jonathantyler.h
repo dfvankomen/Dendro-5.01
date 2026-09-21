@@ -10,6 +10,7 @@ MatrixDiagonalEntries* createJTT4DiagonalsFirstOrder();
 MatrixDiagonalEntries* createJTT4DiagonalsSecondOrder();
 MatrixDiagonalEntries* createJTT6DiagonalsFirstOrder();
 MatrixDiagonalEntries* createJTT6DiagonalsSecondOrder();
+MatrixDiagonalEntries* createJTT6X7DiagonalsFirstOrder();
 MatrixDiagonalEntries* createJTP6DiagonalsFirstOrder();
 MatrixDiagonalEntries* createJTP6DiagonalsSecondOrder();
 
