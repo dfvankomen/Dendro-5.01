@@ -125,7 +125,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         MPI_Comm_rank(m_uiCommActive, &m_uiActiveRank);
         MPI_Comm_size(m_uiCommActive, &m_uiActiveNpes);
 
-        if (!m_uiActiveRank)
+        if (!m_uiGlobalRank)
             std::cout << " [MPI_COMM_SWITCH]: Selected comm.size: "
                       << m_uiActiveNpes << std::endl;
 
@@ -367,7 +367,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         MPI_Comm_rank(m_uiCommActive, &m_uiActiveRank);
         MPI_Comm_size(m_uiCommActive, &m_uiActiveNpes);
 
-        if (!m_uiActiveRank)
+        if (!m_uiGlobalRank)
             std::cout << " [MPI_COMM_SWITCH]: Selected comm.size: "
                       << m_uiActiveNpes << std::endl;
 
@@ -3077,7 +3077,8 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in) {
         treeNodesTovtk(missedKeys,rank,"missedKeys");*/
 #endif
 
-    std::cout << "Seq: E2E mapping Ended" << std::endl;
+    if (!m_uiGlobalRank)
+        std::cout << "Seq: E2E mapping Ended" << std::endl;
 }
 
 void Mesh::buildE2NWithSM() {
