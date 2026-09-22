@@ -30,7 +30,7 @@ void inline boris_init_helper(
         D_storage_map.emplace(
             n, createMatrixSystemForSingleSizeAllUniqueDiags<1>(
                    pw, n, diagEntries, diagEntriesLeft, diagEntriesRight,
-                   diagEntriesLeftRight, i == 1));
+                   diagEntriesLeftRight, false));
 
 #if 0
         if (i == 1) {
@@ -82,6 +82,18 @@ class Boris_BorisO4_FirstOrder : public MatrixCompactDerivs<1> {
                           diagEntriesRight, diagEntriesLeftRight, p_ele_order);
     }
 
+   protected:
+    // sizes first seen after construction must get the per-side diagonals
+    // too, not the generic single-closure build
+    std::unique_ptr<DerivMatrixStorage> build_storage_for_size(
+        unsigned int n, bool skip_leftright) override {
+        return createMatrixSystemForSingleSizeAllUniqueDiags<1>(
+            p_pw, n, diagEntries, diagEntriesLeft, diagEntriesRight,
+            diagEntriesLeftRight, skip_leftright);
+    }
+
+   public:
+
     ~Boris_BorisO4_FirstOrder() {}
 
     std::unique_ptr<Derivs> clone() const override {
@@ -130,6 +142,18 @@ class Boris_BorisO6_FirstOrder : public MatrixCompactDerivs<1> {
                           diagEntriesRight, diagEntriesLeftRight, p_ele_order);
     }
 
+   protected:
+    // sizes first seen after construction must get the per-side diagonals
+    // too, not the generic single-closure build
+    std::unique_ptr<DerivMatrixStorage> build_storage_for_size(
+        unsigned int n, bool skip_leftright) override {
+        return createMatrixSystemForSingleSizeAllUniqueDiags<1>(
+            p_pw, n, diagEntries, diagEntriesLeft, diagEntriesRight,
+            diagEntriesLeftRight, skip_leftright);
+    }
+
+   public:
+
     ~Boris_BorisO6_FirstOrder() {}
 
     std::unique_ptr<Derivs> clone() const override {
@@ -177,6 +201,18 @@ class Boris_BorisO6Eta_FirstOrder : public MatrixCompactDerivs<1> {
         boris_init_helper(D_storage_map_, diagEntries, diagEntriesLeft,
                           diagEntriesRight, diagEntriesLeftRight, p_ele_order);
     }
+
+   protected:
+    // sizes first seen after construction must get the per-side diagonals
+    // too, not the generic single-closure build
+    std::unique_ptr<DerivMatrixStorage> build_storage_for_size(
+        unsigned int n, bool skip_leftright) override {
+        return createMatrixSystemForSingleSizeAllUniqueDiags<1>(
+            p_pw, n, diagEntries, diagEntriesLeft, diagEntriesRight,
+            diagEntriesLeftRight, skip_leftright);
+    }
+
+   public:
 
     ~Boris_BorisO6Eta_FirstOrder() {}
 
