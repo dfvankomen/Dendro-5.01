@@ -1,8 +1,11 @@
-// boundary_conditions.h  --  outer-boundary conditions on unzipped blocks
+// boundary_conditions.h  --  outer-boundary conditions
 //
-// Solvers apply these per block after the rhs, for blocks with bflag != 0.
-// Coordinates are physical: pmin/pmax are the block's padded extent, as in
-// ot::BlockGeometry::ptmin/ptmax, so node (i, j, k) sits at pmin + (i, j, k) h.
+// Two forms. Rhs form (most kinds): applied per unzipped block after the rhs,
+// for blocks with bflag != 0; coordinates are physical, pmin/pmax being the
+// block's padded extent as in ot::BlockGeometry, so node (i, j, k) sits at
+// pmin + (i, j, k) h. Value form (face_nodes / set_face_values): overwrites the
+// zipped state on the domain's face nodes, for boundary data with no closed-form
+// time derivative.
 #pragma once
 
 #include <stdexcept>
@@ -10,6 +13,7 @@
 #include <vector>
 
 #include "dendro.h"
+#include "mesh.h"
 
 namespace dendro_bc {
 
@@ -295,6 +299,64 @@ inline void sommerfeld_rhs(double* f_rhs, const double* f, const double* dxf,
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Value form: overwrite the zipped state on the domain's face nodes. Solvers
+// call it on each stage state before its rhs (with the stage time) and on the
+// final state of each step.
+
+struct FaceNode {
+    unsigned int node;       // CG index into a zipped vector
+    double ox, oy, oz;       // octree coordinates; the solver maps to physical
+    unsigned int faces;      // bit OCT_DIR_* per domain face the node lies on
+};
+
+// Every locally owned CG node on a physical face of the domain. Face membership
+// comes from integer octant data, not from coordinates. Recompute after remesh.
+inline std::vector<FaceNode> face_nodes(ot::Mesh* mesh) {
+    std::vector<FaceNode> out;
+    if (!mesh->isActive()) return out;
+    const ot::TreeNode* pNodes = &(*(mesh->getAllElements().begin()));
+    const unsigned int eo      = mesh->getElementOrder();
+    const unsigned int* e2n_cg = &(*(mesh->getE2NMapping().begin()));
+    const unsigned int* e2n_dg = &(*(mesh->getE2NMapping_DG().begin()));
+    const unsigned int nPe     = mesh->getNumNodesPerElement();
+    const unsigned int nb      = mesh->getNodeLocalBegin();
+    const unsigned int ne      = mesh->getNodeLocalEnd();
+    const unsigned int top     = 1u << m_uiMaxDepth;
+    std::vector<char> seen(mesh->getDegOfFreedom(), 0);
+
+    for (unsigned int e = mesh->getElementLocalBegin();
+         e < mesh->getElementLocalEnd(); e++)
+        for (unsigned int n = 0; n < nPe; n++) {
+            const unsigned int cg = e2n_cg[e * nPe + n];
+            if (cg < nb || cg >= ne || seen[cg]) continue;
+            seen[cg] = 1;
+            unsigned int owner, ii, jj, kk;
+            mesh->dg2eijk(e2n_dg[e * nPe + n], owner, ii, jj, kk);
+            const ot::TreeNode& o  = pNodes[owner];
+            const unsigned int len = 1u << (m_uiMaxDepth - o.getLevel());
+            unsigned int faces     = 0;
+            if (o.minX() == 0 && ii == 0) faces |= 1u << OCT_DIR_LEFT;
+            if (o.minX() + len == top && ii == eo) faces |= 1u << OCT_DIR_RIGHT;
+            if (o.minY() == 0 && jj == 0) faces |= 1u << OCT_DIR_DOWN;
+            if (o.minY() + len == top && jj == eo) faces |= 1u << OCT_DIR_UP;
+            if (o.minZ() == 0 && kk == 0) faces |= 1u << OCT_DIR_BACK;
+            if (o.minZ() + len == top && kk == eo) faces |= 1u << OCT_DIR_FRONT;
+            if (!faces) continue;
+            const double h = (double)len / eo;
+            out.push_back({cg, o.minX() + ii * h, o.minY() + jj * h,
+                           o.minZ() + kk * h, faces});
+        }
+    return out;
+}
+
+// f[node] = g(ox, oy, oz) on every face node (one variable of a zipped state).
+template <typename G>
+inline void set_face_values(double* f, const std::vector<FaceNode>& nodes,
+                            G&& g) {
+    for (const auto& n : nodes) f[n.node] = g(n.ox, n.oy, n.oz);
 }
 
 }  // namespace dendro_bc
