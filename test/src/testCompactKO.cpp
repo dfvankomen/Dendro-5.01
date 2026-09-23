@@ -28,9 +28,169 @@ double original(const double* u, const double* g, unsigned int p, int s,
     return (sigma / (4.0 * h)) * (u[p - s] - 2.0 * u[p] + u[p + s]) +
            (sigma / 8.0) * (g[p - s] - g[p + s]);
 }
+void test_hybrid() {
+    using namespace dendroderivs;
+    const unsigned int sz[3] = {11, 13, 15}, n = 11 * 13 * 15;
+    const auto scheme        = CompactKOScheme::Radius1;
+    const unsigned int lo[3] = {OCT_DIR_LEFT, OCT_DIR_DOWN, OCT_DIR_BACK};
+    const unsigned int hi[3] = {OCT_DIR_RIGHT, OCT_DIR_UP, OCT_DIR_FRONT};
+    std::vector<double> u(n), gx(n), gy(n), gz(n), out(n), cko(n);
+    double* g[3]     = {gx.data(), gy.data(), gz.data()};
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    // Polynomial responses test the smooth-term match and h^3 scaling.
+    // Fourier responses distinguish CKO from KO2/3 and detect double
+    // application.
+    for (unsigned int pw : {2u, 3u})
+        for (unsigned int gpw : {pw, pw - 1})
+            for (double scale : {0.5, 1.0, 2.0})
+                for (double sigma : {0.0, 0.2, 0.4})
+                    for (int degree : {0, 1, 2, 3, 4, -1}) {
+                        const double h[3]     = {.125 * scale, .25 * scale,
+                                                 .5 * scale};
+                        const double theta[3] = {.7, 1.1, 1.7};
+                        for (unsigned int flags = 0; flags < 64; ++flags) {
+                            for (unsigned int k = 0; k < sz[2]; ++k)
+                                for (unsigned int j = 0; j < sz[1]; ++j)
+                                    for (unsigned int i = 0; i < sz[0]; ++i) {
+                                        const unsigned int q[3] = {i, j, k},
+                                                           p    = i + 11 * j +
+                                                               143 * k;
+                                        bool valid_field = true,
+                                             valid_grad  = true;
+                                        u[p]             = 0;
+                                        for (int d = 0; d < 3; ++d) {
+                                            const double x = q[d] * h[d];
+                                            u[p] +=
+                                                degree < 0
+                                                    ? std::sin(theta[d] * q[d] +
+                                                               .21)
+                                                    : std::pow(x, degree);
+                                            g[d][p] =
+                                                degree < 0
+                                                    ? theta[d] / h[d] *
+                                                          std::cos(theta[d] *
+                                                                       q[d] +
+                                                                   .21)
+                                                : degree == 0
+                                                    ? 0
+                                                    : degree *
+                                                          std::pow(x,
+                                                                   degree - 1);
+                                            valid_grad &= q[d] >= gpw &&
+                                                          q[d] < sz[d] - gpw;
+                                            valid_field &=
+                                                !((flags & (1u << lo[d])) &&
+                                                  q[d] < pw);
+                                            valid_field &=
+                                                !((flags & (1u << hi[d])) &&
+                                                  q[d] >= sz[d] - pw);
+                                        }
+                                        if (!valid_field) u[p] = nan;
+                                        if (!valid_grad)
+                                            gx[p] = gy[p] = gz[p] = nan;
+                                    }
+                            std::fill(out.begin(), out.end(), 7);
+                            std::fill(cko.begin(), cko.end(), 7);
+                            add_hybrid_ko(out.data(), u.data(), gx.data(),
+                                          gy.data(), gz.data(), sz, h[0], h[1],
+                                          h[2], pw, gpw, flags, sigma, scheme);
+                            add_compact_ko(cko.data(), u.data(), gx.data(),
+                                           gy.data(), gz.data(), sz, h[0], h[1],
+                                           h[2], pw, gpw, flags, sigma, scheme);
+                            for (unsigned int k = 0; k < sz[2]; ++k)
+                                for (unsigned int j = 0; j < sz[1]; ++j)
+                                    for (unsigned int i = 0; i < sz[0]; ++i) {
+                                        const unsigned int q[3] = {i, j, k},
+                                                           p    = i + 11 * j +
+                                                               143 * k;
+                                        bool active = true, all_cko = true;
+                                        for (int d = 0; d < 3; ++d) {
+                                            active &=
+                                                q[d] >= pw && q[d] < sz[d] - pw;
+                                            active &=
+                                                !((flags & (1u << lo[d])) &&
+                                                  q[d] == pw);
+                                            active &=
+                                                !((flags & (1u << hi[d])) &&
+                                                  q[d] == sz[d] - pw - 1);
+                                            all_cko &= q[d] > gpw &&
+                                                       q[d] < sz[d] - gpw - 1;
+                                        }
+                                        double expected = 7;
+                                        if (active)
+                                            for (int d = 0; d < 3; ++d) {
+                                                if (degree == 4)
+                                                    expected -=
+                                                        sigma *
+                                                        std::pow(h[d], 3) / 2;
+                                                else if (degree < 0) {
+                                                    const double t = theta[d];
+                                                    const bool compact =
+                                                        q[d] > gpw &&
+                                                        q[d] < sz[d] - gpw - 1;
+                                                    const double symbol =
+                                                        compact
+                                                            ? sigma / h[d] *
+                                                                  ((std::cos(
+                                                                        t) -
+                                                                    1) /
+                                                                       2 +
+                                                                   t *
+                                                                       std::sin(
+                                                                           t) /
+                                                                       4)
+                                                            : -sigma /
+                                                                  (3 * h[d]) *
+                                                                  std::pow(
+                                                                      std::sin(
+                                                                          t /
+                                                                          2),
+                                                                      4);
+                                                    expected +=
+                                                        symbol *
+                                                        std::sin(t * q[d] +
+                                                                 .21);
+                                                }
+                                            }
+                                        require(std::isfinite(out[p]) &&
+                                                    std::abs(out[p] -
+                                                             expected) < 2e-10,
+                                                "hybrid "
+                                                "coverage/scaling/polynomial/"
+                                                "Fourier mismatch");
+                                        if (!active || all_cko)
+                                            require(out[p] == cko[p],
+                                                    "hybrid changed valid CKO "
+                                                    "or boundary");
+                                    }
+                        }
+                    }
+    // Two-point interior: fallback on the opposite internal face must not
+    // cross the nearby physical face. All physical field ghosts are poisoned.
+    const unsigned int tiny[3] = {6, 6, 6};
+    std::vector<double> tu(216, 1), tg(216, nan), tr(216, 0);
+    for (unsigned int k = 2; k < 4; ++k)
+        for (unsigned int j = 2; j < 4; ++j)
+            for (unsigned int i = 2; i < 4; ++i) tg[i + 6 * j + 36 * k] = 0;
+    for (unsigned int k = 0; k < 6; ++k)
+        for (unsigned int j = 0; j < 6; ++j)
+            for (unsigned int i = 0; i < 2; ++i) tu[i + 6 * j + 36 * k] = nan;
+    add_hybrid_ko(tr.data(), tu.data(), tg.data(), tg.data(), tg.data(), tiny,
+                  1, 1, 1, 2, 2, 1u << OCT_DIR_LEFT, .4, scheme);
+    for (double v : tr) require(v == 0, "tiny hybrid read physical ghosts");
+    rejects([&] {
+        add_hybrid_ko(out.data(), u.data(), gx.data(), gy.data(), gz.data(), sz,
+                      1, 1, 1, 1, 1, 0, .4, scheme);
+    });
+    rejects([&] {
+        add_hybrid_ko(out.data(), u.data(), gx.data(), gy.data(), gz.data(), sz,
+                      1, 1, 1, 2, 2, 0, 0, static_cast<CompactKOScheme>(99));
+    });
+}
 }  // namespace
 
 int main() {
+    test_hybrid();
     using namespace dendroderivs;
     const auto scheme = CompactKOScheme::Radius1;
     require(compact_ko_radius(scheme) == 1, "wrong radius");
@@ -216,6 +376,6 @@ int main() {
                     }
         }
     }
-    std::cout << "Compact KO tests passed; original-radius1 max difference = "
+    std::cout << "Compact and hybrid KO tests passed; original-radius1 max difference = "
               << max_difference << '\n';
 }

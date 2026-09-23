@@ -35,4 +35,19 @@ void add_compact_ko(double* rhs, const double* u, const double* du_x,
                     unsigned int gradient_padding_width, unsigned int bflag,
                     double sigma, CompactKOScheme scheme);
 
+/** Same contract as add_compact_ko, but requires padding_width >= 2.
+ * Where a directional gradient stencil is unavailable, add centered radius-two
+ * KO2 / 3 using valid field ghosts. Caller guarantees nonphysical field ghosts
+ * are populated, including AMR transfer. Physical planes remain untouched and
+ * fallback stencils never cross a physical face (including on tiny blocks).
+ * A direction with neither valid stencil is left unchanged. No gradient is
+ * overwritten; no element-order-dependent explicit filter is used.
+ */
+void add_hybrid_ko(double* rhs, const double* u, const double* du_x,
+                    const double* du_y, const double* du_z,
+                    const unsigned int* sz, double hx, double hy, double hz,
+                    unsigned int padding_width,
+                    unsigned int gradient_padding_width, unsigned int bflag,
+                    double sigma, CompactKOScheme scheme);
+
 }  // namespace dendroderivs
