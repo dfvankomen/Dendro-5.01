@@ -1,11 +1,19 @@
-// boundary_conditions.h  --  outer-boundary conditions
-//
-// Two forms. Rhs form (most kinds): applied per unzipped block after the rhs,
-// for blocks with bflag != 0; coordinates are physical, pmin/pmax being the
-// block's padded extent as in ot::BlockGeometry, so node (i, j, k) sits at
-// pmin + (i, j, k) h. Value form (face_nodes / set_face_values): overwrites the
-// zipped state on the domain's face nodes, for boundary data with no closed-form
-// time derivative.
+/**
+ * @file boundary_conditions.h
+ * @brief Outer boundary conditions for Dendro solvers.
+ *
+ * Rhs form (dirichlet_rhs, static_rhs, outflow_rhs, robin_rhs, neumann_rhs,
+ * sommerfeld_rhs): applied to one unzipped block after its interior rhs, on
+ * blocks with bflag != 0. pmin/pmax are the block's padded physical extent (as in
+ * ot::BlockGeometry), so node (i, j, k) sits at pmin + (i, j, k) h; pw is the
+ * padding width. Face-node kinds act only on nodes lying on a physical face; the
+ * nodes behind keep the solver's own stencils and closures.
+ *
+ * Value form (face_nodes, set_face_values): overwrites a zipped state on the
+ * domain's face nodes, for boundary data without a closed-form time derivative.
+ * Solvers call it on every stage state before its rhs, at the stage time, and on
+ * the final state of each step.
+ */
 #pragma once
 
 #include <stdexcept>
@@ -17,10 +25,20 @@
 
 namespace dendro_bc {
 
-// Calls f(pp, x, y, z, faces) once for every node lying on a physical face of
-// the block (edges and corners once); `faces` has bit OCT_DIR_* set for each
-// face the node lies on. Faces only: the nodes behind them keep the solver's
-// own stencils and closures.
+/** Coordinate axis (0, 1, 2) of face OCT_DIR_LEFT..OCT_DIR_FRONT. */
+inline unsigned int face_axis(unsigned int face) { return face / 2; }
+
+/** Index step from a node on `face` to its neighbour one node inward. */
+inline long inward_step(unsigned int face, const unsigned int stride[3]) {
+    const long s = (long)stride[face_axis(face)];
+    return (face % 2 == 0) ? s : -s;
+}
+
+/**
+ * Calls f(pp, x, y, z, faces) once for every node lying on a physical face of
+ * the block, edges and corners once; `faces` has bit OCT_DIR_* set for each face
+ * the node lies on.
+ */
 template <typename F>
 inline void for_each_face_node_on(const double* pmin, const double* pmax,
                                   const unsigned int* sz, unsigned int bflag,
@@ -52,7 +70,7 @@ inline void for_each_face_node_on(const double* pmin, const double* pmax,
     }
 }
 
-// As above without the face mask.
+/** for_each_face_node_on without the face mask: f(pp, x, y, z). */
 template <typename F>
 inline void for_each_face_node(const double* pmin, const double* pmax,
                                const unsigned int* sz, unsigned int bflag,
@@ -62,11 +80,11 @@ inline void for_each_face_node(const double* pmin, const double* pmax,
                               unsigned int) { f(pp, x, y, z); });
 }
 
-// Dirichlet in time: on every physical-face node, rhs[v][pp] is replaced by
-// the prescribed time derivative, dfdt(x, y, z, out) filling out[0..nvars).
-// Integrated by the solver's own time stepper, the face then follows the
-// prescribed boundary data to the stepper's accuracy (stage times included,
-// provided dfdt uses the stage time).
+/**
+ * Dirichlet in time: on every face node, rhs[v][pp] = dfdt(x, y, z, out)[v] for
+ * v < nvars. The time stepper then carries the face along the prescribed data to
+ * its own accuracy, provided dfdt uses the stage time.
+ */
 template <typename G>
 inline void dirichlet_rhs(double* const* rhs, unsigned int nvars,
                           const double* pmin, const double* pmax,
@@ -84,11 +102,7 @@ inline void dirichlet_rhs(double* const* rhs, unsigned int nvars,
                        });
 }
 
-
-// ---------------------------------------------------------------------------
-// Data-free conditions, one variable at a time. Apply after the interior rhs.
-
-// Hold: the face keeps whatever value it has (f_t = 0).
+/** Hold: every face node keeps its value (f_t = 0). */
 inline void static_rhs(double* f_rhs, const double* pmin, const double* pmax,
                        const unsigned int* sz, unsigned int bflag,
                        unsigned int pw) {
@@ -99,12 +113,14 @@ inline void static_rhs(double* f_rhs, const double* pmin, const double* pmax,
                        });
 }
 
-// Outflow (first-order characteristic, incoming = 0): f_t = -v . grad f, with
-// vel[face] the outgoing characteristic velocity through that face, indexed by
-// OCT_DIR_LEFT..OCT_DIR_FRONT: c n for speed c, K n / sqrt(n.K.n) for
-// u_tt = K:grad grad u. Exact for waves meeting the face head-on; oblique ones
-// reflect partially, as with every local absorbing condition. Edge and corner
-// nodes use the mean velocity of their faces.
+/**
+ * Outflow, the first-order characteristic condition with zero incoming data:
+ * f_t = -v . grad f, where vel[face] is the outgoing characteristic velocity
+ * through that face (c n for speed c; K n / sqrt(n.K.n) for u_tt = K:grad grad u).
+ * Exact for waves meeting the face head-on; oblique ones reflect partially, as
+ * with any local absorbing condition. Edge and corner nodes use the mean velocity
+ * of their faces.
+ */
 inline void outflow_rhs(double* f_rhs, const double* dxf, const double* dyf,
                         const double* dzf, const double* pmin,
                         const double* pmax, const unsigned int* sz,
@@ -127,26 +143,29 @@ inline void outflow_rhs(double* f_rhs, const double* dxf, const double* dyf,
         });
 }
 
-// Neumann with a time-independent normal derivative (zero flux, or any fixed
-// flux the initial data already has): the sixth-order one-sided derivative
-// sum_k c_k f_k along the inward normal is held constant, so on the face
-// f_t = -(sum_{k>=1} c_k f_t,k) / c_0, using the interior rhs of the six nodes
-// behind it. Needs 7 nodes across the block interior. Edge and corner nodes
-// average over their faces. All updates read the incoming rhs, so the result
-// does not depend on face order.
-inline void neumann_rhs(double* f_rhs, const double* pmin, const double* pmax,
-                        const unsigned int* sz, unsigned int bflag,
-                        unsigned int pw) {
+/**
+ * Robin, a f + b d_n f held at its initial value (d_n the outward normal
+ * derivative), with a[face], b[face] per face. The sixth-order one-sided
+ * derivative over the face node and the six behind it turns the condition into
+ * f_t,0 = b sum_{k>=1} c_k f_t,k / (60 h a - b c_0), using the interior rhs of
+ * those nodes; b = 0 holds f, a = 0 is Neumann. Needs 7 nodes across the block
+ * interior. Edge and corner nodes average over their faces; every update reads
+ * the incoming rhs, so the result does not depend on face order.
+ */
+inline void robin_rhs(double* f_rhs, const double* pmin, const double* pmax,
+                      const unsigned int* sz, unsigned int bflag,
+                      unsigned int pw, const double a[6], const double b[6]) {
     if (bflag == 0) return;
     static const double c[7] = {-147.0, 360.0, -450.0, 400.0,
                                 -225.0, 72.0,  -10.0};
-    const unsigned int nx = sz[0], ny = sz[1];
-    const unsigned int n[3] = {sz[0], sz[1], sz[2]};
-    for (unsigned int a = 0; a < 3; a++)
-        if (n[a] < 2 * pw + 7)
+    const unsigned int stride[3] = {1u, sz[0], sz[0] * sz[1]};
+    double h[3];
+    for (unsigned int ax = 0; ax < 3; ax++) {
+        if (sz[ax] < 2 * pw + 7)
             throw std::runtime_error(
-                "dendro_bc::neumann_rhs: block interior narrower than 7 nodes");
-    const unsigned int stride[3] = {1u, nx, nx * ny};
+                "dendro_bc::robin_rhs: block interior narrower than 7 nodes");
+        h[ax] = (pmax[ax] - pmin[ax]) / (sz[ax] - 1);
+    }
 
     std::vector<std::pair<unsigned int, double>> upd;
     for_each_face_node_on(
@@ -156,15 +175,11 @@ inline void neumann_rhs(double* f_rhs, const double* pmin, const double* pmax,
             unsigned int m = 0;
             for (unsigned int d = 0; d < 6; d++) {
                 if (!(faces & (1u << d))) continue;
-                // OCT_DIR_LEFT/RIGHT = x, DOWN/UP = y, BACK/FRONT = z; the
-                // low face of each pair steps inward in +axis
-                const unsigned int axis = d / 2;
-                const long step = (d % 2 == 0) ? (long)stride[axis]
-                                               : -(long)stride[axis];
+                const long step = inward_step(d, stride);
                 double s = 0.0;
                 for (unsigned int k = 1; k < 7; k++)
                     s += c[k] * f_rhs[(long)pp + (long)k * step];
-                acc += -s / c[0];
+                acc += b[d] * s / (60.0 * h[face_axis(d)] * a[d] - b[d] * c[0]);
                 m++;
             }
             upd.emplace_back(pp, acc / m);
@@ -172,9 +187,21 @@ inline void neumann_rhs(double* f_rhs, const double* pmin, const double* pmax,
     for (const auto& u : upd) f_rhs[u.first] = u.second;
 }
 
-// Sommerfeld (radiative): f_t = -(x f_x + y f_y + z f_z + falloff (f - f_inf))/r
-// on a padding-width slab at each flagged face. Moved verbatim from the
-// generated solvers (dendrosym, 2021), so results are unchanged.
+/** Neumann: d_n f held at its initial value (zero flux if it starts at zero). */
+inline void neumann_rhs(double* f_rhs, const double* pmin, const double* pmax,
+                        const unsigned int* sz, unsigned int bflag,
+                        unsigned int pw) {
+    static const double a[6] = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+    static const double b[6] = {1.0, 1.0, 1.0, 1.0, 1.0, 1.0};
+    robin_rhs(f_rhs, pmin, pmax, sz, bflag, pw, a, b);
+}
+
+/**
+ * Sommerfeld (radiative): f_t = -(x f_x + y f_y + z f_z + falloff (f - f_inf)) / r
+ * on a padding-width slab at each flagged face, for fields falling off as
+ * f_inf + O(1/r^falloff) from a central source. The generated solvers' original
+ * condition (dendrosym, 2021), unchanged.
+ */
 inline void sommerfeld_rhs(double* f_rhs, const double* f, const double* dxf,
                            const double* dyf, const double* dzf,
                            const double* pmin, const double* pmax,
@@ -203,7 +230,6 @@ inline void sommerfeld_rhs(double* f_rhs, const double* f, const double* dxf,
     unsigned int pp;
     double inv_r;
 
-    // apply on each boundary face that's flagged
     if (bflag & (1u << OCT_DIR_LEFT)) {
         for (unsigned int k = kb; k < ke; k++) {
             z = pmin[2] + k * hz;
@@ -301,19 +327,17 @@ inline void sommerfeld_rhs(double* f_rhs, const double* f, const double* dxf,
     }
 }
 
-// ---------------------------------------------------------------------------
-// Value form: overwrite the zipped state on the domain's face nodes. Solvers
-// call it on each stage state before its rhs (with the stage time) and on the
-// final state of each step.
-
+/** A domain face node of a zipped vector, from face_nodes(). */
 struct FaceNode {
-    unsigned int node;       // CG index into a zipped vector
-    double ox, oy, oz;       // octree coordinates; the solver maps to physical
-    unsigned int faces;      // bit OCT_DIR_* per domain face the node lies on
+    unsigned int node;   /**< CG index into a zipped vector */
+    double ox, oy, oz;   /**< octree coordinates; the solver maps them to physical */
+    unsigned int faces;  /**< bit OCT_DIR_* per domain face the node lies on */
 };
 
-// Every locally owned CG node on a physical face of the domain. Face membership
-// comes from integer octant data, not from coordinates. Recompute after remesh.
+/**
+ * Every locally owned CG node on a physical face of the domain. Face membership
+ * comes from integer octant data, not coordinates. Recompute after a remesh.
+ */
 inline std::vector<FaceNode> face_nodes(ot::Mesh* mesh) {
     std::vector<FaceNode> out;
     if (!mesh->isActive()) return out;
@@ -352,7 +376,7 @@ inline std::vector<FaceNode> face_nodes(ot::Mesh* mesh) {
     return out;
 }
 
-// f[node] = g(ox, oy, oz) on every face node (one variable of a zipped state).
+/** f[node] = g(ox, oy, oz) on every face node (one variable of a zipped state). */
 template <typename G>
 inline void set_face_values(double* f, const std::vector<FaceNode>& nodes,
                             G&& g) {
