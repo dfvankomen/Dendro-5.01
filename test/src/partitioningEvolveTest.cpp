@@ -67,6 +67,18 @@ double init_func(double xg, double yg, double zg) {
     const double xp    = xg * scale + DOM_MIN;
     const double yp    = yg * scale + DOM_MIN;
     const double zp    = zg * scale + DOM_MIN;
+    // PARTEVOLVE_INIT=puncture: sharp off-centre gaussian (asymmetric level spread)
+    static const bool puncture = [] {
+        const char* e = std::getenv("PARTEVOLVE_INIT");
+        return e && std::string(e) == "puncture";
+    }();
+    if (puncture) {
+        const double L = DOM_MAX - DOM_MIN;
+        const double cx = DOM_MIN + 0.69 * L, cy = DOM_MIN + 0.53 * L, cz = DOM_MIN + 0.53 * L;
+        const double s2 = 2.0 * (0.023 * L) * (0.023 * L);
+        const double r2 = (xp - cx) * (xp - cx) + (yp - cy) * (yp - cy) + (zp - cz) * (zp - cz);
+        return std::exp(-r2 / s2);
+    }
     // Gaussian at origin, width 0.8
     const double sigma = 0.8;
     const double r2    = xp * xp + yp * yp + zp * zp;
