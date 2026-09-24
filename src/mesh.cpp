@@ -20225,34 +20225,27 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             sendOff[p] = sendOff[p - 1] + sendCount[p - 1];
         int totalSend = sendOff[npes - 1] + sendCount[npes - 1];
 
-        // Exchange DG globals
-        std::vector<long unsigned int> sendBuf(totalSend);
-        std::vector<long unsigned int> recvBuf(totalRecv);
+        // DG globals with the receiver's isDG tag in the top bit, so the
+        // sender knows which entries should read from m_uiLocalNodalDG vs vec
+        constexpr std::uint64_t kIsDGBit = std::uint64_t(1) << 63;
+        std::vector<std::uint64_t> sendBuf(totalSend);
+        std::vector<std::uint64_t> recvBuf(totalRecv);
         {
             int off = 0;
             for (int p = 0; p < npes; p++)
-                for (const auto &v : recvNodeDGG[p])
-                    recvBuf[off++] = v;
+                for (size_t i = 0; i < recvNodeDGG[p].size(); i++)
+                    recvBuf[off++] = std::uint64_t(recvNodeDGG[p][i]) |
+                                     (recvNodeIsDG[p][i] ? kIsDGBit : 0);
         }
         repartRound();
         MPI_Alltoallv(recvBuf.data(), recvCount.data(), recvOff.data(),
-                      MPI_UNSIGNED_LONG, sendBuf.data(), sendCount.data(),
-                      sendOff.data(), MPI_UNSIGNED_LONG, commActive);
-
-        // Exchange the DG tags in parallel so the sender knows which
-        // entries should read from m_uiLocalNodalDG vs vec.
+                      MPI_UINT64_T, sendBuf.data(), sendCount.data(),
+                      sendOff.data(), MPI_UINT64_T, commActive);
         std::vector<unsigned char> sendIsDGBuf(totalSend);
-        std::vector<unsigned char> recvIsDGBuf(totalRecv);
-        {
-            int off = 0;
-            for (int p = 0; p < npes; p++)
-                for (const auto &v : recvNodeIsDG[p])
-                    recvIsDGBuf[off++] = v;
+        for (int i = 0; i < totalSend; i++) {
+            sendIsDGBuf[i] = (sendBuf[i] & kIsDGBit) ? 1 : 0;
+            sendBuf[i] &= ~kIsDGBit;
         }
-        repartRound();
-        MPI_Alltoallv(recvIsDGBuf.data(), recvCount.data(), recvOff.data(),
-                      MPI_UNSIGNED_CHAR, sendIsDGBuf.data(), sendCount.data(),
-                      sendOff.data(), MPI_UNSIGNED_CHAR, commActive);
 
         // Decode (ownerGid, sub) on sender. Three modes:
         //  1. Receiver tagged isDG=1 (R2 boundary): use DG path,
