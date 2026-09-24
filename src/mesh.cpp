@@ -20120,6 +20120,15 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
     // -----
     // ELEMENT SCATTERMAP
+    // Each rank pulls the 26-closure of its local elements from the owners,
+    // so the element ghost exchange is exact by construction. The legacy push
+    // variant walks ghost-side e2e chains, which miss finer neighbours and
+    // ghosts fetched in round 2 on ragged labellings (ENUTS stage sync NaN).
+    static const bool elemSmPush = [] {
+        const char* e = std::getenv("DENDRO_ELEM_SM_PUSH");
+        return e && e[0] == '1';
+    }();
+    if (elemSmPush) {
     std::set<unsigned int> scatterMapSend_R1[npes];
     // get the element scattermap as well
 
@@ -20269,6 +20278,101 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                              "couldn't find global ID "
                           << recvEleGlobalIDs[k] << std::endl;
             }
+        }
+    }
+
+    } else {
+        const unsigned int nAll = m_uiAllElements.size();
+        std::vector<unsigned int> ghostByX;
+        ghostByX.reserve(nAll - (newLocalEnd - newLocalBegin));
+        unsigned int maxGhostSz = 0;
+        for (unsigned int e = 0; e < nAll; e++) {
+            if (e >= newLocalBegin && e < newLocalEnd) continue;
+            ghostByX.push_back(e);
+            maxGhostSz = std::max(
+                maxGhostSz,
+                1u << (m_uiMaxDepth - m_uiAllElements[e].getLevel()));
+        }
+        std::sort(ghostByX.begin(), ghostByX.end(),
+                  [&](unsigned int x, unsigned int y) {
+                      return m_uiAllElements[x].minX() <
+                             m_uiAllElements[y].minX();
+                  });
+        std::vector<unsigned int> ghostMinX(ghostByX.size());
+        for (size_t i = 0; i < ghostByX.size(); i++)
+            ghostMinX[i] = m_uiAllElements[ghostByX[i]].minX();
+
+        std::vector<char> needed(nAll, 0);
+        for (unsigned int e = newLocalBegin; e < newLocalEnd; e++) {
+            const ot::TreeNode& L = m_uiAllElements[e];
+            const unsigned int lo =
+                L.minX() > maxGhostSz ? L.minX() - maxGhostSz : 0u;
+            size_t i = std::lower_bound(ghostMinX.begin(), ghostMinX.end(),
+                                        lo) -
+                       ghostMinX.begin();
+            for (; i < ghostByX.size() && ghostMinX[i] <= L.maxX(); i++) {
+                const ot::TreeNode& G = m_uiAllElements[ghostByX[i]];
+                if (G.maxX() < L.minX() || G.minY() > L.maxY() ||
+                    G.maxY() < L.minY() || G.minZ() > L.maxZ() ||
+                    G.maxZ() < L.minZ())
+                    continue;
+                needed[ghostByX[i]] = 1;
+            }
+        }
+
+        std::vector<std::vector<unsigned int>> reqLocal(npes);
+        for (unsigned int e = 0; e < nAll; e++)
+            if (needed[e])
+                reqLocal[new_oct_connectivity_map[e].trank].push_back(e);
+
+        std::vector<int> reqCount(npes), reqOff(npes), ansCount(npes),
+            ansOff(npes);
+        m_uiGhostElementRound1Index.clear();
+        for (unsigned int p = 0; p < npes; p++) {
+            reqCount[p] = reqLocal[p].size();
+            m_uiGhostElementRound1Index.insert(
+                m_uiGhostElementRound1Index.end(), reqLocal[p].begin(),
+                reqLocal[p].end());
+        }
+        std::vector<unsigned int> reqGlobal(m_uiGhostElementRound1Index.size());
+        for (size_t k = 0; k < reqGlobal.size(); k++)
+            reqGlobal[k] =
+                new_oct_connectivity_map[m_uiGhostElementRound1Index[k]].eid;
+
+        par::Mpi_Alltoall(reqCount.data(), ansCount.data(), 1, commActive);
+        reqOff[0] = ansOff[0] = 0;
+        for (unsigned int p = 1; p < npes; p++) {
+            reqOff[p] = reqOff[p - 1] + reqCount[p - 1];
+            ansOff[p] = ansOff[p - 1] + ansCount[p - 1];
+        }
+        std::vector<unsigned int> ansGlobal(ansOff[npes - 1] +
+                                            ansCount[npes - 1]);
+        MPI_Alltoallv(reqGlobal.data(), reqCount.data(), reqOff.data(),
+                      MPI_UNSIGNED, ansGlobal.data(), ansCount.data(),
+                      ansOff.data(), MPI_UNSIGNED, commActive);
+
+        m_uiScatterMapElementRound1.resize(ansGlobal.size());
+        for (size_t k = 0; k < ansGlobal.size(); k++) {
+            auto it = globaltoNewLocal.find(ansGlobal[k]);
+            if (it == globaltoNewLocal.end() || it->second < newLocalBegin ||
+                it->second >= newLocalEnd) {
+                std::cerr << rank << ": element pull request for global id "
+                          << ansGlobal[k] << " is not local" << std::endl;
+                MPI_Abort(commActive, 1);
+            }
+            m_uiScatterMapElementRound1[k] = it->second - newLocalBegin;
+        }
+
+        m_uiSendEleCount.assign(ansCount.begin(), ansCount.end());
+        m_uiSendEleOffset.assign(ansOff.begin(), ansOff.end());
+        m_uiRecvEleCount.assign(reqCount.begin(), reqCount.end());
+        m_uiRecvEleOffset.assign(reqOff.begin(), reqOff.end());
+
+        m_uiElementSendProcList.clear();
+        m_uiElementRecvProcList.clear();
+        for (unsigned int p = 0; p < m_uiActiveNpes; p++) {
+            if (m_uiSendEleCount[p] > 0) m_uiElementSendProcList.push_back(p);
+            if (m_uiRecvEleCount[p] > 0) m_uiElementRecvProcList.push_back(p);
         }
     }
 
@@ -20905,10 +21009,14 @@ void ot::Mesh::ensureBlockZipPlan() {
     std::vector<unsigned int> counts(nb + 1, 0);
     const size_t N = m_uiZipPlanUnzipIdx.size();
     std::vector<long> bOf(N);
+    size_t dropped = 0;
     for (size_t i = 0; i < N; i++) {
         bOf[i] = blockOf(m_uiZipPlanUnzipIdx[i]);
-        if (bOf[i] >= 0) counts[bOf[i]]++;
+        if (bOf[i] >= 0) counts[bOf[i]]++; else dropped++;
     }
+    if (dropped > 0)
+        std::cerr << "[blk-zip-plan r" << m_uiActiveRank << "] " << dropped << " of " << N
+                  << " zip-plan entries fall outside every block's allocation range" << std::endl;
     m_uiBlkZipPlanStart.assign(nb + 1, 0);
     for (size_t b = 0; b < nb; b++) m_uiBlkZipPlanStart[b + 1] = m_uiBlkZipPlanStart[b] + counts[b];
     m_uiBlkZipPlanIdx.assign(m_uiBlkZipPlanStart[nb], 0);

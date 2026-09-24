@@ -338,6 +338,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     int deallocate_internal_vars();
 
     /**@bried: synchronize the block vectors*/
+    void debug_nan_check(const char* tag, unsigned int blk, unsigned int s,
+                         unsigned int pt, unsigned int rk);
+
     void sync_blk_timestep(unsigned int blk, unsigned int rk_s,
                            bool isIGTSync = false);
 
@@ -910,6 +913,95 @@ void ExplicitNUTS<T, Ctx>::init() {
     // adapted to the initial data.
     m_uiAppCtx->set_ets_synced(false);
     this->sync_with_mesh();
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::debug_nan_check(const char* tag, unsigned int blk,
+                                           unsigned int s, unsigned int pt,
+                                           unsigned int rk) {
+    static const bool on = [] {
+        const char* e = std::getenv("DENDRO_ENUTS_NANCHK");
+        return e && e[0] == '1';
+    }();
+    if (!on) return;
+    ot::Mesh* pMesh      = m_uiAppCtx->get_mesh();
+    const T* v           = m_uiBVec[blk]._vec[s].data();
+    const unsigned int n = m_uiEVar.get_dof() * m_uiBVec[blk]._vec[s].getSz();
+    const ot::Block& b   = pMesh->getLocalBlockList()[blk];
+    const unsigned int NN = b.getAlignedBlockSz();
+    const unsigned int lx = b.getAllocationSzX(), ly = b.getAllocationSzY(),
+                       lz = b.getAllocationSzZ(), PW = b.get1DPadWidth();
+    const bool interiorOnly = (std::strcmp(tag, "post-rhs") == 0);
+    const double hx0 = (1u << (m_uiMaxDepth - pMesh->getAllElements()[b.firstElementID()].getLevel())) /
+                       (double)pMesh->getElementOrder();
+    const double dmax = (double)(1u << m_uiMaxDepth);
+    for (unsigned int i = 0; i < n; i++) {
+        const unsigned int l = i % NN, x = l % lx, y = (l / lx) % ly, z = l / (lx * ly);
+        if (interiorOnly) {
+            if (x < PW || x >= lx - PW || y < PW || y >= ly - PW || z < PW || z >= lz - PW) continue;
+        }
+        {
+            const double px = b.getBlockNode().minX() - PW * hx0 + x * hx0;
+            const double py = b.getBlockNode().minY() - PW * hx0 + y * hx0;
+            const double pz = b.getBlockNode().minZ() - PW * hx0 + z * hx0;
+            if (px < 0 || py < 0 || pz < 0 || px > dmax || py > dmax || pz > dmax) continue;
+        }
+        if (std::isnan(v[i]) || std::isinf(v[i])) {
+            std::cout << "[enuts-nan r" << pMesh->getMPIRankGlobal() << "] "
+                      << tag << " pt=" << pt << " rk=" << rk << " blk=" << blk
+                      << " s=" << s << " idx=" << i << " of " << n << " lev="
+                      << pMesh->getAllElements()[b.firstElementID()].getLevel()
+                      << " nonSFC=" << b.isNonSFC()
+                      << " nele=" << b.numElements()
+                      << " node=" << b.getBlockNode()
+                      << " time=" << m_uiBVec[blk]._time << std::endl;
+            if (std::strcmp(tag, "post-sync") == 0) {
+                std::vector<unsigned int> eid;
+                pMesh->blkUnzipElementIDs(blk, eid);
+                const unsigned int nPe = pMesh->getNumNodesPerElement();
+                const unsigned int dgSz = pMesh->getAllElements().size() * nPe;
+                const T* st = m_uiStVec[s - 1].get_vec_ptr();
+                const std::vector<unsigned int>& r1 = pMesh->getLevel1GhostElementIndices();
+                {
+                    const unsigned int l = i % NN, x = l % lx, y = (l / lx) % ly, z = l / (lx * ly);
+                    const unsigned int eo = pMesh->getElementOrder();
+                    const double hx = (1u << (m_uiMaxDepth - pMesh->getAllElements()[b.firstElementID()].getLevel())) / (double)eo;
+                    const double px = b.getBlockNode().minX() - PW * hx + x * hx;
+                    const double py = b.getBlockNode().minY() - PW * hx + y * hx;
+                    const double pz = b.getBlockNode().minZ() - PW * hx + z * hx;
+                    std::cout << "[enuts-nan r" << pMesh->getMPIRankGlobal() << "]   slot (" << x << "," << y << "," << z
+                              << ") pt (" << px << "," << py << "," << pz << ") PW=" << PW << " lx=" << lx << std::endl;
+                    const std::vector<ot::TreeNode>& all = pMesh->getAllElements();
+                    for (unsigned int e = 0; e < all.size(); e++) {
+                        if (px < all[e].minX() || px > all[e].maxX() || py < all[e].minY() || py > all[e].maxY() ||
+                            pz < all[e].minZ() || pz > all[e].maxZ()) continue;
+                        const bool local = e >= pMesh->getElementLocalBegin() && e < pMesh->getElementLocalEnd();
+                        const bool inR1 = std::find(r1.begin(), r1.end(), e) != r1.end();
+                        const bool inEid = std::find(eid.begin(), eid.end(), e) != eid.end();
+                        std::cout << "[enuts-nan r" << pMesh->getMPIRankGlobal() << "]   covering elem " << e << " " << all[e]
+                                  << " local=" << local << " r1=" << inR1 << " inEid=" << inEid << std::endl;
+                    }
+                    std::cout << "[enuts-nan r" << pMesh->getMPIRankGlobal() << "]   eid size " << eid.size() << " :";
+                    for (const unsigned int e : eid) std::cout << " " << all[e];
+                    std::cout << std::endl;
+                }
+                for (const unsigned int e : eid) {
+                    unsigned int bad = 0;
+                    for (unsigned int v = 0; v < m_uiEVar.get_dof(); v++)
+                        for (unsigned int k = 0; k < nPe; k++)
+                            if (std::isnan(st[v * dgSz + e * nPe + k])) bad++;
+                    if (!bad) continue;
+                    const bool local = e >= pMesh->getElementLocalBegin() && e < pMesh->getElementLocalEnd();
+                    const bool inR1 = std::find(r1.begin(), r1.end(), e) != r1.end();
+                    std::cout << "[enuts-nan r" << pMesh->getMPIRankGlobal() << "]   dep elem " << e
+                              << " " << pMesh->getAllElements()[e] << " bad=" << bad
+                              << " local=" << local << " r1=" << inR1
+                              << " etime=" << m_uiEleTime[e] << " edt=" << m_uiEleDT[e] << std::endl;
+                }
+            }
+            MPI_Abort(pMesh->getMPICommunicator(), 7);
+        }
+    }
 }
 
 template <typename T, typename Ctx>
@@ -1854,9 +1946,11 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             m_uiAppCtx->pre_stage_blk(
                 (T*)m_uiBVec[blk]._vec[m_uiNumStages + 1].data(), DOF, blk,
                 current_t + dt_finest * BLK_T);
+            debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].computeVec(
                 m_uiAppCtx, m_uiBVec[blk]._vec[m_uiNumStages + 1],
                 current_t + dt_finest * BLK_T);
+            debug_nan_check("post-rhs", blk, BLK_S, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].mark_unsynced();
             // std::cout<<"rk:"<<rk<<std::endl;
             // m_uiBVec[blk]._vec[BLK_S].dump_vec(std::cout);
@@ -1889,6 +1983,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                 m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
 
             sync_blk_timestep(blk, BLK_S);
+            debug_nan_check("post-sync", blk, BLK_S, pt, rk);
             m_uiAppCtx->post_stage_blk((T*)m_uiBVec[blk]._vec[BLK_S].data(),
                                        DOF, blk, current_t + dt_finest * BLK_T);
             m_uiBVec[blk]._vec[BLK_S].mark_synced();
@@ -2087,9 +2182,11 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
             m_uiAppCtx->pre_stage_blk(
                 (T*)m_uiBVec[blk]._vec[m_uiNumStages + 1].data(), DOF, blk,
                 current_t + dt_finest * BLK_T);
+            debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].computeVec(
                 m_uiAppCtx, m_uiBVec[blk]._vec[m_uiNumStages + 1],
                 current_t + dt_finest * BLK_T);
+            debug_nan_check("post-rhs", blk, BLK_S, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].mark_unsynced();
             // std::cout<<"rk:"<<rk<<std::endl;
             // m_uiBVec[blk]._vec[BLK_S].dump_vec(std::cout);
@@ -2557,10 +2654,12 @@ void ExplicitNUTS<T, Ctx>::remesh(unsigned int grain_sz, double ld_tol,
         m_uiBVec[blk]._vec[0].mark_unsynced();
         sync_blk_timestep(blk, 0);
         m_uiBVec[blk]._vec[0].mark_synced();
+        debug_nan_check("igt-sync-u", blk, 0, 0, 0);
 
         for (unsigned int s = 1; s <= m_uiNumStages; s++) {
             m_uiBVec[blk]._vec[s].mark_unsynced();
             sync_blk_timestep(blk, s, true);
+            debug_nan_check("igt-sync-stage", blk, s, 0, s);
         }
     }
 
