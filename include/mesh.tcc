@@ -741,23 +741,22 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
             sendB = (T*)ctx.getSendBuffer();
 
-            // threaded gather into the send buffer (disjoint writes per proc)
+            // threaded gather over (proc, var) pairs -- disjoint writes
+            const unsigned int sendWork = sendProcList.size() * dof;
 #ifdef DENDRO_HYBRID_OMP
-#pragma omp parallel for private(proc_id)
+#pragma omp parallel for schedule(dynamic)
 #endif
-            for (unsigned int send_p = 0; send_p < sendProcList.size();
-                 send_p++) {
-                proc_id = sendProcList[send_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeSendOffset[proc_id];
-                         k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
-                         k++) {
-                        sendB[dof * (nodeSendOffset[proc_id]) +
-                              (var * nodeSendCount[proc_id]) +
-                              (k - nodeSendOffset[proc_id])] =
-                            (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
-                    }
+            for (unsigned int idx = 0; idx < sendWork; idx++) {
+                const unsigned int send_p  = idx / dof;
+                const unsigned int var     = idx % dof;
+                const unsigned int proc_id = sendProcList[send_p];
+                for (unsigned int k = nodeSendOffset[proc_id];
+                     k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
+                     k++) {
+                    sendB[dof * (nodeSendOffset[proc_id]) +
+                          (var * nodeSendCount[proc_id]) +
+                          (k - nodeSendOffset[proc_id])] =
+                        (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
                 }
             }
 
@@ -842,23 +841,22 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             // copy the recv data to the vec
             recvB = (T*)cctx.getRecvBuffer();
 
-            // threaded scatter from recv buffer (recvNodeSM is a permutation)
+            // threaded scatter over (proc, var) pairs (recvNodeSM is a permutation)
+            const unsigned int recvWork = recvProcList.size() * dof;
 #ifdef DENDRO_HYBRID_OMP
-#pragma omp parallel for private(proc_id)
+#pragma omp parallel for schedule(dynamic)
 #endif
-            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
-                 recv_p++) {
-                proc_id = recvProcList[recv_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeRecvOffset[proc_id];
-                         k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
-                         k++) {
-                        (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
-                            recvB[dof * (nodeRecvOffset[proc_id]) +
-                                  (var * nodeRecvCount[proc_id]) +
-                                  (k - nodeRecvOffset[proc_id])];
-                    }
+            for (unsigned int idx = 0; idx < recvWork; idx++) {
+                const unsigned int recv_p  = idx / dof;
+                const unsigned int var     = idx % dof;
+                const unsigned int proc_id = recvProcList[recv_p];
+                for (unsigned int k = nodeRecvOffset[proc_id];
+                     k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
+                     k++) {
+                    (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
+                        recvB[dof * (nodeRecvOffset[proc_id]) +
+                              (var * nodeRecvCount[proc_id]) +
+                              (k - nodeRecvOffset[proc_id])];
                 }
             }
         }
@@ -930,23 +928,22 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
             dendro::timer::t_ghost_pack.start();
 #endif
-            // threaded gather into the send buffer (disjoint writes per proc)
+            // threaded gather over (proc, var) pairs -- disjoint writes
+            const unsigned int sendWork = sendProcList.size() * dof;
 #ifdef DENDRO_HYBRID_OMP
-#pragma omp parallel for private(proc_id)
+#pragma omp parallel for schedule(dynamic)
 #endif
-            for (unsigned int send_p = 0; send_p < sendProcList.size();
-                 send_p++) {
-                proc_id = sendProcList[send_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeSendOffset[proc_id];
-                         k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
-                         k++) {
-                        sendB[dof * (nodeSendOffset[proc_id]) +
-                              (var * nodeSendCount[proc_id]) +
-                              (k - nodeSendOffset[proc_id])] =
-                            (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
-                    }
+            for (unsigned int idx = 0; idx < sendWork; idx++) {
+                const unsigned int send_p  = idx / dof;
+                const unsigned int var     = idx % dof;
+                const unsigned int proc_id = sendProcList[send_p];
+                for (unsigned int k = nodeSendOffset[proc_id];
+                     k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
+                     k++) {
+                    sendB[dof * (nodeSendOffset[proc_id]) +
+                          (var * nodeSendCount[proc_id]) +
+                          (k - nodeSendOffset[proc_id])] =
+                        (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
                 }
             }
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
@@ -1028,23 +1025,22 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
             dendro::timer::t_ghost_unpack.start();
 #endif
-            // threaded scatter from recv buffer (recvNodeSM is a permutation)
+            // threaded scatter over (proc, var) pairs (recvNodeSM is a permutation)
+            const unsigned int recvWork = recvProcList.size() * dof;
 #ifdef DENDRO_HYBRID_OMP
-#pragma omp parallel for private(proc_id)
+#pragma omp parallel for schedule(dynamic)
 #endif
-            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
-                 recv_p++) {
-                proc_id = recvProcList[recv_p];
-
-                for (unsigned int var = 0; var < dof; var++) {
-                    for (unsigned int k = nodeRecvOffset[proc_id];
-                         k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
-                         k++) {
-                        (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
-                            recvB[dof * (nodeRecvOffset[proc_id]) +
-                                  (var * nodeRecvCount[proc_id]) +
-                                  (k - nodeRecvOffset[proc_id])];
-                    }
+            for (unsigned int idx = 0; idx < recvWork; idx++) {
+                const unsigned int recv_p  = idx / dof;
+                const unsigned int var     = idx % dof;
+                const unsigned int proc_id = recvProcList[recv_p];
+                for (unsigned int k = nodeRecvOffset[proc_id];
+                     k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
+                     k++) {
+                    (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
+                        recvB[dof * (nodeRecvOffset[proc_id]) +
+                              (var * nodeRecvCount[proc_id]) +
+                              (k - nodeRecvOffset[proc_id])];
                 }
             }
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
