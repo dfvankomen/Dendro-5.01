@@ -541,9 +541,7 @@ void ETS<T, Ctx>::evolve() {
                 m_uiCtxpt[ETSPROFILE::STAGE_0 + stage].start();
 #endif
 
-            m_uiEVecTmp[0].copy_data(m_uiEVar);
-
-            // Fused: tmp += sum_p (aip*dt)*StVec[p] in one region (bit-identical).
+            // Stage input tmp = EVar + sum_p (aip*dt)*StVec[p], post_timestep fused.
             {
                 DendroScalar a_cf[ETS_MAX_STAGES];
                 const DVec* a_sp[ETS_MAX_STAGES];
@@ -556,11 +554,9 @@ void ETS<T, Ctx>::evolve() {
                         a_n++;
                     }
                 }
-                if (a_n)
-                    DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
+                m_uiAppCtx->rk_stage_input(m_uiEVar, a_n, a_cf, a_sp,
+                                           m_uiEVecTmp[0]);
             }
-
-            m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
 
             current_t_adv = current_t + m_uiCi[stage] * dt;
             m_uiAppCtx->pre_stage(m_uiStVec[stage]);
@@ -574,7 +570,7 @@ void ETS<T, Ctx>::evolve() {
 #endif
         }
 
-        // Fused: EVar += sum_k (bi*dt)*StVec[k] in one region (all k; bit-identical).
+        // EVar += sum_k (bi*dt)*StVec[k], post_timestep fused.
         {
             DendroScalar b_cf[ETS_MAX_STAGES];
             const DVec* b_sp[ETS_MAX_STAGES];
@@ -582,11 +578,11 @@ void ETS<T, Ctx>::evolve() {
                 b_cf[k] = m_uiBi[k] * dt;
                 b_sp[k] = &m_uiStVec[k];
             }
-            DVec::axpy_multi(pMesh, m_uiNumStages, b_cf, b_sp, m_uiEVar);
+            m_uiAppCtx->rk_combine(m_uiNumStages, b_cf, b_sp, m_uiEVar);
         }
+    } else {
+        m_uiAppCtx->post_timestep(m_uiEVar);
     }
-
-    m_uiAppCtx->post_timestep(m_uiEVar);
 
     m_uiAppCtx->increment_ts_info();
     m_uiTimeInfo = m_uiAppCtx->get_ts_info();
