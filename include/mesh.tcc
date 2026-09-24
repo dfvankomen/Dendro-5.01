@@ -11347,6 +11347,10 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
         }
     }
 
+    std::vector<unsigned int> lptOrder;
+    const bool useLpt =
+        ot::g_lpt_block_order &&
+        ot::computeLptBlockOrder(blkList, (unsigned int)n_blocks, lptOrder);
 #pragma omp parallel
     {
         std::vector<T> p2cI_all_tls(NUM_CHILDREN * dof * nPe);
@@ -11362,7 +11366,8 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 
 #pragma omp for schedule(dynamic, 1)
         for (size_t blk_idx = 0; blk_idx < n_blocks; blk_idx++) {
-            const unsigned int blk = (unsigned int)blk_idx;
+            const unsigned int blk =
+                useLpt ? lptOrder[blk_idx] : (unsigned int)blk_idx;
             // Overlap path: process only interior or only boundary blocks.
             if (blk_filter >= 0 &&
                 (int)blkList[blk].getBlockType() != blk_filter)

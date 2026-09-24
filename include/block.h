@@ -19,6 +19,10 @@
 #include <assert.h>
 #include <treenode2vtk.h>
 
+#include <algorithm>
+#include <numeric>
+#include <vector>
+
 #include "TreeNode.h"
 #include "dendro.h"
 
@@ -321,6 +325,30 @@ inline void computeBalancedBlockPartition(const ot::Block* blkList,
     // the invariant explicit so empty ranges are well-defined, not reversed).
     for (unsigned int t = 1; t <= nthreads; t++)
         if (out[t] < out[t - 1]) out[t] = out[t - 1];
+}
+
+// Visit blocks largest-first in dynamic block loops; set by the application.
+inline bool g_lpt_block_order = false;
+
+// Largest-first order by padded volume; false when all blocks are the same
+// size.
+inline bool computeLptBlockOrder(const ot::Block* blkList,
+                                 unsigned int numBlocks,
+                                 std::vector<unsigned int>& order) {
+    std::vector<unsigned long long> vol(numBlocks);
+    for (unsigned int b = 0; b < numBlocks; b++)
+        vol[b] = (unsigned long long)blkList[b].getAllocationSzX() *
+                 blkList[b].getAllocationSzY() * blkList[b].getAllocationSzZ();
+    if (numBlocks < 2 || std::all_of(
+                             vol.begin(), vol.end(),
+                             [&](unsigned long long v) { return v == vol[0]; }))
+        return false;
+    order.resize(numBlocks);
+    std::iota(order.begin(), order.end(), 0u);
+    std::stable_sort(
+        order.begin(), order.end(),
+        [&vol](unsigned int a, unsigned int b) { return vol[a] > vol[b]; });
+    return true;
 }
 
 }  // end of namespace ot
