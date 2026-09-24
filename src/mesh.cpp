@@ -19698,6 +19698,10 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 opts.refine_max_imbalance = iEnv ? atof(iEnv) : 1.05;
                 const char *oEnv = std::getenv("DENDRO_GRAPH_REFINE_OBJ");
                 opts.refine_objective     = oEnv ? atoi(oEnv) : 0;
+                const char *bEnv  = std::getenv("DENDRO_GRAPH_BALANCE_ROUNDS");
+                const char *btEnv = std::getenv("DENDRO_GRAPH_BALANCE_TOL");
+                if (bEnv) opts.refine_balance_rounds = atoi(bEnv);
+                if (btEnv) opts.refine_balance_tol = atof(btEnv);
                 if (refineMode == 2) {
                     vcon.resize(n);
                     for (size_t i = 0; i < n; ++i)
