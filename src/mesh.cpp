@@ -8336,8 +8336,8 @@ void Mesh::buildZipPlan() {
     // default path's O(total)=O(P*local) per-rank cost becomes O(local).
     // See buildZipPlanArbitrateDistributed.
     static const char* __zp_dist_env = std::getenv("DENDRO_ZIPPLAN_DIST");
-    const bool zpDist = __zp_dist_env && __zp_dist_env[0] == '1' &&
-                        __zp_dist_env[1] == '\0' && m_uiActiveNpes > 1;
+    const bool zpDist = !(__zp_dist_env && __zp_dist_env[0] == '0') &&
+                        m_uiActiveNpes > 1;
 
     int myCount = (int)myX.size();
     std::vector<int> counts(m_uiActiveNpes), offs(m_uiActiveNpes, 0);
@@ -19794,7 +19794,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // isGhostTwo is a fetch-round label, not a geometric ring — an
     // element-level R2 skip starves the unzip; see the coverage check.)
     const char* minScatterEnv = std::getenv("DENDRO_MINIMAL_SCATTER");
-    const bool minimalScatter = (minScatterEnv && minScatterEnv[0] == '1');
+    const bool minimalScatter = !(minScatterEnv && minScatterEnv[0] == '0');
     if (minimalScatter && rank == 0)
         std::cout << "[minimal-scatter] shrinking per-step nodal scatter "
                      "map to consumer-read slots"
