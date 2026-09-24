@@ -1214,6 +1214,8 @@ class Mesh {
     std::vector<unsigned int> m_uiUnzipCanonWriter;
     bool m_uiUnzipCanonWriterBuilt = false;
     std::vector<unsigned int> m_uiUnzipEleOrder;
+    std::vector<unsigned int> m_uiUnzipAllBlkIds;
+    bool m_uiUnzipBlockOk = false;
 
     PartitioningOptions m_partitionOption = PartitioningOptions::fastpart;
 
@@ -2971,6 +2973,14 @@ class Mesh {
      * this is the whole-run total. reduces over THIS mesh's active comm, so
      * call it on the final mesh; ranks inactive there won't contribute. */
     void dumpCommStatsCumulative(std::ostream& out, const char* tag);
+    // DENDRO_MESH_PROF=1: seconds in the ctx unzip driver, split by phase
+    static double s_dProfGhostBegin;
+    static double s_dProfGhostEnd;
+    static double s_dProfUnzip;
+    static bool meshProfOn() {
+        static const bool on = [] { const char* e = std::getenv("DENDRO_MESH_PROF"); return e && e[0] == '1'; }();
+        return on;
+    }
 
     /**@brief reduce+print a static partition-quality snapshot of THIS (rebuilt)
      * mesh: per-rank element load + ghost-node surface (the communication

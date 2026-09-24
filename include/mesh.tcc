@@ -14216,13 +14216,27 @@ template <typename T>
 void Mesh::unzip(const T* in, T* out, unsigned int dof) {
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
 
-    // std::vector<unsigned int > blkIDs;
-    // blkIDs.resize(m_uiLocalBlockList.size());
-
-    // for(unsigned int i=0; i< m_uiLocalBlockList.size(); i++)
-    //     blkIDs[i] = i ;
-    // unzip all the blocks.
-    // this->unzip(in,out,blkIDs.data(),blkIDs.size(),dof);
+    // DENDRO_UNZIP_BLOCK=1: SFC meshes take the block-wise unzip; labelled
+    // meshes (any non-SFC block) always need the plan-based scatter
+    static const bool blockUnzip = [] {
+        const char* e = std::getenv("DENDRO_UNZIP_BLOCK");
+        return e && e[0] == '1';
+    }();
+    if (blockUnzip) {
+        if (m_uiUnzipAllBlkIds.size() != m_uiLocalBlockList.size()) {
+            m_uiUnzipAllBlkIds.clear();
+            m_uiUnzipBlockOk = true;
+            for (unsigned int b = 0; b < m_uiLocalBlockList.size(); b++) {
+                m_uiUnzipAllBlkIds.push_back(b);
+                if (m_uiLocalBlockList[b].isNonSFC()) m_uiUnzipBlockOk = false;
+            }
+        }
+        if (m_uiUnzipBlockOk) {
+            this->unzip(in, out, m_uiUnzipAllBlkIds.data(),
+                        (unsigned int)m_uiUnzipAllBlkIds.size(), dof);
+            return;
+        }
+    }
     this->unzip_scatter(in, out, dof);
 }
 

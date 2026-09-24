@@ -668,6 +668,9 @@ DendroIntL Mesh::s_uiCommStatMsgRecvAll   = 0;
 DendroIntL Mesh::s_uiCommStatExchangesAll = 0;
 DendroIntL Mesh::s_uiCommStatSyncBytesAll = 0;
 DendroIntL Mesh::s_uiCommStatSyncCallsAll = 0;
+double Mesh::s_dProfGhostBegin = 0.0;
+double Mesh::s_dProfGhostEnd   = 0.0;
+double Mesh::s_dProfUnzip      = 0.0;
 
 void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
     if (m_uiCommStatsOn != 1 || !m_uiIsActive) return;
@@ -698,6 +701,17 @@ void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
             << " bytes_sent_imbalance=" << imbal
             << " sync_bytes_sent=" << sum[5] << " sync_calls=" << maxv[6]
             << std::endl;
+    }
+    if (meshProfOn()) {
+        double loc[3] = {s_dProfGhostBegin, s_dProfGhostEnd, s_dProfUnzip};
+        double mx[3]  = {0, 0, 0}, mn[3] = {0, 0, 0};
+        par::Mpi_Reduce(loc, mx, 3, MPI_MAX, 0, m_uiCommActive);
+        par::Mpi_Reduce(loc, mn, 3, MPI_MIN, 0, m_uiCommActive);
+        if (m_uiActiveRank == 0)
+            out << "[unzip-prof] " << tag << " ghost_begin=" << mn[0] << "/"
+                << mx[0] << " ghost_end=" << mn[1] << "/" << mx[1]
+                << " unzip=" << mn[2] << "/" << mx[2] << " s (min/max over ranks)"
+                << std::endl;
     }
 }
 
@@ -20075,6 +20089,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     }
     std::swap(m_uiAllElements, newAllElements);
     m_uiUnzipEleOrder.clear();
+    m_uiUnzipAllBlkIds.clear();
     std::swap(m_uiOwnerMask, newOwnerMask);
     std::swap(m_uiBlockInfo, newBlockInfo);
 

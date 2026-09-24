@@ -546,6 +546,8 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
 
     if (in.get_loc() == ot::DVEC_LOC::HOST) {
         // unzip on the host.
+        const bool prof = ot::Mesh::meshProfOn();
+        double t0 = prof ? MPI_Wtime() : 0.0;
         for (unsigned int i = 0; i < async_k; i++) {
             const unsigned int v_begin  = ((i * dof) / async_k);
             const unsigned int v_end    = (((i + 1) * dof) / async_k);
@@ -554,6 +556,7 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
             m_uiMesh->readFromGhostBegin(
                 m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
         }
+        if (prof) { const double t1 = MPI_Wtime(); ot::Mesh::s_dProfGhostBegin += t1 - t0; t0 = t1; }
 
         for (unsigned int i = 0; i < async_k; i++) {
             const unsigned int v_begin  = ((i * dof) / async_k);
@@ -562,6 +565,7 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
 
             m_uiMesh->readFromGhostEnd(
                 m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+            if (prof) { const double t1 = MPI_Wtime(); ot::Mesh::s_dProfGhostEnd += t1 - t0; t0 = t1; }
 
 #ifdef __PROFILE_CTX__
             m_uiCtxpt[CTXPROFILE::UNZIP].start();
@@ -569,6 +573,7 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
 
             m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
                             out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
+            if (prof) { const double t1 = MPI_Wtime(); ot::Mesh::s_dProfUnzip += t1 - t0; t0 = t1; }
 
 #ifdef __PROFILE_CTX__
             m_uiCtxpt[CTXPROFILE::UNZIP].stop();
