@@ -7959,7 +7959,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
 void Mesh::pruneZipSync() {
     static const int level = [] {
         const char* e = std::getenv("DENDRO_ZIPSYNC_PRUNE");
-        return e ? std::atoi(e) : 0;
+        return e ? std::atoi(e) : 2;
     }();
     if (level <= 0 || !m_uiIsActive || m_uiActiveNpes <= 1 ||
         m_uiZipSyncPruned)
