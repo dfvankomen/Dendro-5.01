@@ -36,7 +36,12 @@ with it on.
   default back. Probes: `DENDRO_ZIP_NANCHK=1`, `DENDRO_ZIPSYNC_STATS=1`, `DENDRO_ZIPSYNC_CHECK=1`,
   `DENDRO_UNREF_CHECK=1`.
 
-## Uncommitted in the user's repos (the user commits)
+## Committed 2026-09-25 in the sibling repos (were uncommitted when this brief was first written)
+- `dendrogr_dfvk_repartitioning`: branch `fix/bh-tracker-ghost-exchange` (`56250e4`, off master `639af21`) holds
+  only the tracker exchange; master's working tree (the uncommitted repartitioning integration) is untouched.
+- `em4_base_cpy` branch `repartitioning`: `02a7cfe` = flags ride the g2s transport with the default on.
+- `fastpart` branch `dendro-refine`: `746b379` = the balance phase.
+The items below describe those changes.
 - `dendrogr_dfvk_repartitioning/BSSN_GR/src/bssnCtx.cpp`: ghost exchange of the three shift components
   before `computeBHLocations` (correctness fix; upstream has the same stale read).
 - `em4_base_cpy/solver/src/solverCtx.cpp`: `DENDRO_REDIST_FLAGS` default on.
