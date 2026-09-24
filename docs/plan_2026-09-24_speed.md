@@ -224,3 +224,9 @@ arms), NLSM ragged ENUTS and BSSN SFC (33 % faster there), so SFC-only productio
 labelled runs must not until the transport reads are exchanged explicitly (the same rule as the BSSN
 tracker: exchange before you read). Next: instrument `redistributeDVec` for source ghost reads, add the
 exchange, then re-run the four-arm BSSN A/B at level 2.
+- Final defaults gate (prune 0, route/flags on, unzip + sandwich round 2 + p2p sync + ENUTS cache):
+  EM4 np=4 both arms and np=8 SFC on the old checksums; np=8 labelled is `32eb202e…`, which the earlier
+  binary with the full side-channel reproduces exactly — the `4521dbc3…` recorded earlier tonight was the
+  sync-off value from the stuck-flag bug (np=8 labelled EM4 *is* sensitive to the side-channel, np=4 is
+  not). testPartitioning four arms at np=4 and np=8 identical, ragged ENUTS 18 digits, BSSN graph short
+  run finite.
