@@ -5967,8 +5967,10 @@ void Mesh::syncLocalNodalDGFromCG(const T* vec) {
 template <typename T>
 void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                            unsigned int dof,
-                           std::vector<unsigned int>* unfilledOut) const {
+                           std::vector<unsigned int>* unfilledOut,
+                           std::vector<unsigned int>* dstFlags) const {
     if (unfilledOut) unfilledOut->clear();
+    if (dstFlags) dstFlags->clear();
     // Redistribute `dof` CG fields across a partition change. `this`
     // (source) and `dstMesh` (target) contain the same global element set.
     // vecIn is laid out [dof][src CG size], vecOut [dof][dst CG size]:
@@ -6326,6 +6328,24 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     for (size_t i = 0; i < recvTN.size(); i++) {
         auto it = tnToLocal.find(recvTN[i]);
         if (it != tnToLocal.end()) eAbs[i] = (int)it->second;
+    }
+    if (dstFlags) {
+        dstFlags->assign(numLocalEle, OCT_NO_CHANGE);
+        for (size_t i = 0; i < recvTN.size(); i++) {
+            if (eAbs[i] < 0) continue;
+            const unsigned int f = recvTN[i].getFlag() >> NUM_LEVEL_BITS;
+            (*dstFlags)[eAbs[i] - dstEleBegin] =
+                (f == OCT_SPLIT)    ? OCT_SPLIT
+                : (f == OCT_COARSE) ? OCT_COARSE
+                                    : OCT_NO_CHANGE;
+        }
+        static bool announced = false;
+        if (!rank && !announced) {
+            announced = true;
+            std::cout << "[redist-flags] in-band refinement flags: "
+                      << numLocalEle << " dst-local elements on r0"
+                      << std::endl;
+        }
     }
 
     // fused authoritative-write + localDG refresh (was two separate

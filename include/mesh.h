@@ -3657,10 +3657,14 @@ class Mesh {
      * any delivery path (element matching + orphan fill). They are
      * zero-filled; solvers whose physical vacuum is non-zero (e.g. BSSN
      * flat space) must repatch them — zero metric data NaNs algebraic
-     * constraint enforcement. */
+     * constraint enforcement.
+     * dstFlags (optional): per dst-local element refinement flag
+     * (OCT_NO_CHANGE/SPLIT/COARSE) carried in-band from the src TreeNode
+     * level word; input for dstMesh->setMeshRefinementFlags. */
     void redistributeVec(ot::Mesh *dstMesh, const T *vecIn, T *vecOut,
                          unsigned int dof                       = 1,
-                         std::vector<unsigned int> *unfilledOut = nullptr)
+                         std::vector<unsigned int> *unfilledOut = nullptr,
+                         std::vector<unsigned int> *dstFlags    = nullptr)
         const;
 
     /**
