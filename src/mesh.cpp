@@ -19143,10 +19143,118 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
     std::vector<D_INT_L> my_partition;
 
+    const size_t localSz = oct_connectivity_map.size();
+
+    struct AnchorKey {
+        uint32_t x, y, z, lev;
+        bool operator<(const AnchorKey& o) const {
+            if (x != o.x) return x < o.x;
+            if (y != o.y) return y < o.y;
+            if (z != o.z) return z < o.z;
+            return lev < o.lev;
+        }
+    };
+    // dense local block id per element (elements without block info are singletons)
+    auto blockIds = [&]() {
+        std::vector<unsigned int> ids(localSz);
+        std::map<AnchorKey, unsigned int> seen;
+        unsigned int next = 0;
+        for (size_t i = 0; i < localSz; ++i) {
+            const auto& oct = oct_connectivity_map[i];
+            if ((oct.blkMeta & (1u << 31)) == 0u) { ids[i] = next++; continue; }
+            AnchorKey k{oct.blkAnchorX, oct.blkAnchorY, oct.blkAnchorZ, oct.blkAnchorLevel};
+            auto it = seen.find(k);
+            if (it == seen.end()) it = seen.emplace(k, next++).first;
+            ids[i] = it->second;
+        }
+        return ids;
+    };
+
+    // k-th of the n_L elements at level L (global Hilbert order) -> rank floor(k*np/n_L)
+    auto levelwiseLabels = [&]() {
+        unsigned int lmin = 0, lmax = 0;
+        this->computeMinMaxLevel(lmin, lmax);
+        const unsigned int nlev = lmax - lmin + 1;
+        std::vector<unsigned long long> cnt(nlev, 0), tot(nlev, 0), off(nlev, 0);
+        for (size_t i = 0; i < localSz; ++i) cnt[oct_connectivity_map[i].level - lmin]++;
+        MPI_Allreduce(cnt.data(), tot.data(), nlev, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+        MPI_Exscan(cnt.data(), off.data(), nlev, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+        if (rank == 0) std::fill(off.begin(), off.end(), 0ull);
+        std::vector<unsigned int> lab(localSz);
+        for (size_t i = 0; i < localSz; ++i) {
+            const unsigned int l = oct_connectivity_map[i].level - lmin;
+            unsigned int p = (unsigned int)((off[l]++ * (unsigned long long)npes) / tot[l]);
+            lab[i] = (p >= (unsigned int)npes) ? npes - 1 : p;
+        }
+        return lab;
+    };
+
+    // whole-block majority vote (most votes, then lowest rank); DENDRO_DISABLE_BLOCK_VOTE=1 skips
+    auto blockVote = [&](std::vector<unsigned int>& parts) {
+        const char* disableVote = std::getenv("DENDRO_DISABLE_BLOCK_VOTE");
+        if (disableVote && disableVote[0] == '1') return;
+        std::map<AnchorKey, std::vector<size_t>> blockGroups;
+        for (size_t i = 0; i < localSz; ++i) {
+            const auto& oct = oct_connectivity_map[i];
+            if ((oct.blkMeta & (1u << 31)) == 0u) continue;
+            AnchorKey k{oct.blkAnchorX, oct.blkAnchorY, oct.blkAnchorZ, oct.blkAnchorLevel};
+            blockGroups[k].push_back(i);
+        }
+        size_t reassigned = 0;
+        for (auto& kv : blockGroups) {
+            const auto& indices = kv.second;
+            if (indices.size() <= 1) continue;
+            std::map<unsigned int, unsigned int> votes;
+            for (size_t i : indices) votes[parts[i]]++;
+            unsigned int winnerRank = 0, winnerCount = 0;
+            for (const auto& vk : votes)
+                if (vk.second > winnerCount || (vk.second == winnerCount && vk.first < winnerRank)) {
+                    winnerRank = vk.first;
+                    winnerCount = vk.second;
+                }
+            for (size_t i : indices)
+                if (parts[i] != winnerRank) { parts[i] = winnerRank; reassigned++; }
+        }
+        if (rank == 0)
+            std::cout << "[block-vote] reassigned " << reassigned << " elements (of " << localSz << ")"
+                      << std::endl;
+    };
+
+    // per-element target rank -> sorted global eids this rank will own
+    auto partitionFromLabels = [&](const std::vector<unsigned int>& parts) {
+        std::vector<D_INT_L> mine;
+        std::vector<std::vector<unsigned int>> to_send(npes);
+        for (size_t i = 0; i < localSz; ++i) {
+            if (parts[i] == (unsigned int)rank) mine.push_back(oct_connectivity_map[i].eid);
+            else to_send[parts[i]].push_back(oct_connectivity_map[i].eid);
+        }
+        std::vector<int> nsend(npes, 0), nrecv(npes, 0), sendOffset(npes, 0), recvOffset(npes, 0);
+        std::vector<unsigned int> flatten_send;
+        for (int p = 0; p < npes; ++p) {
+            nsend[p] = (int)to_send[p].size();
+            flatten_send.insert(flatten_send.end(), to_send[p].begin(), to_send[p].end());
+        }
+        MPI_Alltoall(nsend.data(), 1, MPI_INT, nrecv.data(), 1, MPI_INT, commActive);
+        for (int p = 1; p < npes; ++p) {
+            sendOffset[p] = sendOffset[p - 1] + nsend[p - 1];
+            recvOffset[p] = recvOffset[p - 1] + nrecv[p - 1];
+        }
+        std::vector<unsigned int> flatten_recv(recvOffset[npes - 1] + nrecv[npes - 1]);
+        MPI_Alltoallv(flatten_send.data(), nsend.data(), sendOffset.data(), MPI_UNSIGNED,
+                      flatten_recv.data(), nrecv.data(), recvOffset.data(), MPI_UNSIGNED, commActive);
+        mine.insert(mine.end(), flatten_recv.begin(), flatten_recv.end());
+        std::sort(mine.begin(), mine.end());
+        return mine;
+    };
+
     if (m_partitionOption == PartitioningOptions::OriginalPartition) {
         my_partition = noPartitionChange(oct_connectivity_map);
     } else if (m_partitionOption == PartitioningOptions::RandomPartition) {
         my_partition = randomPartitioningSimple(oct_connectivity_map);
+    } else if (m_partitionOption == PartitioningOptions::SFCLevelwise) {
+        std::vector<unsigned int> parts = levelwiseLabels();
+        blockVote(parts);
+        my_partition = partitionFromLabels(parts);
     } else if (m_partitionOption == PartitioningOptions::fastpart) {
         // quick conversion of oct_connectivity_map to wanted format
 
@@ -19201,8 +19309,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // everything
 #ifndef _ONLY_DUMP_OCT_DATA_
 
-        fastpart_uint_t *parts = static_cast<fastpart_uint_t *>(
-            malloc(oct_connectivity_map.size() * sizeof(fastpart_uint_t)));
+        std::vector<unsigned int> parts(localSz, 0);
+        static_assert(sizeof(fastpart_uint_t) == sizeof(unsigned int), "fastpart int width");
 
         // LTS-weighted graph partition (DENDRO_GRAPH_VTX_WEIGHTED):
         //   unset/0 -> the octree wrapper, element-count balance (default).
@@ -19221,8 +19329,13 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // cut tracks the ghost-node surface that is actually communicated.
         const char *fsEnv      = std::getenv("DENDRO_GRAPH_FULL_STENCIL");
         const bool fullStencil = (fsEnv && fsEnv[0] == '1');
-        if (wpartMode == 0 && !fullStencil) {
-            fastpart_partgraph_octree(vtx_dist, temp_oct_data.data(), parts,
+        // DENDRO_GRAPH_REFINE: 1 = start from the SFC split, 2 = start from the
+        // levelwise split with per-level capacities; both then run fastpart's
+        // gain refinement on the 26-stencil graph moving whole blocks.
+        const char *refEnv   = std::getenv("DENDRO_GRAPH_REFINE");
+        const int refineMode = (refEnv) ? atoi(refEnv) : 0;
+        if (wpartMode == 0 && !fullStencil && refineMode == 0) {
+            fastpart_partgraph_octree(vtx_dist, temp_oct_data.data(), parts.data(),
                                       &commActive);
         } else {
             unsigned int lmin = 0, lmax = 0;
@@ -19239,8 +19352,31 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             fastpart_oct_partopts_init(&opts);
             opts.vwgt               = (wpartMode == 1) ? vwgt.data() : nullptr;
             opts.include_edge_corner = fullStencil;
+
+            std::vector<unsigned int> initLab, groupIds, vcon;
+            if (refineMode > 0) {
+                initLab = (refineMode == 2) ? levelwiseLabels()
+                                            : std::vector<unsigned int>(n, (unsigned int)rank);
+                groupIds = blockIds();
+                const char *rEnv = std::getenv("DENDRO_GRAPH_REFINE_ROUNDS");
+                const char *iEnv = std::getenv("DENDRO_GRAPH_REFINE_IMB");
+                opts.init_labels          = initLab.data();
+                opts.group_ids            = groupIds.data();
+                opts.use_diffusion        = false;
+                opts.include_edge_corner  = true;
+                opts.refine_rounds        = rEnv ? atoi(rEnv) : 30;
+                opts.refine_max_imbalance = iEnv ? atof(iEnv) : 1.05;
+                if (refineMode == 2) {
+                    vcon.resize(n);
+                    for (size_t i = 0; i < n; ++i)
+                        vcon[i] = oct_connectivity_map[i].level - lmin;
+                    opts.vcon = vcon.data();
+                    opts.ncon = (int)(lmax - lmin + 1);
+                }
+                opts.verbose = 1;
+            }
             fastpart_partgraph_octree_ex(vtx_dist, temp_oct_data.data(), &opts,
-                                         parts, &commActive);
+                                         parts.data(), &commActive);
 
             if (rank == 0)
                 std::cout << "[graph-part-ex] wmode=" << wpartMode
@@ -19248,122 +19384,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                           << " lmin=" << lmin << " lmax=" << lmax << std::endl;
         }
 
-        // BLOCK-ATOMIC POST-PROCESSING:
-        // for each canonical SFC block on this source rank, override
-        // fastpart's per-element decisions so all elements of that
-        // block land on a single target rank. without this, ~16% of
-        // canonical blocks get split across target ranks, which leaves
-        // partial blocks with missing block-interior data on each
-        // target rank → corrupted FD stencils → long-haul divergence.
-        //
-        // vote rule: target rank that already received the most
-        // elements of this block wins. ties broken by smallest rank.
-        // load-imbalance impact is bounded by max-block-size /
-        // mean-elements-per-rank (≤ 1% in typical configurations).
-        //
-        // gated by DENDRO_DISABLE_BLOCK_VOTE=1 for diagnostic A/B.
-        const char* disableVote = std::getenv("DENDRO_DISABLE_BLOCK_VOTE");
-        if (!disableVote || disableVote[0] != '1') {
-            struct AnchorKey {
-                uint32_t x, y, z, lev;
-                bool operator<(const AnchorKey& o) const {
-                    if (x != o.x) return x < o.x;
-                    if (y != o.y) return y < o.y;
-                    if (z != o.z) return z < o.z;
-                    return lev < o.lev;
-                }
-            };
-            std::map<AnchorKey, std::vector<size_t>> blockGroups;
-            for (size_t i = 0; i < oct_connectivity_map.size(); ++i) {
-                const auto& oct = oct_connectivity_map[i];
-                // skip elements without valid block info — leave them
-                // on their fastpart-assigned target.
-                if ((oct.blkMeta & (1u << 31)) == 0u) continue;
-                AnchorKey k{oct.blkAnchorX, oct.blkAnchorY,
-                            oct.blkAnchorZ, oct.blkAnchorLevel};
-                blockGroups[k].push_back(i);
-            }
-
-            size_t reassigned = 0;
-            for (auto& kv : blockGroups) {
-                const auto& indices = kv.second;
-                if (indices.size() <= 1) continue;
-                // tally votes per target rank
-                std::map<unsigned int, unsigned int> votes;
-                for (size_t i : indices) votes[parts[i]]++;
-                // pick winner: highest count, then lowest rank
-                unsigned int winnerRank = 0;
-                unsigned int winnerCount = 0;
-                for (const auto& vk : votes) {
-                    if (vk.second > winnerCount ||
-                        (vk.second == winnerCount && vk.first < winnerRank)) {
-                        winnerRank  = vk.first;
-                        winnerCount = vk.second;
-                    }
-                }
-                // reassign all block elements to winner
-                for (size_t i : indices) {
-                    if (parts[i] != winnerRank) {
-                        parts[i] = winnerRank;
-                        reassigned++;
-                    }
-                }
-            }
-            if (rank == 0) {
-                std::cout << "[block-vote] rank " << rank
-                          << " reassigned " << reassigned
-                          << " elements via block-atomic vote (out of "
-                          << oct_connectivity_map.size() << ")"
-                          << std::endl;
-            }
-        }
-
-        // with the target_locations in mind, we need to figure out our "new
-        // partition"
-        std::vector<unsigned int> to_send[m_uiActiveNpes];
-        unsigned int total_send = 0;
-        for (unsigned int i = 0; i < oct_connectivity_map.size(); ++i) {
-            if (parts[i] == rank) {
-                my_partition.push_back(oct_connectivity_map[i].eid);
-                continue;
-            }
-
-            to_send[parts[i]].push_back(oct_connectivity_map[i].eid);
-            total_send++;
-        }
-        // then flatten it
-        std::vector<unsigned int> flatten_send(total_send);
-        std::vector<int> nsend(npes, 0);
-        unsigned int counter = 0;
-        for (unsigned int i = 0; i < npes; i++) {
-            for (const unsigned int &snd : to_send[i]) {
-                flatten_send[counter++] = snd;
-            }
-            nsend[i] = to_send[i].size();
-        }
-        std::vector<int> nrecv(npes);
-
-        MPI_Alltoall(nsend.data(), 1, MPI_INT, nrecv.data(), 1, MPI_INT,
-                     commActive);
-
-        std::vector<int> sendOffset(npes);
-        std::vector<int> recvOffset(npes);
-        sendOffset[0] = 0;
-        for (int i = 1; i < npes; ++i) {
-            sendOffset[i] = sendOffset[i - 1] + nsend[i - 1];
-            recvOffset[i] = recvOffset[i - 1] + nrecv[i - 1];
-        }
-        unsigned int nTotalRecv = recvOffset[npes - 1] + nrecv[npes - 1];
-        std::vector<unsigned int> flatten_recv(nTotalRecv);
-
-        MPI_Alltoallv(flatten_send.data(), nsend.data(), sendOffset.data(),
-                      MPI_UNSIGNED, flatten_recv.data(), nrecv.data(),
-                      recvOffset.data(), MPI_UNSIGNED, commActive);
-
-        my_partition.insert(my_partition.end(), flatten_recv.begin(),
-                            flatten_recv.end());
-        std::sort(my_partition.begin(), my_partition.end());
-        free(parts);
+        blockVote(parts);
+        my_partition = partitionFromLabels(parts);
 #endif
 
         free(vtx_dist);

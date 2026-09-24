@@ -365,7 +365,8 @@ enum PartitioningOptions {
     NoPartition = 0,
     OriginalPartition,
     RandomPartition,
-    fastpart
+    fastpart,
+    SFCLevelwise  // per-level equal-count Hilbert split (arbitrary labelling, no partitioner)
 };
 
 /**
