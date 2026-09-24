@@ -7731,6 +7731,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
         sCnt[homeIdx[i]]++;
     }
     for (int p = 1; p < npes; p++) sOff[p] = sOff[p - 1] + sCnt[p - 1];
+    repartRound();
     MPI_Alltoall(sCnt.data(), 1, MPI_INT, rCnt.data(), 1, MPI_INT,
                  m_uiCommActive);
     for (int p = 1; p < npes; p++) rOff[p] = rOff[p - 1] + rCnt[p - 1];
@@ -7756,6 +7757,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
             rB[p] = rCnt[p] * E;
             rO[p] = rOff[p] * E;
         }
+        repartRound();
         MPI_Alltoallv(sendC.data(), sB.data(), sO.data(), MPI_BYTE,
                       recvC.data(), rB.data(), rO.data(), MPI_BYTE,
                       m_uiCommActive);
@@ -7806,6 +7808,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
             rB[p] = sCnt[p] * E;
             rO[p] = sOff[p] * E;
         }
+        repartRound();
         MPI_Alltoallv(backSend.data(), sB.data(), sO.data(), MPI_BYTE,
                       backRecv.data(), rB.data(), rO.data(), MPI_BYTE,
                       m_uiCommActive);
@@ -7888,6 +7891,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
     std::vector<int> qsC(npes, 0), qsO(npes, 0), qrC(npes, 0), qrO(npes, 0);
     for (int p = 0; p < npes; p++) qsC[p] = (int)reqTo[p].size();
     for (int p = 1; p < npes; p++) qsO[p] = qsO[p - 1] + qsC[p - 1];
+    repartRound();
     MPI_Alltoall(qsC.data(), 1, MPI_INT, qrC.data(), 1, MPI_INT,
                  m_uiCommActive);
     for (int p = 1; p < npes; p++) qrO[p] = qrO[p - 1] + qrC[p - 1];
@@ -7907,6 +7911,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
             rB[p] = qrC[p] * E;
             rO[p] = qrO[p] * E;
         }
+        repartRound();
         MPI_Alltoallv(qs.data(), sB.data(), sO.data(), MPI_BYTE, qr.data(),
                       rB.data(), rO.data(), MPI_BYTE, m_uiCommActive);
     }
@@ -8354,6 +8359,7 @@ void Mesh::buildZipPlan() {
     std::vector<int> counts(m_uiActiveNpes), offs(m_uiActiveNpes, 0);
     int total = 0;
     if (!zpDist) {
+        repartRound();
         MPI_Allgather(&myCount, 1, MPI_INT, counts.data(), 1, MPI_INT,
                       m_uiCommActive);
         for (int p = 0; p < m_uiActiveNpes; p++) {
@@ -8370,17 +8376,21 @@ void Mesh::buildZipPlan() {
     allX.resize(total); allY.resize(total); allZ.resize(total);
     allTNX.resize(total); allTNY.resize(total); allTNZ.resize(total);
     allTNLev.resize(total); allCg.resize(total);
+    repartRound();
     MPI_Allgatherv(myX.data(), myCount, MPI_UINT64_T, allX.data(),
                    counts.data(), offs.data(), MPI_UINT64_T,
                    m_uiCommActive);
+    repartRound();
     MPI_Allgatherv(myY.data(), myCount, MPI_UINT64_T, allY.data(),
                    counts.data(), offs.data(), MPI_UINT64_T,
                    m_uiCommActive);
+    repartRound();
     MPI_Allgatherv(myZ.data(), myCount, MPI_UINT64_T, allZ.data(),
                    counts.data(), offs.data(), MPI_UINT64_T,
                    m_uiCommActive);
     auto agU = [&](std::vector<unsigned int>& src,
                    std::vector<unsigned int>& dst) {
+        repartRound();
         MPI_Allgatherv(src.data(), myCount, MPI_UNSIGNED, dst.data(),
                        counts.data(), offs.data(), MPI_UNSIGNED,
                        m_uiCommActive);
@@ -8841,6 +8851,7 @@ void Mesh::buildZipPlan() {
                 rOffs[p]   = (int)m_uiRecvNodeOffset[p];
             }
         }
+        repartRound();
         MPI_Alltoallv(sendBuf.data(), sCounts.data(), sOffs.data(),
                       MPI_UNSIGNED, recvBuf.data(), rCounts.data(),
                       rOffs.data(), MPI_UNSIGNED, m_uiCommActive);
@@ -18411,11 +18422,15 @@ void Mesh::computeMinMaxLevel(unsigned int &lmin, unsigned int &lmax) const {
                 lmax_l = m_uiAllElements[e].getLevel();
         }
 
+        repartRound();
         par::Mpi_Reduce(&lmin_l, &lmin, 1, MPI_MIN, 0, m_uiCommActive);
+        repartRound();
         par::Mpi_Reduce(&lmax_l, &lmax, 1, MPI_MAX, 0, m_uiCommActive);
     }
 
+    repartRound();
     par::Mpi_Bcast(&lmin, 1, 0, m_uiCommGlobal);
+    repartRound();
     par::Mpi_Bcast(&lmax, 1, 0, m_uiCommGlobal);
 
     return;
@@ -19198,6 +19213,12 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // via setPosBcastEnabled(false) after the twin build.
     m_uiPosBcastEnabled = true;
 
+    static const bool countRounds = [] {
+        const char* e = std::getenv("DENDRO_REPART_ROUNDS");
+        return e && e[0] == '1';
+    }();
+    if (countRounds) repartRoundCounter() = 0;
+
     constexpr size_t RANK_TEST = 2;
 
     typedef unsigned int D_INT_L;
@@ -19293,7 +19314,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     auto weightedPrefixLabels = [&](const std::vector<fastpart_uint_t>& w) {
         unsigned long long loc = 0, tot = 0, off = 0;
         for (size_t i = 0; i < localSz; ++i) loc += w[i];
+        repartRound();
         MPI_Allreduce(&loc, &tot, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+        repartRound();
         MPI_Exscan(&loc, &off, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
         if (rank == 0) off = 0;
         std::vector<unsigned int> lab(localSz);
@@ -19312,7 +19335,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         const unsigned int nlev = lmax - lmin + 1;
         std::vector<unsigned long long> cnt(nlev, 0), tot(nlev, 0), off(nlev, 0);
         for (size_t i = 0; i < localSz; ++i) cnt[oct_connectivity_map[i].level - lmin]++;
+        repartRound();
         MPI_Allreduce(cnt.data(), tot.data(), nlev, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+        repartRound();
         MPI_Exscan(cnt.data(), off.data(), nlev, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
         if (rank == 0) std::fill(off.begin(), off.end(), 0ull);
         std::vector<unsigned int> lab(localSz);
@@ -19369,12 +19394,14 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             nsend[p] = (int)to_send[p].size();
             flatten_send.insert(flatten_send.end(), to_send[p].begin(), to_send[p].end());
         }
+        repartRound();
         MPI_Alltoall(nsend.data(), 1, MPI_INT, nrecv.data(), 1, MPI_INT, commActive);
         for (int p = 1; p < npes; ++p) {
             sendOffset[p] = sendOffset[p - 1] + nsend[p - 1];
             recvOffset[p] = recvOffset[p - 1] + nrecv[p - 1];
         }
         std::vector<unsigned int> flatten_recv(recvOffset[npes - 1] + nrecv[npes - 1]);
+        repartRound();
         MPI_Alltoallv(flatten_send.data(), nsend.data(), sendOffset.data(), MPI_UNSIGNED,
                       flatten_recv.data(), nrecv.data(), recvOffset.data(), MPI_UNSIGNED, commActive);
         mine.insert(mine.end(), flatten_recv.begin(), flatten_recv.end());
@@ -19532,6 +19559,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     __phase("partition-decision");
     {
         unsigned int nMine = (unsigned int)my_partition.size(), nMin = 0;
+        repartRound();
         MPI_Allreduce(&nMine, &nMin, 1, MPI_UNSIGNED, MPI_MIN, commActive);
         if (nMin == 0) {
             if (rank == 0)
@@ -20069,6 +20097,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         // Exchange counts to get send counts
         std::vector<int> sendCount(npes);
+        repartRound();
         MPI_Alltoall(recvCount.data(), 1, MPI_INT, sendCount.data(), 1,
                      MPI_INT, commActive);
 
@@ -20086,6 +20115,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 for (const auto &v : recvNodeDGG[p])
                     recvBuf[off++] = v;
         }
+        repartRound();
         MPI_Alltoallv(recvBuf.data(), recvCount.data(), recvOff.data(),
                       MPI_UNSIGNED_LONG, sendBuf.data(), sendCount.data(),
                       sendOff.data(), MPI_UNSIGNED_LONG, commActive);
@@ -20100,6 +20130,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 for (const auto &v : recvNodeIsDG[p])
                     recvIsDGBuf[off++] = v;
         }
+        repartRound();
         MPI_Alltoallv(recvIsDGBuf.data(), recvCount.data(), recvOff.data(),
                       MPI_UNSIGNED_CHAR, sendIsDGBuf.data(), sendCount.data(),
                       sendOff.data(), MPI_UNSIGNED_CHAR, commActive);
@@ -20305,6 +20336,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         m_uiSendEleCount[p] = scatterMapSend_R1[p].size();
     }
 
+    repartRound();
     par::Mpi_Alltoall(m_uiSendEleCount.data(), m_uiRecvEleCount.data(), 1,
                       m_uiCommActive);
     m_uiSendEleOffset[0] = 0;
@@ -20348,6 +20380,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         // exchange: other ranks tell us which elements they're sending
         std::vector<unsigned int> recvEleGlobalIDs(totalEleRecv);
+        repartRound();
         MPI_Alltoallv(sendEleGlobalIDs.data(), sendEleCounts_i.data(),
                       sendEleOffsets_i.data(), MPI_UNSIGNED,
                       recvEleGlobalIDs.data(), recvEleCounts_i.data(),
@@ -20427,6 +20460,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             reqGlobal[k] =
                 new_oct_connectivity_map[m_uiGhostElementRound1Index[k]].eid;
 
+        repartRound();
         par::Mpi_Alltoall(reqCount.data(), ansCount.data(), 1, commActive);
         reqOff[0] = ansOff[0] = 0;
         for (unsigned int p = 1; p < npes; p++) {
@@ -20435,6 +20469,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }
         std::vector<unsigned int> ansGlobal(ansOff[npes - 1] +
                                             ansCount[npes - 1]);
+        repartRound();
         MPI_Alltoallv(reqGlobal.data(), reqCount.data(), reqOff.data(),
                       MPI_UNSIGNED, ansGlobal.data(), ansCount.data(),
                       ansOff.data(), MPI_UNSIGNED, commActive);
@@ -20474,6 +20509,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             minMaxLocal[1] = m_uiAllElements[m_uiElementLocalEnd - 1];
         }
         // else: default-constructed TreeNodes (rank has no elements)
+        repartRound();
         par::Mpi_Allgather(minMaxLocal, m_uiSplitterNodes, 2, commActive);
     }
 
@@ -20808,6 +20844,12 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         __phase("block-decomposition");
     }
+    if (countRounds) {
+        if (!rank)
+            std::cout << "[repart-rounds] total=" << repartRoundCounter()
+                      << std::endl;
+        repartRoundCounter() = -1;
+    }
     if (!rank) {
         std::cout << rank << ": Now finished with the repartitioning scheme!"
                   << std::endl;
@@ -20860,6 +20902,7 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
 
     // then exchange the send counts to get "receive counts", which is how
     // many we'll actually need to send to each process
+    repartRound();
     MPI_Alltoall(send_counts.data(), 1, MPI_INT, recv_counts.data(), 1, MPI_INT,
                  commActive);
 
@@ -20882,6 +20925,7 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
     }
 
     // perform all-to-all-v which lets us know what we need
+    repartRound();
     MPI_Alltoallv(flattened_send_buffer.data(), send_counts.data(),
                   send_offsets.data(), MPI_UNSIGNED_LONG,
                   flattened_recv_buffer.data(), recv_counts.data(),
@@ -20913,6 +20957,7 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
 
     // perform full communication, flattened_recv_full_data now has what was
     // requested
+    repartRound();
     MPI_Alltoallv(flattened_send_full_data.data(), recv_counts.data(),
                   recv_offsets.data(), octdata_mpi_type,
                   flattened_recv_full_data.data(), send_counts.data(),

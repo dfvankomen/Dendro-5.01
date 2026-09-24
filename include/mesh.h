@@ -408,6 +408,15 @@ enum NeighbourLevel { COARSE, SAME, REFINE };
 
 namespace ot {
 
+// DENDRO_REPART_ROUNDS=1: collectives issued by one repartitionMeshGlobal (-1 = off)
+inline long& repartRoundCounter() {
+    static long c = -1;
+    return c;
+}
+inline void repartRound(long n = 1) {
+    if (repartRoundCounter() >= 0) repartRoundCounter() += n;
+}
+
 /**@brief type of the scatter map, based on numerical computation method*/
 enum SM_TYPE {
     FDM = 0,  // Finite Difference Method
@@ -4097,6 +4106,7 @@ class Mesh {
         ele_counts.resize(npes);
 
         // gather counts from all processes to build global map
+        repartRound();
         par::Mpi_Allgather(&localSz, ele_counts.data(), 1, commActive);
         ele_offsets[0] = 0;
         // this computes the offsets for each process
@@ -4160,6 +4170,7 @@ class Mesh {
             }
             // the gather below is collective: decide on the global count
             unsigned int numMissingGlobal = 0;
+            repartRound();
             MPI_Allreduce(&numMissing, &numMissingGlobal, 1, MPI_UNSIGNED, MPI_SUM,
                           commActive);
 
@@ -4173,6 +4184,7 @@ class Mesh {
                 const unsigned int PACK_SZ = 5;
                 std::vector<int> allLocalSizes(npes);
                 int myLocalSz = static_cast<int>(localSz);
+                repartRound();
                 MPI_Allgather(&myLocalSz, 1, MPI_INT, allLocalSizes.data(),
                               1, MPI_INT, commActive);
 
@@ -4203,6 +4215,7 @@ class Mesh {
                 }
 
                 std::vector<unsigned int> allPack(totalGlobal * PACK_SZ);
+                repartRound();
                 MPI_Allgatherv(myPack.data(), localSz * PACK_SZ,
                                MPI_UNSIGNED, allPack.data(),
                                sendCounts.data(), sendDispls.data(),
