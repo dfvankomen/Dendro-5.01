@@ -6164,7 +6164,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     };
     static const bool routeDir = [] {
         const char* v = std::getenv("DENDRO_REDIST_ROUTE");
-        return v && v[0] == '1';
+        return !(v && v[0] == '0');
     }();
 
     const unsigned int srcLocalBegin = m_uiIsActive ? m_uiElementLocalBegin : 0;
