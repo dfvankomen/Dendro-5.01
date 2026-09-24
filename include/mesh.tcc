@@ -1828,6 +1828,111 @@ void Mesh::setUpSendRecvCompressionRequests(
 
     m_uiCommTag++;
 }
+
+inline unsigned int Mesh::getSendCompressSlotSize(AsyncExchangeContex &ctx,
+                                                  unsigned int p) const {
+    const auto &off = ctx.getSendCompressOffsets();
+    return off[p + 1] - off[p];
+}
+
+inline unsigned int Mesh::getRecvCompressSlotSize(AsyncExchangeContex &ctx,
+                                                  unsigned int p) const {
+    const auto &off = ctx.getReceiveCompressOffsets();
+    return off[p + 1] - off[p];
+}
+
+template <typename T>
+void Mesh::postCompressionRecvs(AsyncExchangeContex &ctx,
+                                std::vector<MPI_Request> &recv_requests,
+                                std::vector<unsigned int> &recv_requests_ctx,
+                                unsigned int ctx_idx) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    const auto &recvProcList      = this->getRecvProcList();
+    const auto &nodeRecvCount     = this->getNodalRecvCounts();
+    const auto &nodeRecvOffset    = this->getNodalRecvOffsets();
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const unsigned int recvBSz =
+        nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
+    if (!recvBSz) return;
+
+    unsigned char *recvB =
+        static_cast<unsigned char *>(ctx.getCompressRecvBuffer());
+    if (!recvB) {
+        std::cerr << "ERROR: The receive compress buffer somehow broke inside "
+                     "posting compression receives!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    const auto &recvCompressOffsets = ctx.getReceiveCompressOffsets();
+    MPI_Comm commActive             = this->getMPICommunicator();
+
+    recv_requests.reserve(recv_requests.size() + recvProcList.size());
+    recv_requests_ctx.reserve(recv_requests_ctx.size() + recvProcList.size());
+
+    dendro::timer::t_compression_begin_comms.start();
+    for (unsigned int proc_id : recvProcList) {
+        recv_requests.emplace_back();
+        par::Mpi_Irecv(recvB + recvCompressOffsets[proc_id],
+                       this->getRecvCompressSlotSize(ctx, proc_id), proc_id,
+                       m_uiCommTag, commActive, &recv_requests.back());
+        recv_requests_ctx.push_back(ctx_idx);
+    }
+    dendro::timer::t_compression_begin_comms.stop();
+}
+
+template <typename T>
+void Mesh::postCompressionSend(AsyncExchangeContex &ctx, unsigned int proc_id,
+                               std::vector<MPI_Request> &send_requests,
+                               std::vector<unsigned int> &send_requests_ctx,
+                               unsigned int ctx_idx) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive) ||
+        !this->isActive())
+        return;
+
+    const auto &nodeSendCount     = this->getNodalSendCounts();
+    const auto &nodeSendOffset    = this->getNodalSendOffsets();
+    const unsigned int activeNpes = this->getMPICommSize();
+
+    const unsigned int sendBSz =
+        nodeSendOffset[activeNpes - 1] + nodeSendCount[activeNpes - 1];
+    if (!sendBSz) return;
+
+    unsigned char *compressSendB =
+        static_cast<unsigned char *>(ctx.getCompressSendBuffer());
+    if (!compressSendB) {
+        std::cerr << "ERROR: The send compress buffer somehow broke inside "
+                     "posting a compression send!"
+                  << std::endl;
+        exit(EXIT_FAILURE);
+    }
+
+    const auto &sendCompressCounts  = ctx.getSendCompressCounts();
+    const auto &sendCompressOffsets = ctx.getSendCompressOffsets();
+
+    // A codec that overran its slot has already corrupted the next peer's
+    // region by the time we get here, so this is a hard stop, not a warning.
+    if (sendCompressCounts[proc_id] > this->getSendCompressSlotSize(ctx, proc_id)) {
+        std::cerr << "ERROR: compressed payload for rank " << proc_id << " is "
+                  << sendCompressCounts[proc_id] << " bytes but its slot holds "
+                  << this->getSendCompressSlotSize(ctx, proc_id)
+                  << " -- the compressed send buffer has been overrun."
+                  << std::endl;
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+
+    dendro::timer::t_compression_begin_comms.start();
+    send_requests.emplace_back();
+    par::Mpi_Isend(compressSendB + sendCompressOffsets[proc_id],
+                   sendCompressCounts[proc_id], proc_id, m_uiCommTag,
+                   this->getMPICommunicator(), &send_requests.back());
+    send_requests_ctx.push_back(ctx_idx);
+    dendro::timer::t_compression_begin_comms.stop();
+}
 #endif  // DENDRO_ENABLE_GHOST_COMPRESSION
 
 template <typename T>

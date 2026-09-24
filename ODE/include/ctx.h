@@ -991,6 +991,18 @@ void Ctx<DerivedCtx, T, I>::process_finished_unzip_all_dof(
 
                 // in this function, we only deal with DOF, no batch size
                 if (use_compression) {
+#ifdef DENDRO_COMPRESSION_EAGER_EXCHANGE
+                    // Without a size exchange, how many bytes actually arrived
+                    // is only knowable from the status. Decompression does not
+                    // need it -- the codec framing is self-delimiting -- but
+                    // the ratio accounting does.
+                    int arrived = 0;
+                    MPI_Get_count(&statuses[i], MPI_BYTE, &arrived);
+                    if (arrived != MPI_UNDEFINED)
+                        m_mpi_ctx[ctx_idx]
+                            .getReceiveCompressCounts()[statuses[i].MPI_SOURCE] +=
+                            arrived;
+#endif
                     // need to decompress to the recv buffer
 
                     if (m_mpi_ctx[ctx_idx].getCommDtype() ==
@@ -1387,6 +1399,11 @@ void Ctx<DerivedCtx, T, I>::exchange_host_gathered_dof(ot::DVector<T, I>& in,
 template <typename DerivedCtx, typename T, typename I>
 void Ctx<DerivedCtx, T, I>::exchange_host_gathered_dof_compression(
     ot::DVector<T, I>& in, ot::DVector<T, I>& out, unsigned int async_k) {
+    // Ctx::unzip already screens this out, but the function is public and the
+    // ranks left out of a small octree's active comm have no scatter map to
+    // walk -- calling it on one segfaults rather than doing nothing.
+    if (!m_uiMesh->isActive()) return;
+
     ot::DENDRO_number_times_compress_called++;
     const unsigned int dof             = in.get_dof();
     T* in_ptr                          = in.get_vec_ptr();
@@ -1403,14 +1420,16 @@ void Ctx<DerivedCtx, T, I>::exchange_host_gathered_dof_compression(
     std::vector<unsigned int> send_requests_ctx, recv_requests_ctx;
     std::vector<MPI_Status> statuses;
 
-    int mpi_comm_tag_compression   = 5098;
-
     // a vector of send_requests based on the size we need
     const unsigned int n_send_proc = m_uiMesh->getSendProcListSize();
     const unsigned int n_recv_proc = m_uiMesh->getRecvProcListSize();
-    std::vector<MPI_Request> size_requests(n_send_proc + n_recv_proc);
 
-    T* temp_ptr_next;
+#ifndef DENDRO_COMPRESSION_EAGER_EXCHANGE
+    // Only the legacy size-negotiating path needs these.
+    int mpi_comm_tag_compression = 5098;
+    std::vector<MPI_Request> size_requests(n_send_proc + n_recv_proc);
+#endif
+
     const unsigned int THRESHOLD = m_uiMesh->getMPICommSize() * 1;
 
     // if async_k is not 1, then we are done here
@@ -1422,6 +1441,95 @@ void Ctx<DerivedCtx, T, I>::exchange_host_gathered_dof_compression(
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
+#ifdef DENDRO_COMPRESSION_EAGER_EXCHANGE
+    // ---------------------------------------------------------------------
+    // Eager exchange: no size negotiation, payloads posted per peer.
+    //
+    // The legacy path below compressed EVERY peer, then exchanged all the
+    // compressed byte counts, then MPI_Waitall'ed on that exchange, and only
+    // then posted the first payload. That put a full latency round-trip and a
+    // synchronization point in front of every send -- in a routine already
+    // dominated by waiting on the slowest neighbour.
+    //
+    // Neither is necessary. The receiver already knows where an incoming
+    // payload will land (the fixed slot layout built in alloc_mpi_ctx) and the
+    // codec framing is self-delimiting, so decompression never needed the byte
+    // count -- only the offset. So: post every receive up front with the slot
+    // capacity as a ceiling, then compress peer-by-peer and put each payload on
+    // the wire the moment it is ready. Compression overlaps the wire instead of
+    // preceding it.
+    // ---------------------------------------------------------------------
+    for (unsigned int i = 0; i < async_k; i++) {
+        const unsigned int v_begin  = (i * dof) / async_k;
+        const unsigned int v_end    = ((i + 1) * dof) / async_k;
+        const unsigned int batch_sz = v_end - v_begin;
+
+        auto& send_compress_counts  = m_mpi_ctx[i].getSendCompressCounts();
+        auto& recv_compress_counts  = m_mpi_ctx[i].getReceiveCompressCounts();
+        auto& send_compress_offsets = m_mpi_ctx[i].getSendCompressOffsets();
+
+        std::fill(send_compress_counts.begin(), send_compress_counts.end(), 0);
+        std::fill(recv_compress_counts.begin(), recv_compress_counts.end(), 0);
+
+        T* temp_ptr = in_ptr;
+
+        // Receives first: nothing here depends on any compression having
+        // happened, locally or remotely.
+        m_uiMesh->postCompressionRecvs<T>(m_mpi_ctx[i], recv_requests,
+                                          recv_requests_ctx, i);
+
+        for (unsigned int proc_id = 0; proc_id < n_send_proc; ++proc_id) {
+            const unsigned int send_p_id = m_uiMesh->getSendProcList()[proc_id];
+
+            // Peer p's compressed bytes go at its reserved slot offset. Passed
+            // by value: compressSingleProcessAllDOF advances what it is handed,
+            // and the slot table must survive the exchange.
+            unsigned int slot_offset     = send_compress_offsets[send_p_id];
+
+            if (m_mpi_ctx[i].getCommDtype() == ot::CTXSendType::CTX_FLOAT) {
+                dendro::timer::t_compression_extraction.start();
+                m_uiMesh->extractAllDofSingleProcess<T, float>(
+                    m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id);
+                dendro::timer::t_compression_extraction.stop();
+
+                m_uiMesh->compressSingleProcessAllDOF<T, float>(
+                    m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id, slot_offset);
+            } else if (m_mpi_ctx[i].getCommDtype() ==
+                       ot::CTXSendType::CTX_DOUBLE) {
+                dendro::timer::t_compression_extraction.start();
+                m_uiMesh->extractAllDofSingleProcess<T, double>(
+                    m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id);
+                dendro::timer::t_compression_extraction.stop();
+
+                m_uiMesh->compressSingleProcessAllDOF<T, double>(
+                    m_mpi_ctx[i], temp_ptr, batch_sz, send_p_id, slot_offset);
+            } else {
+                std::cerr << "ERROR: UNKNOWN DATA TYPE WAS ATTEMPTED FOR USE "
+                             "WHEN EXTRACTING/COMPRESSING DATA TO SEND"
+                          << std::endl;
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+
+            // On the wire immediately -- this peer's bytes do not wait on the
+            // remaining peers' compression.
+            m_uiMesh->postCompressionSend<T>(m_mpi_ctx[i], send_p_id,
+                                             send_requests, send_requests_ctx,
+                                             i);
+
+            // Drain opportunistically: by now some earlier peer's payload may
+            // already have landed and can be decompressed while we compress.
+            if (send_requests.size() + recv_requests.size() > THRESHOLD) {
+                this->process_finished_unzip_all_dof(
+                    in, out, async_k, true, completed_indices, send_requests,
+                    recv_requests, send_requests_ctx, recv_requests_ctx,
+                    statuses);
+            }
+        }
+
+        // One tag bump per exchange, on every rank, matching the legacy path.
+        m_uiMesh->bumpCommTag();
+    }
+#else
     // this for loop is essentially meanlingless right now
     for (unsigned int i = 0; i < async_k; i++) {
         // we need to know where we're at with our variables
@@ -1551,6 +1659,7 @@ void Ctx<DerivedCtx, T, I>::exchange_host_gathered_dof_compression(
 
         ++mpi_comm_tag_compression;
     }
+#endif  // DENDRO_COMPRESSION_EAGER_EXCHANGE
 
     // as long as we have active requests, we need to try and clear them out
     while (!send_requests.empty() || !recv_requests.empty()) {

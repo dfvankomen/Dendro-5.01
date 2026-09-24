@@ -72,10 +72,14 @@ class AsyncExchangeContex {
      * mem */
     std::vector<unsigned char*> m_uiCompSendBufs;
 
-    void* m_uiCompSendBuf = NULL;
+    void* m_uiCompSendBuf     = NULL;
 
     /** pointer to the compressed receive buffer */
-    void* m_uiCompRecvBuf = NULL;
+    void* m_uiCompRecvBuf     = NULL;
+
+    /** allocated capacity of the two buffers above, in bytes */
+    size_t m_uiCompSendBufSize = 0;
+    size_t m_uiCompRecvBufSize = 0;
 
    private:
     /**Send counts for the compressed data*/
@@ -169,7 +173,8 @@ class AsyncExchangeContex {
     inline MPI_Request* getAllToAllRequest() { return &m_alltoallRequest; }
 
     inline void allocateCompressRecvBuffer(size_t bytes) {
-        m_uiCompRecvBuf = malloc(bytes);
+        m_uiCompRecvBuf     = malloc(bytes);
+        m_uiCompRecvBufSize = bytes;
     }
 
     inline void allocateCompressSendBuffers(unsigned int num) {
@@ -177,7 +182,18 @@ class AsyncExchangeContex {
     }
 
     inline void allocateCompressSendBuffer(size_t bytes) {
-        m_uiCompSendBuf = malloc(bytes);
+        m_uiCompSendBuf     = malloc(bytes);
+        m_uiCompSendBufSize = bytes;
+    }
+
+    // Capacity, not occupancy -- the per-peer slot layout is checked against
+    // these at setup so a codec can never silently run off the end.
+    inline size_t getCompressSendBufferSize() const {
+        return m_uiCompSendBufSize;
+    }
+
+    inline size_t getCompressRecvBufferSize() const {
+        return m_uiCompRecvBufSize;
     }
 
     inline std::vector<unsigned char*>& getCompressSendBuffers() {
@@ -198,12 +214,17 @@ class AsyncExchangeContex {
 
     inline void deallocateCompressRecvBuffer() {
         free(m_uiCompRecvBuf);
-        m_uiCompRecvBuf = NULL;
+        m_uiCompRecvBuf     = NULL;
+        m_uiCompRecvBufSize = 0;
     }
 
     inline void deallocateCompressSendBuffer() {
         free(m_uiCompSendBuf);
-        m_uiCompRecvBuf = NULL;
+        // NOTE: this used to null m_uiCompRecvBuf -- a copy-paste that left the
+        // SEND pointer dangling after a dealloc. Harmless only because
+        // alloc_mpi_ctx always re-mallocs over it on the next remesh.
+        m_uiCompSendBuf     = NULL;
+        m_uiCompSendBufSize = 0;
     }
 
     inline void reallocateCompressSendBuffer(size_t bytes) {
@@ -211,13 +232,14 @@ class AsyncExchangeContex {
 
         if (temp_ptr == NULL) {
             printf(
-                "\nReallocation of compressed recieve buffer failed (see "
+                "\nReallocation of compressed send buffer failed (see "
                 "asyncExchangeContext.h and mesh.tcc)!\nEXITING!\n");
             free(m_uiCompSendBuf);
             exit(0);
         } else {
-            m_uiCompSendBuf = temp_ptr;
-            temp_ptr        = NULL;
+            m_uiCompSendBuf     = temp_ptr;
+            m_uiCompSendBufSize = bytes;
+            temp_ptr            = NULL;
         }
     }
 
@@ -231,8 +253,9 @@ class AsyncExchangeContex {
             free(m_uiCompRecvBuf);
             exit(0);
         } else {
-            m_uiCompRecvBuf = temp_ptr;
-            temp_ptr        = NULL;
+            m_uiCompRecvBuf     = temp_ptr;
+            m_uiCompRecvBufSize = bytes;
+            temp_ptr            = NULL;
         }
     }
 

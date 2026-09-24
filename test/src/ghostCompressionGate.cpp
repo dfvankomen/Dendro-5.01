@@ -145,6 +145,25 @@ class GateCtx : public ts::Ctx<GateCtx, DendroScalar, unsigned int> {
         m_uiMesh->readFromGhostBegin(m_mpi_ctx[0], m_evar.get_vec_ptr(), m_dof);
         m_uiMesh->readFromGhostEnd(m_mpi_ctx[0], m_evar.get_vec_ptr(), m_dof);
     }
+
+    /**
+     * @brief The COMPRESSED exchange on its own, no unzip.
+     *
+     * The counterpart to raw_exchange(), and the only honest way to measure a
+     * change to the exchange PROTOCOL. The exchange is under 4% of an unzip, so
+     * an effect worth ~0.1 ms sits inside the build-to-build code-layout noise
+     * of the full-unzip number -- two builds differing only in a preprocessor
+     * flag were seen 0.23 ms apart on the compression-OFF arm, which is
+     * identical code in both. Compare exchanges to exchanges.
+     */
+    void compressed_exchange() {
+        // Ctx::unzip's guard, which calling the exchange directly skips. Ranks
+        // outside a small octree's active comm have no scatter map; without
+        // this the harness segfaults at 8 ranks but not at 4, which reads like
+        // a bug in the exchange and is not one.
+        if (!m_uiMesh->isActive()) return;
+        this->exchange_host_gathered_dof_compression(m_evar, m_unz, ASYNC_K);
+    }
 };
 
 /** @brief run one unzip and return the unzipped buffer. */
@@ -364,18 +383,52 @@ int main(int argc, char** argv) {
 
         // How much of an unzip is the EXCHANGE at all? Measured directly by
         // running the uncompressed exchange on its own (see raw_exchange).
-        double exch_ms = 0.0;
+        // Uncompressed vs compressed EXCHANGE, nothing else running. This is
+        // the number to quote when the exchange PROTOCOL changes; the
+        // full-unzip figures above are far too diluted to resolve it.
+        //
+        // Estimator: MINIMUM over interleaved passes, not the mean. The signal
+        // is ~0.17 ms and the contamination on a shared laptop is one-sided --
+        // a pass can only be made slower by a descheduled rank, never faster --
+        // so the mean tracks the interference and the min tracks the machine.
+        // With mean-of-one-pass the derived break-even bandwidth printed -5.20
+        // and +10.83 GB/s on consecutive runs of the SAME binary. Exchanges are
+        // cheap (~0.4 ms), so passes are affordable where whole unzips are not.
+        double exch_ms = 0.0, cexch_dum_ms = 0.0, cexch_qnt_ms = 0.0;
         {
+            const unsigned int passes    = 7;
+            const unsigned int exch_reps = reps * 4;
+
+            const dendro_compress::CompressionType arms[3] = {
+                dendro_compress::CompressionType::NONE,
+                dendro_compress::CompressionType::DUMMY,
+                dendro_compress::CompressionType::QUANT};
+            double* outs[3] = {&exch_ms, &cexch_dum_ms, &cexch_qnt_ms};
+            for (int a = 0; a < 3; ++a) *outs[a] = 1e300;
+
+            // One ctx per arm, built once: the constructor allocates the
+            // compressed buffers and slot layout, which is setup, not exchange.
+            for (int a = 0; a < 3; ++a) {
+                dendro_compress::COMPRESSION_OPTION = arms[a];
+                GateCtx cctx(mesh, dof);
+                cctx.fill();
+                for (unsigned int w = 0; w < 3; ++w)
+                    a == 0 ? cctx.raw_exchange() : cctx.compressed_exchange();
+
+                for (unsigned int p = 0; p < passes; ++p) {
+                    MPI_Barrier(comm);
+                    const double c0 = MPI_Wtime();
+                    for (unsigned int r = 0; r < exch_reps; ++r)
+                        a == 0 ? cctx.raw_exchange()
+                               : cctx.compressed_exchange();
+                    const double loc = (MPI_Wtime() - c0) / exch_reps * 1e3;
+                    double mx        = 0.0;
+                    MPI_Allreduce(&loc, &mx, 1, MPI_DOUBLE, MPI_MAX, comm);
+                    if (mx < *outs[a]) *outs[a] = mx;
+                }
+            }
             dendro_compress::COMPRESSION_OPTION =
                 dendro_compress::CompressionType::NONE;
-            GateCtx ectx(mesh, dof);
-            ectx.fill();
-            for (unsigned int w = 0; w < 3; ++w) ectx.raw_exchange();
-            MPI_Barrier(comm);
-            const double e0 = MPI_Wtime();
-            for (unsigned int r = 0; r < reps; ++r) ectx.raw_exchange();
-            const double loc = (MPI_Wtime() - e0) / reps * 1e3;
-            MPI_Allreduce(&loc, &exch_ms, 1, MPI_DOUBLE, MPI_MAX, comm);
         }
 
         if (!rank) {
@@ -396,18 +449,34 @@ int main(int argc, char** argv) {
                 exch_ms, 100.0 * exch_ms / t_off,
                 100.0 * (t_dum - t_off) / exch_ms,
                 100.0 * (t_qnt - t_off) / exch_ms);
+            std::printf(
+                "\n    [EXCHANGE ONLY] ms per exchange, no unzip -- this is the\n"
+                "      number that moves when the exchange PROTOCOL changes\n"
+                "      uncompressed        : %8.3f ms\n"
+                "      compressed, DUMMY   : %8.3f ms   %+7.1f%%\n"
+                "      compressed, quant16 : %8.3f ms   %+7.1f%%\n",
+                exch_ms, cexch_dum_ms,
+                100.0 * (cexch_dum_ms - exch_ms) / exch_ms, cexch_qnt_ms,
+                100.0 * (cexch_qnt_ms - exch_ms) / exch_ms);
             // Bytes this rank puts on the wire per exchange, from the scatter map
             // directly (rather than the unsigned-int byte counters, which wrap
             // at 4 GB).
             const double MB = send_bytes / 1048576.0;
             const double saved_frac = 1.0 - 1.0 / 1.850;  // measured real-mix ratio
-            const double overhead_ms = t_qnt - t_off;
+            // Overhead is taken from the EXCHANGE-ONLY arms, not from
+            // (t_qnt - t_off). The full-unzip delta is a ~0.15 ms signal inside
+            // a ~6 ms measurement, and it is not merely imprecise: it goes
+            // NEGATIVE often enough to print a negative break-even bandwidth,
+            // which is nonsense. Same two runs, same machine, gave -0.88 and
+            // 5.64 GB/s off the unzip delta while the exchange-only delta held
+            // steady. Measure the thing you changed.
+            const double overhead_ms = cexch_qnt_ms - exch_ms;
             // fabric bandwidth at which saved wire time == measured overhead
             const double be_gbs =
                 (send_bytes * saved_frac) / (overhead_ms * 1e-3) / 1e9;
             std::printf(
                 "\n    per-rank send volume        : %8.3f MiB / exchange\n"
-                "    quant16 overhead            : %8.3f ms\n"
+                "    quant16 overhead (exchange) : %8.3f ms\n"
                 "    => break-even fabric bandwidth: %7.2f GB/s per rank\n",
                 MB, overhead_ms, be_gbs);
             std::printf(

@@ -167,6 +167,19 @@ option(DENDRO_COMPRESSION_OMP
        "OpenMP-thread the compression codec over independent blocks (bit-exact)"
        OFF)
 
+# Post every compressed payload the moment its peer is compressed, instead of
+# compressing all peers -> exchanging byte counts -> waiting on all of them ->
+# only then sending. The size exchange is unnecessary: each rank derives a fixed
+# per-peer slot layout from its own scatter map, and the codec framing is
+# self-delimiting, so a receiver knows where a payload lands without being told
+# how big it is. Removes one latency round-trip and one synchronization point
+# per exchange, and lets compression overlap the wire.
+#
+# OFF restores the original size-negotiating path, which exists only so the two
+# can be measured against each other. Both are bit-identical in result.
+option(DENDRO_COMPRESSION_EAGER_EXCHANGE
+       "Skip the compressed-size exchange and post payloads per peer" ON)
+
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
 set(OCT2BLK_COARSEST_LEV 0 CACHE STRING "Coarsest Level")
@@ -462,6 +475,8 @@ dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
 dendro_add_def(DENDRO_ENABLE_GHOST_COMPRESSION DENDRO_ENABLE_GHOST_COMPRESSION)
 dendro_add_def(DENDRO_COMPRESSION_QUALITY DENDRO_COMPRESSION_QUALITY)
 dendro_add_def(DENDRO_COMPRESSION_OMP DENDRO_COMPRESSION_OMP)
+dendro_add_def(DENDRO_COMPRESSION_EAGER_EXCHANGE
+               DENDRO_COMPRESSION_EAGER_EXCHANGE)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})

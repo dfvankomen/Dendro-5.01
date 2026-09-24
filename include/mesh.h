@@ -2496,6 +2496,45 @@ class Mesh {
         std::vector<unsigned int> &recv_requests_ctx, unsigned int ctx_idx);
 
     /**
+     * @brief Post every compressed-payload Irecv up front, before anything has
+     * been compressed and without knowing how many bytes will actually arrive.
+     *
+     * This is what the fixed slot layout buys (see alloc_mpi_ctx): peer p's
+     * bytes always land at getReceiveCompressOffsets()[p], and the slot is
+     * sized for the worst case, so the count passed here is a CEILING. MPI is
+     * happy to deliver fewer bytes than the receive buffer allows; the true
+     * length comes back in the status and is only needed for accounting, since
+     * the codec framing is self-delimiting.
+     */
+    template <typename T>
+    void postCompressionRecvs(AsyncExchangeContex &ctx,
+                              std::vector<MPI_Request> &recv_requests,
+                              std::vector<unsigned int> &recv_requests_ctx,
+                              unsigned int ctx_idx);
+
+    /**
+     * @brief Post one peer's compressed payload the instant that peer has been
+     * compressed, rather than waiting for the whole send loop to finish.
+     */
+    template <typename T>
+    void postCompressionSend(AsyncExchangeContex &ctx, unsigned int proc_id,
+                             std::vector<MPI_Request> &send_requests,
+                             std::vector<unsigned int> &send_requests_ctx,
+                             unsigned int ctx_idx);
+
+    /**@brief advance the ghost-exchange message tag; one bump per exchange, on
+     * every rank, so senders and receivers stay in step. */
+    inline void bumpCommTag() { m_uiCommTag++; }
+
+    /**@brief byte capacity of peer p's compressed send slot. */
+    inline unsigned int getSendCompressSlotSize(AsyncExchangeContex &ctx,
+                                                unsigned int p) const;
+
+    /**@brief byte capacity of peer p's compressed receive slot. */
+    inline unsigned int getRecvCompressSlotSize(AsyncExchangeContex &ctx,
+                                                unsigned int p) const;
+
+    /**
      * @brief : ghost read begin.
      *
      * @tparam T

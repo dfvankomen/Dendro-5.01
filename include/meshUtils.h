@@ -379,10 +379,72 @@ void alloc_mpi_ctx(const Mesh* pMesh,
             ctx_list[i].getReceiveCompressCounts().resize(
                 pMesh->getMPICommSize(), 0);
 
-            ctx_list[i].getSendCompressOffsets().resize(pMesh->getMPICommSize(),
-                                                        0);
+            // NOTE: npes+1, not npes -- the trailing sentinel makes peer p's
+            // slot capacity offsets[p+1]-offsets[p].
+            ctx_list[i].getSendCompressOffsets().resize(
+                pMesh->getMPICommSize() + 1, 0);
             ctx_list[i].getReceiveCompressOffsets().resize(
-                pMesh->getMPICommSize(), 0);
+                pMesh->getMPICommSize() + 1, 0);
+
+            // Fixed slot layout for the compressed payload.
+            //
+            // Each peer gets a permanently reserved region of the compressed
+            // buffer, sized for the WORST case: incompressible data falls back
+            // to a raw copy plus one size_t header per block, which is exactly
+            // the headroom the buffer above was allocated with. Both sides
+            // derive their own layout from their own scatter map, so a rank
+            // knows where an incoming payload will land before it knows how
+            // big it is -- which is what lets the exchange skip negotiating
+            // sizes altogether. The layouts do NOT have to agree across ranks;
+            // MPI only moves a byte range.
+            //
+            // Cost: the compressed buffers stay uncompressed-sized. They
+            // already were, and the saving that matters is on the wire.
+            {
+                auto fill_slots = [&](std::vector<unsigned int>& offsets,
+                                      const std::vector<unsigned int>& counts,
+                                      const std::vector<std::array<unsigned int, 4>>&
+                                          dimCounts) {
+                    size_t acc = 0;
+                    for (unsigned int p = 0; p < activeNpes; p++) {
+                        offsets[p]              = acc;
+                        unsigned int num_blks_p = 0;
+                        for (const auto& b : dimCounts[p]) num_blks_p += b;
+                        acc += (size_t)batch_sz * counts[p] * dtypeSize +
+                               sizeof(size_t) * num_blks_p;
+                    }
+                    offsets[activeNpes] = acc;
+                    return acc;
+                };
+
+                const size_t sendSlotTotal = fill_slots(
+                    ctx_list[i].getSendCompressOffsets(), nodeSendCount,
+                    pMesh->getSendNodeSMConfigDimCounts());
+                const size_t recvSlotTotal = fill_slots(
+                    ctx_list[i].getReceiveCompressOffsets(), nodeRecvCount,
+                    pMesh->getRecvNodeSMConfigDimCounts());
+
+                // The slot layout is the same sum the allocations above use,
+                // just partitioned per peer -- if that ever stops being true
+                // the buffers are too small and the failure is a silent
+                // heap overrun during an exchange.
+                if (sendBSz &&
+                    sendSlotTotal > ctx_list[i].getCompressSendBufferSize()) {
+                    std::cerr << "ERROR: compressed send slot layout needs "
+                              << sendSlotTotal << " bytes but only "
+                              << ctx_list[i].getCompressSendBufferSize()
+                              << " were allocated." << std::endl;
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+                if (recvBSz &&
+                    recvSlotTotal > ctx_list[i].getCompressRecvBufferSize()) {
+                    std::cerr << "ERROR: compressed recv slot layout needs "
+                              << recvSlotTotal << " bytes but only "
+                              << ctx_list[i].getCompressRecvBufferSize()
+                              << " were allocated." << std::endl;
+                    MPI_Abort(MPI_COMM_WORLD, 1);
+                }
+            }
 #endif
         }
     }
