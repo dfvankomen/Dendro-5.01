@@ -783,6 +783,8 @@ int main(int argc, char** argv) {
                 const char* ei = std::getenv("ECC_REFINE_IMB");
                 opts.refine_rounds = er ? atoi(er) : 30;
                 opts.refine_max_imbalance = ei ? atof(ei) : 1.05;
+                const char* eo = std::getenv("ECC_REFINE_OBJ");
+                opts.refine_objective = eo ? atoi(eo) : 0;
                 opts.include_edge_corner = (v != "fastpart_refine");
             }
             if (lw_init) {

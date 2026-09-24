@@ -19388,6 +19388,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 opts.include_edge_corner  = true;
                 opts.refine_rounds        = rEnv ? atoi(rEnv) : 30;
                 opts.refine_max_imbalance = iEnv ? atof(iEnv) : 1.05;
+                const char *oEnv = std::getenv("DENDRO_GRAPH_REFINE_OBJ");
+                opts.refine_objective     = oEnv ? atoi(oEnv) : 0;
                 if (refineMode == 2) {
                     vcon.resize(n);
                     for (size_t i = 0; i < n; ++i)
