@@ -750,12 +750,17 @@ void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
             (DendroIntL)oct_work_weight(m_uiAllElements[ele].getLevel(), lmin,
                                         lmax);
 
-    DendroIntL local[6] = {localEle,  ghostSend, ghostRecv,
-                           sendProcs, recvProcs, workLoad};
-    DendroIntL sum[6]   = {0, 0, 0, 0, 0, 0};
-    DendroIntL maxv[6]  = {0, 0, 0, 0, 0, 0};
-    par::Mpi_Reduce(local, sum, 6, MPI_SUM, 0, m_uiCommActive);
-    par::Mpi_Reduce(local, maxv, 6, MPI_MAX, 0, m_uiCommActive);
+    DendroIntL paddedVol = 0;
+    for (const ot::Block& b : m_uiLocalBlockList)
+        paddedVol += (DendroIntL)b.getAllocationSzX() * b.getAllocationSzY() *
+                     b.getAllocationSzZ();
+
+    DendroIntL local[7] = {localEle,  ghostSend, ghostRecv, sendProcs,
+                           recvProcs, workLoad,  paddedVol};
+    DendroIntL sum[7]   = {0, 0, 0, 0, 0, 0, 0};
+    DendroIntL maxv[7]  = {0, 0, 0, 0, 0, 0, 0};
+    par::Mpi_Reduce(local, sum, 7, MPI_SUM, 0, m_uiCommActive);
+    par::Mpi_Reduce(local, maxv, 7, MPI_MAX, 0, m_uiCommActive);
 
     // per-sub-step ENUTS efficiency: level l fires 2^(l-lmin) times per coarse
     // step and each partial step waits for the rank holding most of level l
@@ -788,11 +793,16 @@ void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
         const double meanWork = (double)sum[5] * invNpes;
         const double workImbal =
             (meanWork > 0.0) ? (double)maxv[5] / meanWork : 0.0;
+        const double meanPad = (double)sum[6] * invNpes;
+        const double padImbal =
+            (meanPad > 0.0) ? (double)maxv[6] / meanPad : 0.0;
         out << "[part-stats] " << tag << " npes=" << m_uiActiveNpes
             << " total_elements=" << sum[0]
             << " ele_imbalance=" << eleImbal
             << " total_work=" << sum[5]
             << " work_imbalance=" << workImbal
+            << " total_padded_vol=" << sum[6]
+            << " padded_vol_imbalance=" << padImbal
             << " total_ghost_send_nodes=" << sum[1]
             << " total_ghost_recv_nodes=" << sum[2]
             << " max_rank_ghost_send=" << maxv[1]
@@ -15531,6 +15541,29 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
     std::vector<ot::TreeNode> balOct1;  // new balanced octree.
 
     if (m_uiIsActive) {
+        static const char* flagDumpDir = std::getenv("DENDRO_REMESH_FLAG_DUMP");
+        static int flagDumpCall = 0;
+        if (flagDumpDir) {
+            unsigned int nonSfcBlocks = 0;
+            for (const auto& b : m_uiLocalBlockList) nonSfcBlocks += b.isNonSFC();
+            char fn[1024];
+            std::snprintf(fn, sizeof(fn), "%s/flags_r%d_%d.txt", flagDumpDir,
+                          (int)m_uiActiveRank, flagDumpCall++);
+            if (FILE* fp = std::fopen(fn, "w")) {
+                std::fprintf(fp, "# rank=%d numLocal=%u nonSfcBlocks=%u blocks=%zu\n",
+                             (int)m_uiActiveRank, m_uiNumLocalElements,
+                             nonSfcBlocks, m_uiLocalBlockList.size());
+                for (unsigned int ele = m_uiElementLocalBegin;
+                     ele < m_uiElementLocalEnd; ele++)
+                    std::fprintf(fp, "%u %u %u %u %u\n",
+                                 m_uiAllElements[ele].getX(),
+                                 m_uiAllElements[ele].getY(),
+                                 m_uiAllElements[ele].getZ(),
+                                 m_uiAllElements[ele].getLevel(),
+                                 m_uiAllElements[ele].getFlag() >> NUM_LEVEL_BITS);
+                std::fclose(fp);
+            }
+        }
         // 1. build the unbalanced octree from the remesh flags.
         std::vector<ot::TreeNode> unBalancedOctree;
         unsigned int remeshFlag;
@@ -19242,6 +19275,36 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         return ids;
     };
 
+    // RHS/unzip cost of an element = padded volume of its source block over the
+    // block's element count; (eOrder*m+1+2*pw)^3 / m^3 for a block of side m
+    const unsigned int padW = m_uiLocalBlockList.empty()
+                                  ? (m_uiElementOrder >> 1)
+                                  : m_uiLocalBlockList[0].get1DPadWidth();
+    auto paddedVolumeWeight = [&](const oct_data<D_INT_L>& oct) {
+        const unsigned int m = (oct.blkMeta >> 31) & 1u
+                                   ? 1u << (oct.level - oct.blkAnchorLevel)
+                                   : 1u;
+        const double side = (double)(m_uiElementOrder * m + 1u + 2u * padW);
+        return (fastpart_uint_t)std::llround(side * side * side /
+                                             (double)((size_t)m * m * m));
+    };
+
+    // weighted prefix split of the global Hilbert order: rank floor(W_prefix*np/W_total)
+    auto weightedPrefixLabels = [&](const std::vector<fastpart_uint_t>& w) {
+        unsigned long long loc = 0, tot = 0, off = 0;
+        for (size_t i = 0; i < localSz; ++i) loc += w[i];
+        MPI_Allreduce(&loc, &tot, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+        MPI_Exscan(&loc, &off, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+        if (rank == 0) off = 0;
+        std::vector<unsigned int> lab(localSz);
+        for (size_t i = 0; i < localSz; ++i) {
+            const unsigned int p = (unsigned int)((off * (unsigned long long)npes) / tot);
+            lab[i] = (p >= (unsigned int)npes) ? npes - 1 : p;
+            off += w[i];
+        }
+        return lab;
+    };
+
     // k-th of the n_L elements at level L (global Hilbert order) -> rank floor(k*np/n_L)
     auto levelwiseLabels = [&]() {
         unsigned int lmin = 0, lmax = 0;
@@ -19416,16 +19479,20 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 for (size_t i = 0; i < n; ++i)
                     vwgt[i] = (fastpart_uint_t)ot::oct_work_weight(
                         oct_connectivity_map[i].level, lmin, lmax);
+            else if (wpartMode == 2)
+                for (size_t i = 0; i < n; ++i)
+                    vwgt[i] = paddedVolumeWeight(oct_connectivity_map[i]);
 
             fastpart_oct_partopts opts;
             fastpart_oct_partopts_init(&opts);
-            opts.vwgt               = (wpartMode == 1) ? vwgt.data() : nullptr;
+            opts.vwgt               = (wpartMode >= 1) ? vwgt.data() : nullptr;
             opts.include_edge_corner = fullStencil;
 
             std::vector<unsigned int> initLab, groupIds, vcon;
             if (refineMode > 0) {
-                initLab = (refineMode == 2) ? levelwiseLabels()
-                                            : std::vector<unsigned int>(n, (unsigned int)rank);
+                initLab = (refineMode == 2)   ? levelwiseLabels()
+                          : (refineMode == 3) ? weightedPrefixLabels(vwgt)
+                                              : std::vector<unsigned int>(n, (unsigned int)rank);
                 groupIds = blockIds();
                 const char *rEnv = std::getenv("DENDRO_GRAPH_REFINE_ROUNDS");
                 const char *iEnv = std::getenv("DENDRO_GRAPH_REFINE_IMB");
@@ -20117,6 +20184,27 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     };
     buildNodalSM(nullptr);
     __phase("nodal-scatter-map");
+
+    if (const char* e = std::getenv("DENDRO_UNREF_CHECK"); e && e[0] == '1') {
+        std::vector<char> ref(m_uiNumActualNodes, 0);
+        for (unsigned int el = m_uiElementPreGhostBegin; el < m_uiElementPostGhostEnd; el++)
+            for (unsigned int k = 0; k < m_uiNpE; k++) {
+                const unsigned int cg = m_uiE2NMapping_CG[el * m_uiNpE + k];
+                if (cg < m_uiNumActualNodes) ref[cg] = 1;
+            }
+        std::vector<char> sentCG(m_uiNumActualNodes, 0), sentDG(m_uiNumActualNodes, 0);
+        for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
+            const unsigned int idx = m_uiScatterMapActualNodeSend[k];
+            const bool dg = k < m_uiScatterMapSendIsDG.size() && m_uiScatterMapSendIsDG[k];
+            if (!dg && idx < m_uiNumActualNodes) sentCG[idx] = 1;
+            if (dg) sentDG[0] = 1;
+        }
+        unsigned int unref = 0, unrefSent = 0;
+        for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd; cg++)
+            if (!ref[cg]) { unref++; if (sentCG[cg]) unrefSent++; }
+        std::cout << "[unref-check r" << rank << "] local=" << (m_uiNodeLocalEnd - m_uiNodeLocalBegin)
+                  << " unreferenced=" << unref << " of_which_sent_as_cg=" << unrefSent << std::endl;
+    }
 
     // -----
     // ELEMENT SCATTERMAP
