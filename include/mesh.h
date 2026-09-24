@@ -242,11 +242,21 @@ class Mesh {
     std::vector<unsigned int> m_uiZipPlanCgIdx;
     bool m_uiZipPlanBuilt = false;
 
-    /** unzip plan: per-element hanging face/edge interpolations (id | cnum<<5)
-     * and corner re-gathers applied after a flat e2n gather; see buildUnzipPlan. */
+    /** unzip plan: per-element hanging face/edge interpolations
+     * (id | cnum<<5) and corner re-gathers applied after an e2n gather. */
     std::vector<unsigned int> m_uiUnzipOpOffset;
     std::vector<unsigned char> m_uiUnzipOps;
     std::vector<unsigned int> m_uiUnzipSlots;
+    /** unzip copy plan: per unzip cell its last writer's CG index (< cgSz),
+     * cgSz + compact DG index, or UINT_MAX (coarse->fine or never written). */
+    std::vector<unsigned int> m_uiUnzipCopySrc;
+    /** elements whose nodal values the copy plan / prolongation still read */
+    std::vector<unsigned int> m_uiUnzipDgEle;
+    std::vector<unsigned int> m_uiUnzipDgSlot;
+    /** per block, coarser elements (prolonged) in scatter order */
+    std::vector<unsigned int> m_uiUnzipC2FOffset;
+    std::vector<unsigned int> m_uiUnzipC2FEle;
+    bool m_uiUnzipCopyPlanOk = false;
     bool m_uiUnzipPlanBuilt = false;
     /** Element to Node mapping with DG indexing after removing duplicates. This
      * is used for debugging. */
@@ -712,6 +722,8 @@ class Mesh {
     void buildZipPlan();
 
     void buildUnzipPlan();
+
+    void buildUnzipCopyPlan();
 
     /**
      * @brief: Builds the Element to nodal mapping for DG computations.
@@ -2217,13 +2229,13 @@ class Mesh {
     void unzip_scatter_batch(const T *const *ins, T *const *outs,
                              unsigned int n_vars);
 
-    /**@brief getElementNodalValues via the unzip plan (bit-identical output). */
+    /**@brief getElementNodalValues via the unzip plan (identical output). */
     template <typename T>
     void getElementNodalValuesPlanned(const T *vec, T *nodalValues,
                                       unsigned int ele, T *pin, T *pout,
                                       double *im1, double *im2) const;
 
-    /**@brief reference unzip_scatter_batch for testUnzipExact; not used by the solver. */
+    /**@brief pre-plan unzip_scatter_batch (testUnzipExact reference). */
     template <typename T>
     void unzip_scatter_batch_ref(const T *const *ins, T *const *outs,
                                  unsigned int n_vars);

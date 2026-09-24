@@ -9,6 +9,7 @@
 #include <cstring>
 #include <functional>
 #include <string>
+#include <ctime>
 #include <vector>
 
 #include "TreeNode.h"
@@ -134,6 +135,8 @@ int main(int argc, char** argv) {
                 }
             }
 
+            ot::g_lpt_block_order = (p % 2) == 1;  // cover both block orders
+
             // poison both outputs so untouched cells must agree too
             std::memset(out_ref.data(), 0xA5, out_ref.size() * sizeof(double));
             std::memset(out_new.data(), 0xA5, out_new.size() * sizeof(double));
@@ -176,16 +179,24 @@ int main(int argc, char** argv) {
                     rank, p, nd, n_words, first, first / unSz, out_ref[first],
                     out_new[first]);
             } else if (!rank) {
-                std::printf("  pattern %u: bit-exact (%zu doubles, memcmp==0)\n",
-                            p, n_words);
+                std::printf("  pattern %u: bit-exact (%zu doubles)%s\n", p,
+                            n_words, ot::g_lpt_block_order ? " lpt" : "");
             }
         }
 
         // timing: ref/new interleaved per rep, max over ranks per call
         if (n_reps > 0) {
-            std::vector<double> t_ref(n_reps), t_new(n_reps);
+            std::vector<double> t_ref(n_reps), t_new(n_reps), c_ref(n_reps),
+                c_new(n_reps);
+            auto cpu_now = []() {
+                timespec ts;
+                clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+                return ts.tv_sec + 1e-9 * ts.tv_nsec;
+            };
+            double c_last = 0.0;
             auto time_call = [&](bool use_ref) {
                 MPI_Barrier(comm);
+                const double c0 = cpu_now();
                 const double t0 = MPI_Wtime();
                 if (use_ref)
                     mesh->unzip_scatter_batch_ref(ins.data(), outs_ref.data(),
@@ -194,15 +205,18 @@ int main(int argc, char** argv) {
                     mesh->unzip_scatter_batch(ins.data(), outs_new.data(),
                                               n_vars);
                 double dt = MPI_Wtime() - t0, dmax;
+                c_last    = cpu_now() - c0;
                 MPI_Allreduce(&dt, &dmax, 1, MPI_DOUBLE, MPI_MAX, comm);
                 return dmax;
             };
             for (unsigned int r = 0; r < n_reps; r++) {
                 t_ref[r] = time_call(true);
+                c_ref[r] = c_last;
                 t_new[r] = time_call(false);
+                c_new[r] = c_last;
             }
-            std::sort(t_ref.begin(), t_ref.end());
-            std::sort(t_new.begin(), t_new.end());
+            for (auto* t : {&t_ref, &t_new, &c_ref, &c_new})
+                std::sort(t->begin(), t->end());
             if (!rank)
                 std::printf(
                     "  timing[%s] %u reps: ref med=%.3f min=%.3f ms | new "
@@ -210,6 +224,11 @@ int main(int argc, char** argv) {
                     tag, n_reps, 1e3 * t_ref[n_reps / 2], 1e3 * t_ref[0],
                     1e3 * t_new[n_reps / 2], 1e3 * t_new[0],
                     t_ref[n_reps / 2] / t_new[n_reps / 2], t_ref[0] / t_new[0]);
+            if (!rank)
+                std::printf("  cpu[%s] rank0 process cpu med: ref=%.3f new=%.3f ms "
+                            "ratio=%.3fx\n",
+                            tag, 1e3 * c_ref[n_reps / 2], 1e3 * c_new[n_reps / 2],
+                            c_ref[n_reps / 2] / c_new[n_reps / 2]);
         }
     };
 
