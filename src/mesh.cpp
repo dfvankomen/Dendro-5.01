@@ -19594,19 +19594,88 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     }
     __phase("partition-decision");
 
-    // push each element to its label with trank set, as the fetch would
+    // forward push of the owned set + R1/R2/R3 closure. the source of an
+    // element knows its label and its 26 neighbour ids, so "rank p needs g at
+    // ring d" claims travel to g's source (3 claim rounds, one per ring), then
+    // every element is pushed once to each rank that claimed it. ring d is the
+    // directed BFS layer of the keyset fetch, so the delivered set and the
+    // isGhostTwo tags are the same as R1/R2/R3; trank = label as the fetch sets
     std::vector<oct_data<D_INT_L>> new_oct_connectivity_map;
+    std::vector<D_INT_L> post_first_round_comms_ids;
     if (pushPath) {
+        const D_INT_L myBeg = ele_offsets[rank], myEnd = ele_offsets[rank + 1];
+        const D_INT_L nGlobal = ele_offsets[npes];
+        for (size_t i = 0; i < localSz; ++i)
+            oct_connectivity_map[i].trank = pushLabels[i];
+
+        std::vector<std::vector<std::pair<unsigned int, unsigned char>>> ring(localSz);
+        std::vector<std::pair<size_t, unsigned int>> frontier, next;
+        unsigned long long nClaims = 0, nNoop = 0, nDup = 0;
+        auto claim = [&](size_t li, unsigned int p, unsigned char d) {
+            ++nClaims;
+            bool known = (pushLabels[li] == p);
+            for (const auto& q : ring[li]) known = known || (q.first == p);
+            if (known) { ++nNoop; return; }
+            ring[li].emplace_back(p, d);
+            next.emplace_back(li, p);
+        };
+        for (size_t i = 0; i < localSz; ++i) frontier.emplace_back(i, pushLabels[i]);
+        for (unsigned char d = 1; d <= 3; ++d) {
+            next.clear();
+            std::vector<std::vector<unsigned long long>> out(npes);
+            auto emit = [&](unsigned int p, D_INT_L g) {
+                if (g >= nGlobal) return;
+                if (g >= myBeg && g < myEnd) { claim(g - myBeg, p, d); return; }
+                const int owner = (int)(std::upper_bound(ele_offsets.begin(),
+                                                         ele_offsets.end(), g) -
+                                        ele_offsets.begin()) - 1;
+                out[owner].push_back(((unsigned long long)g << 32) | p);
+            };
+            for (const auto& [li, p] : frontier) {
+                const auto& oct = oct_connectivity_map[li];
+                for (const auto g : oct.e2e) emit(p, g);
+                for (const auto g : oct.edgeNeighbors) emit(p, g);
+                for (const auto g : oct.vertexNeighbors) emit(p, g);
+            }
+            for (auto& b : out) {
+                const size_t n0 = b.size();
+                std::sort(b.begin(), b.end());
+                b.erase(std::unique(b.begin(), b.end()), b.end());
+                nDup += n0 - b.size();
+            }
+            for (const auto k : exchangeBuckets(out, MPI_UNSIGNED_LONG_LONG))
+                claim((D_INT_L)(k >> 32) - myBeg, (unsigned int)(k & 0xffffffffu), d);
+            frontier.swap(next);
+        }
+
         std::vector<std::vector<oct_data<D_INT_L>>> out(npes);
         for (size_t i = 0; i < localSz; ++i) {
-            oct_connectivity_map[i].trank = pushLabels[i];
             out[pushLabels[i]].push_back(oct_connectivity_map[i]);
+            for (const auto& [p, d] : ring[i]) {
+                out[p].push_back(oct_connectivity_map[i]);
+                if (d >= 2) out[p].back().isGhostTwo = true;
+            }
         }
         MPI_Datatype octType = create_octdata_mpi_type<D_INT_L>();
         new_oct_connectivity_map = exchangeBuckets(out, octType);
         MPI_Type_free(&octType);
-        for (const auto& o : new_oct_connectivity_map) my_partition.push_back(o.eid);
+        for (const auto& o : new_oct_connectivity_map) {
+            if (o.trank == (unsigned int)rank) my_partition.push_back(o.eid);
+            if (o.trank == (unsigned int)rank || !o.isGhostTwo)
+                post_first_round_comms_ids.push_back(o.eid);
+        }
         std::sort(my_partition.begin(), my_partition.end());
+
+        if (countRounds) {
+            unsigned long long loc[4] = {nClaims, nNoop, nDup,
+                                         (unsigned long long)new_oct_connectivity_map.size()},
+                               tot[4];
+            MPI_Reduce(loc, tot, 4, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            if (!rank)
+                std::cout << "[repart-push] claims=" << tot[0] << " noop=" << tot[1]
+                          << " dup_suppressed=" << tot[2] << " delivered=" << tot[3]
+                          << std::endl;
+        }
     }
     {
         unsigned int nMine = (unsigned int)my_partition.size(), nMin = 0;
@@ -19656,7 +19725,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
     size_t newLocalBegin = LOOK_UP_TABLE_DEFAULT;
     size_t newNumEle;
-    std::vector<D_INT_L> post_first_round_comms_ids;
 
 
     // ================= KEYSET-BASED GHOST FETCH =================
@@ -19698,6 +19766,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             }
         };
 
+    if (!pushPath) {
     std::set<D_INT_L> present;
     for (const auto &oct : new_oct_connectivity_map) present.insert(oct.eid);
 
@@ -19772,6 +19841,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                                     r3_fetched.begin(), r3_fetched.end());
     new_oct_connectivity_map.insert(new_oct_connectivity_map.end(),
                                     r3_local.begin(), r3_local.end());
+    }
 
     std::sort(new_oct_connectivity_map.begin(),
               new_oct_connectivity_map.end(),
