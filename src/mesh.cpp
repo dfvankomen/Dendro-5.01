@@ -761,6 +761,25 @@ void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
     par::Mpi_Reduce(local, sum, 6, MPI_SUM, 0, m_uiCommActive);
     par::Mpi_Reduce(local, maxv, 6, MPI_MAX, 0, m_uiCommActive);
 
+    // per-sub-step ENUTS efficiency: level l fires 2^(l-lmin) times per coarse
+    // step and each partial step waits for the rank holding most of level l
+    const unsigned int nlev = lmax - lmin + 1;
+    std::vector<DendroIntL> levLocal(nlev, 0), levSum(nlev, 0), levMax(nlev, 0);
+    for (unsigned int ele = m_uiElementLocalBegin; ele < m_uiElementLocalEnd; ele++)
+        levLocal[m_uiAllElements[ele].getLevel() - lmin]++;
+    par::Mpi_Reduce(levLocal.data(), levSum.data(), nlev, MPI_SUM, 0, m_uiCommActive);
+    par::Mpi_Reduce(levLocal.data(), levMax.data(), nlev, MPI_MAX, 0, m_uiCommActive);
+    double ltsEff = 0.0;
+    if (m_uiActiveRank == 0 && m_uiActiveNpes > 0) {
+        double ideal = 0.0, gated = 0.0;
+        for (unsigned int l = 0; l < nlev; ++l) {
+            const double fire = (double)(1ull << l);
+            ideal += fire * (double)levSum[l] / (double)m_uiActiveNpes;
+            gated += fire * (double)levMax[l];
+        }
+        ltsEff = (gated > 0.0) ? ideal / gated : 0.0;
+    }
+
     if (m_uiActiveRank == 0) {
         const double invNpes =
             (m_uiActiveNpes > 0) ? 1.0 / (double)m_uiActiveNpes : 0.0;
@@ -782,7 +801,8 @@ void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
             << " total_ghost_recv_nodes=" << sum[2]
             << " max_rank_ghost_send=" << maxv[1]
             << " ghost_send_imbalance=" << ghostImbal
-            << " max_send_partners=" << maxv[3] << std::endl;
+            << " max_send_partners=" << maxv[3]
+            << " lts_substep_eff=" << ltsEff << std::endl;
     }
 }
 
