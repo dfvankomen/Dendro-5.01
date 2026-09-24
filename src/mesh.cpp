@@ -19131,7 +19131,12 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // -------- PHASE TIMING --------
     auto __t_start = MPI_Wtime();
     auto __t_prev  = __t_start;
+    static const bool __phase_prof = [] {
+        const char* e = std::getenv("DENDRO_REPART_PHASE_PROF");
+        return e && e[0] == '1';
+    }();
     auto __phase   = [&](const char *name) {
+        if (!__phase_prof) return;
         MPI_Barrier(commActive);
         double now = MPI_Wtime();
         if (rank == 0)

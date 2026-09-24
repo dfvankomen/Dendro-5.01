@@ -4084,8 +4084,12 @@ class Mesh {
             for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
                 if (eid_vec[ele] == LOOK_UP_TABLE_DEFAULT) numMissing++;
             }
+            // the gather below is collective: decide on the global count
+            unsigned int numMissingGlobal = 0;
+            MPI_Allreduce(&numMissing, &numMissingGlobal, 1, MPI_UNSIGNED, MPI_SUM,
+                          commActive);
 
-            if (numMissing > 0) {
+            if (numMissingGlobal > 0) {
                 // gather all local element descriptors globally
                 // each entry: (x, y, z, level, global_id) packed as
                 // 5 unsigned ints
