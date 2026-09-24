@@ -136,6 +136,12 @@ class Block {
         return m_isNonSFC ? (m_elementIndices.empty() ? 0 : m_elementIndices[0])
                           : m_uiLocalElementBegin;
     }
+    inline bool isNonSFC() const { return m_isNonSFC; }
+    inline bool containsElement(DendroIntL e) const {
+        if (!m_isNonSFC) return e >= m_uiLocalElementBegin && e < m_uiLocalElementEnd;
+        for (const DendroIntL x : m_elementIndices) if (x == e) return true;
+        return false;
+    }
     inline size_t numElements() const {
         return m_isNonSFC ? m_elementIndices.size()
                           : (size_t)(m_uiLocalElementEnd - m_uiLocalElementBegin);

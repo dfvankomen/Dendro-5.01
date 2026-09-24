@@ -12,6 +12,8 @@
  */
 
 #pragma once
+#include <cstdlib>
+#include <cmath>
 #include "enutsOp.h"
 #include "mesh.h"
 #include "ts.h"
@@ -176,8 +178,7 @@ class BlockAsyncVector {
 
         const unsigned int dgSz      = pMesh->getDegOfFreedomDG();
         for (unsigned int v = 0; v < dof; v++) {
-            for (unsigned int elem = blkList[blk].getLocalElementBegin();
-                 elem < blkList[blk].getLocalElementEnd(); elem++) {
+            for (const unsigned int elem : blkList[blk]) {
                 const unsigned int ei =
                     (pNodes[elem].getX() - blkNode.getX()) >>
                     (m_uiMaxDepth - regLev);
@@ -254,11 +255,42 @@ class BlockAsyncVector {
 
         unsigned int oEid, oXi, oYj, oZk;
 
+        if (m_uiMode == BLK_ASYNC_VEC_MODE::BLK_UNZIP &&
+            blkList[m_uiBlkID].isNonSFC()) {
+            // labelled mesh: write exactly what the mesh's zip plan writes for
+            // this block (owner elements may be ghosts, so the E2N_DG self-owner
+            // rule below would leave local cgs stale)
+            const unsigned int* planIdx = nullptr;
+            size_t n                    = 0;
+            pMesh->blockZipPlan(m_uiBlkID, planIdx, n);
+            const unsigned int* cgs   = pMesh->getZipPlanCg().data();
+            const unsigned int* uidx  = pMesh->getZipPlanUnzipIdx().data();
+            const unsigned int offset = blkList[m_uiBlkID].getOffset();
+            const unsigned int blkSz  = lx * ly * lz;
+            static int dbg_calls = 0;
+            if (std::getenv("DENDRO_ENUTS_DEBUG") && dbg_calls++ < 3) {
+                T mx[8] = {0};
+                for (unsigned int v = 0; v < dof && v < 8; v++)
+                    for (unsigned int q = 0; q < blkSz; q++)
+                        mx[v] = std::max(mx[v], (T)std::fabs(m_uiVec[v * blkSz + q]));
+                std::cout << "[blkzip r" << pMesh->getMPIRankGlobal() << "] blk=" << m_uiBlkID
+                          << " nonSFC plan n=" << n << " dof=" << dof << " blkSz=" << blkSz
+                          << " max|v0|=" << mx[0] << " max|v1|=" << mx[1] << std::endl;
+            }
+            for (unsigned int v = 0; v < dof; v++)
+                for (size_t i = 0; i < n; i++)
+                    zipVec[(v * vsz_cg) + cgs[planIdx[i]]] =
+                        m_uiVec[(v * blkSz) + (uidx[planIdx[i]] - offset)];
+            return;
+        }
+        static int dbg_sfc = 0;
+        if (std::getenv("DENDRO_ENUTS_DEBUG") && dbg_sfc++ < 2)
+            std::cout << "[blkzip r" << pMesh->getMPIRankGlobal() << "] blk=" << m_uiBlkID
+                      << " SFC path nonSFC=" << blkList[m_uiBlkID].isNonSFC()
+                      << " numEle=" << blkList[m_uiBlkID].numElements() << std::endl;
         if (m_uiMode == BLK_ASYNC_VEC_MODE::BLK_UNZIP) {
             for (unsigned int v = 0; v < dof; v++) {
-                for (unsigned int elem =
-                         blkList[m_uiBlkID].getLocalElementBegin();
-                     elem < blkList[m_uiBlkID].getLocalElementEnd(); elem++) {
+                for (const unsigned int elem : blkList[m_uiBlkID]) {
                     const unsigned int ei =
                         (pNodes[elem].getX() - blkNode.getX()) >>
                         (m_uiMaxDepth - regLev);
@@ -352,8 +384,7 @@ class BlockAsyncVector {
             pMesh->getAllElements().size() * pMesh->getNumNodesPerElement();
 
         for (unsigned int v = 0; v < dof; v++) {
-            for (unsigned int elem = blkList[m_uiBlkID].getLocalElementBegin();
-                 elem < blkList[m_uiBlkID].getLocalElementEnd(); elem++) {
+            for (const unsigned int elem : blkList[m_uiBlkID]) {
                 const unsigned int ei =
                     (pNodes[elem].getX() - blkNode.getX()) >>
                     (m_uiMaxDepth - regLev);
@@ -445,8 +476,7 @@ class BlockAsyncVector {
             const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
             const ot::TreeNode* pNodes = pMesh->getAllElements().data();
 
-            if (!(ele >= blkList[m_uiBlkID].getLocalElementBegin() &&
-                  ele < blkList[m_uiBlkID].getLocalElementEnd())) {
+            if (!blkList[m_uiBlkID].containsElement(ele)) {
                 std::cout << "Error : " << __LINE__
                           << " block async. get unzip elemental values called "
                              "on the invalid BVec"
@@ -581,8 +611,7 @@ class BlockAsyncVector {
             const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
             const ot::TreeNode* pNodes = pMesh->getAllElements().data();
 
-            if (!(ele >= blkList[m_uiBlkID].getLocalElementBegin() &&
-                  ele < blkList[m_uiBlkID].getLocalElementEnd())) {
+            if (!blkList[m_uiBlkID].containsElement(ele)) {
                 std::cout << "Error : " << __LINE__
                           << " block async. get unzip elemental values called "
                              "on the invalid BVec"

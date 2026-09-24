@@ -571,6 +571,10 @@ class Mesh {
      *  (graph meshes need the sync side-channels before first ghost
      *  exchange). */
     bool m_uiZipPlanBuilt = false;
+    // zip-plan entries grouped by block (for block-local zips on labelled meshes)
+    bool m_uiBlkZipPlanBuilt = false;
+    std::vector<unsigned int> m_uiBlkZipPlanStart;
+    std::vector<unsigned int> m_uiBlkZipPlanIdx;
 
     /** Per-element 27-bit ownership mask (eOrd=2 representative
      *  layout). Bit r ∈ [0, 27) is set iff this element owns the
@@ -2052,6 +2056,16 @@ class Mesh {
      * ensureZipPlanBuilt). For callers that need the plan's side-channel
      * products (zip-sync maps etc.) before any unzip/zip runs. */
     inline void ensureZipPlanBuiltPublic() { this->ensureZipPlanBuilt(); }
+    /** zip-plan entries whose unzip index lies inside block `blk`: (planIdx, n) */
+    void ensureBlockZipPlan();
+    inline void blockZipPlan(unsigned int blk, const unsigned int*& planIdx,
+                             size_t& n) {
+        ensureBlockZipPlan();
+        planIdx = m_uiBlkZipPlanIdx.data() + m_uiBlkZipPlanStart[blk];
+        n       = m_uiBlkZipPlanStart[blk + 1] - m_uiBlkZipPlanStart[blk];
+    }
+    inline const std::vector<unsigned int>& getZipPlanCg() const { return m_uiZipPlanCg; }
+    inline const std::vector<unsigned int>& getZipPlanUnzipIdx() const { return m_uiZipPlanUnzipIdx; }
 
     /**@brief Read-only accessor for the per-element ownership masks. */
     inline const std::vector<uint32_t>& getOwnerMask() const {

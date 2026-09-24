@@ -20879,3 +20879,41 @@ void Mesh::buildBcastPlan() {
 
 }  // namespace ot
 
+
+
+void ot::Mesh::ensureBlockZipPlan() {
+    if (m_uiBlkZipPlanBuilt) return;
+    ensureZipPlanBuilt();
+    const auto& blks = m_uiLocalBlockList;
+    const size_t nb  = blks.size();
+    std::vector<unsigned int> order(nb);
+    for (size_t b = 0; b < nb; b++) order[b] = (unsigned int)b;
+    std::sort(order.begin(), order.end(), [&](unsigned int a, unsigned int c) {
+        return blks[a].getOffset() < blks[c].getOffset();
+    });
+    std::vector<unsigned int> offs(nb);
+    for (size_t k = 0; k < nb; k++) offs[k] = blks[order[k]].getOffset();
+    auto blockOf = [&](unsigned int uz) -> long {
+        if (nb == 0) return -1;
+        size_t k = std::upper_bound(offs.begin(), offs.end(), uz) - offs.begin();
+        if (k == 0) return -1;
+        const unsigned int b = order[k - 1];
+        const unsigned int sz = blks[b].getAllocationSzX() * blks[b].getAllocationSzY() *
+                                blks[b].getAllocationSzZ();
+        return (uz < blks[b].getOffset() + sz) ? (long)b : -1L;
+    };
+    std::vector<unsigned int> counts(nb + 1, 0);
+    const size_t N = m_uiZipPlanUnzipIdx.size();
+    std::vector<long> bOf(N);
+    for (size_t i = 0; i < N; i++) {
+        bOf[i] = blockOf(m_uiZipPlanUnzipIdx[i]);
+        if (bOf[i] >= 0) counts[bOf[i]]++;
+    }
+    m_uiBlkZipPlanStart.assign(nb + 1, 0);
+    for (size_t b = 0; b < nb; b++) m_uiBlkZipPlanStart[b + 1] = m_uiBlkZipPlanStart[b] + counts[b];
+    m_uiBlkZipPlanIdx.assign(m_uiBlkZipPlanStart[nb], 0);
+    std::vector<unsigned int> fill(m_uiBlkZipPlanStart.begin(), m_uiBlkZipPlanStart.end() - 1);
+    for (size_t i = 0; i < N; i++)
+        if (bOf[i] >= 0) m_uiBlkZipPlanIdx[fill[bOf[i]]++] = (unsigned int)i;
+    m_uiBlkZipPlanBuilt = true;
+}
