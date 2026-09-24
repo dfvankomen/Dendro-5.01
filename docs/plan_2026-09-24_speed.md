@@ -186,3 +186,41 @@ read):**
   had masked it. Fix in the BSSN repo (uncommitted): exchange the three shift components before the
   tracker. Four-arm A/B (sfc/graph × prune 0/2) on the fixed solver running; the bar is
   sfc_p0 = sfc_p2 and graph_p0 = graph_p2.
+- Block-wise unzip vs the plan scatter on the SFC arm, interleaved ×3 (load ~8): unzip compute 27.9 / 25.8 /
+  29.1 s (block) vs 18.7 / 19.0 / 21.4 s (scatter), identical md5. The fork's `unzip_scatter` is already
+  ~1.4× faster than upstream's block unzip; `DENDRO_UNZIP_BLOCK` stays an opt-in A/B tool. The scatter is
+  still 63 % of the RK step (18.7 of 29.6 s), so its hot loop is the next per-step target (row-wise
+  copies for same-level writes, gating only where the canon table has entries).
+- Sandwich round 2 (rebased under the line, gate green at np=4/8 + ragged ENUTS): zip-plan claims by
+  sort+fold, E2N audit on demand (223 → 50 ms per remesh), unify by sort, `computeMinMaxLevel` one
+  Allreduce, prefix labels one Allgather → rebuild 28 → **25 collectives**.
+- BSSN with the tracker exchange, `sfc_p0`: BH locations and constraints bit-identical to the *old*
+  prune-0 run (md5 7a18bafe… / 2ffba783…) — the exchange reproduces exactly what the side-channel used to
+  deliver. `sfc_p2` decides whether the prune default stands for BSSN.
+- **BSSN verdict (SFC arm):** with the shift exchange before the tracker, `sfc_p2` ≡ `sfc_p0` ≡ the old
+  side-channel run on every output (BH locations 7a18bafe…, constraints 2ffba783…, GW modes) — the prune
+  default stands and the tracker fix is the correctness item (BSSN repo, user commits). Wall 1333 → 897 s
+  for prune 0 → 2 in the same load window (indicator only). Graph-mode pair running.
+
+## Verdict on the prune, 2026-09-25 early morning — opt-in for now
+
+Graph-mode BSSN gives NaN in the constraint norm at **every** prune level ≥ 1, while prune 0 is
+finite, the evolution (BH tracker, ψ4) is bit-identical between levels, and the solver is deterministic.
+What the probes established: (1) the NaN sits in 6 local constraint slots per rank at level 7 near the
+punctures — on rank 0 written by the zip from a block whose EV padding is already NaN, on rank 2
+unwritten by the zip (no plan writer; their value only ever came via the side-channel); (2) it appears
+at step 0, before any sandwich, so the initial swap (transport from the ctor SFC mesh) is where the
+missing values enter; (3) pruning the *labelled* mesh is not the cause — with the labelled rebuild
+guarded off (full side-channel there) the NaN persists, so it is the prune on the **ctor SFC meshes**
+(the initial mesh and the twins) that removes values the transport reads: source-mesh ghost slots
+that only the side-channel refreshed, presumably through `redistributeDVec`'s orphan fill; (4) the
+check probe shows every dropped entry differs only on the first sync call after a (re)build (transported
+vs primary value) and never afterwards, i.e. the exchange does deliver the same values once it has run.
+Two prune-state bugs were fixed on the way: the ctor prune stuck on the reused Mesh object so the
+labelled rebuild's lists were never pruned and the stale "nothing active" flag switched the side-channel
+off (EM4/NLSM never noticed), and sync send sources (ghost winners) were not in the keep set.
+Decision: `DENDRO_ZIPSYNC_PRUNE` defaults to 0 again. Level 2 is verified byte-identical on EM4 (both
+arms), NLSM ragged ENUTS and BSSN SFC (33 % faster there), so SFC-only production runs can set it;
+labelled runs must not until the transport reads are exchanged explicitly (the same rule as the BSSN
+tracker: exchange before you read). Next: instrument `redistributeDVec` for source ghost reads, add the
+exchange, then re-run the four-arm BSSN A/B at level 2.
