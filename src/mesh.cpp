@@ -249,6 +249,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                     tb_canon = MPI_Wtime() - tb0;
                     tb0      = MPI_Wtime();
                     buildZipPlan();
+                    pruneZipSync();
                     tb_zip = MPI_Wtime() - tb0;
                 }
             }
@@ -537,6 +538,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                     tb_canon = MPI_Wtime() - tb0;
                     tb0      = MPI_Wtime();
                     buildZipPlan();
+                    pruneZipSync();
                     tb_zip = MPI_Wtime() - tb0;
                 }
             }
@@ -7952,6 +7954,95 @@ void Mesh::buildZipPlanArbitrateDistributed(
                 (it != posToWinCg.end()) ? it->second : LOOK_UP_TABLE_DEFAULT;
         }
     }
+}
+
+void Mesh::pruneZipSync() {
+    static const int level = [] {
+        const char* e = std::getenv("DENDRO_ZIPSYNC_PRUNE");
+        return e ? std::atoi(e) : 0;
+    }();
+    if (level <= 0 || !m_uiIsActive || m_uiActiveNpes <= 1 ||
+        m_uiZipSyncPruned)
+        return;
+    const int npes = m_uiActiveNpes;
+    std::unordered_set<unsigned int> delivered(
+        m_uiScatterMapActualNodeRecv.begin(),
+        m_uiScatterMapActualNodeRecv.end());
+    std::unordered_set<unsigned int> sendSrc;
+    {
+        const bool useDG = m_uiScatterMapSendIsDG.size() ==
+                           m_uiScatterMapActualNodeSend.size();
+        for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
+            unsigned int idx = m_uiScatterMapActualNodeSend[k];
+            if (useDG && m_uiScatterMapSendIsDG[k])
+                idx = m_uiE2NMapping_CG[(idx / m_uiNpE + m_uiElementLocalBegin) *
+                                            m_uiNpE +
+                                        idx % m_uiNpE];
+            sendSrc.insert(idx);
+        }
+    }
+    // level 2 also drops undelivered ghost slots nothing on this rank reads:
+    // the unzip reads the nodes of every element feeding a local block, the
+    // mirrors read their ghost sources
+    std::unordered_set<unsigned int> readSet;
+    if (level >= 2) {
+        for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+            if (m_e2b_unzip_counts[e] == 0) continue;
+            for (unsigned int n = 0; n < m_uiNpE; n++)
+                readSet.insert(m_uiE2NMapping_CG[e * m_uiNpE + n]);
+        }
+        for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
+            readSet.insert(kv.second);
+        for (const auto& kv : m_uiPassDDemotedToGhostCg)
+            readSet.insert(kv.second);
+    }
+    const size_t recvN = m_uiZipSyncRecvCg.size();
+    const size_t sendN = m_uiZipSyncSendCg.size();
+    std::vector<unsigned char> keepR(recvN), keepS(sendN);
+    for (size_t k = 0; k < recvN; k++) {
+        const unsigned int cg = m_uiZipSyncRecvCg[k];
+        const bool local = cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd;
+        const bool undelivered =
+            !delivered.count(cg) && (level < 2 || readSet.count(cg));
+        keepR[k] = local || undelivered || sendSrc.count(cg);
+    }
+    // my recv block from rank p is p's send block to me, in the same order
+    MPI_Alltoallv(keepR.data(), m_uiZipSyncRecvCounts.data(),
+                  m_uiZipSyncRecvOffsets.data(), MPI_UNSIGNED_CHAR,
+                  keepS.data(), m_uiZipSyncSendCounts.data(),
+                  m_uiZipSyncSendOffsets.data(), MPI_UNSIGNED_CHAR,
+                  m_uiCommActive);
+    auto compact = [npes](std::vector<unsigned int>& cg, std::vector<int>& cnt,
+                          std::vector<int>& off,
+                          const std::vector<unsigned char>& keep) {
+        size_t w = 0;
+        for (int p = 0; p < npes; p++) {
+            const int b = off[p], n = cnt[p];
+            int kept = 0;
+            for (int k = 0; k < n; k++)
+                if (keep[b + k]) {
+                    cg[w++] = cg[b + k];
+                    kept++;
+                }
+            off[p] = (int)w - kept;
+            cnt[p] = kept;
+        }
+        cg.resize(w);
+    };
+    compact(m_uiZipSyncRecvCg, m_uiZipSyncRecvCounts, m_uiZipSyncRecvOffsets,
+            keepR);
+    compact(m_uiZipSyncSendCg, m_uiZipSyncSendCounts, m_uiZipSyncSendOffsets,
+            keepS);
+    int any  = (m_uiZipSyncRecvCg.empty() && m_uiZipSyncSendCg.empty()) ? 0 : 1;
+    int anyG = 0;
+    MPI_Allreduce(&any, &anyG, 1, MPI_INT, MPI_MAX, m_uiCommActive);
+    m_uiZipSyncGlobalActive = anyG != 0;
+    m_uiZipSyncPruned       = true;
+    if (std::getenv("DENDRO_ZIPSYNC_STATS"))
+        std::cout << "[zipsync-prune r" << m_uiActiveRank << "] recv " << recvN
+                  << "->" << m_uiZipSyncRecvCg.size() << " send " << sendN
+                  << "->" << m_uiZipSyncSendCg.size()
+                  << " active=" << anyG << std::endl;
 }
 
 void Mesh::buildZipPlan() {
@@ -20960,6 +21051,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // set up above (outside do_block_creation), no need to
         // duplicate here.
 
+        pruneZipSync();
         __phase("block-decomposition");
     }
     if (countRounds) {

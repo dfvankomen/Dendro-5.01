@@ -682,6 +682,8 @@ class Mesh {
     std::vector<int> m_uiZipSyncRecvOffsets;
     std::vector<unsigned int> m_uiZipSyncSendCg;
     std::vector<unsigned int> m_uiZipSyncRecvCg;
+    bool m_uiZipSyncPruned       = false;
+    bool m_uiZipSyncGlobalActive = true;
 
     /** Intra-rank duplicate sync: for phys_pos with multiple LOCAL cgs
      *  on this rank, after the cross-rank Alltoallv copies the primary
@@ -1324,6 +1326,12 @@ class Mesh {
      * cascade and E2BlkMap must be finalized). Rebuilt on every
      * mesh change. */
     void buildZipPlan();
+    /**@brief Drop zip-sync entries the nodal ghost exchange already delivers
+     * (ghost slots in the recv scatter map that are not read as a send
+     * source). Non-primary local slots are always kept. One keep-mask
+     * Alltoallv over the rank-aligned lists, then a mesh-wide active flag so
+     * every rank agrees whether the per-step collective runs. */
+    void pruneZipSync();
 
     /**@brief DENDRO_ZIPPLAN_DIST=1: home-rank arbitration for buildZipPlan.
      *
@@ -1373,6 +1381,7 @@ class Mesh {
         if (m_uiZipPlanBuilt) return;
         if (!m_uiUnzipCanonWriterBuilt) buildUnzipCanonicalWriterTable();
         buildZipPlan();
+        pruneZipSync();
     }
 
     /**@brief Derive the per-element 27-bit ownership mask

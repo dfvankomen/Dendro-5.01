@@ -821,7 +821,11 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
         }
     }
     if (m_uiActiveNpes <= 1) return;
-    if (m_uiZipSyncSendCg.empty() && m_uiZipSyncRecvCg.empty()) return;
+    if (m_uiZipSyncPruned) {
+        if (!m_uiZipSyncGlobalActive) return;
+    } else if (m_uiZipSyncSendCg.empty() && m_uiZipSyncRecvCg.empty()) {
+        return;
+    }
 
     const size_t sendN = m_uiZipSyncSendCg.size();
     const size_t recvN = m_uiZipSyncRecvCg.size();
