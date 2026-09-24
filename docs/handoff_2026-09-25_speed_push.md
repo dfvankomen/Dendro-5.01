@@ -1,0 +1,66 @@
+# Handoff — the speed push (2026-09-24 night → 2026-09-25 early morning)
+
+Read with `docs/plan_2026-09-24_speed.md` (the plan and every result table) and the vault's
+Repartitioning `Next Session Handoff` / `Open Questions`. Everything below is on the jj main line
+(`jj log`), local only, never pushed.
+
+## State in one paragraph
+Correctness on genuinely ragged labellings is proven (global RK and ENUTS match SFC to 18 digits, ENUTS
+through 10 remeshes). The labelled path is much faster than two days ago: rebuild 36 → 25 collectives,
+sandwich hot loops halved (e2n-audit 290 → 50 ms, zip plan 514 → ~240 ms per remesh), unzip compute
+−20 % SFC / −34 % labelled, unzip order and ENUTS dependency lists cached, redistribute route/flags
+default on after np=8 byte-identity. The thesis handoff's padded-volume objective is met (SFC 1.20 →
+1.02 at np=16 at SFC-level ghost volume; it conflicts with LTS efficiency, choose per solver). The one
+big per-step lever — pruning the zip-plan side-channel sync that moves 4.7–5.9× the ghost-exchange
+bytes on every mesh — is built, byte-identical on EM4 (both arms), NLSM ragged ENUTS and BSSN SFC (33 %
+faster), but **opt-in** (`DENDRO_ZIPSYNC_PRUNE=2`) because graph-mode BSSN NaNs its constraint norm
+with it on.
+
+## The open defect, and exactly what is known
+- Symptom: BSSN q1 tinytest, `BSSN_PARTITIONING_METHOD=3`, `BSSN_REFINEMENT_MODE=3`, any
+  `DENDRO_ZIPSYNC_PRUNE ≥ 1`: `Constraint C_HAM L2 : (-nan)` from step 0; evolution, BH tracker and ψ4
+  bit-identical to prune 0; solver deterministic (repeat run identical).
+- Localised: 6 local constraint slots per rank at level 7 near the punctures. Rank 0's are zipped from a
+  block whose EV padding is already NaN; rank 2's have **no zip-plan writer at all** and only ever
+  received a value through the side-channel.
+- Not the labelled mesh's prune: guarding the labelled rebuild off (full side-channel there) changes
+  nothing. Not level 1, not the full scatter map, not the legacy zip, not adding sync send sources.
+- Therefore the prune on the **ctor SFC meshes** (initial mesh, sandwich twins) removes values the
+  initial transport reads — `redistributeDVec` (orphan fill by canonical phys, DG paths) reads
+  source-mesh ghost slots that only the side-channel refreshed.
+- `DENDRO_ZIPSYNC_CHECK=1` (full lists + report) shows dropped entries differ only on the first sync
+  after a (re)build (transported vs primary value), never afterwards.
+- Do first: instrument `redistributeDVec`/`redistributeVec` for reads of source ghost slots (cg outside
+  the source's local range), then exchange those (or restrict the fill to source local slots), re-run
+  `scratchpad/bssn/final2.sh`-style four arms (`sfc_p0 = sfc_p2`, `graph_p0 = graph_p2`), then flip the
+  default back. Probes: `DENDRO_ZIP_NANCHK=1`, `DENDRO_ZIPSYNC_STATS=1`, `DENDRO_ZIPSYNC_CHECK=1`,
+  `DENDRO_UNREF_CHECK=1`.
+
+## Uncommitted in the user's repos (the user commits)
+- `dendrogr_dfvk_repartitioning/BSSN_GR/src/bssnCtx.cpp`: ghost exchange of the three shift components
+  before `computeBHLocations` (correctness fix; upstream has the same stale read).
+- `em4_base_cpy/solver/src/solverCtx.cpp`: `DENDRO_REDIST_FLAGS` default on.
+- `fastpart` branch `dendro-refine`: the balance phase (`refine_balance_rounds/_tol`); the option struct
+  grew, so every fork build links `fastpart/build_balance/install` — never mix the old `.so` with new
+  binaries.
+
+## Gates and references (scratchpad `speed/`)
+`gate.sh <label> <testPartitioning> [NP=8]` (four arms incl. ragged, diffs TEST lines against
+`tp_base/np{4,8}_*.txt`), `nuts.sh <label> <nlsmNUTS>` (ragged d9 ENUTS, 18-digit reference in the
+script), EM4 checksums: np=4 SFC `d7bbee89…`, labelled `a75a069e…`; np=8 SFC `d7bbee89…`, labelled
+`32eb202e…` (the `4521dbc3…` noted on 09-24 was a sync-off artefact). BSSN references with the tracker
+fix: SFC BH `7a18bafe…` / constraints `2ffba783…`; graph prune-0 BH `7a18bafe…` / constraints
+`c1508613…`. `bin_c14/` holds the binaries of the final defaults gate.
+
+## Next after the defect
+Block-major unzip pass from a per-call DG buffer (the unzip agent's next lever); one-group floor in the
+balance budget; the 1-ULP hanging-node residual on the fixed-mesh ragged ENUTS arm; cluster pricing
+(`tools/cluster_bundle`, needs the user's pushes and OK); later, backup then reconcile with
+`dfvankomen/experimental`.
+
+## Traps that cost time
+Never put a process-name pattern on the command line (self-kill ×3; use a script file). Never edit a
+running bash script. Never edit dendrolib sources while any build compiles them (object-layout
+mismatch → heap corruption that looks like an MPI bug); killing `make` leaves truncated objects with
+fresh mtimes. BSSN TOML keys must precede `[AEH_PARAMS]`. `PARTEVOLVE_INIT=puncture` (evolve test) vs
+`PARTTEST_INIT=puncture` (mesh test). Wall-clock on this box is an indicator only.
