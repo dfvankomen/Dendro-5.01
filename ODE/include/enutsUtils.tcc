@@ -44,7 +44,7 @@ void sync_blk_padding(const ot::Mesh* pMesh, const T* const dgWVec,
     const unsigned int* e2e = pMesh->getE2EMapping().data();
 
     const unsigned int bLev =
-        pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+        pNodes[blkList[blk].firstElementID()].getLevel();
 
     T* m_uiVec        = (T*)bVec[blk]._vec[bVecIndex].data();
 
@@ -330,8 +330,7 @@ void sync_blk_padding(const ot::Mesh* pMesh, const T* const dgWVec,
         }
     }
 
-    for (unsigned int elem = blkList[blk].getLocalElementBegin();
-         elem < blkList[blk].getLocalElementEnd(); elem++) {
+    for (const unsigned int elem : blkList[blk]) {
         const unsigned int ei =
             (pNodes[elem].getX() - blkNode.getX()) >> (m_uiMaxDepth - regLevel);
         const unsigned int ej =

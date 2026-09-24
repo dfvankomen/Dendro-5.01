@@ -383,8 +383,7 @@ void computeBlockUnzipGhostNodes(const ot::Mesh* pMesh, unsigned int blk,
         const ot::TreeNode blkNode  = blkList[blk].getBlockNode();
         const unsigned int regLevel = blkList[blk].getRegularGridLev();
 
-        for (unsigned int elem = blkList[blk].getLocalElementBegin();
-             elem < blkList[blk].getLocalElementEnd(); elem++) {
+        for (const unsigned int elem : blkList[blk]) {
             const unsigned int ei = (pNodes[elem].getX() - blkNode.getX()) >>
                                     (m_uiMaxDepth - regLevel);
             const unsigned int ej = (pNodes[elem].getY() - blkNode.getY()) >>
@@ -792,7 +791,7 @@ unsigned int computeTLevel(const ot::Mesh* const pMesh, unsigned int blk) {
     const ot::TreeNode* const pNodes      = pMesh->getAllElements().data();
     const ot::Block block                 = blkList[blk];
 
-    unsigned int b_lev = pNodes[block.getLocalElementBegin()].getLevel();
+    unsigned int b_lev = pNodes[block.firstElementID()].getLevel();
     unsigned int eijk[3];
 
     const std::vector<unsigned int> blkEdgeMap = block.getBlk2DiagMap_vec();
@@ -816,8 +815,7 @@ unsigned int computeTLevel(const ot::Mesh* const pMesh, unsigned int blk) {
         }
     }
 
-    for (unsigned int ele = block.getLocalElementBegin();
-         ele < block.getLocalElementEnd(); ele++) {
+    for (const unsigned int ele : block) {
         if (block.isBlockInternalEle(pNodes[ele])) continue;
 
         for (unsigned int dir = 0; dir < NUM_FACES; dir++) {

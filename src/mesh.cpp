@@ -15745,7 +15745,12 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                           balOct1.front().getParent())) {
                     std::cout << "[Remesh Error]: rank: " << m_uiActiveRank
                               << " M1 & M2 front alignment failed "
-                              << std::endl;
+                              << " old.front=" << m_uiAllElements[m_uiElementLocalBegin]
+                              << " new.front=" << balOct1.front()
+                              << " old.back=" << m_uiAllElements[m_uiElementLocalEnd - 1]
+                              << " new.back=" << balOct1.back()
+                              << " nOld=" << (m_uiElementLocalEnd - m_uiElementLocalBegin)
+                              << " nNew=" << balOct1.size() << std::endl;
                     exit(0);
                 }
 
@@ -15777,6 +15782,36 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                             << " ele: " << ele << "pNodes1: " << pNodes1[ele]
                             << " count2: " << count2
                             << " pNodes2: " << pNodes2[count2] << std::endl;
+                        for (int d = -6; d <= 6; d++) {
+                            const long e1 = (long)ele + d, e2 = (long)count2 + d;
+                            std::cout << "[Remesh Error] r" << m_uiActiveRank << " d=" << d;
+                            if (e1 >= (long)m_uiElementLocalBegin && e1 < (long)m_uiElementLocalEnd)
+                                std::cout << " old=" << pNodes1[e1];
+                            if (e2 >= 0 && e2 < (long)balOct1.size())
+                                std::cout << " new=" << pNodes2[e2];
+                            std::cout << std::endl;
+                        }
+                        {
+                            auto firstUnsorted = [&](const ot::TreeNode* a, size_t n) -> long {
+                                std::vector<ot::TreeNode> in(a, a + n), out;
+                                SFC::seqSort::SFC_treeSort(in.data(), in.size(), out, out, out,
+                                                           m_uiMaxDepth, m_uiMaxDepth, rootNode,
+                                                           ROOT_ROTATION, 1, TS_SORT_ONLY);
+                                for (size_t i = 0; i < n && i < out.size(); i++)
+                                    if (!(in[i] == out[i])) return (long)i;
+                                return -1L;
+                            };
+                            std::cout << "[Remesh Error] r" << m_uiActiveRank
+                                      << " firstUnsorted old=" << firstUnsorted(&m_uiAllElements[m_uiElementLocalBegin], m_uiElementLocalEnd - m_uiElementLocalBegin)
+                                      << " new=" << firstUnsorted(balOct1.data(), balOct1.size())
+                                      << std::endl;
+                        }
+                        std::cout << "[Remesh Error] r" << m_uiActiveRank
+                                  << " localRange=[" << m_uiAllElements[m_uiElementLocalBegin]
+                                  << " .. " << m_uiAllElements[m_uiElementLocalEnd - 1]
+                                  << "] n=" << (m_uiElementLocalEnd - m_uiElementLocalBegin)
+                                  << " balOct1=[" << balOct1.front() << " .. " << balOct1.back()
+                                  << "] n=" << balOct1.size() << std::endl;
                         exit(0);
                     }
 

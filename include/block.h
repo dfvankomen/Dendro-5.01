@@ -131,6 +131,15 @@ class Block {
      * rotation id of the block.
      *  */
     inline unsigned int getRegularGridLev() const { return m_uiRegGridLev; }
+    /** first element id of the block, valid for range and index-list storage */
+    inline DendroIntL firstElementID() const {
+        return m_isNonSFC ? (m_elementIndices.empty() ? 0 : m_elementIndices[0])
+                          : m_uiLocalElementBegin;
+    }
+    inline size_t numElements() const {
+        return m_isNonSFC ? m_elementIndices.size()
+                          : (size_t)(m_uiLocalElementEnd - m_uiLocalElementBegin);
+    }
 
     /**@brief returns the rotation id of the block*/
     inline unsigned int getRotationID() const { return m_uiRotID; }

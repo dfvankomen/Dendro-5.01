@@ -495,13 +495,9 @@ ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart) : ETS<T, Ctx>(ctx) {
         if (!m_uiAppCtx->is_wpart_func_set())
             m_uiAppCtx->set_wpart_function(getOctWeight);
 
-        ot::Mesh* newMesh = m_uiAppCtx->remesh();
-
-        m_uiAppCtx->grid_transfer(newMesh);
-
-        std::swap(pMesh, newMesh);
-        delete newMesh;
-        m_uiAppCtx->set_mesh(pMesh);
+        // the ctx path is virtual: solvers with a labelled mesh route it
+        // through their SFC-twin sandwich
+        m_uiAppCtx->remesh_and_gridtransfer();
     }
     this->init_data_structures();
 }
@@ -543,8 +539,7 @@ void ExplicitNUTS<T, Ctx>::dump_est_speedup(std::ostream& sout, bool verbose) {
                           2 * blkList[blk].get1DPadWidth());
             // localSz += (nnx*nnx*nnx);  //(blkList[blk].getLocalElementEnd() -
             // blkList[blk].getLocalElementBegin());
-            localSz += (blkList[blk].getLocalElementEnd() -
-                        blkList[blk].getLocalElementBegin());
+            localSz += blkList[blk].numElements();
         }
 
         double globalESz;
@@ -584,7 +579,7 @@ void ExplicitNUTS<T, Ctx>::dump_est_speedup(std::ostream& sout, bool verbose) {
                 const unsigned int BLK_T = m_uiBVec[blk]._time;
                 const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
                 const unsigned int bLev =
-                    pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+                    pNodes[blkList[blk].firstElementID()].getLevel();
                 const unsigned int BLK_DT =
                     m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
                 if (pt % BLK_DT != 0) continue;
@@ -598,8 +593,7 @@ void ExplicitNUTS<T, Ctx>::dump_est_speedup(std::ostream& sout, bool verbose) {
                 // numBlkEvolved += (nnx*nnx*nnx);
                 // //(blkList[blk].getLocalElementEnd() -
                 // blkList[blk].getLocalElementBegin());
-                numBlkEvolved += (blkList[blk].getLocalElementEnd() -
-                                  blkList[blk].getLocalElementBegin());
+                numBlkEvolved += blkList[blk].numElements();
 
                 m_uiBVec[blk]._time += BLK_DT;
                 m_uiBVec[blk]._rks = 0;
@@ -625,7 +619,7 @@ void ExplicitNUTS<T, Ctx>::dump_est_speedup(std::ostream& sout, bool verbose) {
             //     const unsigned int BLK_T = m_uiBVec[blk]._time;
             //     const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
             //     const unsigned int bLev =
-            //     pNodes[blkList[blk].getLocalElementBegin()].getLevel(); const
+            //     pNodes[blkList[blk].firstElementID()].getLevel(); const
             //     unsigned int BLK_DT =
             //     m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
             //     if( pt% BLK_DT !=0 )
@@ -899,36 +893,17 @@ void ExplicitNUTS<T, Ctx>::init() {
         if (!m_uiAppCtx->is_wpart_func_set())
             m_uiAppCtx->set_wpart_function(getOctWeight);
 
-        ot::Mesh* newMesh = m_uiAppCtx->remesh();
-
-        {
-            DendroIntL oldElements = pMesh->getNumLocalMeshElements();
-            DendroIntL newElements = newMesh->getNumLocalMeshElements();
-
-            DendroIntL oldElements_g, newElements_g;
-
-            par::Mpi_Reduce(&oldElements, &oldElements_g, 1, MPI_SUM, 0,
-                            pMesh->getMPIGlobalCommunicator());
-            par::Mpi_Reduce(&newElements, &newElements_g, 1, MPI_SUM, 0,
-                            newMesh->getMPIGlobalCommunicator());
-
-            if (!(pMesh->getMPIRankGlobal()))
-                std::cout << GRN
-                          << "[LTS Init(Wpart)]: \told mesh: " << oldElements_g
-                          << "\tnew mesh:" << newElements_g << NRM << std::endl;
-        }
-
-        DVec eVar        = m_uiAppCtx->get_evolution_vars();
-        unsigned int DOF = eVar.get_dof();
-
-        pMesh->readFromGhostBegin(eVar.get_vec_ptr(), DOF);
-        pMesh->readFromGhostEnd(eVar.get_vec_ptr(), DOF);
-
-        m_uiAppCtx->grid_transfer(newMesh);
-
-        std::swap(pMesh, newMesh);
-        delete newMesh;
-        m_uiAppCtx->set_mesh(pMesh);
+        DendroIntL oldElements = pMesh->getNumLocalMeshElements(), oldElements_g = 0;
+        par::Mpi_Reduce(&oldElements, &oldElements_g, 1, MPI_SUM, 0,
+                        pMesh->getMPIGlobalCommunicator());
+        m_uiAppCtx->remesh_and_gridtransfer();
+        pMesh = m_uiAppCtx->get_mesh();
+        DendroIntL newElements = pMesh->getNumLocalMeshElements(), newElements_g = 0;
+        par::Mpi_Reduce(&newElements, &newElements_g, 1, MPI_SUM, 0,
+                        pMesh->getMPIGlobalCommunicator());
+        if (!(pMesh->getMPIRankGlobal()))
+            std::cout << GRN << "[LTS Init(Wpart)]: \told mesh: " << oldElements_g
+                      << "\tnew mesh:" << newElements_g << NRM << std::endl;
     }
 
     // Ctx initialize might have changed the mesh i.e. converge untill mesh
@@ -977,9 +952,9 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     const unsigned int* e2e = pMesh->getE2EMapping().data();
 
     const unsigned int bLev =
-        pNodes[blkList[blk].getLocalElementBegin()].getLevel();
-    const unsigned int bTime = etVec[blkList[blk].getLocalElementBegin()];
-    const unsigned int bDT   = dtELev[blkList[blk].getLocalElementBegin()];
+        pNodes[blkList[blk].firstElementID()].getLevel();
+    const unsigned int bTime = etVec[blkList[blk].firstElementID()];
+    const unsigned int bDT   = dtELev[blkList[blk].firstElementID()];
 
     T dt;
     unsigned int tl  = 0;
@@ -1623,8 +1598,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
     // block internal copy.
     if (rk_s == 0) {
-        for (unsigned int elem = blkList[blk].getLocalElementBegin();
-             elem < blkList[blk].getLocalElementEnd(); elem++) {
+        for (const unsigned int elem : blkList[blk]) {
             const unsigned int ei = (pNodes[elem].getX() - blkNode.getX()) >>
                                     (m_uiMaxDepth - regLevel);
             const unsigned int ej = (pNodes[elem].getY() - blkNode.getY()) >>
@@ -1668,8 +1642,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         }
 
     } else {
-        for (unsigned int elem = blkList[blk].getLocalElementBegin();
-             elem < blkList[blk].getLocalElementEnd(); elem++) {
+        for (const unsigned int elem : blkList[blk]) {
             const unsigned int ei = (pNodes[elem].getX() - blkNode.getX()) >>
                                     (m_uiMaxDepth - regLevel);
             const unsigned int ej = (pNodes[elem].getY() - blkNode.getY()) >>
@@ -1718,12 +1691,11 @@ void ExplicitNUTS<T, Ctx>::update_ele_timestep() {
     const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
     for (unsigned int blk = 0; blk < blkList.size(); blk++) {
         const unsigned int bLev =
-            pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+            pNodes[blkList[blk].firstElementID()].getLevel();
         const unsigned int BLK_DT =
             m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
 
-        for (unsigned int ele = blkList[blk].getLocalElementBegin();
-             ele < blkList[blk].getLocalElementEnd(); ele++) {
+        for (const unsigned int ele : blkList[blk]) {
             m_uiEleTime[ele] = m_uiBVec[blk]._time;
             m_uiEleDT[ele]   = BLK_DT;
         }
@@ -1756,7 +1728,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     // note that this is needed if we are planing to perform parital remesh.
     for (unsigned int blk = 0; blk < blkList.size(); blk++) {
         const unsigned int bLev =
-            pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+            pNodes[blkList[blk].firstElementID()].getLevel();
         m_uiBlkTimeLevMinMax[2 * bLev + 0] = LOOK_UP_TABLE_DEFAULT;
         m_uiBlkTimeLevMinMax[2 * bLev + 1] = 0;
     }
@@ -1764,7 +1736,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     for (unsigned int blk = 0; blk < blkList.size(); blk++) {
         const unsigned int BLK_T = m_uiBVec[blk]._time;
         const unsigned int bLev =
-            pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+            pNodes[blkList[blk].firstElementID()].getLevel();
 
         if (BLK_T < m_uiBlkTimeLevMinMax[2 * bLev + 0])
             m_uiBlkTimeLevMinMax[2 * bLev + 0] = BLK_T;
@@ -1782,7 +1754,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         const unsigned int BLK_T = m_uiBVec[blk]._time;
         const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
         const unsigned int bLev =
-            pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+            pNodes[blkList[blk].firstElementID()].getLevel();
         const unsigned int BLK_DT =
             m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
 
@@ -1836,7 +1808,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     //     const unsigned int BLK_T = m_uiBVec[blk]._time;
     //     const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
     //     const unsigned int bLev =
-    //     pNodes[blkList[blk].getLocalElementBegin()].getLevel(); const
+    //     pNodes[blkList[blk].firstElementID()].getLevel(); const
     //     unsigned int BLK_DT =
     //     m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
 
@@ -1853,7 +1825,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
-                pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+                pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
                 m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
 
@@ -1912,7 +1884,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
-                pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+                pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
                 m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
 
@@ -1939,7 +1911,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
-        pNodes[blkList[blk].getLocalElementBegin()].getLevel(); const unsigned
+        pNodes[blkList[blk].firstElementID()].getLevel(); const unsigned
         int BLK_DT = m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
 
             sync_blk_timestep(blk,BLK_S);
@@ -1959,7 +1931,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
-        pNodes[blkList[blk].getLocalElementBegin()].getLevel(); const unsigned
+        pNodes[blkList[blk].firstElementID()].getLevel(); const unsigned
         int BLK_DT = m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
 
             sync_blk_timestep(blk,BLK_S);
@@ -1979,7 +1951,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         const unsigned int BLK_T = m_uiBVec[blk]._time;
         const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
         const unsigned int bLev =
-            pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+            pNodes[blkList[blk].firstElementID()].getLevel();
         const unsigned int BLK_DT =
             m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
         const T blk_dt = m_uiTimeInfo._m_uiTh * BLK_DT;
@@ -2069,7 +2041,7 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
     //     const unsigned int BLK_T = m_uiBVec[blk]._time;
     //     const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
     //     const unsigned int bLev =
-    //     pNodes[blkList[blk].getLocalElementBegin()].getLevel(); const
+    //     pNodes[blkList[blk].firstElementID()].getLevel(); const
     //     unsigned int BLK_DT =
     //     m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
 
@@ -2086,7 +2058,7 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
-                pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+                pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
                 m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
 
@@ -2147,7 +2119,7 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
-                pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+                pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
                 m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
 
@@ -2169,7 +2141,7 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
         const unsigned int BLK_T = m_uiBVec[blk]._time;
         const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
         const unsigned int bLev =
-            pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+            pNodes[blkList[blk].firstElementID()].getLevel();
         const unsigned int BLK_DT =
             m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
         const T blk_dt = m_uiTimeInfo._m_uiTh * BLK_DT;
@@ -2284,7 +2256,7 @@ void ExplicitNUTS<T, Ctx>::evolve() {
             //     const unsigned int BLK_T = m_uiBVec[blk]._time;
             //     const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
             //     const unsigned int bLev =
-            //     pNodes[blkList[blk].getLocalElementBegin()].getLevel(); const
+            //     pNodes[blkList[blk].firstElementID()].getLevel(); const
             //     unsigned int BLK_DT =
             //     m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);;
             //     if( pt% BLK_DT !=0 )
@@ -2313,7 +2285,7 @@ void ExplicitNUTS<T, Ctx>::evolve() {
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
-                pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+                pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
                 m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
 
@@ -2555,9 +2527,8 @@ void ExplicitNUTS<T, Ctx>::remesh(unsigned int grain_sz, double ld_tol,
     bool isBlkEleTimeSynced               = true;
     for (unsigned int blk = 0; blk < blkList.size(); blk++) {
         const unsigned int eletime =
-            m_uiEleTime[blkList[blk].getLocalElementBegin()];
-        for (unsigned int ele = blkList[blk].getLocalElementBegin();
-             ele < blkList[blk].getLocalElementEnd(); ele++) {
+            m_uiEleTime[blkList[blk].firstElementID()];
+        for (const unsigned int ele : blkList[blk]) {
             if (m_uiEleTime[ele] != eletime) {
                 std::cout << "rank: " << pMesh->getMPIRank()
                           << " element : " << pNodes[ele]
@@ -2566,7 +2537,7 @@ void ExplicitNUTS<T, Ctx>::remesh(unsigned int grain_sz, double ld_tol,
                           << eletime
                           << " current eletime : " << m_uiEleTime[ele]
                           << " ele dt1 : "
-                          << m_uiEleDT[blkList[blk].getLocalElementBegin()]
+                          << m_uiEleDT[blkList[blk].firstElementID()]
                           << " ele dt2 : " << m_uiEleDT[ele] << std::endl;
                 isBlkEleTimeSynced = false;
             }
@@ -2630,8 +2601,7 @@ bool ExplicitNUTS<T, Ctx>::isRemeshEvars(
         const ot::TreeNode* pNodes = pMesh->getAllElements().data();
 
         for (unsigned int blk = 0; blk < blkList.size(); blk++) {
-            for (unsigned int ele = blkList[blk].getLocalElementBegin();
-                 ele < blkList[blk].getLocalElementEnd(); ele++) {
+            for (const unsigned int ele : blkList[blk]) {
                 bool isBdyEle = pMesh->isBoundaryOctant(ele);
                 m_uiBVec[blk]._vec[0].getUnzipElementalValues(pMesh, ele,
                                                               uEleVec.data());
@@ -2895,7 +2865,7 @@ void ExplicitNUTS<T, Ctx>::evolve_with_remesh(unsigned int remesh_freq) {
             // const unsigned int BLK_T = m_uiBVec[blk]._time;
             // const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
             // const unsigned int bLev =
-            // pNodes[blkList[blk].getLocalElementBegin()].getLevel(); const
+            // pNodes[blkList[blk].firstElementID()].getLevel(); const
             // unsigned int BLK_DT =
             // m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
             m_uiBVec[blk]._vec[0].zip(pMesh, m_uiEVar.get_vec_ptr(), DOF);
