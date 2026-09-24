@@ -1427,6 +1427,7 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
     // Side-channel non-primary sync runs before the standard ghost
     // exchange so updated non-primary local cgs are captured by the
     // send-buffer pack and propagated to ghost cgs transitively.
+    ghostReadCheck(vec, dof, "pre");
     syncZipNonPrimary(vec, dof);
 
     // send recv buffers.
@@ -1676,6 +1677,7 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
     }
 
     return;
+    ghostReadCheck(vec, dof, "plain");
 }
 
 template <typename T>
@@ -1685,6 +1687,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 
     // Side-channel non-primary sync runs before the standard ghost
     // exchange (see performGhostExchange comment for rationale).
+    ghostReadCheck(vec, dof, "pre");
     syncZipNonPrimary(vec, dof);
 
     // send recv buffers.
@@ -2090,6 +2093,7 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
             }
         }
     }
+    ghostReadCheck(vec, dof, "ctx");
 
     return;
 }
@@ -6364,6 +6368,23 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     std::vector<std::vector<ot::TreeNode>> sendTN(npes);
     std::vector<std::vector<T>> sendDG(npes);
     std::vector<std::vector<unsigned char>> sendLocalFlag(npes);
+    // DENDRO_REDIST_PROBE=1: classify every source ghost-slot read of step 2
+    // (delivered by the scatter map or not, finite or not) and every
+    // destination slot that ends non-finite by the write path that produced it
+    static const bool rprobe = std::getenv("DENDRO_REDIST_PROBE") != nullptr;
+    static int rprobeCall = 0;
+    struct RProbe {
+        size_t gRead = 0, gUndel = 0, gNan = 0, gUndelNan = 0, lNan = 0;
+        size_t gZero = 0, gUndelZero = 0, lZero = 0;
+        size_t dLocNanAuth = 0, dLocNanNonAuth = 0, dLocNanOrph = 0,
+               dLocNanRes = 0, dGhostNanNonAuth = 0, dGhostNanAuth = 0;
+        size_t dLocZero[4] = {0, 0, 0, 0}, dGhostZero[4] = {0, 0, 0, 0};
+        std::vector<std::string> samples;
+    } rp;
+    std::unordered_set<unsigned int> rpDelivered;
+    if (rprobe && m_uiIsActive)
+        rpDelivered.insert(m_uiScatterMapActualNodeRecv.begin(),
+                           m_uiScatterMapActualNodeRecv.end());
     if (m_uiIsActive) {
         const auto* pNO = m_uiAllElements.data();
         const auto& e2nO = m_uiE2NMapping_CG;
@@ -6378,6 +6399,40 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                 unsigned int cg = e2nO[e * npe + n];
                 bool isLocal = (cg >= m_uiNodeLocalBegin &&
                                 cg < m_uiNodeLocalEnd);
+                if (rprobe) {
+                    bool nan = false, zero = true;
+                    for (unsigned int v = 0; v < dof; v++) {
+                        const double x = (double)vecIn[v * srcCgSz + cg];
+                        if (!std::isfinite(x)) nan = true;
+                        if (x != 0.0) zero = false;
+                    }
+                    if (isLocal) { if (nan) rp.lNan++; if (zero) rp.lZero++; }
+                    else {
+                        rp.gRead++;
+                        const bool undel = !rpDelivered.count(cg);
+                        if (undel) rp.gUndel++;
+                        if (zero) {
+                            rp.gZero++;
+                            if (undel) rp.gUndelZero++;
+                            if (rp.samples.size() < 6) {
+                                char b[256];
+                                std::snprintf(b, sizeof(b), "src-ghost-allzero cg=%u undelivered=%d elem=%u lev=%u xyz=%u,%u,%u n=%u",
+                                    cg, (int)undel, e, (unsigned)pNO[e].getLevel(), pNO[e].getX(), pNO[e].getY(), pNO[e].getZ(), n);
+                                rp.samples.emplace_back(b);
+                            }
+                        }
+                        if (nan) {
+                            rp.gNan++;
+                            if (undel) rp.gUndelNan++;
+                            if (rp.samples.size() < 4) {
+                                char b[256];
+                                std::snprintf(b, sizeof(b), "src-ghost-nan cg=%u undelivered=%d elem=%u lev=%u xyz=%u,%u,%u n=%u",
+                                    cg, (int)undel, e, (unsigned)pNO[e].getLevel(), pNO[e].getX(), pNO[e].getY(), pNO[e].getZ(), n);
+                                rp.samples.emplace_back(b);
+                            }
+                        }
+                    }
+                }
                 sendLocalFlag[target].push_back(isLocal ? 1 : 0);
                 // dof values for this node, contiguous (layout [node][dof]).
                 for (unsigned int v = 0; v < dof; v++)
@@ -6492,6 +6547,9 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // initial swap; root cause of the 2026-06-12 BSSN BBH tracker NaN).
     std::vector<unsigned char> cgWrittenAny(
         dstNodeLocalEnd - dstNodeLocalBegin, 0);
+    // probe only: last write path per dst slot (1 auth, 2 non-auth, 3 orphan)
+    std::vector<unsigned char> rpPath;
+    if (rprobe) rpPath.assign(dstCgSz, 0);
     // dst GHOST regions: a fresh DVec's ghost slots are undefined until
     // the first standard exchange delivers them, but the zip-sync mirror
     // paths inside performGhostExchange can copy ghost->local BEFORE that
@@ -6557,6 +6615,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                     vecOut[v * dstCgSz + cg] = recvDG[base + v];
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd)
                     cgWrittenAuth[cg - dstNodeLocalBegin] = 1;
+                if (rprobe) rpPath[cg] = 1;
                 markWritten(cg);
             }
         }
@@ -6572,13 +6631,16 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                 const unsigned int cg = e2n[e * npe + n];
                 const size_t base = ((size_t)i * npe + n) * dof;
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd) {
-                    if (!cgWrittenAuth[cg - dstNodeLocalBegin])
+                    if (!cgWrittenAuth[cg - dstNodeLocalBegin]) {
                         for (unsigned int v = 0; v < dof; v++)
                             vecOut[v * dstCgSz + cg] = recvDG[base + v];
+                        if (rprobe) rpPath[cg] = 2;
+                    }
                     markWritten(cg);
                 } else {
                     for (unsigned int v = 0; v < dof; v++)
                         vecOut[v * dstCgSz + cg] = recvDG[base + v];
+                    if (rprobe && rpPath[cg] != 1) rpPath[cg] = 2;
                 }
             }
         }
@@ -6653,7 +6715,61 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         oOffs[p] = oTotal;
         oTotal += oCounts[p];
     }
-    if (oTotal == 0) return;  // no orphans anywhere, done
+    auto rpReport = [&]() {
+        if (!rprobe) return;
+        const unsigned int dstCgTot = (unsigned int)dstCgSz;
+        for (unsigned int cg = 0; cg < dstCgTot; cg++) {
+            bool nan = false, zero = true;
+            for (unsigned int v = 0; v < dof; v++) {
+                const double x = (double)vecOut[v * dstCgSz + cg];
+                if (!std::isfinite(x)) nan = true;
+                if (x != 0.0) zero = false;
+            }
+            const bool loc = cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd;
+            const unsigned char pth = rpPath[cg];
+            if (zero) {
+                (loc ? rp.dLocZero : rp.dGhostZero)[pth & 3]++;
+                if (loc && rp.samples.size() < 14) {
+                    char b[160];
+                    std::snprintf(b, sizeof(b), "dst-local-allzero cg=%u path=%u", cg, (unsigned)pth);
+                    rp.samples.emplace_back(b);
+                }
+            }
+            if (!nan) continue;
+            if (loc) {
+                if (pth == 1) rp.dLocNanAuth++;
+                else if (pth == 2) rp.dLocNanNonAuth++;
+                else if (pth == 3) rp.dLocNanOrph++;
+                else rp.dLocNanRes++;
+                if (rp.samples.size() < 12) {
+                    char b[160];
+                    std::snprintf(b, sizeof(b), "dst-local-nan cg=%u path=%u", cg, (unsigned)pth);
+                    rp.samples.emplace_back(b);
+                }
+            } else {
+                if (pth == 1) rp.dGhostNanAuth++;
+                else if (pth == 2) rp.dGhostNanNonAuth++;
+            }
+        }
+        std::cout << "[redist-probe r" << rank << "] call=" << rprobeCall
+                  << " dof=" << dof << " src_ghost_reads=" << rp.gRead
+                  << " undelivered=" << rp.gUndel << " nan=" << rp.gNan
+                  << " undelivered_nan=" << rp.gUndelNan
+                  << " src_local_nan=" << rp.lNan
+                  << " src_ghost_allzero=" << rp.gZero << " (undelivered " << rp.gUndelZero << ")"
+                  << " src_local_allzero=" << rp.lZero
+                  << " | dst_local_allzero none/auth/nonauth/orphan=" << rp.dLocZero[0] << "/" << rp.dLocZero[1] << "/" << rp.dLocZero[2] << "/" << rp.dLocZero[3]
+                  << " dst_ghost_allzero none/auth/nonauth/orphan=" << rp.dGhostZero[0] << "/" << rp.dGhostZero[1] << "/" << rp.dGhostZero[2] << "/" << rp.dGhostZero[3]
+                  << " | dst_local_nan auth=" << rp.dLocNanAuth
+                  << " nonauth=" << rp.dLocNanNonAuth << " orphan=" << rp.dLocNanOrph
+                  << " residual=" << rp.dLocNanRes
+                  << " dst_ghost_nan auth=" << rp.dGhostNanAuth
+                  << " nonauth=" << rp.dGhostNanNonAuth << std::endl;
+        for (const auto& l : rp.samples)
+            std::cout << "[redist-probe r" << rank << "]   " << l << std::endl;
+        rprobeCall++;
+    };
+    if (oTotal == 0) { rpReport(); return; }  // no orphans anywhere, done
 
     std::vector<int>          oAllRank(oTotal);
     std::vector<unsigned int> oAllCG(oTotal);
@@ -6789,6 +6905,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         if (it == srcPosToLocalCG.end()) continue;
         for (unsigned int v = 0; v < dof; v++)
             vecOut[v * dstCgSz + oAllCG[t]] = vecIn[v * srcCgSz + it->second];
+        if (rprobe) rpPath[oAllCG[t]] = 3;
         markWritten(oAllCG[t]);
     }
 
@@ -6850,6 +6967,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     for (int i = 0; i < totRCGO; i++) {
         for (unsigned int v = 0; v < dof; v++)
             vecOut[v * dstCgSz + recvCGO[i]] = recvValO[(size_t)i * dof + v];
+        if (rprobe) rpPath[recvCGO[i]] = 3;
         markWritten(recvCGO[i]);
     }
 
@@ -6878,6 +6996,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                       << " physical vacua should repatch via unfilledOut)"
                       << std::endl;
     }
+    rpReport();
 }
 
 template <typename T>
@@ -14335,8 +14454,99 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
 }
 
 template <typename T>
+void Mesh::ghostReadCheck(const T* vec, unsigned int dof, const char* tag) {
+    static const bool on = std::getenv("DENDRO_GHOSTREAD_CHECK") != nullptr;
+    if (!on || !m_uiIsActive) return;
+    static std::map<const Mesh*, int> calls;
+    const int call = calls[this]++;
+    if (call >= 6) return;
+    std::vector<unsigned char> planW(m_uiNumActualNodes, 0);
+    for (unsigned int c : m_uiZipPlanCg) if (c < m_uiNumActualNodes) planW[c] = 1;
+    std::vector<unsigned char> refLocal(m_uiNumActualNodes, 0);
+    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++)
+        for (unsigned int n = 0; n < m_uiNpE; n++) {
+            const unsigned int cg = m_uiE2NMapping_CG[e * m_uiNpE + n];
+            if (cg < m_uiNumActualNodes) refLocal[cg] = 1;
+        }
+    std::vector<unsigned char> readMask(m_uiNumActualNodes, 0);
+    std::vector<unsigned int> readElem(m_uiNumActualNodes, 0);
+    if (m_e2b_unzip_counts.size() == m_uiNumTotalElements)
+        for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+            if (m_e2b_unzip_counts[e] == 0) continue;
+            for (unsigned int n = 0; n < m_uiNpE; n++) {
+                const unsigned int cg = m_uiE2NMapping_CG[e * m_uiNpE + n];
+                if (cg < m_uiNumActualNodes && !readMask[cg]) { readMask[cg] = 1; readElem[cg] = e; }
+            }
+        }
+    std::unordered_set<unsigned int> deliv(m_uiScatterMapActualNodeRecv.begin(), m_uiScatterMapActualNodeRecv.end());
+    std::unordered_set<unsigned int> synced(m_uiZipSyncRecvCg.begin(), m_uiZipSyncRecvCg.end());
+    size_t gRead = 0, gNan = 0, gZero = 0, lRead = 0, lNan = 0, lZero = 0, gZeroDeliv = 0, gZeroSync = 0;
+    std::vector<std::string> samples;
+    for (unsigned int cg = 0; cg < m_uiNumActualNodes; cg++) {
+        if (!readMask[cg]) continue;
+        const bool loc = cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd;
+        bool nan = false, zero = true;
+        for (unsigned int v = 0; v < dof; v++) {
+            const double x = (double)vec[v * m_uiNumActualNodes + cg];
+            if (!std::isfinite(x)) nan = true;
+            if (x != 0.0) zero = false;
+        }
+        if (loc) { lRead++; if (nan) lNan++; if (zero) lZero++; }
+        else {
+            gRead++; if (nan) gNan++;
+            if (zero) { gZero++; if (deliv.count(cg)) gZeroDeliv++; if (synced.count(cg)) gZeroSync++; }
+        }
+        if ((nan || zero) && samples.size() < 16) {
+            const unsigned int e = readElem[cg];
+            char b[256];
+            std::snprintf(b, sizeof(b), "%s cg=%u %s delivered=%d synced=%d planwriter=%d mirrordst=%d reflocal=%d elem=%u lev=%u xyz=%u,%u,%u",
+                nan ? "nonfinite" : "allzero", cg, loc ? "LOCAL" : "ghost", (int)deliv.count(cg), (int)synced.count(cg),
+                (int)planW[cg], (int)m_uiZipNonPrimaryToGhostCg.count(cg), (int)refLocal[cg],
+                e, (unsigned)m_uiAllElements[e].getLevel(), m_uiAllElements[e].getX(), m_uiAllElements[e].getY(), m_uiAllElements[e].getZ());
+            samples.emplace_back(b);
+        }
+    }
+    std::cout << "[ghostread-check r" << m_uiActiveRank << " " << tag << "] mesh=" << (const void*)this << " call=" << call
+              << " dof=" << dof << " labelled=" << (int)m_uiIsLabelledRebuild << " pruned=" << (int)m_uiZipSyncPruned
+              << " ghost_read=" << gRead << " nonfinite=" << gNan << " allzero=" << gZero
+              << " (delivered=" << gZeroDeliv << " synced=" << gZeroSync << ")"
+              << " local_read=" << lRead << " nonfinite=" << lNan << " allzero=" << lZero << std::endl;
+    for (const auto& l : samples)
+        std::cout << "[ghostread-check r" << m_uiActiveRank << "]   " << l << std::endl;
+}
+
+template <typename T>
 void Mesh::unzip(const T* in, T* out, unsigned int dof) {
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
+    // DENDRO_UNZIP_FILLCHK=1 probe: sentinel the padded buffer and report the
+    // slots the unzip leaves unwritten (padding vs interior, per block)
+    static const bool fillChk = std::getenv("DENDRO_UNZIP_FILLCHK") != nullptr;
+    static std::map<const Mesh*, int> fillCalls;
+    const bool doFill = fillChk && fillCalls[this]++ < 2;
+    const uint64_t sentinelBits = 0x7ff8deadbeef0001ULL;
+    T sentinel; std::memset(&sentinel, 0, sizeof(T));
+    if (doFill) {
+        if (sizeof(T) == 8) std::memcpy(&sentinel, &sentinelBits, 8);
+        for (size_t i = 0; i < (size_t)dof * m_uiUnZippedVecSz; i++) out[i] = sentinel;
+    }
+    auto fillReport = [&]() {
+        if (!doFill || sizeof(T) != 8) return;
+        size_t unwPad = 0, unwInt = 0; std::vector<std::string> samples;
+        for (unsigned int b = 0; b < m_uiLocalBlockList.size(); b++) {
+            const auto& blk = m_uiLocalBlockList[b];
+            const unsigned int off = blk.getOffset(), Lx = blk.getAllocationSzX(), Ly = blk.getAllocationSzY(), Lz = blk.getAllocationSzZ(), pw = blk.get1DPadWidth();
+            for (unsigned int k = 0; k < Lz; k++) for (unsigned int j = 0; j < Ly; j++) for (unsigned int i = 0; i < Lx; i++) {
+                const size_t idx = (size_t)off + k * Lx * Ly + j * Lx + i;
+                if (std::memcmp(&out[idx], &sentinelBits, 8) != 0) continue;
+                const bool pad = i < pw || i >= Lx - pw || j < pw || j >= Ly - pw || k < pw || k >= Lz - pw;
+                if (pad) unwPad++; else unwInt++;
+                if (samples.size() < 6) { char s[160]; std::snprintf(s, sizeof(s), "unwritten idx=%zu blk=%u lev=%u ijk=%u,%u,%u %s", idx, b, blk.getRegularGridLev(), i, j, k, pad ? "pad" : "INTERIOR"); samples.emplace_back(s); }
+            }
+        }
+        std::cout << "[unzip-fillchk r" << m_uiActiveRank << "] mesh=" << (const void*)this << " labelled=" << (int)m_uiIsLabelledRebuild
+                  << " unwritten_pad=" << unwPad << " unwritten_interior=" << unwInt << " (dof 0 scan, buffer " << m_uiUnZippedVecSz << ")" << std::endl;
+        for (const auto& l : samples) std::cout << "[unzip-fillchk r" << m_uiActiveRank << "]   " << l << std::endl;
+    };
 
     // DENDRO_UNZIP_BLOCK=1: SFC meshes take the block-wise unzip; labelled
     // meshes (any non-SFC block) always need the plan-based scatter
@@ -14356,10 +14566,12 @@ void Mesh::unzip(const T* in, T* out, unsigned int dof) {
         if (m_uiUnzipBlockOk) {
             this->unzip(in, out, m_uiUnzipAllBlkIds.data(),
                         (unsigned int)m_uiUnzipAllBlkIds.size(), dof);
+            fillReport();
             return;
         }
     }
     this->unzip_scatter(in, out, dof);
+    fillReport();
 }
 
 #if 0

@@ -2051,6 +2051,11 @@ class Mesh {
         this->syncZipNonPrimary(vec, dof);
     }
 
+    /** DENDRO_GHOSTREAD_CHECK=1 probe: after a ghost exchange, report unzip-read
+     *  cg slots that are non-finite or all-zero across dof (ghost and local). */
+    template <typename T>
+    void ghostReadCheck(const T* vec, unsigned int dof, const char* tag);
+
     /**@brief Public wrapper for broadcastCgValuesByPhysPos. */
     template <typename T>
     inline void broadcastCgValuesByPhysPosPublic(T* vec, unsigned int dof) {
