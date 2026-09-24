@@ -11970,6 +11970,10 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
     // Per-variable scratch (reused across vars, size for ONE variable's DG).
     std::vector<T> all_dg((std::size_t)m_uiNumTotalElements * dgSz);
 
+    std::vector<unsigned int> lptOrder;
+    const bool useLpt =
+        ot::g_lpt_block_order &&
+        ot::computeLptBlockOrder(blkList, (unsigned int)n_blocks, lptOrder);
 // ONE parallel region for ALL variables. The fork/join cost is paid once
 // total, not n_vars times.
 #pragma omp parallel
@@ -12012,7 +12016,8 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
 // unzip_scatter, but with dof=1 fixed.
 #pragma omp for schedule(dynamic, 1)
             for (size_t blk_idx = 0; blk_idx < n_blocks; blk_idx++) {
-                const unsigned int blk     = (unsigned int)blk_idx;
+                const unsigned int blk =
+                    useLpt ? lptOrder[blk_idx] : (unsigned int)blk_idx;
                 const ot::TreeNode blkNode = blkList[blk].getBlockNode();
                 const unsigned int PW      = blkList[blk].get1DPadWidth();
                 const unsigned int lx      = blkList[blk].getAllocationSzX();
