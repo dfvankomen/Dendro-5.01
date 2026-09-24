@@ -97,7 +97,11 @@ void usage(const char* argv0) {
         << "  --variants LIST      comma list of:\n"
         << "                         sfc, sfc_weighted, sfc_levelwise,\n"
         << "                         sfc_mc_contig, fastpart, fastpart_fullstencil,\n"
-        << "                         fastpart_weighted, fastpart_amracut, fastpart_prop\n"
+        << "                         fastpart_weighted, fastpart_amracut, fastpart_prop,\n"
+        << "                         fastpart_sfcinit, fastpart_refine, fastpart_refine26,\n"
+        << "                         levelwise_refine26, levelwise_group26, sfc_group26\n"
+        << "                       (*_refine*: dendro-refine branch of fastpart;\n"
+        << "                        *group*: parent-octet groups as a block proxy)\n"
         << "                       (default sfc,fastpart)\n"
         << "  --oct PATH           score a dumpOctDataParallel *_N.oct file\n"
         << "                       (136-byte fastpart oct_element records, e.g. the\n"
@@ -747,7 +751,10 @@ int main(int argc, char** argv) {
             label_of_gid = sfc_mc_contig_label;
         } else if (v == "fastpart" || v == "fastpart_fullstencil" ||
                    v == "fastpart_weighted" || v == "fastpart_amracut" ||
-                   v == "fastpart_prop") {
+                   v == "fastpart_prop" || v == "fastpart_sfcinit" ||
+                   v == "fastpart_refine" || v == "fastpart_refine26" ||
+                   v == "levelwise_refine26" || v == "levelwise_group26" ||
+                   v == "sfc_group26") {
             std::vector<fastpart_uint_t> parts(nloc, 0);
             std::vector<fastpart_uint_t> vwgt(nloc, 1);
             for (size_t i = 0; i < nloc; ++i) vwgt[i] = (fastpart_uint_t)work_w[i];
@@ -756,6 +763,49 @@ int main(int argc, char** argv) {
             fastpart_oct_partopts_init(&opts);
             opts.include_edge_corner = (v == "fastpart_fullstencil");
             opts.vwgt = (v == "fastpart_weighted") ? vwgt.data() : nullptr;
+
+            // *_refine*/*_group* variants: fastpart branch dendro-refine
+            const bool refine_v = (v == "fastpart_refine" || v == "fastpart_refine26" ||
+                                   v == "levelwise_refine26" || v == "levelwise_group26" ||
+                                   v == "sfc_group26");
+            const bool lw_init  = (v == "levelwise_refine26" || v == "levelwise_group26");
+            const bool grp_v    = (v == "levelwise_group26" || v == "sfc_group26");
+            std::vector<fastpart_uint_t> init_l(nloc), vcon_l(nloc), grp_l(nloc);
+            if (v == "fastpart_sfcinit" || refine_v) {
+                for (size_t i = 0; i < nloc; ++i)
+                    init_l[i] = lw_init ? sfc_levelwise_label[local_gids[i]]
+                                        : sfc_label[local_gids[i]];
+                opts.init_labels = init_l.data();
+            }
+            if (refine_v) {
+                opts.use_diffusion = false;
+                const char* er = std::getenv("ECC_REFINE_ROUNDS");
+                const char* ei = std::getenv("ECC_REFINE_IMB");
+                opts.refine_rounds = er ? atoi(er) : 30;
+                opts.refine_max_imbalance = ei ? atof(ei) : 1.05;
+                opts.include_edge_corner = (v != "fastpart_refine");
+            }
+            if (lw_init) {
+                for (size_t i = 0; i < nloc; ++i) vcon_l[i] = conn[i].level - lmin;
+                opts.vcon = vcon_l.data();
+                opts.ncon = (int)(lmax - lmin + 1);
+            }
+            if (grp_v) {
+                // parent-octet proxy for a dendro block: key = hash(level, parent anchor)
+                for (size_t i = 0; i < nloc; ++i) {
+                    const unsigned int L = conn[i].level;
+                    const unsigned int sh = (m_uiMaxDepth >= L) ? (m_uiMaxDepth - L + 1) : 0;
+                    const unsigned long long px = conn[i].coord[0] >> sh,
+                                             py = conn[i].coord[1] >> sh,
+                                             pz = conn[i].coord[2] >> sh;
+                    unsigned long long h = (L * 0x9E3779B97F4A7C15ull) ^ (px * 0xBF58476D1CE4E5B9ull) ^
+                                           (py * 0x94D049BB133111EBull) ^ (pz * 0xD6E8FEB86659FD93ull);
+                    h ^= h >> 29; h *= 0xBF58476D1CE4E5B9ull; h ^= h >> 32;
+                    grp_l[i] = (fastpart_uint_t)(h & 0xFFFFFFFFull);
+                }
+                opts.group_ids = grp_l.data();
+            }
+            opts.verbose = refine_v ? 1 : 0;  // collective inside fastpart: same on all ranks
 
             // fastpart_amracut: the PUBLISHED AMRaCut diffusion schedule
             // (5 rounds, 3-tier rates 0.01/0.2/0.8); fastpart_prop: the paper
