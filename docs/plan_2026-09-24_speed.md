@@ -136,3 +136,53 @@ Update `tools/cluster_bundle` to the new tip and the arms of Step 3; the user su
 
 Design A (labelled ReMesh without the twin), scaffolding deletion, the `experimental` reconcile (backup
 first, after the partitioning is settled).
+
+## Round 2 (2026-09-24, late night) — after the prune, what is left per step and per remesh
+
+Per-step, SFC arm: 0 collectives per stage, but `unzip_async` is still 12.4 of 21.8 s. Per-step,
+labelled arm: 819 sync calls carrying 3.3 MB total remain (the mirrors' sources and non-primary locals).
+Per remesh: buildZipPlan 240 ms and e2n-audit 163 ms are still hash-bound; the rebuild is 27 collectives.
+
+1. **Split `unzip_async`** into exchange wait vs unzip compute (`DENDRO_MESH_PROF=1` accumulators in
+   `readFromGhostEnd` and `unzip_scatter`, printed with the cumulative comm stats). If compute dominates,
+   the plan-based `unzip_scatter` is the target: on SFC meshes the canonical-writer table is a no-op
+   and `n_phases` is 1, so the per-slot gating can be skipped; the per-element interpolation path should
+   be compared against upstream's block unzip.
+2. **Labelled arm to 0 collectives per stage**: fold the surviving sync entries into the nodal scatter
+   map (they are (primary rank, primary cg) → (rank, slot) pairs, exactly a scatter-map entry), so the
+   side-channel disappears and only the p2p exchange remains. Byte-identical by construction if the
+   delivered value is the same primary value; gate = the usual four.
+3. **Sandwich hash maps** (agent, workspace `rounds`): `homeWin`/`myMin` as sort + fold with the
+   insertion-order tie rule; audit maps built on demand from the query keys; `unify` via sort.
+4. **Rounds** (same agent, after 3): `computeMinMaxLevel` as one Allreduce; fused request/response
+   rounds where the request payload is small; IGT per-variable Alltoallv batching.
+5. **np=8 gates** for the four arms + EM4 md5, then `DENDRO_REDIST_ROUTE` / `_FLAGS` defaults.
+Every item byte-identical behind a knob for one A/B, then default; BSSN A/B (running) gates the prune.
+
+**Round 2 results so far (late night; box saturated, so only byte-identity and the phase *split* are
+read):**
+- `unzip_async` split (`[unzip-prof]`, EM4 SFC np=4): ghost_begin 0.8 s, ghost_end 8.6 s, **unzip
+  compute 49–63 s** — the plan-based `unzip_scatter` is ~85 % of the phase, the exchange wait ~15 %.
+- `DENDRO_UNZIP_BLOCK=1` (SFC meshes take upstream's block-wise unzip): **byte-identical on the EM4 SFC
+  arm** (md5 d7bbee…), labelled meshes fall back to the scatter (md5 a75a069…). So the scatter equals
+  upstream's unzip on SFC meshes; whether the block path is faster needs a quiet box (both arms ran
+  under load 20+, unusable).
+- Pruned sync is now point-to-point among the surviving partners (no O(P) collective); byte-identical on
+  all four gates.
+- np=8: EM4 SFC md5 equals the np=4 one (d7bbee…), graph np=8 base 4521dbc3…; `DENDRO_REDIST_ROUTE=1`,
+  `DENDRO_REDIST_FLAGS=1` and both together are byte-identical at np=8 on every arm → **both default on**
+  (`=0` reverts; the flags knob lives in EM4's `solverCtx.cpp`, user commits). Rebuild at np=8: 28
+  collectives.
+- BSSN q1 tinytest A/B (SFC / graph full side-channel / graph pruned): SFC arm done, graph arms running.
+- Defaults-path gate of the whole line (route + flags on, p2p sync, timers, block-unzip knob off): EM4
+  md5 at np=4 and np=8 both arms, four testPartitioning arms at np=4 **and np=8**, ragged ENUTS 18
+  digits — all identical. Rebuild at np=4 is 28 collectives with the routed redistribute (+1 for the
+  O(local) directory in place of the O(N_global) gather).
+- **BSSN, the reader the prune exposed:** the first pair (both arms SFC by a TOML-table accident,
+  prune 0 vs 2) differed — constraints 5th digit, BH positions visibly — and a repeated run proved the
+  solver deterministic. Cause: `BSSNCtx::post_timestep` → `computeBHLocations` interpolates the shift
+  from the zipped vector after the final axpy with its ghost exchange commented out (fork and upstream),
+  so it reads fresh local nodes next to one-stage-stale ghost nodes; the side-channel's post-axpy sync
+  had masked it. Fix in the BSSN repo (uncommitted): exchange the three shift components before the
+  tracker. Four-arm A/B (sfc/graph × prune 0/2) on the fixed solver running; the bar is
+  sfc_p0 = sfc_p2 and graph_p0 = graph_p2.
