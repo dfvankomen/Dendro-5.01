@@ -847,6 +847,86 @@ void Mesh::broadcastCgValuesByPhysPos(T* vec, unsigned int dof) {
     }
     if (!gate_on) return;
 
+    // DENDRO_BCAST_PLAN=0 reverts to the per-call rebuild; the probe
+    // (EM4_BCAST_PROBE_DIR) only exists on the legacy path.
+    static const char* plan_env  = std::getenv("DENDRO_BCAST_PLAN");
+    static const char* check_env = std::getenv("DENDRO_BCAST_PLAN_CHECK");
+    static const bool plan_on =
+        !(plan_env && plan_env[0] == '0') &&
+        DENDRO_PROBE_GETENV("EM4_BCAST_PROBE_DIR") == nullptr;
+    static const bool check_on = check_env && check_env[0] == '1';
+    if (!plan_on) {
+        broadcastCgValuesByPhysPosLegacy(vec, dof);
+        return;
+    }
+    if (!check_on) {
+        broadcastCgValuesByPhysPosPlanned(vec, dof);
+        return;
+    }
+    const size_t n = (size_t)dof * m_uiNumActualNodes;
+    std::vector<T> ref(vec, vec + n);
+    broadcastCgValuesByPhysPosLegacy(ref.data(), dof);
+    broadcastCgValuesByPhysPosPlanned(vec, dof);
+    if (std::memcmp(ref.data(), vec, n * sizeof(T)) != 0) {
+        for (size_t i = 0; i < n; i++) {
+            if (std::memcmp(&ref[i], &vec[i], sizeof(T)) == 0) continue;
+            std::fprintf(stderr,
+                "[bcast-plan-check] MISMATCH rank=%d var=%zu cg=%zu "
+                "legacy=%.17g plan=%.17g\n",
+                (int)m_uiActiveRank, i / m_uiNumActualNodes,
+                i % m_uiNumActualNodes, (double)ref[i], (double)vec[i]);
+            break;
+        }
+        std::fflush(stderr);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+}
+
+template <typename T>
+void Mesh::broadcastCgValuesByPhysPosPlanned(T* vec, unsigned int dof) {
+    if (!m_uiBcastPlanBuilt) buildBcastPlan();
+    const unsigned int N = m_uiNumActualNodes;
+    const size_t sendN = m_uiBcastSendSrcCg.size();
+    const size_t recvN = m_uiBcastRecvDstCg.size();
+    std::vector<T> sendBuf(sendN * dof);
+    std::vector<T> recvBuf(recvN * dof);
+    for (size_t k = 0; k < sendN; k++) {
+        const unsigned int cg = m_uiBcastSendSrcCg[k];
+        T* dst = sendBuf.data() + k * dof;
+        for (unsigned int v = 0; v < dof; v++) dst[v] = vec[v * N + cg];
+    }
+    std::vector<int> sCnt(m_uiActiveNpes), sOff(m_uiActiveNpes),
+        rCnt(m_uiActiveNpes), rOff(m_uiActiveNpes);
+    for (int p = 0; p < (int)m_uiActiveNpes; p++) {
+        sCnt[p] = m_uiBcastSendCounts[p] * (int)dof;
+        sOff[p] = m_uiBcastSendOffsets[p] * (int)dof;
+        rCnt[p] = m_uiBcastRecvCounts[p] * (int)dof;
+        rOff[p] = m_uiBcastRecvOffsets[p] * (int)dof;
+    }
+    par::Mpi_Alltoallv(sendBuf.data(), sCnt.data(), sOff.data(),
+                       recvBuf.data(), rCnt.data(), rOff.data(),
+                       m_uiCommActive);
+    for (size_t k = 0; k < recvN; k++) {
+        const unsigned int cg = m_uiBcastRecvDstCg[k];
+        const T* src = recvBuf.data() + k * dof;
+        for (unsigned int v = 0; v < dof; v++) vec[v * N + cg] = src[v];
+    }
+    const size_t nIntra = m_uiBcastIntraDst.size();
+    for (size_t k = 0; k < nIntra; k++) {
+        const unsigned int d = m_uiBcastIntraDst[k];
+        const unsigned int s = m_uiBcastIntraSrc[k];
+        for (unsigned int v = 0; v < dof; v++) vec[v * N + d] = vec[v * N + s];
+    }
+    for (const unsigned int cg : m_uiBcastPhantomCg) {
+        for (unsigned int v = 0; v < dof; v++)
+            vec[v * N + cg] = (v < m_uiPhantomFill.size())
+                                  ? (T)m_uiPhantomFill[v]
+                                  : (T)0;
+    }
+}
+
+template <typename T>
+void Mesh::broadcastCgValuesByPhysPosLegacy(T* vec, unsigned int dof) {
     const unsigned int npe = m_uiNpE;
     const unsigned int eOrd = m_uiElementOrder;
     const unsigned int nTotal_cg = m_uiNumActualNodes;

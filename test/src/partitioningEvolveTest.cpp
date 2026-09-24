@@ -531,6 +531,9 @@ int main(int argc, char** argv) {
     mesh_sfc->dumpPartitionStats(std::cout, "sfc-initial");
     mesh_repart->dumpPartitionStats(std::cout, "graph-initial");
 
+    const char* bcastEnv = std::getenv("PARTEVOLVE_BCAST");
+    const bool bcastOn   = bcastEnv && bcastEnv[0] == '1';
+
     auto runOne = [&](ot::Mesh*& mesh, const std::string& tag) {
         std::vector<double> u, tmp, k1, k2, k3, k4, uzIn, uzOut;
         mesh->createVector(u, initFunc);
@@ -556,6 +559,17 @@ int main(int argc, char** argv) {
 
         for (int step = 1; step <= numSteps; step++) {
             rk4_step(mesh, u, tmp, k1, k2, k3, k4, uzIn, uzOut, dt);
+            // PARTEVOLVE_BCAST=1: run the pos-bcast (enabled on graph
+            // meshes only) on a 3-dof [u,k1,k2] stack, keep u.
+            if (bcastOn && mesh->isActive()) {
+                const size_t N = u.size();
+                std::vector<double> stack(3 * N);
+                std::copy(u.begin(), u.end(), stack.begin());
+                std::copy(k1.begin(), k1.end(), stack.begin() + N);
+                std::copy(k2.begin(), k2.end(), stack.begin() + 2 * N);
+                mesh->broadcastCgValuesByPhysPosPublic(stack.data(), 3);
+                std::copy(stack.begin(), stack.begin() + N, u.begin());
+            }
 
             if (remeshEvery > 0 && step % remeshEvery == 0) {
                 bool isGraph =

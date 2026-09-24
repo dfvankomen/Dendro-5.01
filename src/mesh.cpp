@@ -1666,6 +1666,7 @@ void Mesh::generateBdyElementDiagonalSearchKeys() {
 }
 
 void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
+    invalidateBcastPlan();
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
@@ -3086,6 +3087,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
 }
 
 void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in) {
+    invalidateBcastPlan();
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
@@ -3281,6 +3283,7 @@ void Mesh::buildE2NWithSM() {
 }
 
 void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
+    invalidateBcastPlan();
     if (!m_uiIsActive) return;
 
     int rank  = m_uiActiveRank;
@@ -4805,6 +4808,7 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
 }
 
 void Mesh::buildE2NMap() {
+    invalidateBcastPlan();
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
@@ -5681,6 +5685,7 @@ void Mesh::buildFEM_E2N() {
 }
 
 void Mesh::buildE2N_DG() {
+    invalidateBcastPlan();
     dendro::logger::debug(dendro::logger::Scope{"MESH"},
                           "Now constructing E2N map (DG)");
     unsigned int lookUp = 0;
@@ -10622,6 +10627,7 @@ void Mesh::computeNodeScatterMaps(MPI_Comm comm) {
 }
 
 void Mesh::computeNodalScatterMap(MPI_Comm comm) {
+    invalidateBcastPlan();
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
@@ -10926,6 +10932,7 @@ void Mesh::computeNodalScatterMap(MPI_Comm comm) {
 }
 
 void Mesh::computeNodalScatterMap1(MPI_Comm comm) {
+    invalidateBcastPlan();
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
@@ -11627,6 +11634,7 @@ void Mesh::computeNodalScatterMap1(MPI_Comm comm) {
 }
 
 void Mesh::computeNodalScatterMap2(MPI_Comm comm) {
+    invalidateBcastPlan();
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
@@ -12122,6 +12130,7 @@ void Mesh::computeNodalScatterMap2(MPI_Comm comm) {
 }
 
 void Mesh::computeNodalScatterMap3(MPI_Comm comm) {
+    invalidateBcastPlan();
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
@@ -13037,6 +13046,7 @@ void Mesh::computeNodalScatterMap3(MPI_Comm comm) {
 }
 
 void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
+    invalidateBcastPlan();
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
@@ -19143,6 +19153,7 @@ void Mesh::blkUnzipElementIDs(unsigned int blk,
 void Mesh::repartitionMeshGlobal(bool do_block_creation,
                                  bool do_fastpart_filesave,
                                  std::string fileprefix) {
+    invalidateBcastPlan();
     if (!m_uiIsActive) return;
 
     if (m_partitionOption == PartitioningOptions::NoPartition) {
@@ -20721,4 +20732,151 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
     return flattened_recv_full_data;
 }
 
+void Mesh::buildBcastPlan() {
+    // mirrors broadcastCgValuesByPhysPosLegacy steps 1-4 + intra/phantom
+    // derivation; everything here is mesh-only.
+    const unsigned int npe       = m_uiNpE;
+    const unsigned int eOrd      = m_uiElementOrder;
+    const unsigned int nTotal_cg = m_uiNumActualNodes;
+    const unsigned int nLB       = m_uiNodeLocalBegin;
+    const unsigned int nLE       = m_uiNodeLocalEnd;
+    const int nP                 = (int)m_uiActiveNpes;
+    const int me                 = (int)m_uiActiveRank;
+
+    std::vector<unsigned long long> myX, myY, myZ;
+    std::vector<unsigned int> myCg;
+    std::vector<unsigned char> myLocal;
+    myX.reserve(nTotal_cg); myY.reserve(nTotal_cg); myZ.reserve(nTotal_cg);
+    myCg.reserve(nTotal_cg); myLocal.reserve(nTotal_cg);
+    for (unsigned int cg = 0; cg < nTotal_cg; cg++) {
+        if (cg >= m_uiCG2DG.size()) continue;
+        const unsigned int dg = m_uiCG2DG[cg];
+        if (dg == LOOK_UP_TABLE_DEFAULT) continue;
+        const unsigned int e = dg / npe;
+        const unsigned int n = dg % npe;
+        if (e >= m_uiAllElements.size()) continue;
+        const ot::TreeNode& tn = m_uiAllElements[e];
+        const unsigned int lev = tn.getLevel();
+        if (lev > m_uiMaxDepth) continue;
+        const unsigned long long len =
+            (unsigned long long)1 << (m_uiMaxDepth - lev);
+        const unsigned int ni = n % (eOrd + 1);
+        const unsigned int nj = (n / (eOrd + 1)) % (eOrd + 1);
+        const unsigned int nk = n / ((eOrd + 1) * (eOrd + 1));
+        myX.push_back((unsigned long long)tn.getX() * eOrd
+                      + (unsigned long long)ni * len);
+        myY.push_back((unsigned long long)tn.getY() * eOrd
+                      + (unsigned long long)nj * len);
+        myZ.push_back((unsigned long long)tn.getZ() * eOrd
+                      + (unsigned long long)nk * len);
+        myCg.push_back(cg);
+        myLocal.push_back((cg >= nLB && cg < nLE) ? 1u : 0u);
+    }
+
+    const int myCount = (int)myCg.size();
+    std::vector<int> counts(nP), offs(nP, 0);
+    MPI_Allgather(&myCount, 1, MPI_INT, counts.data(), 1, MPI_INT,
+                  m_uiCommActive);
+    int total = 0;
+    for (int p = 0; p < nP; p++) {
+        offs[p] = total;
+        total += counts[p];
+    }
+    std::vector<unsigned long long> allX(total), allY(total), allZ(total);
+    std::vector<unsigned int> allCg(total);
+    std::vector<unsigned char> allLocal(total);
+    MPI_Allgatherv(myX.data(), myCount, MPI_UINT64_T, allX.data(),
+                   counts.data(), offs.data(), MPI_UINT64_T, m_uiCommActive);
+    MPI_Allgatherv(myY.data(), myCount, MPI_UINT64_T, allY.data(),
+                   counts.data(), offs.data(), MPI_UINT64_T, m_uiCommActive);
+    MPI_Allgatherv(myZ.data(), myCount, MPI_UINT64_T, allZ.data(),
+                   counts.data(), offs.data(), MPI_UINT64_T, m_uiCommActive);
+    MPI_Allgatherv(myCg.data(), myCount, MPI_UNSIGNED, allCg.data(),
+                   counts.data(), offs.data(), MPI_UNSIGNED, m_uiCommActive);
+    MPI_Allgatherv(myLocal.data(), myCount, MPI_UNSIGNED_CHAR,
+                   allLocal.data(), counts.data(), offs.data(),
+                   MPI_UNSIGNED_CHAR, m_uiCommActive);
+
+    struct Winner {
+        int rank;
+        unsigned int cg;
+        unsigned char is_local;
+    };
+    std::unordered_map<PhysKey3, Winner, PhysKey3Hash> winners;
+    winners.reserve(total);
+    for (int p = 0; p < nP; p++) {
+        for (int i = offs[p]; i < offs[p] + counts[p]; i++) {
+            PhysKey3 k{allX[i], allY[i], allZ[i]};
+            auto it = winners.find(k);
+            if (it == winners.end()) {
+                winners[k] = Winner{p, allCg[i], allLocal[i]};
+                continue;
+            }
+            Winner& w = it->second;
+            if (allLocal[i] && !w.is_local) {
+                w = Winner{p, allCg[i], allLocal[i]};
+                continue;
+            }
+            if (!allLocal[i] && w.is_local) continue;
+            if (p < w.rank || (p == w.rank && allCg[i] < w.cg))
+                w = Winner{p, allCg[i], allLocal[i]};
+        }
+    }
+
+    m_uiBcastSendCounts.assign(nP, 0);
+    m_uiBcastRecvCounts.assign(nP, 0);
+    m_uiBcastSendOffsets.assign(nP, 0);
+    m_uiBcastRecvOffsets.assign(nP, 0);
+    // resolve each claim's winner once; reused by the fill pass below.
+    std::vector<const Winner*> wOf(total, nullptr);
+    for (int p = 0; p < nP; p++) {
+        for (int i = offs[p]; i < offs[p] + counts[p]; i++) {
+            auto wit = winners.find(PhysKey3{allX[i], allY[i], allZ[i]});
+            if (wit == winners.end()) continue;
+            const Winner& w = wit->second;
+            wOf[i] = &w;
+            if (p == w.rank) continue;
+            if (me == w.rank) m_uiBcastSendCounts[p]++;
+            if (me == p) m_uiBcastRecvCounts[w.rank]++;
+        }
+    }
+    for (int p = 1; p < nP; p++) {
+        m_uiBcastSendOffsets[p] =
+            m_uiBcastSendOffsets[p - 1] + m_uiBcastSendCounts[p - 1];
+        m_uiBcastRecvOffsets[p] =
+            m_uiBcastRecvOffsets[p - 1] + m_uiBcastRecvCounts[p - 1];
+    }
+    m_uiBcastSendSrcCg.assign(
+        m_uiBcastSendOffsets[nP - 1] + m_uiBcastSendCounts[nP - 1], 0);
+    m_uiBcastRecvDstCg.assign(
+        m_uiBcastRecvOffsets[nP - 1] + m_uiBcastRecvCounts[nP - 1], 0);
+    std::vector<int> sendPos(m_uiBcastSendOffsets),
+        recvPos(m_uiBcastRecvOffsets);
+    for (int p = 0; p < nP; p++) {
+        for (int i = offs[p]; i < offs[p] + counts[p]; i++) {
+            const Winner* w = wOf[i];
+            if (!w || p == w->rank) continue;
+            if (me == w->rank) m_uiBcastSendSrcCg[sendPos[p]++] = w->cg;
+            if (me == p) m_uiBcastRecvDstCg[recvPos[w->rank]++] = allCg[i];
+        }
+    }
+
+    m_uiBcastIntraDst.clear();
+    m_uiBcastIntraSrc.clear();
+    m_uiBcastPhantomCg.clear();
+    for (int i = offs[me]; i < offs[me] + counts[me]; i++) {
+        const Winner* w = wOf[i];
+        if (!w || w->rank != me || allCg[i] == w->cg) continue;
+        m_uiBcastIntraDst.push_back(allCg[i]);
+        m_uiBcastIntraSrc.push_back(w->cg);
+    }
+    for (int i = offs[me]; i < offs[me] + counts[me]; i++) {
+        const Winner* w = wOf[i];
+        if (!w || w->is_local) continue;
+        m_uiBcastPhantomCg.push_back(allCg[i]);
+    }
+    m_uiBcastPlanBuilt = true;
+}
+
 }  // namespace ot
+

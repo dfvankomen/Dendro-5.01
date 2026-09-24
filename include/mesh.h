@@ -697,6 +697,16 @@ class Mesh {
      *  values. Indexed by dof var; vars beyond the vector size fill 0. */
     std::vector<double> m_uiPhantomFill;
 
+    /** Cached pos-bcast plan (mesh-only; see buildBcastPlan). Invalidated
+     *  wherever CG2DG / all-elements / node ranges are rebuilt. */
+    bool m_uiBcastPlanBuilt = false;
+    std::vector<int> m_uiBcastSendCounts, m_uiBcastSendOffsets;
+    std::vector<int> m_uiBcastRecvCounts, m_uiBcastRecvOffsets;
+    std::vector<unsigned int> m_uiBcastSendSrcCg, m_uiBcastRecvDstCg;
+    std::vector<unsigned int> m_uiBcastIntraDst, m_uiBcastIntraSrc;
+    std::vector<unsigned int> m_uiBcastPhantomCg;
+    inline void invalidateBcastPlan() { m_uiBcastPlanBuilt = false; }
+
     // m_uiCanonicalOverride was an old experiment in routing zip
     // writes; superseded by the explicit zip plan
     // (m_uiZipPlanCg / m_uiZipPlanUnzipIdx) and removed.
@@ -1465,6 +1475,17 @@ class Mesh {
      * If no rank has a LOCAL cg, lowest rank with any (ghost) cg wins. */
     template <typename T>
     void broadcastCgValuesByPhysPos(T* vec, unsigned int dof);
+
+    /** original per-call rebuild path (DENDRO_BCAST_PLAN=0). */
+    template <typename T>
+    void broadcastCgValuesByPhysPosLegacy(T* vec, unsigned int dof);
+
+    /** cached-plan apply: one Alltoallv over all dof. */
+    template <typename T>
+    void broadcastCgValuesByPhysPosPlanned(T* vec, unsigned int dof);
+
+    /** collective: builds the m_uiBcast* plan from the global claim set. */
+    void buildBcastPlan();
 
 
     /**
