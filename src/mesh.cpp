@@ -235,18 +235,15 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             // E2N repair must be eager (mutates E2N_CG; no-op on unique-TN
             // SFC meshes).
             unifyE2NCgAcrossTNInstances();
-            // canon-writer table + zip plan: built eagerly BY DEFAULT.
-            // DENDRO_LAZY_ZIPPLAN=1 defers them to first unzip/zip
-            // (ensureZipPlanBuilt) — saves ~1.4s/sandwich at BSSN scale
-            // (transient ReMesh successors never use them) but exposed an
-            // allocation-timing NaN in BSSN BBH (2026-06-11, see
-            // docs/graph_partitioning_correctness.md) — keep opt-in until
-            // that uninitialized-read is hunted down.
+            // canon-writer table + zip plan are deferred to first zip/unzip
+            // (ensureZipPlanBuilt); ctor-built SFC meshes have empty zip-sync
+            // lists, so transient ReMesh successors never need them.
+            // DENDRO_LAZY_ZIPPLAN=0 restores eager construction.
             {
                 static const char* lzp_env =
                     std::getenv("DENDRO_LAZY_ZIPPLAN");
                 static const bool lzp_on =
-                    lzp_env && lzp_env[0] == '1' && lzp_env[1] == '\0';
+                    !(lzp_env && lzp_env[0] == '0');
                 if (!lzp_on) {
                     tb0 = MPI_Wtime();
                     buildUnzipCanonicalWriterTable();
@@ -534,7 +531,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                 static const char* lzp_env =
                     std::getenv("DENDRO_LAZY_ZIPPLAN");
                 static const bool lzp_on =
-                    lzp_env && lzp_env[0] == '1' && lzp_env[1] == '\0';
+                    !(lzp_env && lzp_env[0] == '0');
                 if (!lzp_on) {
                     tb0 = MPI_Wtime();
                     buildUnzipCanonicalWriterTable();
