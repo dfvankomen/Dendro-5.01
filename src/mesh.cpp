@@ -19409,6 +19409,42 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         return mine;
     };
 
+    static const bool legacyFetch = [] {
+        const char* e = std::getenv("DENDRO_REPART_LEGACY_FETCH");
+        return e && e[0] == '1';
+    }();
+    std::vector<unsigned int> pushLabels;
+    bool pushPath = false;
+    auto takeLabels = [&](std::vector<unsigned int>& parts) {
+        if (legacyFetch) {
+            my_partition = partitionFromLabels(parts);
+            return;
+        }
+        pushLabels = std::move(parts);
+        pushPath   = true;
+    };
+
+    // counts Alltoall + payload Alltoallv over per-destination buckets
+    auto exchangeBuckets = [&](auto& out, MPI_Datatype dt) {
+        using V = typename std::decay_t<decltype(out)>::value_type::value_type;
+        std::vector<int> sc(npes), rc(npes), so(npes, 0), ro(npes, 0);
+        for (int p = 0; p < npes; ++p) sc[p] = (int)out[p].size();
+        repartRound();
+        MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, commActive);
+        for (int p = 1; p < npes; ++p) {
+            so[p] = so[p - 1] + sc[p - 1];
+            ro[p] = ro[p - 1] + rc[p - 1];
+        }
+        std::vector<V> sb;
+        sb.reserve(so[npes - 1] + sc[npes - 1]);
+        for (const auto& b : out) sb.insert(sb.end(), b.begin(), b.end());
+        std::vector<V> rb(ro[npes - 1] + rc[npes - 1]);
+        repartRound();
+        MPI_Alltoallv(sb.data(), sc.data(), so.data(), dt, rb.data(), rc.data(),
+                      ro.data(), dt, commActive);
+        return rb;
+    };
+
     if (m_partitionOption == PartitioningOptions::OriginalPartition) {
         my_partition = noPartitionChange(oct_connectivity_map);
     } else if (m_partitionOption == PartitioningOptions::RandomPartition) {
@@ -19416,7 +19452,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     } else if (m_partitionOption == PartitioningOptions::SFCLevelwise) {
         std::vector<unsigned int> parts = levelwiseLabels();
         blockVote(parts);
-        my_partition = partitionFromLabels(parts);
+        takeLabels(parts);
     } else if (m_partitionOption == PartitioningOptions::fastpart) {
         // quick conversion of oct_connectivity_map to wanted format
 
@@ -19550,13 +19586,28 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }
 
         blockVote(parts);
-        my_partition = partitionFromLabels(parts);
+        takeLabels(parts);
 #endif
 
         free(vtx_dist);
         free(ele_counts_fp);
     }
     __phase("partition-decision");
+
+    // push each element to its label with trank set, as the fetch would
+    std::vector<oct_data<D_INT_L>> new_oct_connectivity_map;
+    if (pushPath) {
+        std::vector<std::vector<oct_data<D_INT_L>>> out(npes);
+        for (size_t i = 0; i < localSz; ++i) {
+            oct_connectivity_map[i].trank = pushLabels[i];
+            out[pushLabels[i]].push_back(oct_connectivity_map[i]);
+        }
+        MPI_Datatype octType = create_octdata_mpi_type<D_INT_L>();
+        new_oct_connectivity_map = exchangeBuckets(out, octType);
+        MPI_Type_free(&octType);
+        for (const auto& o : new_oct_connectivity_map) my_partition.push_back(o.eid);
+        std::sort(my_partition.begin(), my_partition.end());
+    }
     {
         unsigned int nMine = (unsigned int)my_partition.size(), nMin = 0;
         repartRound();
@@ -19580,13 +19631,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                   << oct_connectivity_map.size() << " NEW PARTITION SIZE - "
                   << my_partition.size() << std::endl;
 
-    auto new_oct_connectivity_map = getOctDataFromOtherProcesses(
+    if (!pushPath) {
+    new_oct_connectivity_map = getOctDataFromOtherProcesses(
         oct_connectivity_map, ele_offsets, ele_counts, my_partition);
-    __phase("fetch-my-partition");
-
-    // now that we have all of this information, we just need to get our new
-    // assignment and then probe the rest of the mesh to get the necessary
-    // information
 
     // assign back in the retained elements
     for (auto &ele_id : my_partition) {
@@ -19599,6 +19646,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 oct_connectivity_map[ele_id - ele_offsets[rank]]);
         }
     }
+    }
+    __phase("fetch-my-partition");
     // then sort by global ID
     std::sort(new_oct_connectivity_map.begin(), new_oct_connectivity_map.end(),
               [](const oct_data<D_INT_L> &o1, const oct_data<D_INT_L> &o2) {
