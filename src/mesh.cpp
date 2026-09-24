@@ -20882,15 +20882,13 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
 
     for (const auto &ele_id : data_to_fetch) {
         if (ele_id < ele_offsets[rank] || ele_id >= ele_offsets[rank + 1]) {
-            // find the original owner of this data
-            for (size_t r_id = 0; r_id < npes; ++r_id) {
-                if (ele_id >= ele_offsets[r_id] &&
-                    ele_id < ele_offsets[r_id + 1]) {
-                    recv_requests[r_id].push_back(ele_id);
-                    send_counts[r_id]++;
-                    break;
-                }
-            }
+            if (ele_id >= ele_offsets[npes]) continue;
+            const size_t r_id = std::upper_bound(ele_offsets.begin(),
+                                                 ele_offsets.begin() + npes + 1,
+                                                 ele_id) -
+                                ele_offsets.begin() - 1;
+            recv_requests[r_id].push_back(ele_id);
+            send_counts[r_id]++;
         }
     }
 
