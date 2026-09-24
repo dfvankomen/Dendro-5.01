@@ -11,6 +11,8 @@
 #include <assert.h>
 
 #include <bitset>
+#include <fstream>
+#include <iomanip>
 #include <functional>
 #include <iostream>
 
@@ -283,6 +285,12 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief: DG vector for m_uiEVar*/
     DVec m_uiEvarDG;
 
+    /**@brief per local cg, the DG slot of its SFC-canonical owner (coarsest
+     * sharer, ties by TreeNode order): the writer buildE2NMap picks on an
+     * SFC mesh. Rebuilt per mesh; labelled meshes zip through it. */
+    std::vector<unsigned int> m_uiCgOwnerDG;
+    const ot::Mesh* m_uiCgOwnerMesh = nullptr;
+
     /**@brief: temp vector of the DG scheme*/
     DVec m_uiDGTmp0;
 
@@ -340,6 +348,10 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@bried: synchronize the block vectors*/
     void debug_nan_check(const char* tag, unsigned int blk, unsigned int s,
                          unsigned int pt, unsigned int rk);
+    void debug_blk_hash(const char* tag, unsigned int blk, unsigned int s,
+                        unsigned int pt, unsigned int rk);
+    void build_cg_owner_map();
+    void zip_labelled_via_dg();
 
     void sync_blk_timestep(unsigned int blk, unsigned int rk_s,
                            bool isIGTSync = false);
@@ -721,6 +733,7 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
     m_uiEvarUzip.create_vector(m_uiAppCtx->get_mesh(),
                                ot::DVEC_TYPE::OCT_LOCAL_WITH_PADDING,
                                ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
+    m_uiCgOwnerMesh = nullptr;
     m_uiEvarDG.create_vector(m_uiAppCtx->get_mesh(),
                              ot::DVEC_TYPE::OCT_LOCAL_NODES, ot::DVEC_LOC::HOST,
                              m_uiEVar.get_dof(), true);
@@ -913,6 +926,211 @@ void ExplicitNUTS<T, Ctx>::init() {
     // adapted to the initial data.
     m_uiAppCtx->set_ets_synced(false);
     this->sync_with_mesh();
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::build_cg_owner_map() {
+    ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+    if (m_uiCgOwnerMesh == pMesh && m_uiCgOwnerDG.size() == pMesh->getDegOfFreedom()) return;
+    m_uiCgOwnerMesh = pMesh;
+    const unsigned int eo = pMesh->getElementOrder(), nPe = pMesh->getNumNodesPerElement();
+    const std::vector<ot::TreeNode>& all = pMesh->getAllElements();
+    const unsigned int* e2n = pMesh->getE2NMapping().data();
+    m_uiCgOwnerDG.assign(pMesh->getDegOfFreedom(), LOOK_UP_TABLE_DEFAULT);
+    // sharers of a cg = every (element, non-hanging node) mapped to it; the
+    // SFC build makes the coarsest sharer the owner, ties by TreeNode order
+    for (unsigned int e = pMesh->getElementPreGhostBegin(); e < pMesh->getElementPostGhostEnd(); e++) {
+        if (e < pMesh->getElementLocalBegin() || e >= pMesh->getElementLocalEnd()) {
+            bool touchesLocal = false;
+            for (unsigned int nd = 0; nd < nPe && !touchesLocal; nd++) {
+                const unsigned int cg = e2n[e * nPe + nd];
+                touchesLocal = cg >= pMesh->getNodeLocalBegin() && cg < pMesh->getNodeLocalEnd();
+            }
+            if (!touchesLocal) continue;
+        }
+        for (unsigned int k = 0; k <= eo; k++)
+            for (unsigned int j = 0; j <= eo; j++)
+                for (unsigned int i = 0; i <= eo; i++) {
+                    const unsigned int nd = k * (eo + 1) * (eo + 1) + j * (eo + 1) + i;
+                    const unsigned int cg = e2n[e * nPe + nd];
+                    if (cg < pMesh->getNodeLocalBegin() || cg >= pMesh->getNodeLocalEnd()) continue;
+                    if (pMesh->isNodeHanging(e, i, j, k)) continue;
+                    unsigned int& cur = m_uiCgOwnerDG[cg];
+                    if (cur == LOOK_UP_TABLE_DEFAULT) { cur = e * nPe + nd; continue; }
+                    const unsigned int ce = cur / nPe;
+                    if (all[e].getLevel() < all[ce].getLevel() ||
+                        (all[e].getLevel() == all[ce].getLevel() && all[e] < all[ce]))
+                        cur = e * nPe + nd;
+                }
+    }
+    // slots no element references (or only hanging ones): keep the mesh's own canonical
+    const std::vector<unsigned int>& cg2dg = pMesh->getCG2DGMap();
+    for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd(); cg++)
+        if (m_uiCgOwnerDG[cg] == LOOK_UP_TABLE_DEFAULT && cg < cg2dg.size()) m_uiCgOwnerDG[cg] = cg2dg[cg];
+    if (std::getenv("DENDRO_ENUTS_NANCHK")) {
+        const unsigned int* e2nDG = pMesh->getE2NMapping_DG().data();
+        unsigned int set = 0, agree = 0, disagree = 0;
+        for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd(); cg++) {
+            if (m_uiCgOwnerDG[cg] == LOOK_UP_TABLE_DEFAULT) continue;
+            set++;
+            unsigned int oe, oi, oj, ok;
+            pMesh->dg2eijk(m_uiCgOwnerDG[cg], oe, oi, oj, ok);
+            const unsigned int nd = ok * (eo + 1) * (eo + 1) + oj * (eo + 1) + oi;
+            if (e2nDG[oe * nPe + nd] == m_uiCgOwnerDG[cg] && e2n[oe * nPe + nd] == cg) { agree++; continue; }
+            disagree++;
+            if (disagree <= 8) {
+                const unsigned int dgE = pMesh->getCG2DGMap()[cg];
+                unsigned int de, di, dj, dk; pMesh->dg2eijk(dgE, de, di, dj, dk);
+                const bool oeLocal = oe >= pMesh->getElementLocalBegin() && oe < pMesh->getElementLocalEnd();
+                const bool deLocal = de >= pMesh->getElementLocalBegin() && de < pMesh->getElementLocalEnd();
+                std::cout << "[cg-owner r" << pMesh->getMPIRankGlobal() << "]   cg " << cg << " mine " << all[oe] << " (" << oi << ',' << oj << ',' << ok << ") local=" << oeLocal
+                          << "  e2nDG " << all[de] << " (" << di << ',' << dj << ',' << dk << ") local=" << deLocal
+                          << " e2nDG-self=" << (e2nDG[de * nPe + dk * (eo + 1) * (eo + 1) + dj * (eo + 1) + di] == dgE)
+                          << " tnless(mine<e2n)=" << (all[oe] < all[de]) << std::endl;
+            }
+        }
+        std::cout << "[cg-owner r" << pMesh->getMPIRankGlobal() << "] local="
+                  << (pMesh->getNodeLocalEnd() - pMesh->getNodeLocalBegin()) << " set=" << set
+                  << " agreeE2NDG=" << agree << " disagree=" << disagree << std::endl;
+    }
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::zip_labelled_via_dg() {
+    ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+    const unsigned int DOF  = m_uiEVar.get_dof();
+    const unsigned int cgSz = pMesh->getDegOfFreedom();
+    const unsigned int dgSz = pMesh->getDegOfFreedomDG();
+    T* cg       = m_uiEVar.get_vec_ptr();
+    const T* dg = m_uiEvarDG.get_vec_ptr();
+    for (unsigned int v = 0; v < DOF; v++)
+        for (unsigned int c = pMesh->getNodeLocalBegin(); c < pMesh->getNodeLocalEnd(); c++)
+            if (m_uiCgOwnerDG[c] != LOOK_UP_TABLE_DEFAULT)
+                cg[v * cgSz + c] = dg[v * dgSz + m_uiCgOwnerDG[c]];
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::debug_blk_hash(const char* tag, unsigned int blk,
+                                          unsigned int s, unsigned int pt,
+                                          unsigned int rk) {
+    static const char* dir = std::getenv("DENDRO_ENUTS_BLKHASH");
+    if (!dir) return;
+    ot::Mesh* pMesh      = m_uiAppCtx->get_mesh();
+    static std::ofstream out;
+    if (!out.is_open())
+        out.open(std::string(dir) + "/blkhash_r" +
+                 std::to_string(pMesh->getMPIRankGlobal()) + ".txt");
+    const T* v            = m_uiBVec[blk]._vec[s].data();
+    const unsigned int n  = m_uiEVar.get_dof() * m_uiBVec[blk]._vec[s].getSz();
+    const ot::Block& b    = pMesh->getLocalBlockList()[blk];
+    const unsigned int NN = b.getAlignedBlockSz();
+    const unsigned int lx = b.getAllocationSzX(), ly = b.getAllocationSzY(),
+                       lz = b.getAllocationSzZ(), PW = b.get1DPadWidth();
+    const double hx0 = (1u << (m_uiMaxDepth - pMesh->getAllElements()[b.firstElementID()].getLevel())) /
+                       (double)pMesh->getElementOrder();
+    const double dmax = (double)(1u << m_uiMaxDepth);
+    unsigned long long hi = 1469598103934665603ull, hp = 1469598103934665603ull;
+    double mi = 0, mp = 0;
+    for (unsigned int i = 0; i < n; i++) {
+        const unsigned int l = i % NN, x = l % lx, y = (l / lx) % ly, z = l / (lx * ly);
+        const bool interior = !(x < PW || x >= lx - PW || y < PW || y >= ly - PW || z < PW || z >= lz - PW);
+        if (!interior) {
+            const double px = b.getBlockNode().minX() - PW * hx0 + x * hx0;
+            const double py = b.getBlockNode().minY() - PW * hx0 + y * hx0;
+            const double pz = b.getBlockNode().minZ() - PW * hx0 + z * hx0;
+            if (px < 0 || py < 0 || pz < 0 || px > dmax || py > dmax || pz > dmax) continue;
+        }
+        unsigned long long bits; std::memcpy(&bits, &v[i], sizeof(bits));
+        unsigned long long& h = interior ? hi : hp;
+        double& m = interior ? mi : mp;
+        h ^= bits; h *= 1099511628211ull;
+        if (std::fabs(v[i]) > m) m = std::fabs(v[i]);
+    }
+    const ot::TreeNode bn = b.getBlockNode();
+    std::vector<unsigned int> eid;
+    pMesh->blkUnzipElementIDs(blk, eid);
+    std::vector<ot::TreeNode> eidTN;
+    for (const unsigned int e : eid) eidTN.push_back(pMesh->getAllElements()[e]);
+    std::sort(eidTN.begin(), eidTN.end());
+    unsigned long long he = 1469598103934665603ull, ho = he, hv = he;
+    for (const ot::TreeNode& t : eidTN) {
+        for (unsigned int c : {t.getX(), t.getY(), t.getZ(), t.getLevel()}) { he ^= c; he *= 1099511628211ull; }
+    }
+    for (const unsigned int e : eid) {
+        const ot::TreeNode& t = pMesh->getAllElements()[e];
+        for (unsigned int c : {t.getX(), t.getY(), t.getZ(), t.getLevel()}) { ho ^= c; ho *= 1099511628211ull; }
+    }
+    {
+        std::vector<unsigned int> byTN(eid);
+        std::sort(byTN.begin(), byTN.end(), [&](unsigned int p, unsigned int q) {
+            return pMesh->getAllElements()[p] < pMesh->getAllElements()[q]; });
+        const unsigned int nPe = pMesh->getNumNodesPerElement();
+        const unsigned int dgSz = pMesh->getAllElements().size() * nPe;
+        const T* src = (s == 0) ? m_uiEvarDG.get_vec_ptr()
+                       : (s <= m_uiNumStages) ? m_uiStVec[s - 1].get_vec_ptr() : nullptr;
+        const bool srcOk = src != nullptr && std::strcmp(tag, "init-unzip") != 0;
+        if (srcOk) for (const unsigned int e : byTN)
+            for (unsigned int vv = 0; vv < m_uiEVar.get_dof(); vv++)
+                for (unsigned int k = 0; k < nPe; k++) {
+                    unsigned long long bits; std::memcpy(&bits, &src[vv * dgSz + e * nPe + k], sizeof(bits));
+                    hv ^= bits; hv *= 1099511628211ull;
+                }
+    }
+    if (const char* sel = std::getenv("DENDRO_ENUTS_BLKDUMP")) {
+        unsigned int sx, sy, sz, sl; unsigned int spt, srk; char stag[32];
+        static unsigned int matches = 0;
+        unsigned int socc = 1;
+        if (std::sscanf(sel, "%u,%u,%u,%u,%u,%u,%31[^,],%u", &sx, &sy, &sz, &sl, &spt, &srk, stag, &socc) >= 7 &&
+            sx == bn.getX() && sy == bn.getY() && sz == bn.getZ() && sl == bn.getLevel() &&
+            spt == pt && srk == rk && std::strcmp(stag, tag) == 0 && ++matches == socc) {
+            std::ofstream d(std::string(dir) + "/blkdump_r" + std::to_string(pMesh->getMPIRankGlobal()) + ".txt");
+            {
+                // per non-padding slot: cg, my owner, e2nDG owner
+                const unsigned int eo = pMesh->getElementOrder(), nPe = pMesh->getNumNodesPerElement();
+                const std::vector<ot::TreeNode>& all = pMesh->getAllElements();
+                const unsigned int* e2nCG = pMesh->getE2NMapping().data();
+                const unsigned int* e2nDG = pMesh->getE2NMapping_DG().data();
+                const unsigned int regLev = b.getRegularGridLev();
+                std::set<unsigned int> done;
+                for (const unsigned int e : b) {
+                    const unsigned int ei = (all[e].getX() - bn.getX()) >> (m_uiMaxDepth - regLev);
+                    const unsigned int ej = (all[e].getY() - bn.getY()) >> (m_uiMaxDepth - regLev);
+                    const unsigned int ek = (all[e].getZ() - bn.getZ()) >> (m_uiMaxDepth - regLev);
+                    for (unsigned int k = 0; k <= eo; k++) for (unsigned int j = 0; j <= eo; j++) for (unsigned int i = 0; i <= eo; i++) {
+                        const unsigned int sx2 = ei * eo + i + PW, sy2 = ej * eo + j + PW, sz2 = ek * eo + k + PW;
+                        const unsigned int slot = sz2 * lx * ly + sy2 * lx + sx2;
+                        if (!done.insert(slot).second) continue;
+                        const unsigned int nd = k * (eo + 1) * (eo + 1) + j * (eo + 1) + i;
+                        const unsigned int cg = e2nCG[e * nPe + nd], dg = e2nDG[e * nPe + nd];
+                        unsigned int oe, oi, oj, ok; pMesh->dg2eijk(dg, oe, oi, oj, ok);
+                        const bool cgLocal = cg >= pMesh->getNodeLocalBegin() && cg < pMesh->getNodeLocalEnd();
+                        d << "slot " << sx2 << ' ' << sy2 << ' ' << sz2 << " cg " << cg << " cgLocal " << cgLocal << " hang " << pMesh->isNodeHanging(e, i, j, k)
+                          << " e2nDG " << all[oe].getX() << ' ' << all[oe].getY() << ' ' << all[oe].getZ() << ' ' << all[oe].getLevel() << ' ' << oi << ' ' << oj << ' ' << ok
+                          << " local " << (oe >= pMesh->getElementLocalBegin() && oe < pMesh->getElementLocalEnd());
+                        if (cgLocal && cg < m_uiCgOwnerDG.size() && m_uiCgOwnerDG[cg] != LOOK_UP_TABLE_DEFAULT) {
+                            unsigned int me, mi, mj, mk; pMesh->dg2eijk(m_uiCgOwnerDG[cg], me, mi, mj, mk);
+                            d << " mine " << all[me].getX() << ' ' << all[me].getY() << ' ' << all[me].getZ() << ' ' << all[me].getLevel() << ' ' << mi << ' ' << mj << ' ' << mk
+                              << " local " << (me >= pMesh->getElementLocalBegin() && me < pMesh->getElementLocalEnd());
+                        } else d << " mine none";
+                        d << '\n';
+                    }
+                }
+            }
+            for (const unsigned int e : eid) {
+                const ot::TreeNode& t = pMesh->getAllElements()[e];
+                d << "eid " << e << ' ' << t.getX() << ' ' << t.getY() << ' ' << t.getZ() << ' ' << t.getLevel()
+                  << ' ' << (e >= pMesh->getElementLocalBegin() && e < pMesh->getElementLocalEnd()) << '\n';
+            }
+            for (unsigned int i = 0; i < n; i++) {
+                const unsigned int l = i % NN, x = l % lx, y = (l / lx) % ly, z = l / (lx * ly);
+                d << i / NN << ' ' << x << ' ' << y << ' ' << z << ' ' << std::setprecision(17) << v[i] << '\n';
+            }
+        }
+    }
+    out << bn.getX() << ' ' << bn.getY() << ' ' << bn.getZ() << ' ' << bn.getLevel()
+        << ' ' << pt << ' ' << rk << ' ' << tag << ' ' << s << ' ' << std::hex << hi << ' ' << hp
+        << std::dec << ' ' << std::setprecision(17) << mi << ' ' << mp << ' ' << b.isNonSFC()
+        << ' ' << m_uiBVec[blk]._time << ' ' << eid.size() << ' ' << std::hex << he << ' ' << ho << ' ' << hv << std::dec << '\n';
 }
 
 template <typename T, typename Ctx>
@@ -1947,10 +2165,12 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                 (T*)m_uiBVec[blk]._vec[m_uiNumStages + 1].data(), DOF, blk,
                 current_t + dt_finest * BLK_T);
             debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
+            debug_blk_hash("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].computeVec(
                 m_uiAppCtx, m_uiBVec[blk]._vec[m_uiNumStages + 1],
                 current_t + dt_finest * BLK_T);
             debug_nan_check("post-rhs", blk, BLK_S, pt, rk);
+            debug_blk_hash("post-rhs", blk, BLK_S, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].mark_unsynced();
             // std::cout<<"rk:"<<rk<<std::endl;
             // m_uiBVec[blk]._vec[BLK_S].dump_vec(std::cout);
@@ -1984,6 +2204,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
             sync_blk_timestep(blk, BLK_S);
             debug_nan_check("post-sync", blk, BLK_S, pt, rk);
+            debug_blk_hash("post-sync", blk, BLK_S, pt, rk);
             m_uiAppCtx->post_stage_blk((T*)m_uiBVec[blk]._vec[BLK_S].data(),
                                        DOF, blk, current_t + dt_finest * BLK_T);
             m_uiBVec[blk]._vec[BLK_S].mark_synced();
@@ -2064,6 +2285,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         m_uiAppCtx->post_timestep_blk((T*)m_uiBVec[blk]._vec[0].data(), DOF,
                                       blk, current_t + dt_finest * BLK_T);
         m_uiBVec[blk]._vec[0].mark_synced();
+        debug_blk_hash("post-axpy", blk, 0, pt, 0);
 
         // zipDG to the stVec[0]
         // mark the stage vars as junck.
@@ -2183,10 +2405,12 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
                 (T*)m_uiBVec[blk]._vec[m_uiNumStages + 1].data(), DOF, blk,
                 current_t + dt_finest * BLK_T);
             debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
+            debug_blk_hash("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].computeVec(
                 m_uiAppCtx, m_uiBVec[blk]._vec[m_uiNumStages + 1],
                 current_t + dt_finest * BLK_T);
             debug_nan_check("post-rhs", blk, BLK_S, pt, rk);
+            debug_blk_hash("post-rhs", blk, BLK_S, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].mark_unsynced();
             // std::cout<<"rk:"<<rk<<std::endl;
             // m_uiBVec[blk]._vec[BLK_S].dump_vec(std::cout);
@@ -2256,6 +2480,7 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
         m_uiAppCtx->post_timestep_blk((T*)m_uiBVec[blk]._vec[0].data(), DOF,
                                       blk, current_t + dt_finest * BLK_T);
         m_uiBVec[blk]._vec[0].mark_synced();
+        debug_blk_hash("post-axpy", blk, 0, pt, 0);
 
         // zipDG to the stVec[0]
         // mark the stage vars as junck.
@@ -2325,6 +2550,7 @@ void ExplicitNUTS<T, Ctx>::evolve() {
             m_uiBVec[blk]._vec[0].copyFromUnzip(
                 pMesh, m_uiEvarUzip.get_vec_ptr(), true, DOF);
             m_uiBVec[blk]._vec[0].mark_synced();
+            debug_blk_hash("init-unzip", blk, 0, 0, 0);
 
             for (unsigned int s = 1; s <= m_uiNumStages; s++)
                 m_uiBVec[blk]._vec[s].mark_unsynced();
@@ -2378,7 +2604,24 @@ void ExplicitNUTS<T, Ctx>::evolve() {
         m_uiPt[ENUTSPROFILE::ENUTS_BLK_ZIP].start();
 #endif
 
-        for (unsigned int blk = 0; blk < blkList.size(); blk++) {
+        // on labelled meshes the zip plan may source a cg from a block's
+        // padding, which is stale after the last sub-step: bring every block's
+        // padding to the common end-of-step time first
+        // labelled meshes: the block zip plan follows the labelled E2N_DG
+        // owner, which can differ from the SFC build's owner; the two block
+        // copies of a shared node differ after sub-cycling, so gather each cg
+        // from its SFC-canonical owner's block copy through the DG vector
+        bool anyNonSFC = false;
+        for (const ot::Block& b : blkList) anyNonSFC |= b.isNonSFC();
+        if (anyNonSFC) {
+            build_cg_owner_map();
+            blk_vec_to_zipDG(m_uiBVec.data(), m_uiEvarDG, 0);
+            pMesh->readFromGhostBeginEleDGVec(m_uiEvarDG.get_vec_ptr(), DOF);
+            pMesh->readFromGhostEndEleDGVec(m_uiEvarDG.get_vec_ptr(), DOF);
+            zip_labelled_via_dg();
+        }
+
+        for (unsigned int blk = 0; anyNonSFC == false && blk < blkList.size(); blk++) {
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
@@ -2655,11 +2898,13 @@ void ExplicitNUTS<T, Ctx>::remesh(unsigned int grain_sz, double ld_tol,
         sync_blk_timestep(blk, 0);
         m_uiBVec[blk]._vec[0].mark_synced();
         debug_nan_check("igt-sync-u", blk, 0, 0, 0);
+        debug_blk_hash("igt-sync-u", blk, 0, 0, 0);
 
         for (unsigned int s = 1; s <= m_uiNumStages; s++) {
             m_uiBVec[blk]._vec[s].mark_unsynced();
             sync_blk_timestep(blk, s, true);
             debug_nan_check("igt-sync-stage", blk, s, 0, s);
+            debug_blk_hash("igt-sync-stage", blk, s, 0, s);
         }
     }
 
@@ -2842,6 +3087,7 @@ void ExplicitNUTS<T, Ctx>::evolve_with_remesh(unsigned int remesh_freq) {
             m_uiBVec[blk]._vec[0].copyFromUnzip(
                 pMesh, m_uiEvarUzip.get_vec_ptr(), true, DOF);
             m_uiBVec[blk]._vec[0].mark_synced();
+            debug_blk_hash("init-unzip", blk, 0, 0, 0);
 
             for (unsigned int s = 1; s <= m_uiNumStages; s++)
                 m_uiBVec[blk]._vec[s].mark_unsynced();
@@ -2960,7 +3206,24 @@ void ExplicitNUTS<T, Ctx>::evolve_with_remesh(unsigned int remesh_freq) {
 #endif
 
         const unsigned int DOF = m_uiEVar.get_dof();
-        for (unsigned int blk = 0; blk < blkList.size(); blk++) {
+        // on labelled meshes the zip plan may source a cg from a block's
+        // padding, which is stale after the last sub-step: bring every block's
+        // padding to the common end-of-step time first
+        // labelled meshes: the block zip plan follows the labelled E2N_DG
+        // owner, which can differ from the SFC build's owner; the two block
+        // copies of a shared node differ after sub-cycling, so gather each cg
+        // from its SFC-canonical owner's block copy through the DG vector
+        bool anyNonSFC = false;
+        for (const ot::Block& b : blkList) anyNonSFC |= b.isNonSFC();
+        if (anyNonSFC) {
+            build_cg_owner_map();
+            blk_vec_to_zipDG(m_uiBVec.data(), m_uiEvarDG, 0);
+            pMesh->readFromGhostBeginEleDGVec(m_uiEvarDG.get_vec_ptr(), DOF);
+            pMesh->readFromGhostEndEleDGVec(m_uiEvarDG.get_vec_ptr(), DOF);
+            zip_labelled_via_dg();
+        }
+
+        for (unsigned int blk = 0; anyNonSFC == false && blk < blkList.size(); blk++) {
             // const unsigned int BLK_T = m_uiBVec[blk]._time;
             // const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
             // const unsigned int bLev =

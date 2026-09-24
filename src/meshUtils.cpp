@@ -780,6 +780,14 @@ void computeBlockUnzipGhostNodes(const ot::Mesh* pMesh, unsigned int blk,
 void computeBlockUnzipDepElements(const ot::Mesh* pMesh, unsigned int blk,
                                   std::vector<unsigned int>& eid) {
     pMesh->blkUnzipElementIDs(blk, eid);
+    // the padding fill is last-writer-wins where dependents overlap; order
+    // them by the SFC relation (== index order on SFC meshes) so the writer
+    // choice does not depend on the ghost/local layout of a labelled mesh
+    const ot::TreeNode* pNodes = pMesh->getAllElements().data();
+    std::stable_sort(eid.begin(), eid.end(),
+                     [pNodes](unsigned int a, unsigned int b) {
+                         return pNodes[a] < pNodes[b];
+                     });
     return;
 }
 

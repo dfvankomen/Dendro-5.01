@@ -41,9 +41,12 @@ agree with SFC to 3–4 digits, not 18 — the fixed-mesh A/B decides ULP class 
 
 The gate must contain a labelling that is NOT SFC-identical, or it cannot see this class of bug.
 
-1. `testPartitioning`: add an arm that runs the full TEST 2/2b/8/10/11 + COVERAGE set under
-   `DENDRO_GRAPH_REFINE=0` on an asymmetric mesh (`PARTEVOLVE_INIT=puncture`-style initial data, or the
-   existing ragged option), and assert `[block-vote] reassigned > 0` as proof of raggedness.
+1. ~~`testPartitioning`: add an arm … on an asymmetric mesh~~ **DONE (jj `ovluqyvl`):**
+   `PARTTEST_INIT=puncture` + `DENDRO_GRAPH_REFINE=0`, e.g. `3 7 1e-3 0.1 4 50 4` (vote moves 7 of 143)
+   and `3 8 1e-4 0.1 4 50 4` (14 of 299). All PASS gates green (TEST 2b maxErr=0, COVERAGE 0, TEST 11a/b/c,
+   TEST 10 worst 1.07e-14). The informational sub-tests (8bb/8bc zip round-trip mismatches, 8bi async
+   drift, 8bt/8bv duplicate-slot counts) are non-zero here AND on the symmetric baseline — pre-existing
+   diagnostics of duplicate local slots, not ragged regressions. Add this arm to every gate script.
 2. `partitioningEvolveTest`: global-RK ragged vs SFC on a FIXED mesh (remesh off) → bit-identity at
    sampled observables; then with remeshes → identical `createMesh:` sequence (the Step 0 outcome
    decides whether this is achievable or documented as a residual).
@@ -52,8 +55,18 @@ The gate must contain a labelling that is NOT SFC-identical, or it cannot see th
    64 steps (min/max; L2 differs only because duplicate local slots at one position are counted
    twice). ENUTS is not: U_PHI min drifts 4e-7 → 3e-5 over 4 coarse steps. ENUTS-only ⇒ suspect the
    duplicate local CG slots at coarse–fine interfaces, written by different blocks at different
-   sub-step times with no post-axpy/duplicate sync in `partial_evolve` (ets.h has one). Next: add the
-   sync after each partial step (mesh-side helper, block-local), re-run this A/B.
+   sub-step times with no post-axpy/duplicate sync in `partial_evolve` (ets.h has one). **Bisected
+   (per-block hashes by block node, `DENDRO_ENUTS_BLKHASH`): the duplicate-sync hypothesis was wrong
+   (a post-zip sync/bcast is a value no-op). Two real causes:** (1) `computeBlockUnzipDepElements`
+   returned dependents in index order and the padding fill is last-writer-wins, so the writer changed
+   with the ghost/local layout — now stable-sorted by TreeNode order (== index order on SFC);
+   (2) the labelled build promotes a local element to canonical E2N_DG owner when the SFC owner is a
+   ghost; value-neutral under global RK, percent-level under sub-cycling because the two block copies of
+   a shared node diverge between zips — ENUTS now reconstructs the SFC owner (coarsest sharer, ties by
+   TreeNode) and zips labelled meshes via the DG vector (`build_cg_owner_map`/`zip_labelled_via_dg`,
+   only when any block `isNonSFC()`). Result: ragged depth-9 WITH 10 remeshes identical to SFC to 18
+   digits at every coarse step; fixed 4096 mesh identical through step 2, then a 1-ULP hanging-node
+   residual (open, rounding class).
 4. Fold the `DENDRO_ENUTS_NANCHK` probe into the ENUTS gate run (cheap, catches the unfilled-padding
    class directly).
 
