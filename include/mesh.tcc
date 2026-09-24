@@ -5990,31 +5990,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     const size_t srcCgSz   = (size_t)this->getDegOfFreedom();
     const size_t dstCgSz   = (size_t)dstMesh->getDegOfFreedom();
 
-    // ---- Step 1: Allgatherv each rank's local TreeNodes on dstMesh, build
-    //              a global TreeNode -> rank map (hashed for speed).
-    std::vector<ot::TreeNode> myLocal;
-    if (dstMesh->isActive()) {
-        const auto* pN = dstMesh->getAllElements().data();
-        for (unsigned int e = dstMesh->getElementLocalBegin();
-             e < dstMesh->getElementLocalEnd(); e++)
-            myLocal.push_back(pN[e]);
-    }
-    int myCount = (int)myLocal.size();
-
-    std::vector<int> counts(npes), offs(npes, 0);
-    MPI_Allgather(&myCount, 1, MPI_INT, counts.data(), 1, MPI_INT, comm);
-    int total = 0;
-    for (int p = 0; p < npes; p++) {
-        offs[p] = total;
-        total += counts[p];
-    }
-
-    std::vector<ot::TreeNode> allLocal(total);
-    MPI_Allgatherv(myLocal.data(), myCount,
-                   par::Mpi_datatype<ot::TreeNode>::value(), allLocal.data(),
-                   counts.data(), offs.data(),
-                   par::Mpi_datatype<ot::TreeNode>::value(), comm);
-
     struct TNHash {
         size_t operator()(const ot::TreeNode& t) const noexcept {
             uint64_t h = (uint64_t)t.getX();
@@ -6029,19 +6004,151 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             return (size_t)h;
         }
     };
-    std::unordered_map<ot::TreeNode, int, TNHash> tnToRank;
-    tnToRank.reserve((size_t)total);
-    size_t tnRankDup = 0;
-    for (int p = 0; p < npes; p++)
-        for (int i = offs[p]; i < offs[p] + counts[p]; i++)
-            if (!tnToRank.emplace(allLocal[i], p).second) tnRankDup++;
-    // a duplicate TN across dst ranks violates the unique-partition
-    // contract; first-wins would silently mis-route, so shout.
-    if (tnRankDup > 0)
-        std::cerr << "[redistributeVec r" << rank << "] WARNING: "
-                  << tnRankDup << " duplicate TreeNodes across dst ranks"
-                  << " (tnToRank first-wins; routing is unreliable)"
-                  << std::endl;
+    static const bool routeDir = [] {
+        const char* v = std::getenv("DENDRO_REDIST_ROUTE");
+        return v && v[0] == '1';
+    }();
+
+    const unsigned int srcLocalBegin = m_uiIsActive ? m_uiElementLocalBegin : 0;
+    const unsigned int srcLocalEnd   = m_uiIsActive ? m_uiElementLocalEnd : 0;
+    std::vector<int> srcTarget(srcLocalEnd - srcLocalBegin, -1);
+
+    if (routeDir) {
+        const MPI_Datatype tnType = par::Mpi_datatype<ot::TreeNode>::value();
+        TNHash tnHash;
+        auto dirOf = [&](const ot::TreeNode& t) {
+            return (int)(tnHash(t) % (size_t)npes);
+        };
+        auto exchange = [&](auto& buckets, auto& recv, std::vector<int>& rCnt,
+                            std::vector<int>& rOff, MPI_Datatype dt) {
+            std::vector<int> sCnt(npes), sOff(npes, 0);
+            for (int p = 0; p < npes; p++) sCnt[p] = (int)buckets[p].size();
+            for (int p = 1; p < npes; p++) sOff[p] = sOff[p - 1] + sCnt[p - 1];
+            rCnt.assign(npes, 0);
+            rOff.assign(npes, 0);
+            MPI_Alltoall(sCnt.data(), 1, MPI_INT, rCnt.data(), 1, MPI_INT, comm);
+            for (int p = 1; p < npes; p++) rOff[p] = rOff[p - 1] + rCnt[p - 1];
+            std::decay_t<decltype(buckets[0])> flat;
+            flat.reserve(sOff[npes - 1] + sCnt[npes - 1]);
+            for (int p = 0; p < npes; p++)
+                flat.insert(flat.end(), buckets[p].begin(), buckets[p].end());
+            recv.resize(rOff[npes - 1] + rCnt[npes - 1]);
+            MPI_Alltoallv(flat.data(), sCnt.data(), sOff.data(), dt,
+                          recv.data(), rCnt.data(), rOff.data(), dt, comm);
+        };
+
+        std::vector<std::vector<ot::TreeNode>> ownBkt(npes);
+        if (dstMesh->isActive()) {
+            const auto* pN = dstMesh->getAllElements().data();
+            for (unsigned int e = dstMesh->getElementLocalBegin();
+                 e < dstMesh->getElementLocalEnd(); e++)
+                ownBkt[dirOf(pN[e])].push_back(pN[e]);
+        }
+        std::vector<ot::TreeNode> dirOwn;
+        std::vector<int> ownCnt, ownOff;
+        exchange(ownBkt, dirOwn, ownCnt, ownOff, tnType);
+        ownBkt.clear();
+        ownBkt.shrink_to_fit();
+
+        std::unordered_map<ot::TreeNode, int, TNHash> dirMap;
+        dirMap.reserve(dirOwn.size());
+        unsigned long long dirDup = 0;
+        for (int p = 0; p < npes; p++)
+            for (int i = ownOff[p]; i < ownOff[p] + ownCnt[p]; i++)
+                if (!dirMap.emplace(dirOwn[i], p).second) dirDup++;
+
+        std::vector<std::vector<ot::TreeNode>> qBkt(npes);
+        std::vector<std::vector<unsigned int>> qElem(npes);
+        if (m_uiIsActive) {
+            const auto* pNO = m_uiAllElements.data();
+            for (unsigned int e = srcLocalBegin; e < srcLocalEnd; e++) {
+                const int d = dirOf(pNO[e]);
+                qBkt[d].push_back(pNO[e]);
+                qElem[d].push_back(e - srcLocalBegin);
+            }
+        }
+        std::vector<ot::TreeNode> dirQ;
+        std::vector<int> qCnt, qOff;
+        exchange(qBkt, dirQ, qCnt, qOff, tnType);
+
+        std::vector<std::vector<int>> aBkt(npes);
+        for (int p = 0; p < npes; p++) {
+            aBkt[p].reserve(qCnt[p]);
+            for (int i = qOff[p]; i < qOff[p] + qCnt[p]; i++) {
+                auto it = dirMap.find(dirQ[i]);
+                aBkt[p].push_back(it == dirMap.end() ? -1 : it->second);
+            }
+        }
+        std::vector<int> ans, aCnt, aOff;
+        exchange(aBkt, ans, aCnt, aOff, MPI_INT);
+        for (int d = 0; d < npes; d++)
+            for (int k = 0; k < aCnt[d]; k++)
+                srcTarget[qElem[d][k]] = ans[aOff[d] + k];
+
+        unsigned long long stats[2] = {dirDup,
+                                       (unsigned long long)srcTarget.size()};
+        MPI_Allreduce(MPI_IN_PLACE, stats, 2, MPI_UNSIGNED_LONG_LONG,
+                      MPI_SUM, comm);
+        if (stats[0] > 0)
+            std::cerr << "[redistributeVec r" << rank << "] WARNING: "
+                      << stats[0] << " duplicate TreeNodes across dst ranks"
+                      << " (directory first-wins; routing is unreliable)"
+                      << std::endl;
+        static bool announced = false;
+        if (!rank && !announced) {
+            announced = true;
+            std::cout << "[redist-route] directory path: " << stats[1]
+                      << " elements routed by TN-hash rendezvous" << std::endl;
+        }
+    } else {
+        // ---- Step 1: Allgatherv each rank's local TreeNodes on dstMesh, build
+        //              a global TreeNode -> rank map (hashed for speed).
+        std::vector<ot::TreeNode> myLocal;
+        if (dstMesh->isActive()) {
+            const auto* pN = dstMesh->getAllElements().data();
+            for (unsigned int e = dstMesh->getElementLocalBegin();
+                 e < dstMesh->getElementLocalEnd(); e++)
+                myLocal.push_back(pN[e]);
+        }
+        int myCount = (int)myLocal.size();
+
+        std::vector<int> counts(npes), offs(npes, 0);
+        MPI_Allgather(&myCount, 1, MPI_INT, counts.data(), 1, MPI_INT, comm);
+        int total = 0;
+        for (int p = 0; p < npes; p++) {
+            offs[p] = total;
+            total += counts[p];
+        }
+
+        std::vector<ot::TreeNode> allLocal(total);
+        MPI_Allgatherv(myLocal.data(), myCount,
+                       par::Mpi_datatype<ot::TreeNode>::value(), allLocal.data(),
+                       counts.data(), offs.data(),
+                       par::Mpi_datatype<ot::TreeNode>::value(), comm);
+
+        std::unordered_map<ot::TreeNode, int, TNHash> tnToRank;
+        tnToRank.reserve((size_t)total);
+        size_t tnRankDup = 0;
+        for (int p = 0; p < npes; p++)
+            for (int i = offs[p]; i < offs[p] + counts[p]; i++)
+                if (!tnToRank.emplace(allLocal[i], p).second) tnRankDup++;
+        // a duplicate TN across dst ranks violates the unique-partition
+        // contract; first-wins would silently mis-route, so shout.
+        if (tnRankDup > 0)
+            std::cerr << "[redistributeVec r" << rank << "] WARNING: "
+                      << tnRankDup << " duplicate TreeNodes across dst ranks"
+                      << " (tnToRank first-wins; routing is unreliable)"
+                      << std::endl;
+
+        if (m_uiIsActive) {
+            const auto* pNO = m_uiAllElements.data();
+            for (unsigned int e = srcLocalBegin; e < srcLocalEnd; e++) {
+                auto it = tnToRank.find(pNO[e]);
+                if (it != tnToRank.end())
+                    srcTarget[e - srcLocalBegin] = it->second;
+            }
+        }
+    }
 
     // ---- Step 2: walk this mesh's local elements, pack per-element DG
     //              values via E2N_CG (canonical owner's CG value) into
@@ -6074,9 +6181,8 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         const unsigned int eOrdO = m_uiElementOrder;
         for (unsigned int e = m_uiElementLocalBegin;
              e < m_uiElementLocalEnd; e++) {
-            auto it = tnToRank.find(pNO[e]);
-            if (it == tnToRank.end()) continue;
-            int target = it->second;
+            const int target = srcTarget[e - m_uiElementLocalBegin];
+            if (target < 0) continue;
             sendTN[target].push_back(pNO[e]);
             for (unsigned int n = 0; n < npe; n++) {
                 unsigned int cg = e2nO[e * npe + n];
