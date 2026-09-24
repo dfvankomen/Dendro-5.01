@@ -4080,15 +4080,49 @@ class Mesh {
         // by the element ghost exchange.  Uses an Allgatherv of local
         // element coordinates to build a global lookup table.
         {
+            // only ids that local elements reference through a face, edge
+            // or corner are ever read (the rest feed local_to_global, which
+            // is only printed), so count those
             unsigned int numMissing = 0;
-            for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
-                if (eid_vec[ele] == LOOK_UP_TABLE_DEFAULT) numMissing++;
+            {
+                const unsigned int nd = this->getNumDirections();
+                unsigned int lk[NUM_CHILDREN];
+                for (unsigned int ele = lb; ele < le; ele++) {
+                    for (unsigned int k = 0; k < nd; k++) {
+                        const T t = e2e_map[ele * nd + k];
+                        if (t != LOOK_UP_TABLE_DEFAULT && eid_vec[t] == LOOK_UP_TABLE_DEFAULT)
+                            numMissing++;
+                    }
+                    for (const unsigned int dir :
+                         {OCT_DIR_LEFT_DOWN, OCT_DIR_LEFT_UP, OCT_DIR_LEFT_BACK,
+                          OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
+                          OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
+                          OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK, OCT_DIR_UP_FRONT}) {
+                        getElementalEdgeNeighbors(ele, dir, lk);
+                        const T t = lk[3];
+                        if (t != LOOK_UP_TABLE_DEFAULT && eid_vec[t] == LOOK_UP_TABLE_DEFAULT)
+                            numMissing++;
+                    }
+                    for (const unsigned int dir :
+                         {OCT_DIR_LEFT_DOWN_BACK, OCT_DIR_RIGHT_DOWN_BACK,
+                          OCT_DIR_LEFT_UP_BACK, OCT_DIR_RIGHT_UP_BACK,
+                          OCT_DIR_LEFT_DOWN_FRONT, OCT_DIR_RIGHT_DOWN_FRONT,
+                          OCT_DIR_LEFT_UP_FRONT, OCT_DIR_RIGHT_UP_FRONT}) {
+                        getElementalVertexNeighbors(ele, dir, lk);
+                        const T t = lk[7];
+                        if (t != LOOK_UP_TABLE_DEFAULT && eid_vec[t] == LOOK_UP_TABLE_DEFAULT)
+                            numMissing++;
+                    }
+                }
             }
             // the gather below is collective: decide on the global count
             unsigned int numMissingGlobal = 0;
             MPI_Allreduce(&numMissing, &numMissingGlobal, 1, MPI_UNSIGNED, MPI_SUM,
                           commActive);
 
+            if (rank == 0)
+                std::cout << "[conn-map] referenced-missing ids (global): "
+                          << numMissingGlobal << std::endl;
             if (numMissingGlobal > 0) {
                 // gather all local element descriptors globally
                 // each entry: (x, y, z, level, global_id) packed as
