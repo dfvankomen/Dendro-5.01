@@ -3060,6 +3060,10 @@ class Mesh {
     void createVector(std::vector<T> &vec,
                       std::function<T(T, T, T)> func) const;
 
+    template <typename T>
+    void fillUnreferencedLocalNodes(T *vec, const std::vector<char> &written,
+                                    const std::function<T(T, T, T)> &func) const;
+
     /**
      * @brief: creates (memory allocation) for the unzipped version of the
      * vector.

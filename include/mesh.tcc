@@ -257,6 +257,7 @@ T* Mesh::createVector(std::function<T(T, T, T)> func) const {
     double x, y, z;
     const ot::TreeNode* pNodes = &(*(m_uiAllElements.begin()));
     unsigned int ownerID, ii_x, jj_y, kk_z;
+    std::vector<char> written(m_uiNumActualNodes, 0);
 
     for (unsigned int elem = m_uiElementLocalBegin; elem < m_uiElementLocalEnd;
          elem++) {
@@ -284,9 +285,11 @@ T* Mesh::createVector(std::function<T(T, T, T)> func) const {
                         z = pNodes[ownerID].getZ() +
                             kk_z * (len / ((double)m_uiElementOrder));
                         vec[nodeLookUp_CG] = func(x, y, z);
+                        written[nodeLookUp_CG] = 1;
                     }
                 }
     }
+    fillUnreferencedLocalNodes(vec, written, func);
 
     return vec;
 }
@@ -375,6 +378,7 @@ void Mesh::createVector(std::vector<T>& vec,
 
     // Pass 2: iterate LOCAL elements, write all referenced CGs (local
     // and ghost on this rank) plus populate m_uiLocalNodalDG.
+    std::vector<char> written(m_uiNumActualNodes, 0);
     for (unsigned int elem = m_uiElementLocalBegin; elem < m_uiElementLocalEnd;
          elem++) {
         const unsigned int elemLocalIdx = elem - m_uiElementLocalBegin;
@@ -411,8 +415,32 @@ void Mesh::createVector(std::vector<T>& vec,
                     z = pNodes[ownerID].getZ() +
                         kk_z * (len / ((double)m_uiElementOrder));
                     vec[nodeLookUp_CG] = func(x, y, z);
+                    written[nodeLookUp_CG] = 1;
                 }
     }
+    fillUnreferencedLocalNodes(vec.data(), written, func);
+}
+
+template <typename T>
+void Mesh::fillUnreferencedLocalNodes(T* vec, const std::vector<char>& written,
+                                      const std::function<T(T, T, T)>& func) const {
+    // local CG slots no element on this rank references (labelled-mesh
+    // artefact): evaluate at the cg2dg canonical position
+    const ot::TreeNode* pNodes = m_uiAllElements.data();
+    unsigned int ownerID, ii_x, jj_y, kk_z, unref = 0;
+    for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd; cg++) {
+        if (written[cg] || m_uiCG2DG[cg] == LOOK_UP_TABLE_DEFAULT) continue;
+        dg2eijk(m_uiCG2DG[cg], ownerID, ii_x, jj_y, kk_z);
+        const double h = (1u << (m_uiMaxDepth - pNodes[ownerID].getLevel())) /
+                         ((double)m_uiElementOrder);
+        vec[cg] = func(pNodes[ownerID].getX() + ii_x * h,
+                       pNodes[ownerID].getY() + jj_y * h,
+                       pNodes[ownerID].getZ() + kk_z * h);
+        unref++;
+    }
+    if (unref)
+        std::cout << "[createVector r" << m_uiActiveRank << "] filled " << unref
+                  << " unreferenced local cg slots" << std::endl;
 }
 
 template <typename T>
@@ -3710,6 +3738,19 @@ bool Mesh::isReMeshUnzip(
         static const char* amrp_dir = DENDRO_PROBE_GETENV("EM4_AMR_PROBE_DIR");
         static int amrp_call = 0;
         FILE* amrp_fp = nullptr;
+        static const char* waveDumpDir = std::getenv("DENDRO_REMESH_FLAG_DUMP");
+        static int waveDumpCall = 0;
+        FILE* wave_fp = nullptr;
+        if (waveDumpDir) {
+            char fn[1024];
+            std::snprintf(fn, sizeof(fn), "%s/wave_r%d_%d.txt", waveDumpDir,
+                          (int)m_uiActiveRank, waveDumpCall++);
+            wave_fp = std::fopen(fn, "w");
+            if (wave_fp)
+                std::fprintf(wave_fp, "# rank=%d numLocal=%u blocks=%zu amr_fac=%g\n",
+                             (int)m_uiActiveRank, m_uiNumLocalElements,
+                             blkList.size(), amr_coarse_fac);
+        }
         if (amrp_dir) {
             char fn[1024];
             std::snprintf(fn, sizeof(fn),
@@ -3762,6 +3803,11 @@ bool Mesh::isReMeshUnzip(
                 refine_flags[ele - eleOfst] = OCT_NO_CHANGE;
             }
 
+            if (wave_fp)
+                std::fprintf(wave_fp, "%u %u %u %u %u %.17e %.17e\n",
+                             pNodes[ele].getX(), pNodes[ele].getY(),
+                             pNodes[ele].getZ(), pNodes[ele].getLevel(),
+                             refine_flags[ele - eleOfst], l_max, tol_ele);
             if (amrp_fp) {
                 uint64_t wmax_hb = 0, tol_hb = 0;
                 std::memcpy(&wmax_hb, &l_max, sizeof(wmax_hb));
@@ -3779,6 +3825,7 @@ bool Mesh::isReMeshUnzip(
         }
 
         if (amrp_fp) std::fclose(amrp_fp);
+        if (wave_fp) std::fclose(wave_fp);
         if (amrp_dir) amrp_call++;
 
         if (isMeshLocalChanged)
