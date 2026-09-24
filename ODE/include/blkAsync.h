@@ -111,7 +111,7 @@ class BlockAsyncVector {
 
         if (m_uiMode == BLK_ASYNC_VEC_MODE::BLK_UNZIP) {
             const unsigned int unzipSz = pMesh->getDegOfFreedomUnZip();
-            const unsigned int offset  = blkList[blk].getOffset();
+            const DendroIntL offset  = blkList[blk].getOffset();
             const unsigned int nx      = blkList[blk].getAllocationSzX();
             const unsigned int ny      = blkList[blk].getAllocationSzY();
             const unsigned int nz      = blkList[blk].getAllocationSzZ();
@@ -158,7 +158,7 @@ class BlockAsyncVector {
         const ot::TreeNode* pNodes   = pMesh->getAllElements().data();
 
         const unsigned int unzipSz   = pMesh->getDegOfFreedomUnZip();
-        const unsigned int offset    = blkList[blk].getOffset();
+        const DendroIntL offset    = blkList[blk].getOffset();
         const unsigned int nx        = blkList[blk].getAllocationSzX();
         const unsigned int ny        = blkList[blk].getAllocationSzY();
         const unsigned int nz        = blkList[blk].getAllocationSzZ();
@@ -459,7 +459,7 @@ class BlockAsyncVector {
             const unsigned int lx     = blkList[m_uiBlkID].getAllocationSzX();
             const unsigned int ly     = blkList[m_uiBlkID].getAllocationSzY();
             const unsigned int lz     = blkList[m_uiBlkID].getAllocationSzZ();
-            const unsigned int offset = blkList[m_uiBlkID].getOffset();
+            const DendroIntL offset = blkList[m_uiBlkID].getOffset();
             const unsigned int paddWidth = blkList[m_uiBlkID].get1DPadWidth();
 
             const unsigned int regLev = blkList[m_uiBlkID].getRegularGridLev();
@@ -595,7 +595,7 @@ class BlockAsyncVector {
             const unsigned int lx     = blkList[m_uiBlkID].getAllocationSzX();
             const unsigned int ly     = blkList[m_uiBlkID].getAllocationSzY();
             const unsigned int lz     = blkList[m_uiBlkID].getAllocationSzZ();
-            const unsigned int offset = blkList[m_uiBlkID].getOffset();
+            const DendroIntL offset = blkList[m_uiBlkID].getOffset();
             const unsigned int paddWidth = blkList[m_uiBlkID].get1DPadWidth();
 
             const unsigned int regLev = blkList[m_uiBlkID].getRegularGridLev();

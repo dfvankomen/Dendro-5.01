@@ -33,7 +33,7 @@ void sync_blk_padding(const ot::Mesh* pMesh, const T* const dgWVec,
     const unsigned int lx       = blkList[blk].getAllocationSzX();
     const unsigned int ly       = blkList[blk].getAllocationSzY();
     const unsigned int lz       = blkList[blk].getAllocationSzZ();
-    const unsigned int offset   = blkList[blk].getOffset();
+    const DendroIntL offset   = blkList[blk].getOffset();
 
     const unsigned int dgSz =
         pMesh->getAllElements().size() * pMesh->getNumNodesPerElement();
