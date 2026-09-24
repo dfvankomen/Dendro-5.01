@@ -852,9 +852,30 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
         rCnt[p] = (int)(m_uiZipSyncRecvCounts[p] * dof);
         rOff[p] = (int)(m_uiZipSyncRecvOffsets[p] * dof);
     }
-    par::Mpi_Alltoallv(sendBuf.data(), sCnt.data(), sOff.data(),
-                       recvBuf.data(), rCnt.data(), rOff.data(),
-                       m_uiCommActive);
+    if (m_uiZipSyncPruned) {
+        // after the prune only a few partners remain: point-to-point instead
+        // of an O(P) collective
+        std::vector<MPI_Request> reqs;
+        reqs.reserve(2 * m_uiActiveNpes);
+        for (int p = 0; p < m_uiActiveNpes; p++)
+            if (rCnt[p]) {
+                reqs.emplace_back();
+                par::Mpi_Irecv(recvBuf.data() + rOff[p], rCnt[p], p, 0x2a9,
+                               m_uiCommActive, &reqs.back());
+            }
+        for (int p = 0; p < m_uiActiveNpes; p++)
+            if (sCnt[p]) {
+                reqs.emplace_back();
+                par::Mpi_Isend(sendBuf.data() + sOff[p], sCnt[p], p, 0x2a9,
+                               m_uiCommActive, &reqs.back());
+            }
+        if (!reqs.empty())
+            MPI_Waitall((int)reqs.size(), reqs.data(), MPI_STATUSES_IGNORE);
+    } else {
+        par::Mpi_Alltoallv(sendBuf.data(), sCnt.data(), sOff.data(),
+                           recvBuf.data(), rCnt.data(), rOff.data(),
+                           m_uiCommActive);
+    }
     if (this->commStatsOn()) {
         s_uiCommStatSyncBytesAll += (DendroIntL)(sendN * dof * sizeof(T));
         s_uiCommStatSyncCallsAll++;
