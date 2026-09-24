@@ -2772,6 +2772,50 @@ bool Mesh::isReMeshUnzip(
 
         if (isMeshLocalChanged)
             isMeshLocalChanged = this->setMeshRefinementFlags(refine_flags);
+
+        // findings/43 (dendrojax): env-gated per-element flag dump. flag_pre is
+        // the raw wavelet verdict (this refine_flags[]), flag_post the
+        // sibling-consensus result packed into the octant by
+        // setMeshRefinementFlags. Anchors are octree-integer coords.
+        if (const char* dump_pfx = getenv("DENDRO_REMESH_FLAG_DUMP")) {
+            static int dump_seq = 0;
+            char fname[1024];
+            snprintf(fname, sizeof(fname), "%s_flags_%04d_r%d.csv", dump_pfx,
+                     dump_seq, m_uiActiveRank);
+            FILE* fp = fopen(fname, "w");
+            if (fp) {
+                fprintf(fp, "x,y,z,level,flag_pre,flag_post,wmax,tol\n");
+                for (unsigned int ele = m_uiElementLocalBegin;
+                     ele < m_uiElementLocalEnd; ele++) {
+                    const double oct_dx =
+                        (1u << (m_uiMaxDepth - pNodes[ele].getLevel())) /
+                        (double(m_uiElementOrder));
+                    Point oct_pt1 = Point(pNodes[ele].minX(),
+                                          pNodes[ele].minY(),
+                                          pNodes[ele].minZ());
+                    Point oct_pt2 = Point(pNodes[ele].minX() + oct_dx,
+                                          pNodes[ele].minY() + oct_dx,
+                                          pNodes[ele].minZ() + oct_dx);
+                    Point domain_pt1, domain_pt2, dx_domain;
+                    this->octCoordToDomainCoord(oct_pt1, domain_pt1);
+                    this->octCoordToDomainCoord(oct_pt2, domain_pt2);
+                    dx_domain    = domain_pt2 - domain_pt1;
+                    double hx[3] = {dx_domain.x(), dx_domain.y(),
+                                    dx_domain.z()};
+                    const double tol_ele =
+                        wavelet_tol(domain_pt1.x(), domain_pt1.y(),
+                                    domain_pt1.z(), hx);
+                    fprintf(fp, "%u,%u,%u,%u,%u,%u,%.17g,%.17g\n",
+                            pNodes[ele].getX(), pNodes[ele].getY(),
+                            pNodes[ele].getZ(), pNodes[ele].getLevel(),
+                            refine_flags[ele - eleOfst],
+                            (m_uiAllElements[ele].getFlag() >> NUM_LEVEL_BITS),
+                            eleWMax[ele - eleOfst], tol_ele);
+                }
+                fclose(fp);
+            }
+            dump_seq++;
+        }
     }
 
     // par::Mpi_Allreduce(&isMeshLocalChanged,&isMeshGlobalChanged,1,MPI_LOR,this->getMPIGlobalCommunicator());
