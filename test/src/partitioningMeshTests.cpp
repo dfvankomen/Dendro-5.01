@@ -127,11 +127,22 @@ int main(int argc, char** argv) {
     //@note that based on how the functions are defined (f(x), dxf(x), etc)
     // the
     // compuatational domain is equivalent to the grid domain.
+    // PARTTEST_INIT=puncture: sharp off-centre gaussian so the labelling is
+    // ragged (block vote moves elements) instead of SFC-identical
+    const char* initEnv  = std::getenv("PARTTEST_INIT");
+    const bool puncture  = initEnv && std::string(initEnv) == "puncture";
     std::function<double(double, double, double)> func =
-        [d_min, d_max](const double x, const double y, const double z) {
+        [d_min, d_max, puncture](const double x, const double y, const double z) {
             double xx = (x / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
             double yy = (y / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
             double zz = (z / (1u << m_uiMaxDepth)) * (d_max - d_min) + d_min;
+            if (puncture) {
+                const double L  = d_max - d_min;
+                const double cx = d_min + 0.69 * L, cy = d_min + 0.53 * L, cz = d_min + 0.53 * L;
+                const double s2 = 2.0 * (0.023 * L) * (0.023 * L);
+                const double r2 = (xx - cx) * (xx - cx) + (yy - cy) * (yy - cy) + (zz - cz) * (zz - cz);
+                return std::exp(-r2 / s2);
+            }
             return (sin(2 * M_PI * xx) * sin(2 * M_PI * yy) *
                     sin(2 * M_PI * zz));
         };
