@@ -71,10 +71,19 @@ Key numerical findings:
 
 ## TSRK result: RK-like, and it beats the peer cloud
 
-Prototyped an explicit TSRK that **propagates a single solution vector** and
-reuses the previous 1–2 steps' *stage* derivatives (recent, fractional history) —
-the RK-like storage model of `ETS_MSRK`, no cloud. Order is enforced by uniform
-high stage order (polynomial exactness), so the reused stages stay accurate.
+> **Terminology.** "TSRK" (Two-Step Runge–Kutta, Jackiewicz & Tracogna 1995)
+> strictly means the update references the two most recent step points
+> `{t_{n-1}, t_n}` — i.e. reuses **one** prior step (`depth 1`). The finalized
+> order-6 method below runs `depth 2` (it reuses both `t_{n-1}` and `t_{n-2}`),
+> so it is really a **3-step / general multistep RK**, not a literal two-step
+> method. We keep "TSRK" as the family name (depth-1 members are two-step in the
+> strict sense); read it as "the two-step-RK family, extended to depth 2."
+
+Prototyped an explicit multistep RK that **propagates a single solution vector**
+and reuses the previous 1–2 steps' *stage* derivatives (recent, fractional
+history) — the RK-like storage model of `ETS_MSRK`, no cloud. Order is enforced
+by uniform high stage order (polynomial exactness), so the reused stages stay
+accurate.
 Because every stage hangs off the single `y_n` and the reused-derivative modes
 vanish at `z=0`, the methods are **automatically zero-stable** (no parasitic
 roots near the unit circle) — the single-solution constraint turns into a
