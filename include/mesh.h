@@ -1209,6 +1209,7 @@ class Mesh {
      * (or which partition) is doing the unzip. */
     std::vector<unsigned int> m_uiUnzipCanonWriter;
     bool m_uiUnzipCanonWriterBuilt = false;
+    std::vector<unsigned int> m_uiUnzipEleOrder;
 
     PartitioningOptions m_partitionOption = PartitioningOptions::fastpart;
 

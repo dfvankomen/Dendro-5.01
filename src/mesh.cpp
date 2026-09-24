@@ -19939,6 +19939,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         newBlockInfo.push_back(bi);
     }
     std::swap(m_uiAllElements, newAllElements);
+    m_uiUnzipEleOrder.clear();
     std::swap(m_uiOwnerMask, newOwnerMask);
     std::swap(m_uiBlockInfo, newBlockInfo);
 

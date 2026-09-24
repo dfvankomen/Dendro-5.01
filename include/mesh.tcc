@@ -13598,18 +13598,21 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
     // 8.25e-9 to 2.05e-9 (4×). other sort orders (finer-last, Morton,
     // reverse-Morton) tested and refuted — see
     // findings_2026-05-13_iter_order_exhausted.md.
-    std::vector<unsigned int> ele_order(m_uiNumTotalElements);
-    std::iota(ele_order.begin(), ele_order.end(), 0u);
-    std::sort(ele_order.begin(), ele_order.end(),
-        [&pNodes](unsigned int a, unsigned int b) {
-            const ot::TreeNode& na = pNodes[a];
-            const ot::TreeNode& nb = pNodes[b];
-            if (na.getLevel() != nb.getLevel())
-                return na.getLevel() > nb.getLevel();
-            if (na.getX() != nb.getX()) return na.getX() < nb.getX();
-            if (na.getY() != nb.getY()) return na.getY() < nb.getY();
-            return na.getZ() < nb.getZ();
-        });
+    if (m_uiUnzipEleOrder.size() != (size_t)m_uiNumTotalElements) {
+        m_uiUnzipEleOrder.resize(m_uiNumTotalElements);
+        std::iota(m_uiUnzipEleOrder.begin(), m_uiUnzipEleOrder.end(), 0u);
+        std::sort(m_uiUnzipEleOrder.begin(), m_uiUnzipEleOrder.end(),
+            [&pNodes](unsigned int a, unsigned int b) {
+                const ot::TreeNode& na = pNodes[a];
+                const ot::TreeNode& nb = pNodes[b];
+                if (na.getLevel() != nb.getLevel())
+                    return na.getLevel() > nb.getLevel();
+                if (na.getX() != nb.getX()) return na.getX() < nb.getX();
+                if (na.getY() != nb.getY()) return na.getY() < nb.getY();
+                return na.getZ() < nb.getZ();
+            });
+    }
+    const std::vector<unsigned int>& ele_order = m_uiUnzipEleOrder;
 
     // canonical-writer gating: when m_uiUnzipCanonWriter[idx] is set
     // (multi-writer slot), only the elected writer's value is committed.
