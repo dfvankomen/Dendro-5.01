@@ -109,7 +109,7 @@ struct oct_data {
     unsigned int flag;
 
     // information about the e2n maps based on global IDs, only need dg
-    T e2n_dg[343];
+    T e2n_dg[1];  // unused since the keyset fetch; 1-slot stub
 
     // a boolean that is used for identification in the scattermap regeneration
     bool isGhostTwo = false;
@@ -205,11 +205,11 @@ void print_octdata_vector(std::vector<oct_data<T>> &oct, int procrank = 0) {
                   << "\t\tTARGET: " << std::setw(3) << std::right << o.trank
 
                   << " \te2n_cg[0:5]=";
-        // for (int i = 0; i < 5; i++) {
+        // for (int i = 0; i < 1; i++) {
         //     std::cout << o.e2n_cg[i] << " ";
         // }
         std::cout << "\te2n_dg[0:5]=";
-        for (int i = 0; i < 5; i++) {
+        for (int i = 0; i < 1; i++) {
             std::cout << o.e2n_dg[i] << " ";
         }
         std::cout << std::endl;
@@ -314,7 +314,7 @@ MPI_Datatype get_mpi_type() {
 template <typename T>
 MPI_Datatype create_octdata_mpi_type() {
     MPI_Datatype octdata_mpi_datatype;
-    int blocklengths[] = {1, 1, 1, 1, 3, 6, 1, 1, NUM_PTS_ELE, 1, 12, 8,
+    int blocklengths[] = {1, 1, 1, 1, 3, 6, 1, 1, 1, 1, 12, 8,
                           1, 1, 1, 1, 1, 1};
     MPI_Aint offsets[18];
     MPI_Datatype types[18];

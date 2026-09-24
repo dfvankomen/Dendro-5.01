@@ -8338,12 +8338,14 @@ void Mesh::buildZipPlan() {
 
     int myCount = (int)myX.size();
     std::vector<int> counts(m_uiActiveNpes), offs(m_uiActiveNpes, 0);
-    MPI_Allgather(&myCount, 1, MPI_INT, counts.data(), 1, MPI_INT,
-                  m_uiCommActive);
     int total = 0;
-    for (int p = 0; p < m_uiActiveNpes; p++) {
-        offs[p] = total;
-        total += counts[p];
+    if (!zpDist) {
+        MPI_Allgather(&myCount, 1, MPI_INT, counts.data(), 1, MPI_INT,
+                      m_uiCommActive);
+        for (int p = 0; p < m_uiActiveNpes; p++) {
+            offs[p] = total;
+            total += counts[p];
+        }
     }
     // zpDist skips every one of these: allocating+gathering `total` entries on
     // every rank IS the scaling wall (~58 MB/rank at np=4, and it grows with P).
@@ -8806,21 +8808,24 @@ void Mesh::buildZipPlan() {
     // can build (source_rank, source_cg) -> ghost_cg.
     m_uiZipNonPrimaryToGhostCg.clear();
     std::unordered_map<uint64_t, unsigned int> invScatter;
-    if (m_uiActiveNpes > 1
-        && !m_uiScatterMapActualNodeRecv.empty()) {
+    if (m_uiActiveNpes > 1) {  // collective: every rank joins, empty maps send nothing
         const size_t sendN = m_uiScatterMapActualNodeSend.size();
         const size_t recvN = m_uiScatterMapActualNodeRecv.size();
         std::vector<unsigned int> sendBuf(sendN);
         std::vector<unsigned int> recvBuf(recvN);
         for (size_t k = 0; k < sendN; k++)
             sendBuf[k] = m_uiScatterMapActualNodeSend[k];
-        std::vector<int> sCounts(m_uiActiveNpes), rCounts(m_uiActiveNpes),
-            sOffs(m_uiActiveNpes), rOffs(m_uiActiveNpes);
+        std::vector<int> sCounts(m_uiActiveNpes, 0), rCounts(m_uiActiveNpes, 0),
+            sOffs(m_uiActiveNpes, 0), rOffs(m_uiActiveNpes, 0);
         for (int p = 0; p < m_uiActiveNpes; p++) {
-            sCounts[p] = (int)m_uiSendNodeCount[p];
-            rCounts[p] = (int)m_uiRecvNodeCount[p];
-            sOffs[p]   = (int)m_uiSendNodeOffset[p];
-            rOffs[p]   = (int)m_uiRecvNodeOffset[p];
+            if (p < (int)m_uiSendNodeCount.size()) {
+                sCounts[p] = (int)m_uiSendNodeCount[p];
+                sOffs[p]   = (int)m_uiSendNodeOffset[p];
+            }
+            if (p < (int)m_uiRecvNodeCount.size()) {
+                rCounts[p] = (int)m_uiRecvNodeCount[p];
+                rOffs[p]   = (int)m_uiRecvNodeOffset[p];
+            }
         }
         MPI_Alltoallv(sendBuf.data(), sCounts.data(), sOffs.data(),
                       MPI_UNSIGNED, recvBuf.data(), rCounts.data(),
@@ -19391,10 +19396,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // gain refinement on the 26-stencil graph moving whole blocks.
         const char *refEnv   = std::getenv("DENDRO_GRAPH_REFINE");
         const int refineMode = (refEnv) ? atoi(refEnv) : 0;
-        if (wpartMode == 0 && !fullStencil && refineMode == 0) {
-            fastpart_partgraph_octree(vtx_dist, temp_oct_data.data(), parts.data(),
-                                      &commActive);
-        } else {
+        {
             unsigned int lmin = 0, lmax = 0;
             this->computeMinMaxLevel(lmin, lmax);
 
@@ -19432,8 +19434,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     opts.vcon = vcon.data();
                     opts.ncon = (int)(lmax - lmin + 1);
                 }
-                opts.verbose = 1;
             }
+            opts.verbose = __phase_prof ? 1 : 0;
             fastpart_partgraph_octree_ex(vtx_dist, temp_oct_data.data(), &opts,
                                          parts.data(), &commActive);
 
@@ -19451,6 +19453,17 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         free(ele_counts_fp);
     }
     __phase("partition-decision");
+    {
+        unsigned int nMine = (unsigned int)my_partition.size(), nMin = 0;
+        MPI_Allreduce(&nMine, &nMin, 1, MPI_UNSIGNED, MPI_MIN, commActive);
+        if (nMin == 0) {
+            if (rank == 0)
+                std::cerr << "[repart] a rank owns zero elements after labelling; "
+                             "the block/zip-plan collectives cannot handle that"
+                          << std::endl;
+            MPI_Abort(commActive, 7);
+        }
+    }
 
 #ifdef _ONLY_DUMP_OCT_DATA_
     // NOTE: early return, we just want to save the .oct files

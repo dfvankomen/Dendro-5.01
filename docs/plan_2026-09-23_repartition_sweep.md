@@ -75,3 +75,22 @@ Deterministic gates only (edge cut, per-sub-step eff, bit/byte-identity); the bo
 ## Commit conventions
 `feat(scope):` / `fix(scope):` / `test(scope):` / `refactor(scope):` subject only; no body unless
 essential; no footers or attribution. `jj new -m` before each sub-step.
+
+## 2026-09-24 addendum — audits of the rebuild rounds and the sandwich (vault: "Communication rounds of the labelled rebuild and the sandwich")
+
+Landed today: ENUTS on labelled meshes (Block::firstElementID/numElements/iterator; init remesh routed
+through ctx; solver overrides clear the ETS-synced flag), NLSM LTS driver fixes (worktree
+`nlsm-gr_lts`, branch `lts-graph-fix`), transport trims (e2n_dg stub, fastpart verbose off, dead zip
+gather skipped, stage-3 collective unconditional, zero-element-rank abort).
+
+Next, in order (all byte-identical unless noted):
+1. C-lite: flags ride the g2s `redistributeVec` (kill `redistributeFlags`' O(N_global) allgather) — <1 d.
+2. Cache the `broadcastCgValuesByPhysPos` plan per mesh + one batched Alltoallv per step; count the (β)
+   residual — ~150 lines.
+3. Batch IGT's per-variable Alltoallv_sparse into one exchange.
+4. Push partition (trank from labels) and forward-push R1/R2/R3 closure (14 → 8 rounds).
+5. isDG bit packing; numMissing fold into the counts Allgather; drop the splitters Allgather.
+6. Print `unifyE2NCgAcrossTNInstances`'s discarded counter; if 0 on labelled meshes, one-Alltoallv shrink.
+7. Design A (labelled ReMesh + keyed IGT) behind an env gate with a shadow comparison — not byte-identical.
+Open correctness item: NLSM global-RK graph ≠ SFC under the new defaults (bisect in progress); ENUTS on
+labelled meshes evolves U_PHI ≡ 0 (ENUTS-specific; global RK keeps it).
