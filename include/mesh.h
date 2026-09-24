@@ -4105,9 +4105,63 @@ class Mesh {
         ele_offsets.resize(npes);
         ele_counts.resize(npes);
 
-        // gather counts from all processes to build global map
-        repartRound();
-        par::Mpi_Allgather(&localSz, ele_counts.data(), 1, commActive);
+        // only ids that local elements reference through a face, edge
+        // or corner are ever read (the rest feed local_to_global, which
+        // is only printed), so count those
+        unsigned int numMissing = 0;
+        {
+            // the round-1 element ghost exchange fills exactly these
+            std::vector<char> covered(m_uiNumTotalElements, 0);
+            for (unsigned int e = lb; e < le; e++) covered[e] = 1;
+            if (this->getMPICommSizeGlobal() > 1) {
+                const unsigned int nRecv =
+                    m_uiRecvEleOffset[npes - 1] + m_uiRecvEleCount[npes - 1];
+                for (unsigned int k = 0; k < nRecv; k++)
+                    covered[m_uiGhostElementRound1Index[k]] = 1;
+            }
+            const unsigned int nd = this->getNumDirections();
+            unsigned int lk[NUM_CHILDREN];
+            for (unsigned int ele = lb; ele < le; ele++) {
+                for (unsigned int k = 0; k < nd; k++) {
+                    const T t = e2e_map[ele * nd + k];
+                    if (t != LOOK_UP_TABLE_DEFAULT && !covered[t])
+                        numMissing++;
+                }
+                for (const unsigned int dir :
+                     {OCT_DIR_LEFT_DOWN, OCT_DIR_LEFT_UP, OCT_DIR_LEFT_BACK,
+                      OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
+                      OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
+                      OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK, OCT_DIR_UP_FRONT}) {
+                    getElementalEdgeNeighbors(ele, dir, lk);
+                    const T t = lk[3];
+                    if (t != LOOK_UP_TABLE_DEFAULT && !covered[t])
+                        numMissing++;
+                }
+                for (const unsigned int dir :
+                     {OCT_DIR_LEFT_DOWN_BACK, OCT_DIR_RIGHT_DOWN_BACK,
+                      OCT_DIR_LEFT_UP_BACK, OCT_DIR_RIGHT_UP_BACK,
+                      OCT_DIR_LEFT_DOWN_FRONT, OCT_DIR_RIGHT_DOWN_FRONT,
+                      OCT_DIR_LEFT_UP_FRONT, OCT_DIR_RIGHT_UP_FRONT}) {
+                    getElementalVertexNeighbors(ele, dir, lk);
+                    const T t = lk[7];
+                    if (t != LOOK_UP_TABLE_DEFAULT && !covered[t])
+                        numMissing++;
+                }
+            }
+        }
+        // gather counts (and the missing-id count, which decides the
+        // collective gather below) from all processes to build global map
+        unsigned int numMissingGlobal = 0;
+        {
+            T mine[2] = {localSz, (T)numMissing};
+            std::vector<T> all(2 * npes);
+            repartRound();
+            par::Mpi_Allgather(mine, all.data(), 2, commActive);
+            for (int p = 0; p < npes; p++) {
+                ele_counts[p] = all[2 * p];
+                numMissingGlobal += (unsigned int)all[2 * p + 1];
+            }
+        }
         ele_offsets[0] = 0;
         // this computes the offsets for each process
         for (unsigned int i = 1; i < npes; i++)
@@ -4133,47 +4187,6 @@ class Mesh {
         // by the element ghost exchange.  Uses an Allgatherv of local
         // element coordinates to build a global lookup table.
         {
-            // only ids that local elements reference through a face, edge
-            // or corner are ever read (the rest feed local_to_global, which
-            // is only printed), so count those
-            unsigned int numMissing = 0;
-            {
-                const unsigned int nd = this->getNumDirections();
-                unsigned int lk[NUM_CHILDREN];
-                for (unsigned int ele = lb; ele < le; ele++) {
-                    for (unsigned int k = 0; k < nd; k++) {
-                        const T t = e2e_map[ele * nd + k];
-                        if (t != LOOK_UP_TABLE_DEFAULT && eid_vec[t] == LOOK_UP_TABLE_DEFAULT)
-                            numMissing++;
-                    }
-                    for (const unsigned int dir :
-                         {OCT_DIR_LEFT_DOWN, OCT_DIR_LEFT_UP, OCT_DIR_LEFT_BACK,
-                          OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
-                          OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
-                          OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK, OCT_DIR_UP_FRONT}) {
-                        getElementalEdgeNeighbors(ele, dir, lk);
-                        const T t = lk[3];
-                        if (t != LOOK_UP_TABLE_DEFAULT && eid_vec[t] == LOOK_UP_TABLE_DEFAULT)
-                            numMissing++;
-                    }
-                    for (const unsigned int dir :
-                         {OCT_DIR_LEFT_DOWN_BACK, OCT_DIR_RIGHT_DOWN_BACK,
-                          OCT_DIR_LEFT_UP_BACK, OCT_DIR_RIGHT_UP_BACK,
-                          OCT_DIR_LEFT_DOWN_FRONT, OCT_DIR_RIGHT_DOWN_FRONT,
-                          OCT_DIR_LEFT_UP_FRONT, OCT_DIR_RIGHT_UP_FRONT}) {
-                        getElementalVertexNeighbors(ele, dir, lk);
-                        const T t = lk[7];
-                        if (t != LOOK_UP_TABLE_DEFAULT && eid_vec[t] == LOOK_UP_TABLE_DEFAULT)
-                            numMissing++;
-                    }
-                }
-            }
-            // the gather below is collective: decide on the global count
-            unsigned int numMissingGlobal = 0;
-            repartRound();
-            MPI_Allreduce(&numMissing, &numMissingGlobal, 1, MPI_UNSIGNED, MPI_SUM,
-                          commActive);
-
             if (rank == 0)
                 std::cout << "[conn-map] referenced-missing ids (global): "
                           << numMissingGlobal << std::endl;
@@ -4182,11 +4195,7 @@ class Mesh {
                 // each entry: (x, y, z, level, global_id) packed as
                 // 5 unsigned ints
                 const unsigned int PACK_SZ = 5;
-                std::vector<int> allLocalSizes(npes);
-                int myLocalSz = static_cast<int>(localSz);
-                repartRound();
-                MPI_Allgather(&myLocalSz, 1, MPI_INT, allLocalSizes.data(),
-                              1, MPI_INT, commActive);
+                std::vector<int> allLocalSizes(ele_counts.begin(), ele_counts.end());
 
                 std::vector<int> allLocalDispls(npes, 0);
                 for (int p = 1; p < npes; p++)
