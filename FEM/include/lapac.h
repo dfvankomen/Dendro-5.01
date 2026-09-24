@@ -60,6 +60,20 @@ extern "C" void dgbsvx_(char* fact, char* trans, int* n, int* kl, int* ku,
                         double* rcond, double* ferr, double* berr, double* work,
                         int* iwork, int* info);
 
+// Banded LU factorization (dgbtrf) and the corresponding solve (dgbtrs).
+// Together these are the "simple driver" banded path: dgbsvx performs the
+// same factor+solve but additionally equilibrates, estimates the condition
+// number, and runs iterative refinement with forward/backward error bounds.
+// For the small, well-conditioned compact-FD systems here those diagnostics
+// dominate the runtime, so dgbtrf/dgbtrs is the fair algorithmic baseline
+// against the pre-inverted GEMM path.
+extern "C" void dgbtrf_(int* m, int* n, int* kl, int* ku, double* ab,
+                        int* ldab, int* ipiv, int* info);
+
+extern "C" void dgbtrs_(char* trans, int* n, int* kl, int* ku, int* nrhs,
+                        double* ab, int* ldab, int* ipiv, double* b, int* ldb,
+                        int* info);
+
 namespace lapack {
 
 /**
@@ -337,6 +351,57 @@ inline void dgemm_cpp_safe(const char* TRANSA, const char* TRANSB, const int* m,
  * @param iwork [out] Array of dimension (N). Will contain the pivot indices.
  * @param info [out] Error information, see function for more details
  */
+/**
+ * @brief Type-safe wrapper for LAPACK dgbtrf_: banded LU factorization.
+ *
+ * Factors the kl/ku-banded n x n matrix stored in @p ab (LAPACK banded
+ * layout, LDAB >= 2*kl+ku+1 so that the factorization can overwrite it in
+ * place). No equilibration is performed, so the factors correspond to the
+ * matrix exactly as supplied and dgbtrs solves may be applied directly.
+ */
+inline void dgbtrf_cpp_safe(const int m, const int n, const int* kl,
+                            const int* ku, double* ab, const int* ldab,
+                            int* ipiv, int* info) {
+    dgbtrf_(const_cast<int*>(&m), const_cast<int*>(&n), const_cast<int*>(kl),
+            const_cast<int*>(ku), ab, const_cast<int*>(ldab), ipiv, info);
+
+    if (*info != 0) {
+        std::cerr << "BandedMatrixFactor (dgbtrf) failed. info = " << *info
+                  << std::endl;
+        if (*info < 0) {
+            std::cerr << "Illegal value in element " << std::abs(*info)
+                      << std::endl;
+        } else {
+            std::cerr << "U(i,i) is exactly zero for i = " << *info
+                      << "; the factor is singular." << std::endl;
+        }
+    }
+}
+
+/**
+ * @brief Type-safe wrapper for LAPACK dgbtrs_: banded solve using the
+ * factorization produced by dgbtrf_.
+ *
+ * Solves in place: @p b is overwritten with the solution. @p nrhs columns
+ * are solved in a single call, so the per-call LAPACK dispatch cost is
+ * amortized over the whole set of right-hand sides.
+ */
+inline void dgbtrs_cpp_safe(const char* trans, const int n, const int* kl,
+                            const int* ku, const int nrhs, const double* afb,
+                            const int* ldafb, const int* ipiv, double* b,
+                            const int ldb, int* info) {
+    dgbtrs_(const_cast<char*>(trans), const_cast<int*>(&n),
+            const_cast<int*>(kl), const_cast<int*>(ku),
+            const_cast<int*>(&nrhs), const_cast<double*>(afb),
+            const_cast<int*>(ldafb), const_cast<int*>(ipiv), b,
+            const_cast<int*>(&ldb), info);
+
+    if (*info != 0) {
+        std::cerr << "BandedMatrixSolve (dgbtrs) solve failed. info = " << *info
+                  << std::endl;
+    }
+}
+
 inline void dgbsvx_cpp_safe(const char* fact, const char* trans, const int n,
                             const int* kl, const int* ku, const int nrhs,
                             const double* ab, const int* ldab, double* afb,

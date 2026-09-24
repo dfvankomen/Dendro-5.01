@@ -41,6 +41,7 @@
 #include "derivatives.h"
 #include "derivatives/derivs_factory.h"
 #include "derivatives/derivs_utils.h"
+#include "derivatives/derivs_banded.h"
 
 using namespace dendroderivs;
 
@@ -151,6 +152,20 @@ static PathTiming run_path(const std::string &scheme_name, int deriv_order,
         std::cerr << "  [skip] " << scheme_name
                   << " (eleorder=" << eleorder << ") construct returned null\n";
         return t;
+    }
+
+    // "banded_trs" reuses the same BandedCompactDerivs object as "banded"
+    // and flips it to the dgbtrf/dgbtrs solve. Same factors, same data, same
+    // call structure -- the only difference is the LAPACK driver, which is
+    // what makes the two rows directly comparable.
+    if (path_label == "banded_trs") {
+        auto *bd = dynamic_cast<dendroderivs::BandedCompactDerivs *>(deriv.get());
+        if (!bd) {
+            std::cerr << "  [skip] " << scheme_name
+                      << " is not a BandedCompactDerivs; cannot use dgbtrs\n";
+            return t;
+        }
+        bd->set_use_trs(true);
     }
 
     const size_t total = (size_t)n * n * n;
@@ -295,11 +310,16 @@ int main(int argc, char **argv) {
                 PathTiming bnd = skip_banded ? PathTiming{}
                                              : run_path(p.banded_name, order, "banded",
                                                         eleorder, u, truth);
+                PathTiming trs = skip_banded ? PathTiming{}
+                                             : run_path(p.banded_name, order,
+                                                        "banded_trs",
+                                                        eleorder, u, truth);
                 PathTiming lst = run_path(p.base_name,   order, "matrix_last",
                                           eleorder, u, truth);
                 print_summary_pair(mat, bnd);
                 emit_csv_rows(csv, mat);
                 emit_csv_rows(csv, bnd);
+                emit_csv_rows(csv, trs);
                 emit_csv_rows(csv, lst);
             }
         }

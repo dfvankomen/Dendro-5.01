@@ -34,12 +34,23 @@ class BandedCompactDerivs : public CompactDerivs {
         std::vector<double> Pb;                         // banded-stored P
         std::vector<double> Qb;                         // banded-stored Q
         BandedMatrixSolveVars *vars = nullptr;          // owns AFB, IPIV, etc.
+
+        // Plain (non-equilibrated) LU of P from dgbtrf, used by the dgbtrs
+        // solve path. Kept separate from vars->AFB because that one belongs
+        // to an equilibrated dgbsvx factorization: its factors are of the
+        // scaled matrix R*P*C, so dgbtrs against it would solve the wrong
+        // system unless the scalings were reapplied by hand.
+        std::vector<double> AFB_trs;                    // LDAFB x n, in place
+        std::vector<int>    IPIV_trs;                   // n pivots
+        int ldafb_trs = 0;
+        bool trs_ok = false;                            // factorization valid
     };
 
    protected:
     std::array<Variant, 4> variants_;
 
     double Q_parity_ = -1.0;                            // -1 for 1st, +1 for 2nd
+    bool use_trs_ = false;                              // see set_use_trs()
 
     // workspace for matmul + solve (reused across directions, not thread-safe)
     std::vector<double> workspace_;
@@ -64,6 +75,7 @@ class BandedCompactDerivs : public CompactDerivs {
 
     // ignored: kept only because old derived classes still pass it in.
     BandedMatrixDiagonalWidths *kVals = nullptr;
+
 
    protected:
     // build all four variants. Q_parity must be -1 for first-derivative
@@ -120,6 +132,15 @@ class BandedCompactDerivs : public CompactDerivs {
     BandedCompactDerivs(unsigned int ele_order) : CompactDerivs{ele_order} {};
     BandedCompactDerivs(const BandedCompactDerivs &obj) : CompactDerivs(obj) {};
     virtual ~BandedCompactDerivs();
+
+    // Select the LAPACK routine used by do_grad_*. false (default) keeps the
+    // historical dgbsvx expert-driver path; true switches to dgbtrf/dgbtrs,
+    // which performs the same LU solve without equilibration, condition
+    // estimation, or iterative refinement. Provided so the two can be timed
+    // against each other in the same binary on identical data.
+    void set_use_trs(bool on) { use_trs_ = on; }
+    bool use_trs() const { return use_trs_; }
+
 
     void do_grad_x(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) override;

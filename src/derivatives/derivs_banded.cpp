@@ -119,10 +119,41 @@ static void build_variant(BandedCompactDerivs::Variant &v,
     bandedMatrixStore(v.Pb.data(), P_dense.data(), pkl, pku, n);
     bandedMatrixStore(v.Qb.data(), Q_dense.data(), qkl, qku, n);
 
+    // Factor P for the dgbtrs path BEFORE the dgbsvx setup below. dgbsvx is
+    // constructed with FACT='E', and on that path LAPACK equilibrates A and
+    // overwrites the caller's AB (here v.Pb) with the scaled matrix R*P*C.
+    // Copying Pb after that call would hand dgbtrf the equilibrated matrix,
+    // and the subsequent dgbtrs solves would silently return the solution of
+    // the scaled system -- wrong by the row/column scalings, and only for the
+    // schemes where equilibration actually triggers. Factor from the pristine
+    // band first.
+    //
+    // dgbtrf wants LDAB = 2*kl+ku+1, with the band placed kl rows down so the
+    // leading kl rows are free for pivot fill-in; it factors in place.
+    v.ldafb_trs = 2 * pkl + pku + 1;
+    v.AFB_trs.assign((size_t)v.ldafb_trs * n, 0.0);
+    for (unsigned int j = 0; j < n; ++j) {
+        for (int i = 0; i < pkl + pku + 1; ++i) {
+            v.AFB_trs[(size_t)j * v.ldafb_trs + pkl + i] =
+                v.Pb[(size_t)j * (pkl + pku + 1) + i];
+        }
+    }
+    v.IPIV_trs.assign(n, 0);
+    int trs_info = 0;
+    lapack::dgbtrf_cpp_safe((int)n, (int)n, &v.pkl, &v.pku, v.AFB_trs.data(),
+                            &v.ldafb_trs, v.IPIV_trs.data(), &trs_info);
+    v.trs_ok = (trs_info == 0);
+    if (!v.trs_ok) {
+        std::cerr << "build_variant: dgbtrf failed (info = " << trs_info
+                  << "); dgbtrs path unavailable for this variant."
+                  << std::endl;
+    }
+
     v.vars = new BandedMatrixSolveVars('E', 'N', (int)n, (int)n,
                                        pkl, pku, v.Pb.data());
     bandedMatrixSolve(v.vars);                          // factor once
     *(v.vars->FACT) = 'F';                              // subsequent: reuse
+
 }
 
 void BandedCompactDerivs::init(MatrixDiagonalEntries *entries,
@@ -180,6 +211,37 @@ static inline void check_block_size(const unsigned int *sz, unsigned int p_n) {
     }
 }
 
+// Apply P^{-1} to nrhs right-hand sides of length n, stride ld.
+//
+// Both branches solve the same linear system with the same LU factors of P;
+// they differ only in how much extra work the driver does around the solve.
+// dgbsvx is the expert driver: it applies the equilibration scalings, runs
+// iterative refinement, estimates the condition number, and fills FERR/BERR.
+// dgbtrs does the triangular solves and nothing else. For the small,
+// well-conditioned systems here the diagnostics dominate, which is why the
+// two are timed separately.
+//
+// dgbsvx reads B and writes the solution to X; dgbtrs solves in place, so
+// the trs branch copies B into X first and leaves B untouched. That keeps
+// the caller's buffer contract identical on both paths.
+static inline void solve_rhs(BandedCompactDerivs::Variant &v, bool use_trs,
+                             int n, int nrhs, double *B, double *X, int ld) {
+    if (use_trs && v.trs_ok) {
+        std::memcpy(X, B, (size_t)ld * (size_t)nrhs * sizeof(double));
+        int info = 0;
+        lapack::dgbtrs_cpp_safe("N", n, &v.pkl, &v.pku, nrhs,
+                                v.AFB_trs.data(), &v.ldafb_trs,
+                                v.IPIV_trs.data(), X, ld, &info);
+    } else {
+        lapack::dgbsvx_cpp_safe(
+            v.vars->FACT, v.vars->TRANS, n, &v.pkl, &v.pku, nrhs,
+            v.Pb.data(), v.vars->LDAB, v.vars->AFB, v.vars->LDAFB,
+            v.vars->IPIV, v.vars->EQUED, v.vars->R, v.vars->C,
+            B, ld, X, ld, v.vars->RCOND, v.vars->FERR, v.vars->BERR,
+            v.vars->WORK, v.vars->IWORK, v.vars->INFO);
+    }
+}
+
 void BandedCompactDerivs::do_grad_x(double *const du, const double *const u,
                                     const double dx, const unsigned int *sz,
                                     const unsigned int bflag) {
@@ -205,13 +267,8 @@ void BandedCompactDerivs::do_grad_x(double *const du, const double *const u,
                                    v.qkl, v.qku, alpha, p_n);
         }
 
-        lapack::dgbsvx_cpp_safe(
-            v.vars->FACT, v.vars->TRANS, (int)nx, &v.pkl, &v.pku, (int)ny,
-            v.Pb.data(), v.vars->LDAB, v.vars->AFB,
-            v.vars->LDAFB, v.vars->IPIV, v.vars->EQUED, v.vars->R, v.vars->C,
-            workspace_.data(), (int)nx, du_slice, (int)nx, v.vars->RCOND,
-            v.vars->FERR, v.vars->BERR, v.vars->WORK, v.vars->IWORK,
-            v.vars->INFO);
+        solve_rhs(v, use_trs_, (int)nx, (int)ny, workspace_.data(),
+                  du_slice, (int)nx);
     }
 }
 
@@ -242,13 +299,8 @@ void BandedCompactDerivs::do_grad_y(double *const du, const double *const u,
                                    temp_transpose, v.qkl, v.qku, alpha, p_n);
         }
 
-        lapack::dgbsvx_cpp_safe(
-            v.vars->FACT, v.vars->TRANS, (int)ny, &v.pkl, &v.pku, (int)nx,
-            v.Pb.data(), v.vars->LDAB, v.vars->AFB,
-            v.vars->LDAFB, v.vars->IPIV, v.vars->EQUED, v.vars->R, v.vars->C,
-            intermediate, (int)ny, temp_transpose, (int)ny, v.vars->RCOND,
-            v.vars->FERR, v.vars->BERR, v.vars->WORK, v.vars->IWORK,
-            v.vars->INFO);
+        solve_rhs(v, use_trs_, (int)ny, (int)nx, intermediate,
+                  temp_transpose, (int)ny);
 
         for (unsigned int i = 0; i < nx; i++) {
             for (unsigned int j = 0; j < ny; j++) {
@@ -286,13 +338,8 @@ void BandedCompactDerivs::do_grad_z(double *const du, const double *const u,
                                    v.qkl, v.qku, alpha, p_n);
         }
 
-        lapack::dgbsvx_cpp_safe(
-            v.vars->FACT, v.vars->TRANS, (int)nz, &v.pkl, &v.pku, (int)nx,
-            v.Pb.data(), v.vars->LDAB, v.vars->AFB,
-            v.vars->LDAFB, v.vars->IPIV, v.vars->EQUED, v.vars->R, v.vars->C,
-            ws, (int)nz, transposed, (int)nz, v.vars->RCOND,
-            v.vars->FERR, v.vars->BERR, v.vars->WORK, v.vars->IWORK,
-            v.vars->INFO);
+        solve_rhs(v, use_trs_, (int)nz, (int)nx, ws, transposed,
+                  (int)nz);
 
         for (unsigned int i = 0; i < nx; i++) {
             for (unsigned int k = 0; k < nz; k++) {
