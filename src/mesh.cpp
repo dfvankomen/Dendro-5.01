@@ -4749,6 +4749,91 @@ void Mesh::buildE2NMap() {
     // if(!m_uiActiveRank) std::cout<<"E2N Mapping ended"<<std::endl;
 }
 
+void Mesh::buildUnzipPlan() {
+    if (m_uiUnzipPlanBuilt) return;
+    m_uiUnzipPlanBuilt = true;
+    m_uiUnzipOpOffset.assign(m_uiNumTotalElements + 1, 0);
+    m_uiUnzipOps.clear();
+    m_uiUnzipSlots.clear();
+    if (!m_uiIsActive) return;
+
+    const unsigned int eO  = m_uiElementOrder;
+    const unsigned int eo1 = eO + 1;
+    // slot lists in getElementNodalValues' interpolation order: 6 faces
+    // (L,R,D,U,B,F; slow = higher free axis) then 12 edges (LD..UF)
+    static const unsigned int faceAx[6] = {0, 0, 1, 1, 2, 2};
+    static const unsigned int faceHi[6] = {0, 1, 0, 1, 0, 1};
+    static const unsigned int faceDir[6] = {OCT_DIR_LEFT, OCT_DIR_RIGHT,
+                                            OCT_DIR_DOWN, OCT_DIR_UP,
+                                            OCT_DIR_BACK, OCT_DIR_FRONT};
+    // edge: free axis, then (axis,hi) of its two faces
+    static const unsigned int edgeFree[12] = {2, 2, 1, 1, 2, 2,
+                                              1, 1, 0, 0, 0, 0};
+    static const unsigned int edgeF[12][2] = {
+        {0, 2}, {0, 3}, {0, 4}, {0, 5}, {1, 2}, {1, 3},
+        {1, 4}, {1, 5}, {2, 4}, {2, 5}, {3, 4}, {3, 5}};
+    static const unsigned int edgeDir[12] = {
+        OCT_DIR_LEFT_DOWN,  OCT_DIR_LEFT_UP,    OCT_DIR_LEFT_BACK,
+        OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
+        OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
+        OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK,    OCT_DIR_UP_FRONT};
+
+    auto slot = [eo1](const unsigned int* x) {
+        return x[2] * eo1 * eo1 + x[1] * eo1 + x[0];
+    };
+    for (unsigned int f = 0; f < 6; f++) {
+        const unsigned int a = faceAx[f];
+        const unsigned int lo = (a == 0) ? 1 : 0, hi = (a == 2) ? 1 : 2;
+        unsigned int x[3];
+        x[a] = faceHi[f] * eO;
+        for (x[hi] = 0; x[hi] < eo1; x[hi]++)
+            for (x[lo] = 0; x[lo] < eo1; x[lo]++)
+                m_uiUnzipSlots.push_back(slot(x));
+    }
+    for (unsigned int e = 0; e < 12; e++) {
+        unsigned int x[3];
+        for (unsigned int s = 0; s < 2; s++)
+            x[faceAx[edgeF[e][s]]] = faceHi[edgeF[e][s]] * eO;
+        const unsigned int a = edgeFree[e];
+        for (x[a] = 0; x[a] < eo1; x[a]++) m_uiUnzipSlots.push_back(slot(x));
+    }
+
+    unsigned int cnum;
+    for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+        m_uiUnzipOpOffset[ele] = (unsigned int)m_uiUnzipOps.size();
+        if (m_e2b_unzip_counts[ele] == 0) continue;
+        bool faceHang[6];
+        unsigned char cornerSet = 0;  // bit c = corner (i,j,k) = c's bits
+        for (unsigned int f = 0; f < 6; f++) {
+            faceHang[f] = isFaceHanging(ele, faceDir[f], cnum);
+            if (!faceHang[f]) continue;
+            m_uiUnzipOps.push_back((unsigned char)(f | (cnum << 5)));
+            for (unsigned int c = 0; c < 8; c++)
+                if (((c >> faceAx[f]) & 1u) == faceHi[f]) cornerSet |= 1u << c;
+        }
+        for (unsigned int e = 0; e < 12; e++) {
+            if (faceHang[edgeF[e][0]] || faceHang[edgeF[e][1]]) continue;
+            if (!isEdgeHanging(ele, edgeDir[e], cnum)) continue;
+            m_uiUnzipOps.push_back((unsigned char)((6 + e) | (cnum << 5)));
+            for (unsigned int c = 0; c < 8; c++) {
+                bool on = true;
+                for (unsigned int s = 0; s < 2; s++)
+                    on = on && (((c >> faceAx[edgeF[e][s]]) & 1u) ==
+                                faceHi[edgeF[e][s]]);
+                if (on) cornerSet |= 1u << c;
+            }
+        }
+        // an interpolated corner that is not hanging is re-gathered last
+        for (unsigned int c = 0; c < 8; c++)
+            if (((cornerSet >> c) & 1u) &&
+                !isNodeHanging(ele, (c & 1u) * eO, ((c >> 1) & 1u) * eO,
+                               ((c >> 2) & 1u) * eO))
+                m_uiUnzipOps.push_back((unsigned char)(18 + c));
+    }
+    m_uiUnzipOpOffset[m_uiNumTotalElements] = (unsigned int)m_uiUnzipOps.size();
+    m_uiUnzipOps.shrink_to_fit();
+}
+
 void Mesh::buildZipPlan() {
     if (m_uiZipPlanBuilt) return;
     m_uiZipPlanBuilt = true;
@@ -9882,12 +9967,17 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     m_uiCoarsetBlkLev = cLev;
     m_uiLocalBlockList.clear();
 
-    // blocks change here (LTS rebuilds in place), so drop the zip plan
+    // blocks change here (LTS rebuilds in place), so drop the zip/unzip plans
     m_uiZipPlanBuilt = false;
     m_uiZipPlanUzIdx.clear();
     m_uiZipPlanUzIdx.shrink_to_fit();
     m_uiZipPlanCgIdx.clear();
     m_uiZipPlanCgIdx.shrink_to_fit();
+    m_uiUnzipPlanBuilt = false;
+    m_uiUnzipOpOffset.clear();
+    m_uiUnzipOpOffset.shrink_to_fit();
+    m_uiUnzipOps.clear();
+    m_uiUnzipOps.shrink_to_fit();
 
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;

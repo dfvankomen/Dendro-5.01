@@ -241,6 +241,13 @@ class Mesh {
     std::vector<DendroIntL> m_uiZipPlanUzIdx;
     std::vector<unsigned int> m_uiZipPlanCgIdx;
     bool m_uiZipPlanBuilt = false;
+
+    /** unzip plan: per-element hanging face/edge interpolations (id | cnum<<5)
+     * and corner re-gathers applied after a flat e2n gather; see buildUnzipPlan. */
+    std::vector<unsigned int> m_uiUnzipOpOffset;
+    std::vector<unsigned char> m_uiUnzipOps;
+    std::vector<unsigned int> m_uiUnzipSlots;
+    bool m_uiUnzipPlanBuilt = false;
     /** Element to Node mapping with DG indexing after removing duplicates. This
      * is used for debugging. */
     std::vector<unsigned int> m_uiE2NMapping_DG;
@@ -703,6 +710,8 @@ class Mesh {
     void buildE2NMap();
 
     void buildZipPlan();
+
+    void buildUnzipPlan();
 
     /**
      * @brief: Builds the Element to nodal mapping for DG computations.
@@ -2207,6 +2216,17 @@ class Mesh {
     template <typename T>
     void unzip_scatter_batch(const T *const *ins, T *const *outs,
                              unsigned int n_vars);
+
+    /**@brief getElementNodalValues via the unzip plan (bit-identical output). */
+    template <typename T>
+    void getElementNodalValuesPlanned(const T *vec, T *nodalValues,
+                                      unsigned int ele, T *pin, T *pout,
+                                      double *im1, double *im2) const;
+
+    /**@brief reference unzip_scatter_batch for testUnzipExact; not used by the solver. */
+    template <typename T>
+    void unzip_scatter_batch_ref(const T *const *ins, T *const *outs,
+                                 unsigned int n_vars);
 
     /**
      * @brief performs unzip operation for a given block id.
