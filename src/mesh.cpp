@@ -19610,14 +19610,16 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         std::vector<std::vector<std::pair<unsigned int, unsigned char>>> ring(localSz);
         std::vector<std::pair<size_t, unsigned int>> frontier, next;
-        unsigned long long nClaims = 0, nNoop = 0, nDup = 0;
+        // a (g, p) pair sent in an earlier ring already put g at distance <= d-1
+        std::unordered_set<unsigned long long> sent;
+        unsigned long long nSent = 0, nSentNoop = 0, nPushedRemote = 0;
         auto claim = [&](size_t li, unsigned int p, unsigned char d) {
-            ++nClaims;
             bool known = (pushLabels[li] == p);
             for (const auto& q : ring[li]) known = known || (q.first == p);
-            if (known) { ++nNoop; return; }
+            if (known) return false;
             ring[li].emplace_back(p, d);
             next.emplace_back(li, p);
+            return true;
         };
         for (size_t i = 0; i < localSz; ++i) frontier.emplace_back(i, pushLabels[i]);
         for (unsigned char d = 1; d <= 3; ++d) {
@@ -19629,7 +19631,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 const int owner = (int)(std::upper_bound(ele_offsets.begin(),
                                                          ele_offsets.end(), g) -
                                         ele_offsets.begin()) - 1;
-                out[owner].push_back(((unsigned long long)g << 32) | p);
+                const unsigned long long key = ((unsigned long long)g << 32) | p;
+                if (sent.insert(key).second) out[owner].push_back(key);
             };
             for (const auto& [li, p] : frontier) {
                 const auto& oct = oct_connectivity_map[li];
@@ -19637,14 +19640,10 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 for (const auto g : oct.edgeNeighbors) emit(p, g);
                 for (const auto g : oct.vertexNeighbors) emit(p, g);
             }
-            for (auto& b : out) {
-                const size_t n0 = b.size();
-                std::sort(b.begin(), b.end());
-                b.erase(std::unique(b.begin(), b.end()), b.end());
-                nDup += n0 - b.size();
-            }
+            for (const auto& b : out) nSent += b.size();
             for (const auto k : exchangeBuckets(out, MPI_UNSIGNED_LONG_LONG))
-                claim((D_INT_L)(k >> 32) - myBeg, (unsigned int)(k & 0xffffffffu), d);
+                if (!claim((D_INT_L)(k >> 32) - myBeg, (unsigned int)(k & 0xffffffffu), d))
+                    ++nSentNoop;
             frontier.swap(next);
         }
 
@@ -19656,6 +19655,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 if (d >= 2) out[p].back().isGhostTwo = true;
             }
         }
+        for (int p = 0; p < npes; ++p)
+            if (p != rank) nPushedRemote += out[p].size();
         MPI_Datatype octType = create_octdata_mpi_type<D_INT_L>();
         new_oct_connectivity_map = exchangeBuckets(out, octType);
         MPI_Type_free(&octType);
@@ -19667,14 +19668,12 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         std::sort(my_partition.begin(), my_partition.end());
 
         if (countRounds) {
-            unsigned long long loc[4] = {nClaims, nNoop, nDup,
-                                         (unsigned long long)new_oct_connectivity_map.size()},
-                               tot[4];
-            MPI_Reduce(loc, tot, 4, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            unsigned long long loc[3] = {nSent, nSentNoop, nPushedRemote}, tot[3];
+            MPI_Reduce(loc, tot, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
             if (!rank)
-                std::cout << "[repart-push] claims=" << tot[0] << " noop=" << tot[1]
-                          << " dup_suppressed=" << tot[2] << " delivered=" << tot[3]
-                          << std::endl;
+                std::cout << "[repart-push] claims_sent=" << tot[0]
+                          << " claims_noop=" << tot[1]
+                          << " elems_pushed_remote=" << tot[2] << std::endl;
         }
     }
     {
