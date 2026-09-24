@@ -81,6 +81,7 @@ struct Opts {
     std::string refine = "sine";
     std::string json_path;
     std::string label;
+    std::string oct_path;   // --oct: read a dumpOctDataParallel *_N.oct file
 };
 
 void usage(const char* argv0) {
@@ -94,9 +95,14 @@ void usage(const char* argv0) {
         << "  --refine NAME        sine|blob|offblob|puncture|puncture2\n"
         << "                       (default sine)\n"
         << "  --variants LIST      comma list of:\n"
-        << "                         sfc, sfc_weighted, sfc_levelwise, fastpart,\n"
-        << "                         fastpart_fullstencil, fastpart_weighted\n"
+        << "                         sfc, sfc_weighted, sfc_levelwise,\n"
+        << "                         sfc_mc_contig, fastpart, fastpart_fullstencil,\n"
+        << "                         fastpart_weighted, fastpart_amracut, fastpart_prop\n"
         << "                       (default sfc,fastpart)\n"
+        << "  --oct PATH           score a dumpOctDataParallel *_N.oct file\n"
+        << "                       (136-byte fastpart oct_element records, e.g. the\n"
+        << "                       AMRaCut paper's Zenodo exports) instead of\n"
+        << "                       building a mesh; --max-depth/--refine ignored\n"
         << "  --label S            free-form tag copied into config.label\n"
         << "  --json PATH          write JSONL here (rank 0); default stdout\n";
 }
@@ -354,6 +360,7 @@ int main(int argc, char** argv) {
         else if (a == "--grain") o.grain = atoi(next("--grain"));
         else if (a == "--variants") o.variants = next("--variants");
         else if (a == "--refine") o.refine = next("--refine");
+        else if (a == "--oct") o.oct_path = next("--oct");
         else if (a == "--label") o.label = next("--label");
         else if (a == "--json") o.json_path = next("--json");
         else if (a == "-h" || a == "--help") {
@@ -366,6 +373,82 @@ int main(int argc, char** argv) {
         }
     }
 
+    std::vector<oct_data<unsigned int>> conn;
+    std::vector<unsigned int> ele_offsets, ele_counts;
+    unsigned int lmin = 0, lmax = 0;
+    ot::Mesh* mesh = nullptr;
+
+    if (!o.oct_path.empty()) {
+        // ---- file mode: every rank reads its own contiguous slice of the
+        // dump. record = fastpart oct_element (34 x uint32 = 136 B): rank,
+        // trank, eid, localid, coord[3], e2e[6], level, edgeNeighbors[12],
+        // vertexNeighbors[8]. eid is the global Hilbert index, so an equal
+        // slice per rank IS the SFC baseline (same as the paper suite's
+        // "SFC" arm). N comes from the *_N.oct filename, as in the paper.
+        // NOTE: in the 2025 Zenodo exports vertexNeighbors is only ~1/8
+        // populated, so stencil26 from a file under-counts corner edges.
+        constexpr size_t REC_U32 = 34, REC_B = REC_U32 * sizeof(uint32_t);
+        unsigned long long N = 0;
+        {
+            const std::string& f = o.oct_path;
+            const size_t us = f.rfind('_'), dot = f.rfind('.');
+            if (us == std::string::npos || dot == std::string::npos || us > dot) {
+                if (!rank) std::cerr << "--oct: need *_N.oct filename\n";
+                MPI_Abort(comm, 2);
+            }
+            N = std::stoull(f.substr(us + 1, dot - us - 1));
+        }
+        const unsigned long long base = N / npes, rem = N - base * npes;
+        ele_counts.resize(npes);
+        ele_offsets.assign(npes + 1, 0);
+        for (unsigned int p = 0; p < npes; ++p) {
+            ele_counts[p] = (unsigned int)(base + (p < rem ? 1 : 0));
+            ele_offsets[p + 1] = ele_offsets[p] + ele_counts[p];
+        }
+        const size_t nl = ele_counts[rank];
+        std::vector<uint32_t> buf(nl * REC_U32);
+        {
+            std::ifstream in(o.oct_path, std::ios::binary);
+            if (!in) {
+                if (!rank) std::cerr << "--oct: cannot open " << o.oct_path << "\n";
+                MPI_Abort(comm, 2);
+            }
+            in.seekg((std::streamoff)ele_offsets[rank] * (std::streamoff)REC_B);
+            in.read(reinterpret_cast<char*>(buf.data()), (std::streamsize)(nl * REC_B));
+            if ((size_t)in.gcount() != nl * REC_B) {
+                std::cerr << "--oct: short read on rank " << rank << "\n";
+                MPI_Abort(comm, 2);
+            }
+        }
+        conn.resize(nl);
+        unsigned int llmin = ~0u, llmax = 0;
+        for (size_t i = 0; i < nl; ++i) {
+            const uint32_t* r = &buf[i * REC_U32];
+            auto& c = conn[i];
+            c.rank = rank;
+            c.trank = UINT32_MAX;
+            c.eid = r[2];
+            c.localid = (unsigned int)i;
+            for (int k = 0; k < 3; ++k) c.coord[k] = r[4 + k];
+            for (int k = 0; k < 6; ++k) c.e2e[k] = r[7 + k];
+            c.level = r[13];
+            for (int k = 0; k < 12; ++k) c.edgeNeighbors[k] = r[14 + k];
+            for (int k = 0; k < 8; ++k) c.vertexNeighbors[k] = r[26 + k];
+            if (c.eid != ele_offsets[rank] + i) {
+                std::cerr << "--oct: eid " << c.eid << " != slice index "
+                          << (ele_offsets[rank] + i) << " on rank " << rank
+                          << " (wrong record layout?)\n";
+                MPI_Abort(comm, 2);
+            }
+            llmin = std::min(llmin, c.level);
+            llmax = std::max(llmax, c.level);
+        }
+        MPI_Allreduce(&llmin, &lmin, 1, MPI_UNSIGNED, MPI_MIN, comm);
+        MPI_Allreduce(&llmax, &lmax, 1, MPI_UNSIGNED, MPI_MAX, comm);
+        m_uiMaxDepth = lmax;  // sizes the per-level arrays below
+        if (o.label.empty()) o.label = o.oct_path.substr(o.oct_path.rfind('/') + 1);
+        o.refine = "oct";
+    } else {
     m_uiMaxDepth = o.max_depth;
     _InitializeHcurve(m_uiDim);
 
@@ -444,7 +527,7 @@ int main(int argc, char** argv) {
 
     // pBlockSetup=false: a cut-quality tool never unzips, and block decomposition
     // is the expensive part of mesh construction.
-    ot::Mesh* mesh =
+    mesh =
         ot::createMesh(tmpNodes.data(), tmpNodes.size(), o.eorder, comm, 1,
                        ot::SM_TYPE::FDM, o.grain, o.partition_tol, 256, NULL,
                        false);
@@ -456,13 +539,14 @@ int main(int argc, char** argv) {
         MPI_Finalize();
         return 0;
     }
-
-    unsigned int lmin = 0, lmax = 0;
     mesh->computeMinMaxLevel(lmin, lmax);
 
     // one connectivity map feeds BOTH arms -> identical adjacency by construction
-    auto [conn, local_to_global, ele_offsets, ele_counts] =
-        mesh->buildOctantConnectivityMap<unsigned int>();
+    auto t = mesh->buildOctantConnectivityMap<unsigned int>();
+    conn = std::move(std::get<0>(t));
+    ele_offsets = std::move(std::get<2>(t));
+    ele_counts = std::move(std::get<3>(t));
+    }
 
     const size_t nloc = conn.size();
     const unsigned int num_ele_global = ele_offsets.back();
@@ -566,20 +650,23 @@ int main(int argc, char** argv) {
     // cut is the comms price of reaching it the curve-contiguous-per-level way.
     // Each rank owns up to nlev curve segments instead of 1, so expect the cut
     // to rise; whether it rises less than lts_eff gains is the experiment.
-    std::vector<unsigned int> sfc_levelwise_label(num_ele_global, 0);
+    // global level array (every rank holds it; deterministic, no bcast needed)
+    std::vector<unsigned int> glev(num_ele_global, 0);
+    std::vector<unsigned long long> n_of_lev(m_uiMaxDepth + 2, 0);
     {
         std::vector<int> cnt(npes), disp(npes);
         for (unsigned int p = 0; p < npes; ++p) {
             cnt[p]  = (int)(ele_offsets[p + 1] - ele_offsets[p]);
             disp[p] = (int)ele_offsets[p];
         }
-        std::vector<unsigned int> glev(num_ele_global, 0);
         MPI_Allgatherv(level_of_local.data(), (int)nloc, MPI_UNSIGNED,
                        glev.data(), cnt.data(), disp.data(), MPI_UNSIGNED,
                        comm);
-        std::vector<unsigned long long> n_of_lev(m_uiMaxDepth + 2, 0),
-            k_of_lev(m_uiMaxDepth + 2, 0);
         for (unsigned int g = 0; g < num_ele_global; ++g) n_of_lev[glev[g]]++;
+    }
+    std::vector<unsigned int> sfc_levelwise_label(num_ele_global, 0);
+    {
+        std::vector<unsigned long long> k_of_lev(m_uiMaxDepth + 2, 0);
         for (unsigned int g = 0; g < num_ele_global; ++g) {
             const unsigned int lev = glev[g];
             // k-th of n_L elements at this level -> part floor(k*np/n_L)
@@ -589,6 +676,51 @@ int main(int argc, char** argv) {
             sfc_levelwise_label[g] = (p >= npes) ? npes - 1 : p;
             k_of_lev[lev]++;
         }
+    }
+
+    // ---- SFC-MC-CONTIG labels: the CONTIGUOUS multi-constraint split. Keeps
+    // the one invariant mainline Dendro's Mesh ctor needs (each rank owns one
+    // contiguous Hilbert range, so the splitter-based E2E search still works)
+    // while choosing the np-1 cut points to minimise the worst per-level
+    // imbalance max_{p,L} count_{p,L} / (n_L/np). Bottleneck objective on a
+    // 1-D chain with monotone constraints => greedy packing is exact for
+    // feasibility at a given tolerance t; binary-search t. This is the
+    // labelling `experimental` could adopt with ~300 lines and no fork port;
+    // its lts_eff vs sfc_levelwise says how much the contiguity costs.
+    std::vector<unsigned int> sfc_mc_contig_label(num_ele_global, 0);
+    {
+        const unsigned int nlev = m_uiMaxDepth + 2;
+        // constraints: one per level PLUS the total element count (index nlev),
+        // so the packing cannot starve late ranks. Levels with fewer than np
+        // elements are exempt (they cannot be balanced by any labelling).
+        auto pack = [&](double t, std::vector<unsigned int>* out) -> bool {
+            std::vector<unsigned long long> cap(nlev + 1, 0), cur(nlev + 1, 0);
+            for (unsigned int l = 0; l < nlev; ++l) {
+                if (n_of_lev[l] < npes) { cap[l] = ~0ull; continue; }
+                const double c = std::ceil(t * (double)n_of_lev[l] / (double)npes);
+                cap[l] = std::max<unsigned long long>(1, (unsigned long long)c);
+            }
+            cap[nlev] = (unsigned long long)std::ceil(
+                t * (double)num_ele_global / (double)npes);
+            unsigned int p = 0;
+            for (unsigned int g = 0; g < num_ele_global; ++g) {
+                const unsigned int l = glev[g];
+                if (cur[l] + 1 > cap[l] || cur[nlev] + 1 > cap[nlev]) {
+                    if (++p >= npes) return false;
+                    std::fill(cur.begin(), cur.end(), 0ull);
+                }
+                cur[l]++;
+                cur[nlev]++;
+                if (out) (*out)[g] = p;
+            }
+            return true;
+        };
+        double lo = 1.0, hi = (double)npes;  // t=np is always feasible
+        for (int it = 0; it < 48; ++it) {
+            const double mid = 0.5 * (lo + hi);
+            if (pack(mid, nullptr)) hi = mid; else lo = mid;
+        }
+        pack(hi, &sfc_mc_contig_label);
     }
 
     std::ofstream fout;
@@ -611,8 +743,11 @@ int main(int argc, char** argv) {
             label_of_gid = sfc_weighted_label;
         } else if (v == "sfc_levelwise") {
             label_of_gid = sfc_levelwise_label;
+        } else if (v == "sfc_mc_contig") {
+            label_of_gid = sfc_mc_contig_label;
         } else if (v == "fastpart" || v == "fastpart_fullstencil" ||
-                   v == "fastpart_weighted") {
+                   v == "fastpart_weighted" || v == "fastpart_amracut" ||
+                   v == "fastpart_prop") {
             std::vector<fastpart_uint_t> parts(nloc, 0);
             std::vector<fastpart_uint_t> vwgt(nloc, 1);
             for (size_t i = 0; i < nloc; ++i) vwgt[i] = (fastpart_uint_t)work_w[i];
@@ -622,9 +757,23 @@ int main(int argc, char** argv) {
             opts.include_edge_corner = (v == "fastpart_fullstencil");
             opts.vwgt = (v == "fastpart_weighted") ? vwgt.data() : nullptr;
 
+            // fastpart_amracut: the PUBLISHED AMRaCut diffusion schedule
+            // (5 rounds, 3-tier rates 0.01/0.2/0.8); fastpart_prop: the paper
+            // text's proportional rates. Plain `fastpart` = the local fastpart
+            // HEAD (20 rounds, binary 0.1/0.8), which is what every earlier
+            // vault number measured. Env knobs live in fastpart/dgraph.cpp.
+            if (v == "fastpart_amracut") {
+                setenv("FASTPART_DIFF_ITERS", "5", 1);
+                setenv("FASTPART_RATE_SCHEME", "1", 1);
+            } else if (v == "fastpart_prop") {
+                setenv("FASTPART_DIFF_ITERS", "5", 1);
+                setenv("FASTPART_RATE_SCHEME", "2", 1);
+            }
             MPI_Comm c = comm;
             fastpart_partgraph_octree_ex(vtx_dist.data(), oct_in.data(), &opts,
                                          parts.data(), &c);
+            unsetenv("FASTPART_DIFF_ITERS");
+            unsetenv("FASTPART_RATE_SCHEME");
 
             // gather every rank's labels so any global id resolves in O(1)
             std::vector<int> cnt(npes), disp(npes);
@@ -659,7 +808,7 @@ int main(int argc, char** argv) {
     }
 
     if (fout.is_open()) fout.close();
-    delete mesh;
+    if (mesh) delete mesh;
     MPI_Finalize();
     return 0;
 }
