@@ -7986,16 +7986,37 @@ void Mesh::buildZipPlanArbitrateDistributed(
 void Mesh::pruneZipSync() {
     static const int level = [] {
         const char* e = std::getenv("DENDRO_ZIPSYNC_PRUNE");
-        return e ? std::atoi(e) : 2;
+        return e ? std::atoi(e) : 0;
     }();
-    if (level <= 0 || !m_uiIsActive || m_uiActiveNpes <= 1 ||
+    // DENDRO_ZIPSYNC_CHECK=1: keep the full lists, record the level-2 drop mask
+    // and let syncZipNonPrimary report entries whose delivered value differs
+    static const bool check = [] {
+        const char* e = std::getenv("DENDRO_ZIPSYNC_CHECK");
+        return e && e[0] == '1';
+    }();
+    if ((level <= 0 && !check) || !m_uiIsActive || m_uiActiveNpes <= 1 ||
         m_uiZipSyncPruned)
         return;
+    // labelled meshes keep the full side-channel until the ghost-primary chain
+    // seen on BSSN (constraint vector NaN at every prune level) is understood;
+    // DENDRO_ZIPSYNC_PRUNE_LABELLED=1 prunes them too
+    static const bool pruneLabelled = [] {
+        const char* e = std::getenv("DENDRO_ZIPSYNC_PRUNE_LABELLED");
+        return e && e[0] == '1';
+    }();
+    if (!pruneLabelled && !check && m_uiIsLabelledRebuild) return;
     const int npes = m_uiActiveNpes;
     std::unordered_set<unsigned int> delivered(
         m_uiScatterMapActualNodeRecv.begin(),
         m_uiScatterMapActualNodeRecv.end());
-    std::unordered_set<unsigned int> sendSrc;
+    // slots this rank sends from must stay fresh: the ghost-exchange pack
+    // sources and the side-channel's own send sources (a position's winner can
+    // be a ghost slot here)
+    std::unordered_set<unsigned int> sendSrc(m_uiZipSyncSendCg.begin(),
+                                             m_uiZipSyncSendCg.end());
+    size_t ghostWinners = 0;
+    for (unsigned int cg : m_uiZipSyncSendCg)
+        if (cg < m_uiNodeLocalBegin || cg >= m_uiNodeLocalEnd) ghostWinners++;
     {
         const bool useDG = m_uiScatterMapSendIsDG.size() ==
                            m_uiScatterMapActualNodeSend.size();
@@ -8033,6 +8054,16 @@ void Mesh::pruneZipSync() {
             !delivered.count(cg) && (level < 2 || readSet.count(cg));
         keepR[k] = local || undelivered || sendSrc.count(cg);
     }
+    if (check) {
+        m_uiZipSyncCheckKeep = keepR;
+        m_uiZipSyncCheckDelivered.assign(recvN, 0);
+        m_uiZipSyncCheckRead.assign(recvN, 0);
+        for (size_t k = 0; k < recvN; k++) {
+            m_uiZipSyncCheckDelivered[k] = delivered.count(m_uiZipSyncRecvCg[k]) ? 1 : 0;
+            m_uiZipSyncCheckRead[k]      = readSet.count(m_uiZipSyncRecvCg[k]) ? 1 : 0;
+        }
+        return;
+    }
     // my recv block from rank p is p's send block to me, in the same order
     MPI_Alltoallv(keepR.data(), m_uiZipSyncRecvCounts.data(),
                   m_uiZipSyncRecvOffsets.data(), MPI_UNSIGNED_CHAR,
@@ -8069,12 +8100,17 @@ void Mesh::pruneZipSync() {
         std::cout << "[zipsync-prune r" << m_uiActiveRank << "] recv " << recvN
                   << "->" << m_uiZipSyncRecvCg.size() << " send " << sendN
                   << "->" << m_uiZipSyncSendCg.size()
-                  << " active=" << anyG << std::endl;
+                  << " ghost_winners=" << ghostWinners << " active=" << anyG
+                  << std::endl;
 }
 
 void Mesh::buildZipPlan() {
     m_uiZipPlanCg.clear();
     m_uiZipPlanUnzipIdx.clear();
+    // a rebuilt plan carries fresh sync lists; the in-place labelled rebuild
+    // reuses the mesh object, so the ctor-time prune must not stick
+    m_uiZipSyncPruned       = false;
+    m_uiZipSyncGlobalActive = true;
     // mark before the guards: an early-return below means the plan is
     // legitimately empty for this rank, not "retry on next ensure".
     m_uiZipPlanBuilt = true;
@@ -21112,6 +21148,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // set up above (outside do_block_creation), no need to
         // duplicate here.
 
+        m_uiIsLabelledRebuild = true;
         pruneZipSync();
         __phase("block-decomposition");
     }

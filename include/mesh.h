@@ -683,6 +683,8 @@ class Mesh {
     std::vector<unsigned int> m_uiZipSyncSendCg;
     std::vector<unsigned int> m_uiZipSyncRecvCg;
     bool m_uiZipSyncPruned       = false;
+    bool m_uiIsLabelledRebuild   = false;
+    std::vector<unsigned char> m_uiZipSyncCheckKeep, m_uiZipSyncCheckDelivered, m_uiZipSyncCheckRead;
     bool m_uiZipSyncGlobalActive = true;
 
     /** Intra-rank duplicate sync: for phys_pos with multiple LOCAL cgs

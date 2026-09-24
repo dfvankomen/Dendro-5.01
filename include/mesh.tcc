@@ -880,6 +880,38 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
         s_uiCommStatSyncBytesAll += (DendroIntL)(sendN * dof * sizeof(T));
         s_uiCommStatSyncCallsAll++;
     }
+    if (m_uiZipSyncCheckKeep.size() == recvN) {
+        static int calls = 0;
+        size_t dropped = 0, differ = 0, nanBefore = 0, differDeliv = 0, differUnread = 0;
+        unsigned int sampleCg = 0; bool haveSample = false;
+        for (size_t k = 0; k < recvN; k++) {
+            if (m_uiZipSyncCheckKeep[k]) continue;
+            dropped++;
+            const unsigned int cg = m_uiZipSyncRecvCg[k];
+            bool d = false, isnanb = false;
+            for (unsigned int v = 0; v < dof; v++) {
+                const T before = vec[v * m_uiNumActualNodes + cg];
+                const T after  = recvBuf[k * dof + v];
+                if (std::isnan((double)before)) isnanb = true;
+                if (!(before == after)) d = true;
+            }
+            if (isnanb) nanBefore++;
+            if (d) {
+                differ++;
+                if (m_uiZipSyncCheckDelivered[k]) differDeliv++;
+                if (!m_uiZipSyncCheckRead[k]) differUnread++;
+                if (!haveSample) { sampleCg = cg; haveSample = true; }
+            }
+        }
+        if (calls < 12 || differ)
+            std::cout << "[zipsync-check r" << m_uiActiveRank << "] call=" << calls
+                      << " dof=" << dof << " dropped=" << dropped << " differ=" << differ
+                      << " differ_delivered=" << differDeliv << " differ_unread=" << differUnread
+                      << " nan_before=" << nanBefore
+                      << (haveSample ? " sample_cg=" : "") << (haveSample ? std::to_string(sampleCg) : "")
+                      << std::endl;
+        calls++;
+    }
     for (size_t k = 0; k < recvN; k++) {
         const unsigned int cg = m_uiZipSyncRecvCg[k];
         const T* src = recvBuf.data() + k * dof;
@@ -6871,6 +6903,21 @@ void Mesh::zip(const T* unzippedVec, T* zippedVec) {
         const unsigned int* __restrict__ idxs  = m_uiZipPlanUnzipIdx.data();
         for (size_t i = 0; i < N; i++)
             zippedVec[cgs[i]] = unzippedVec[idxs[i]];
+        static const bool zipNanChk = std::getenv("DENDRO_ZIP_NANCHK") != nullptr;
+        if (zipNanChk) {
+            std::vector<char> written(m_uiNumActualNodes, 0);
+            for (size_t i = 0; i < N; i++) written[cgs[i]] = 1;
+            unsigned int nanW = 0, nanU = 0, firstW = 0, firstU = 0; size_t firstIdx = 0;
+            for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd; cg++) {
+                if (!std::isnan((double)zippedVec[cg])) continue;
+                if (written[cg]) { if (!nanW) { firstW = cg; for (size_t i = 0; i < N; i++) if (cgs[i] == cg) { firstIdx = idxs[i]; break; } } nanW++; }
+                else { if (!nanU) firstU = cg; nanU++; }
+            }
+            if (nanW || nanU) {
+                unsigned int blk = 0; for (unsigned int b = 0; b < m_uiLocalBlockList.size(); b++) if (firstIdx >= m_uiLocalBlockList[b].getOffset() && firstIdx < m_uiLocalBlockList[b].getOffset() + m_uiLocalBlockList[b].getAlignedBlockSz()) blk = b;
+                std::cout << "[zip-nan r" << m_uiActiveRank << "] local_nan_written=" << nanW << " (first cg " << firstW << " from unzip idx " << firstIdx << " blk " << blk << " blkLev " << (nanW ? m_uiLocalBlockList[blk].getRegularGridLev() : 0) << ") local_nan_unwritten=" << nanU << " (first cg " << firstU << ")" << std::endl;
+            }
+        }
 
         // probe: dump (cg, unzip_idx, source_value, block_id, slot) for
         // target cg list. gated by EM4_ZIP_PROBE_DIR + EM4_ZIP_PROBE_CGS
