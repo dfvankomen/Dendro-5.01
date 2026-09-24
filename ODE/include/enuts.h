@@ -290,6 +290,8 @@ class ExplicitNUTS : public ETS<T, Ctx> {
      * SFC mesh. Rebuilt per mesh; labelled meshes zip through it. */
     std::vector<unsigned int> m_uiCgOwnerDG;
     const ot::Mesh* m_uiCgOwnerMesh = nullptr;
+    /**@brief per local block, its unzip dependent elements (SFC order); rebuilt per mesh */
+    std::vector<std::vector<unsigned int>> m_uiBlkDepEid;
 
     /**@brief: temp vector of the DG scheme*/
     DVec m_uiDGTmp0;
@@ -734,6 +736,7 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
                                ot::DVEC_TYPE::OCT_LOCAL_WITH_PADDING,
                                ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
     m_uiCgOwnerMesh = nullptr;
+    m_uiBlkDepEid.clear();
     m_uiEvarDG.create_vector(m_uiAppCtx->get_mesh(),
                              ot::DVEC_TYPE::OCT_LOCAL_NODES, ot::DVEC_LOC::HOST,
                              m_uiEVar.get_dof(), true);
@@ -793,6 +796,7 @@ int ExplicitNUTS<T, Ctx>::deallocate_internal_vars() {
     }
 
     m_uiBVec.clear();
+    m_uiBlkDepEid.clear();
 
     // deallocate m_uiStVec, which is based on the number of stages
     for (unsigned int i = 0; i < m_uiNumStages; i++) {
@@ -1294,8 +1298,12 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
     T* dgEVar = m_uiEvarDG.get_vec_ptr();
 
-    std::vector<unsigned int> eid;
-    computeBlockUnzipDepElements(pMesh, blk, eid);
+    if (m_uiBlkDepEid.size() != pMesh->getLocalBlockList().size()) {
+        m_uiBlkDepEid.assign(pMesh->getLocalBlockList().size(), {});
+        for (unsigned int b = 0; b < m_uiBlkDepEid.size(); b++)
+            computeBlockUnzipDepElements(pMesh, b, m_uiBlkDepEid[b]);
+    }
+    const std::vector<unsigned int>& eid = m_uiBlkDepEid[blk];
 
     if (rk_s == 0) {  // Sync operation for U(t,.)
 

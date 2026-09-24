@@ -268,7 +268,8 @@ class BlockAsyncVector {
             const unsigned int offset = blkList[m_uiBlkID].getOffset();
             const unsigned int blkSz  = lx * ly * lz;
             static int dbg_calls = 0;
-            if (std::getenv("DENDRO_ENUTS_DEBUG") && dbg_calls++ < 3) {
+            static const bool dbg_on = std::getenv("DENDRO_ENUTS_DEBUG") != nullptr;
+            if (dbg_on && dbg_calls++ < 3) {
                 T mx[8] = {0};
                 for (unsigned int v = 0; v < dof && v < 8; v++)
                     for (unsigned int q = 0; q < blkSz; q++)
@@ -284,7 +285,8 @@ class BlockAsyncVector {
             return;
         }
         static int dbg_sfc = 0;
-        if (std::getenv("DENDRO_ENUTS_DEBUG") && dbg_sfc++ < 2)
+        static const bool dbg_sfc_on = std::getenv("DENDRO_ENUTS_DEBUG") != nullptr;
+        if (dbg_sfc_on && dbg_sfc++ < 2)
             std::cout << "[blkzip r" << pMesh->getMPIRankGlobal() << "] blk=" << m_uiBlkID
                       << " SFC path nonSFC=" << blkList[m_uiBlkID].isNonSFC()
                       << " numEle=" << blkList[m_uiBlkID].numElements() << std::endl;
