@@ -9,8 +9,9 @@ anything by itself; `sbatch` is the user's call.
 | B | does the LTS win exist in wall-clock? | `nlsmNUTS` (ts_mode 0) | SFC vs levelwise+refine (method 3, `DENDRO_GRAPH_REFINE=2`) at 32/64 |
 | C | BSSN long-haul gate for the flipped defaults | `bssnSolver` | old defaults (`DENDRO_MINIMAL_SCATTER=0 DENDRO_ZIPPLAN_DIST=0 DENDRO_LAZY_ZIPPLAN=0`) vs new |
 
-Pinned sources (see `build.sh`): fork `93c4b526` (jj tip 2026-09-24, push it first), fastpart branch
-`dendro-refine` @ `0e848b0`, EM4 `repartitioning` + uncommitted sandwich fixes, NLSM worktree branch
+Pinned sources (see `build.sh`): fork = the jj tip after `docs(repart): speed push` (2026-09-24 night, push it
+first), fastpart branch `dendro-refine` @ `0e848b0` **plus the uncommitted balance-phase diff** (commit it; the
+`fastpart_oct_partopts` struct grew, so fork and library must be built together), EM4 `repartitioning` + uncommitted sandwich fixes, NLSM worktree branch
 `lts-graph-fix`. The EM4/NLSM/BSSN edits must be committed and pushed before the cluster can build them.
 
 Rules baked into `run_ab.sh` (from the vault's measurement hygiene):
