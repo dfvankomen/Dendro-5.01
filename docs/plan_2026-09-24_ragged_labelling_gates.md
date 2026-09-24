@@ -121,9 +121,12 @@ refinement) so padded volume is an objective, not just a constraint.
 
 ## Step 3 — the remaining rounds (from the 2026-09-24 audits)
 
-In order of payoff/risk: push partition (trank from labels, no lookup round) → forward-push R1/R2/R3
-closure → fused request/response rounds → isDG packing + numMissing fold → IGT per-variable Alltoallv
-batching. Each byte-identical, each behind a knob for one A/B, then default.
+~~push partition → forward-push R1/R2/R3 closure → isDG packing + numMissing fold~~ **DONE (night, 7 jj
+commits, workspace `rounds`): 36 → 27 collectives per call on method 3, 38 → 29 on levelwise, EM4 later
+calls 38 → 28; every commit byte-identical on all 73 gate lines + EM4 CSV md5; legacy behind
+`DENDRO_REPART_LEGACY_FETCH=1`; counter `DENDRO_REPART_ROUNDS=1`.** Remaining: fused request/response
+rounds; `computeMinMaxLevel` as one Allreduce (−3); keep-mask shrink in one Alltoallv; IGT per-variable
+Alltoallv batching. Each byte-identical, each behind a knob for one A/B, then default.
 
 ## Step 4 — price it (needs the user's cluster OK)
 
