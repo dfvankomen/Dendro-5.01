@@ -851,6 +851,10 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
     par::Mpi_Alltoallv(sendBuf.data(), sCnt.data(), sOff.data(),
                        recvBuf.data(), rCnt.data(), rOff.data(),
                        m_uiCommActive);
+    if (this->commStatsOn()) {
+        s_uiCommStatSyncBytesAll += (DendroIntL)(sendN * dof * sizeof(T));
+        s_uiCommStatSyncCallsAll++;
+    }
     for (size_t k = 0; k < recvN; k++) {
         const unsigned int cg = m_uiZipSyncRecvCg[k];
         const T* src = recvBuf.data() + k * dof;

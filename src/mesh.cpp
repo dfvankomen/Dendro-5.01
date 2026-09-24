@@ -664,18 +664,22 @@ DendroIntL Mesh::s_uiCommStatBytesRecvAll = 0;
 DendroIntL Mesh::s_uiCommStatMsgSentAll   = 0;
 DendroIntL Mesh::s_uiCommStatMsgRecvAll   = 0;
 DendroIntL Mesh::s_uiCommStatExchangesAll = 0;
+DendroIntL Mesh::s_uiCommStatSyncBytesAll = 0;
+DendroIntL Mesh::s_uiCommStatSyncCallsAll = 0;
 
 void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
     if (m_uiCommStatsOn != 1 || !m_uiIsActive) return;
 
     // [0]=bytesSent [1]=bytesRecv [2]=nodesSent [3]=nodesRecv [4]=exchanges
-    DendroIntL local[5] = {s_uiCommStatBytesSentAll, s_uiCommStatBytesRecvAll,
+    // [5]=zip-sync bytes sent [6]=zip-sync collective calls
+    DendroIntL local[7] = {s_uiCommStatBytesSentAll, s_uiCommStatBytesRecvAll,
                            s_uiCommStatNodesSentAll, s_uiCommStatNodesRecvAll,
-                           s_uiCommStatExchangesAll};
-    DendroIntL sum[5]   = {0, 0, 0, 0, 0};
-    DendroIntL maxv[5]  = {0, 0, 0, 0, 0};
-    par::Mpi_Reduce(local, sum, 5, MPI_SUM, 0, m_uiCommActive);
-    par::Mpi_Reduce(local, maxv, 5, MPI_MAX, 0, m_uiCommActive);
+                           s_uiCommStatExchangesAll,  s_uiCommStatSyncBytesAll,
+                           s_uiCommStatSyncCallsAll};
+    DendroIntL sum[7]   = {0, 0, 0, 0, 0, 0, 0};
+    DendroIntL maxv[7]  = {0, 0, 0, 0, 0, 0, 0};
+    par::Mpi_Reduce(local, sum, 7, MPI_SUM, 0, m_uiCommActive);
+    par::Mpi_Reduce(local, maxv, 7, MPI_MAX, 0, m_uiCommActive);
 
     if (m_uiActiveRank == 0) {
         const double meanBytesSent =
@@ -689,7 +693,9 @@ void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
             << " total_nodes_sent=" << sum[2]
             << " total_exchanges=" << sum[4]
             << " max_rank_bytes_sent=" << maxv[0]
-            << " bytes_sent_imbalance=" << imbal << std::endl;
+            << " bytes_sent_imbalance=" << imbal
+            << " sync_bytes_sent=" << sum[5] << " sync_calls=" << maxv[6]
+            << std::endl;
     }
 }
 

@@ -958,6 +958,8 @@ class Mesh {
     static DendroIntL s_uiCommStatMsgSentAll;
     static DendroIntL s_uiCommStatMsgRecvAll;
     static DendroIntL s_uiCommStatExchangesAll;
+    static DendroIntL s_uiCommStatSyncBytesAll;
+    static DendroIntL s_uiCommStatSyncCallsAll;
 
     /**@brief : number of elements that needed to be sent to each processor*/
     std::vector<unsigned int> m_uiSendEleCount;
