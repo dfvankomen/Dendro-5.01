@@ -69,3 +69,42 @@ running bash script. Never edit dendrolib sources while any build compiles them 
 mismatch → heap corruption that looks like an MPI bug); killing `make` leaves truncated objects with
 fresh mtimes. BSSN TOML keys must precede `[AEH_PARAMS]`. `PARTEVOLVE_INIT=puncture` (evolve test) vs
 `PARTTEST_INIT=puncture` (mesh test). Wall-clock on this box is an indicator only.
+
+## Update, 2026-09-25 afternoon — the defect is closed, the prune is the default again
+
+Full plan, probes and every table: `docs/plan_2026-09-25_transport_read.md`.
+
+- **The reader** was `redistributeVec` step 2, but one level deeper than the brief guessed: it reads
+  source ghost slots of an intergrid-transfer output that no ghost exchange ever filled (the BSSN init
+  loop's last remesh + IGT is the swap's source; `interGridTransfer` ends with the duplicate sync only,
+  which with full lists happened to deliver every ghost cg and pruned delivers nothing). The transport
+  probe showed the slots as scatter-map-delivered and *all-zero* (malloc zero pages), not non-finite;
+  rank 0's six NaN constraint cgs were exactly the six local slots the transport wrote from them. The
+  s2g transport has the same dependency.
+- **Fix** `DENDRO_REDIST_CANON_FILL` (jj `putpvosp`, default on since `xyozwlmw`; `=0` reverts):
+  every destination local slot without an authoritative write, plus destination ghost read-set slots no
+  destination exchange delivers, is pulled from a source local slot by cg2dg canonical position through
+  the orphan-fill machinery (68 keys globally on the BSSN swap). Do not widen it to the whole ghost read
+  set (first cut: 661k keys).
+- **Gates green** with the fix on at prune 2 and again on the plain defaults path: testPartitioning
+  four arms at np=4 and np=8 (prune 0 and 2) identical to base; EM4 np=4 `d7bbee89`/`a75a069e`, np=8
+  `d7bbee89`/`32eb202e`; ragged depth-9 ENUTS 18 digits; four-arm BSSN q1 (t_end 6.0) `sfc_p0 = sfc_p2`
+  and `graph_p0 = graph_p2` bit-for-bit on BH locations, constraints, GW_L2 and GW_l2_m2 (SFC
+  constraints `2ffba783…`, graph `c1508613…`); defaults-path BSSN graph and SFC arms reproduce those
+  files exactly with the labelled meshes pruned too. EM4 sync bytes on defaults: SFC 0, labelled
+  3.3 MB (np=4) / 4.8 MB (np=8) against 43.8 GB with the full side-channel.
+- **Defaults now** (`feat(repart)`, `xyozwlmw`): `DENDRO_REDIST_CANON_FILL` on, `DENDRO_ZIPSYNC_PRUNE` 2,
+  `DENDRO_ZIPSYNC_PRUNE_LABELLED` on (the guard's premise was this bug); `=0` reverts each.
+- **Block-major unzip** (`perf(unzip)`, `yyloslms`, `DENDRO_UNZIP_BLOCK_MAJOR=1`, opt-in): byte-identical
+  on every gate, but unzip compute 13.1–13.4 s (scatter) vs 21.2–21.6 s (block-major v1), 3/3
+  interleaved rounds at equal load. v2 (interpolants cached per element, squashed into the same commit) is byte-identical and
+  still ~10 % slower (7.2 vs 7.9 s, 3/3 rounds on a quieter box): the lever is closed, knob opt-in.
+- **Probes kept** (gated, in mesh.tcc): `DENDRO_REDIST_PROBE=1` (source ghost reads and destination
+  slots by write path, non-finite and all-zero), `DENDRO_GHOSTREAD_CHECK=1` (unzip read set before and
+  after each exchange, first 6 calls per mesh), `DENDRO_UNZIP_FILLCHK=1` (sentinel-filled padded
+  buffer, unwritten slots per block). Any future probe for this class must count all-zero slots.
+- **Open**: the GW `l2_m2` mode file differs between the SFC and graph arms (BH, constraints, GW_L2
+  identical; each arm identical between prune levels) — not a gate condition, unexplained.
+- Gate scripts and references for this session live in the session scratchpad `gate/` and `ref/`
+  (copies of `tp_base/`, the EM4 param files, the NLSM d9 par, the q1 TOML and the TwoPunctures
+  solution); `bin_def/` holds the defaults-gate binaries.
