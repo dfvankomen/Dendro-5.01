@@ -9125,7 +9125,13 @@ void Mesh::buildZipPlan() {
     // such cgIdx (LOCAL or GHOST on this rank). Apply post-sync to
     // ensure cgIdx holds the consensus value.
     m_uiZipGhostToLocalAtConsensus.clear();
-    {
+    static const char* erfix_env =
+        std::getenv("DENDRO_ENABLE_ELEM_READ_FIXUP");
+    static const bool erfix_on =
+        erfix_env && erfix_env[0] == '1' && erfix_env[1] == '\0';
+    const bool buildElemReadFixup =
+        erfix_on || dbgWinnerCleanup || std::getenv("DENDRO_ZIPPLAN_STATS");
+    if (buildElemReadFixup) {
         // Map phys_pos → a local cg on this rank that holds the
         // primary's post-sync value. Prefer the cascade winner if
         // it's me; else any local at the phys_pos that's in the
