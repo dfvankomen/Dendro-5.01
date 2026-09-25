@@ -18558,16 +18558,22 @@ void Mesh::computeMinMaxLevel(unsigned int &lmin, unsigned int &lmax) const {
                 lmax_l = m_uiAllElements[e].getLevel();
         }
 
+        // one round: min over (lmin, ~lmax) gives both extremes
+        unsigned int loc[2] = {lmin_l, ~lmax_l}, ext[2];
         repartRound();
-        par::Mpi_Reduce(&lmin_l, &lmin, 1, MPI_MIN, 0, m_uiCommActive);
-        repartRound();
-        par::Mpi_Reduce(&lmax_l, &lmax, 1, MPI_MAX, 0, m_uiCommActive);
+        MPI_Allreduce(loc, ext, 2, MPI_UNSIGNED, MPI_MIN, m_uiCommActive);
+        lmin = ext[0];
+        lmax = ~ext[1];
     }
 
-    repartRound();
-    par::Mpi_Bcast(&lmin, 1, 0, m_uiCommGlobal);
-    repartRound();
-    par::Mpi_Bcast(&lmax, 1, 0, m_uiCommGlobal);
+    // inactive ranks (which never learn m_uiActiveNpes) still need the values
+    if (!m_uiIsActive || m_uiGlobalNpes != m_uiActiveNpes) {
+        unsigned int ext[2] = {lmin, lmax};
+        repartRound();
+        par::Mpi_Bcast(ext, 2, 0, m_uiCommGlobal);
+        lmin = ext[0];
+        lmax = ext[1];
+    }
 
     return;
 }
