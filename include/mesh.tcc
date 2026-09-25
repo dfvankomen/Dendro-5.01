@@ -14571,6 +14571,195 @@ void Mesh::ghostReadCheck(const T* vec, unsigned int dof, const char* tag) {
 }
 
 template <typename T>
+void Mesh::unzip_scatter_bm(const T* in, T* out, unsigned int dof) {
+    ensureZipPlanBuilt();
+    if (!m_uiIsActive) return;
+    // the element-major loop owns every experiment and probe knob
+    static const bool fallback = [] {
+        auto on = [](const char* n) {
+            const char* v = std::getenv(n);
+            return v && v[0] == '1' && v[1] == '\0';
+        };
+        return on("DENDRO_UNZIP_SAME_WINS") || on("DENDRO_UNZIP_SRC_AWARE") ||
+               std::getenv("DENDRO_UNZIP_PROBE") != nullptr ||
+               std::getenv("DENDRO_BBUF_DUMP_DIR") != nullptr ||
+               std::getenv("DENDRO_DUMP_DGWVEC_TN") != nullptr;
+    }();
+    if (fallback || (m_uiElementOrder % 2 != 0)) {
+        unzip_scatter(in, out, dof);
+        return;
+    }
+    const ot::TreeNode* pNodes = m_uiAllElements.data();
+    const ot::Block* blkList   = m_uiLocalBlockList.data();
+    const unsigned int nBlk    = (unsigned int)m_uiLocalBlockList.size();
+    const unsigned int eOrder  = m_uiElementOrder;
+    const unsigned int nPe     = m_uiNpE;
+    const unsigned int cgSz    = this->getDegOfFreedom();
+    const unsigned int unSz    = this->getDegOfFreedomUnZip();
+    const unsigned int nEle    = m_uiNumTotalElements;
+    const unsigned int* e2n    = m_uiE2NMapping_CG.data();
+    const bool canon_on = m_uiUnzipCanonWriterBuilt &&
+                          m_uiUnzipCanonWriter.size() == (size_t)unSz;
+    const unsigned int* canon_writer_tbl =
+        canon_on ? m_uiUnzipCanonWriter.data() : nullptr;
+
+    // block -> elements by counting sort of the element -> block map; the
+    // element loop is ascending so each block's list is ascending too
+    std::vector<unsigned int> b2eOff(nBlk + 1, 0);
+    for (unsigned int e = 0; e < nEle; e++)
+        for (unsigned int i = 0; i < m_e2b_unzip_counts[e]; i++)
+            b2eOff[m_e2b_unzip_map[m_e2b_unzip_offset[e] + i] + 1]++;
+    for (unsigned int b = 0; b < nBlk; b++) b2eOff[b + 1] += b2eOff[b];
+    std::vector<unsigned int> b2e(b2eOff[nBlk]), cur(b2eOff.begin(), b2eOff.end() - 1);
+    std::vector<unsigned int> cacheId(nEle, 0);
+    unsigned int nMulti = 0;
+    for (unsigned int e = 0; e < nEle; e++) {
+        const unsigned int c = m_e2b_unzip_counts[e];
+        if (c > 1) cacheId[e] = ++nMulti;
+        for (unsigned int i = 0; i < c; i++)
+            b2e[cur[m_e2b_unzip_map[m_e2b_unzip_offset[e] + i]]++] = e;
+    }
+    // nodal values of the elements feeding several blocks, gathered once
+    static std::vector<T> cache;
+    if (cache.size() < (size_t)nMulti * dof * nPe)
+        cache.resize((size_t)nMulti * dof * nPe);
+    std::vector<unsigned char> cached(nMulti + 1, 0);
+    std::vector<T> dgTmp((size_t)dof * nPe);
+    // parent->child interpolants of the coarser-role elements, computed once
+    // per (element, child) per call like the element-major loop does
+    static std::vector<T> p2cCache;
+    std::vector<unsigned int> p2cId(nEle, 0);
+    std::vector<unsigned char> p2cValid;
+    unsigned int nP2c = 0;
+    const size_t p2cStride = (size_t)NUM_CHILDREN * dof * nPe;
+    std::vector<ot::TreeNode> childOct;
+    childOct.reserve(NUM_CHILDREN);
+
+    auto has_hanging_face_or_edge = [this](unsigned int e) {
+        unsigned int cnum;
+        for (unsigned int d = OCT_DIR_LEFT; d <= OCT_DIR_FRONT; d++)
+            if (this->isFaceHanging(e, d, cnum)) return true;
+        for (unsigned int d = OCT_DIR_LEFT_DOWN; d <= OCT_DIR_UP_FRONT; d++)
+            if (this->isEdgeHanging(e, d, cnum)) return true;
+        return false;
+    };
+    auto gather = [&](unsigned int ele, T* dg) {
+        if (!has_hanging_face_or_edge(ele)) {
+            const unsigned int* e2n_ele = e2n + ele * nPe;
+            for (unsigned int v = 0; v < dof; v++) {
+                const T* in_v = in + v * cgSz;
+                T* dg_v       = dg + v * nPe;
+                for (unsigned int n = 0; n < nPe; n++) dg_v[n] = in_v[e2n_ele[n]];
+            }
+        } else {
+            for (unsigned int v = 0; v < dof; v++)
+                this->getElementNodalValues(in + v * cgSz, dg + v * nPe, ele, false);
+        }
+    };
+
+    for (unsigned int blk = 0; blk < nBlk; blk++) {
+        const ot::TreeNode blkNode = blkList[blk].getBlockNode();
+        const unsigned int PW      = blkList[blk].get1DPadWidth();
+        const unsigned int lx      = blkList[blk].getAllocationSzX();
+        const unsigned int ly      = blkList[blk].getAllocationSzY();
+        const unsigned int lz      = blkList[blk].getAllocationSzZ();
+        const unsigned int offset  = blkList[blk].getOffset();
+        const unsigned int bLev    = blkList[blk].getRegularGridLev();
+        const double hx   = (1u << (m_uiMaxDepth - bLev)) / (double)eOrder;
+        const double xmin = blkNode.minX() - PW * hx, xmax = blkNode.maxX() + PW * hx;
+        const double ymin = blkNode.minY() - PW * hx, ymax = blkNode.maxY() + PW * hx;
+        const double zmin = blkNode.minZ() - PW * hx, zmax = blkNode.maxZ() + PW * hx;
+
+        // same row-copy scatter as unzip_scatter's scatter_grid
+        auto scatter_grid = [&](const ot::TreeNode& node, unsigned int step,
+                                const T* src_base, unsigned int src_stride,
+                                unsigned int ele) {
+            const long long sz = 1ll << (m_uiMaxDepth - bLev);
+            const int pw = (int)PW, n = (int)(eOrder / step);
+            const int ib = (int)(((long long)node.minX() - blkNode.minX()) * eOrder / sz) + pw;
+            const int jb = (int)(((long long)node.minY() - blkNode.minY()) * eOrder / sz) + pw;
+            const int kb = (int)(((long long)node.minZ() - blkNode.minZ()) * eOrder / sz) + pw;
+            const int i_beg = std::max(0, -ib), i_end = std::min(n, (int)lx - 1 - ib);
+            const int j_beg = std::max(0, -jb), j_end = std::min(n, (int)ly - 1 - jb);
+            const int k_beg = std::max(0, -kb), k_end = std::min(n, (int)lz - 1 - kb);
+            if (i_beg > i_end) return;
+            const unsigned int run = (unsigned int)(i_end - i_beg + 1);
+            for (int k = k_beg; k <= k_end; k++)
+            for (int j = j_beg; j <= j_end; j++) {
+                const unsigned int slot = offset + (unsigned int)(kb + k) * lx * ly +
+                                          (unsigned int)(jb + j) * lx + (unsigned int)(ib + i_beg);
+                const unsigned int src = (unsigned int)k * step * (eOrder + 1) * (eOrder + 1) +
+                                         (unsigned int)j * step * (eOrder + 1) + (unsigned int)i_beg * step;
+                bool gated = false;
+                if (canon_writer_tbl)
+                    for (unsigned int i = 0; i < run; i++) {
+                        const unsigned int canon = canon_writer_tbl[slot + i];
+                        if (canon != LOOK_UP_TABLE_DEFAULT && canon != ele) { gated = true; break; }
+                    }
+                if (!gated) {
+                    for (unsigned int v = 0; v < dof; v++) {
+                        T* dst       = out + v * unSz + slot;
+                        const T* row = src_base + v * src_stride + src;
+                        for (unsigned int i = 0; i < run; i++) dst[i] = row[i * step];
+                    }
+                } else {
+                    for (unsigned int i = 0; i < run; i++) {
+                        const unsigned int canon = canon_writer_tbl[slot + i];
+                        if (canon != LOOK_UP_TABLE_DEFAULT && canon != ele) continue;
+                        for (unsigned int v = 0; v < dof; v++)
+                            out[v * unSz + slot + i] = src_base[v * src_stride + src + i * step];
+                    }
+                }
+            }
+        };
+
+        for (unsigned int k = b2eOff[blk]; k < b2eOff[blk + 1]; k++) {
+            const unsigned int ele = b2e[k];
+            const T* dg;
+            if (cacheId[ele]) {
+                const unsigned int id = cacheId[ele] - 1;
+                T* c = cache.data() + (size_t)id * dof * nPe;
+                if (!cached[id]) { gather(ele, c); cached[id] = 1; }
+                dg = c;
+            } else {
+                gather(ele, dgTmp.data());
+                dg = dgTmp.data();
+            }
+            const unsigned int eLev = pNodes[ele].getLevel();
+            if (eLev == bLev) {
+                scatter_grid(pNodes[ele], 1, dg, nPe, ele);
+            } else if (eLev > bLev) {
+                scatter_grid(pNodes[ele], 2, dg, nPe, ele);
+            } else {
+                childOct.clear();
+                pNodes[ele].addChildren(childOct);
+                if (!p2cId[ele]) {
+                    p2cId[ele] = ++nP2c;
+                    if (p2cCache.size() < (size_t)nP2c * p2cStride)
+                        p2cCache.resize((size_t)nP2c * p2cStride);
+                    p2cValid.resize((size_t)nP2c * NUM_CHILDREN, 0);
+                }
+                const size_t pid = (size_t)(p2cId[ele] - 1);
+                for (unsigned int child = 0; child < NUM_CHILDREN; child++) {
+                    if ((childOct[child].maxX() < xmin || childOct[child].minX() >= xmax) ||
+                        (childOct[child].maxY() < ymin || childOct[child].minY() >= ymax) ||
+                        (childOct[child].maxZ() < zmin || childOct[child].minZ() >= zmax))
+                        continue;
+                    const unsigned int cnum = childOct[child].getMortonIndex();
+                    T* p2c_c = p2cCache.data() + pid * p2cStride + (size_t)cnum * dof * nPe;
+                    if (!p2cValid[pid * NUM_CHILDREN + cnum]) {
+                        for (unsigned int v = 0; v < dof; v++)
+                            this->parent2ChildInterpolation(dg + v * nPe, p2c_c + v * nPe, cnum, m_uiDim);
+                        p2cValid[pid * NUM_CHILDREN + cnum] = 1;
+                    }
+                    scatter_grid(childOct[child], 1, p2c_c, nPe, ele);
+                }
+            }
+        }
+    }
+}
+
+template <typename T>
 void Mesh::unzip(const T* in, T* out, unsigned int dof) {
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
     // DENDRO_UNZIP_FILLCHK=1 probe: sentinel the padded buffer and report the
@@ -14625,7 +14814,13 @@ void Mesh::unzip(const T* in, T* out, unsigned int dof) {
             return;
         }
     }
-    this->unzip_scatter(in, out, dof);
+    // DENDRO_UNZIP_BLOCK_MAJOR=1: block-major scatter (same writes, per block)
+    static const bool blockMajor = [] {
+        const char* e = std::getenv("DENDRO_UNZIP_BLOCK_MAJOR");
+        return e && e[0] == '1';
+    }();
+    if (blockMajor) this->unzip_scatter_bm(in, out, dof);
+    else this->unzip_scatter(in, out, dof);
     fillReport();
 }
 

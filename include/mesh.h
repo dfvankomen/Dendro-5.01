@@ -3261,6 +3261,14 @@ class Mesh {
     template <typename T>
     void unzip_scatter(const T *in, T *out, unsigned int dof = 1);
 
+    /** Block-major form of unzip_scatter (DENDRO_UNZIP_BLOCK_MAJOR=1): walks
+     *  the local blocks in order and, per block, its feeding elements in
+     *  ascending element index, so every block buffer is written contiguously
+     *  and the last-writer order inside a block is the element-major one.
+     *  Elements feeding more than one block are gathered once per call. */
+    template <typename T>
+    void unzip_scatter_bm(const T *in, T *out, unsigned int dof = 1);
+
     /**
      * @brief performs unzip operation for a given block id.
      *
