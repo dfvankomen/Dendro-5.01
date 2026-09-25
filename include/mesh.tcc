@@ -6550,6 +6550,20 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // probe only: last write path per dst slot (1 auth, 2 non-auth, 3 orphan)
     std::vector<unsigned char> rpPath;
     if (rprobe) rpPath.assign(dstCgSz, 0);
+    // DENDRO_REDIST_CANON_FILL=1: every dst slot the transport is responsible
+    // for gets its value from a src LOCAL slot at the same canonical position.
+    // Source ghost slots are never trusted: the source vector may not have had
+    // a ghost exchange since it was written (an IGT output has none; only the
+    // full side-channel sync used to refresh it by accident). The pull set is
+    // every dst local slot without an authoritative write plus every dst ghost
+    // slot the unzip reads that got none; the non-authoritative pass stays as
+    // the fallback for positions no src rank owns locally.
+    static const bool canonFill = [] {
+        const char* v = std::getenv("DENDRO_REDIST_CANON_FILL");
+        return v && v[0] == '1';
+    }();
+    std::vector<unsigned char> authAll;
+    if (canonFill) authAll.assign(dstCgSz, 0);
     // dst GHOST regions: a fresh DVec's ghost slots are undefined until
     // the first standard exchange delivers them, but the zip-sync mirror
     // paths inside performGhostExchange can copy ghost->local BEFORE that
@@ -6615,6 +6629,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                     vecOut[v * dstCgSz + cg] = recvDG[base + v];
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd)
                     cgWrittenAuth[cg - dstNodeLocalBegin] = 1;
+                if (canonFill) authAll[cg] = 1;
                 if (rprobe) rpPath[cg] = 1;
                 markWritten(cg);
             }
@@ -6687,9 +6702,40 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         uint64_t     x, y, z;
     };
     std::vector<OrphanKey> myOrphans;
-    for (unsigned int cg = dstNodeLocalBegin; cg < dstNodeLocalEnd; cg++) {
-        if (dstRefByLocal[cg - dstNodeLocalBegin]) continue;
+    std::vector<unsigned int> pullCgs;
+    size_t pullLocalNoAuth = 0, pullGhostRead = 0;
+    if (canonFill) {
+        for (unsigned int cg = dstNodeLocalBegin; cg < dstNodeLocalEnd; cg++)
+            if (!authAll[cg]) { pullCgs.push_back(cg); pullLocalNoAuth++; }
+        // ghost slots: only those the unzip reads and no exchange on dst
+        // delivers (neither the scatter map nor the side-channel); the rest
+        // are refreshed by the first exchange before anything reads them
+        if (dstMesh->m_e2b_unzip_counts.size() == dstMesh->m_uiNumTotalElements) {
+            std::vector<unsigned char> seen(dstCgSz, 0);
+            for (unsigned int cg : dstMesh->m_uiScatterMapActualNodeRecv)
+                if (cg < dstCgSz) seen[cg] = 1;
+            for (unsigned int cg : dstMesh->m_uiZipSyncRecvCg)
+                if (cg < dstCgSz) seen[cg] = 1;
+            for (unsigned int e = 0; e < dstMesh->m_uiNumTotalElements; e++) {
+                if (dstMesh->m_e2b_unzip_counts[e] == 0) continue;
+                for (unsigned int n = 0; n < npe; n++) {
+                    const unsigned int cg = e2n[e * npe + n];
+                    if (cg >= dstCgSz || seen[cg] || authAll[cg]) continue;
+                    seen[cg] = 1;
+                    if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd) continue;
+                    pullCgs.push_back(cg);
+                    pullGhostRead++;
+                }
+            }
+        }
+    } else {
+        for (unsigned int cg = dstNodeLocalBegin; cg < dstNodeLocalEnd; cg++)
+            if (!dstRefByLocal[cg - dstNodeLocalBegin]) pullCgs.push_back(cg);
+    }
+    for (unsigned int cg : pullCgs) {
+        if (cg >= dstCG2DG.size()) continue;
         unsigned int dg = dstCG2DG[cg];
+        if (dg == LOOK_UP_TABLE_DEFAULT) continue;
         unsigned int ce = dg / npe;
         unsigned int cn = dg % npe;
         uint64_t len =
@@ -6769,6 +6815,15 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             std::cout << "[redist-probe r" << rank << "]   " << l << std::endl;
         rprobeCall++;
     };
+    if (canonFill) {
+        static bool announced = false;
+        if (!rank && !announced) {
+            announced = true;
+            std::cout << "[redist-canon] r0: pull local_noauth=" << pullLocalNoAuth
+                      << " ghost_read_noauth=" << pullGhostRead
+                      << " total_keys=" << oTotal << std::endl;
+        }
+    }
     if (oTotal == 0) { rpReport(); return; }  // no orphans anywhere, done
 
     std::vector<int>          oAllRank(oTotal);
