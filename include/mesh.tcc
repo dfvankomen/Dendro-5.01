@@ -880,7 +880,7 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
         s_uiCommStatSyncBytesAll += (DendroIntL)(sendN * dof * sizeof(T));
         s_uiCommStatSyncCallsAll++;
     }
-    if (m_uiZipSyncCheckKeep.size() == recvN) {
+    if (!m_uiZipSyncCheckKeep.empty() && m_uiZipSyncCheckKeep.size() == recvN) {
         static int calls = 0;
         size_t dropped = 0, differ = 0, nanBefore = 0, differDeliv = 0, differUnread = 0;
         unsigned int sampleCg = 0; bool haveSample = false;
