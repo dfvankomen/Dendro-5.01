@@ -19456,11 +19456,16 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     auto weightedPrefixLabels = [&](const std::vector<fastpart_uint_t>& w) {
         unsigned long long loc = 0, tot = 0, off = 0;
         for (size_t i = 0; i < localSz; ++i) loc += w[i];
+        // one round: the total and this rank's prefix both fall out of the
+        // per-rank sums
+        std::vector<unsigned long long> perRank(npes);
         repartRound();
-        MPI_Allreduce(&loc, &tot, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
-        repartRound();
-        MPI_Exscan(&loc, &off, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
-        if (rank == 0) off = 0;
+        MPI_Allgather(&loc, 1, MPI_UNSIGNED_LONG_LONG, perRank.data(), 1,
+                      MPI_UNSIGNED_LONG_LONG, commActive);
+        for (int p = 0; p < npes; ++p) {
+            if (p < rank) off += perRank[p];
+            tot += perRank[p];
+        }
         std::vector<unsigned int> lab(localSz);
         for (size_t i = 0; i < localSz; ++i) {
             const unsigned int p = (unsigned int)((off * (unsigned long long)npes) / tot);
@@ -19477,11 +19482,17 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         const unsigned int nlev = lmax - lmin + 1;
         std::vector<unsigned long long> cnt(nlev, 0), tot(nlev, 0), off(nlev, 0);
         for (size_t i = 0; i < localSz; ++i) cnt[oct_connectivity_map[i].level - lmin]++;
+        // one round: per-level totals and this rank's prefixes from the
+        // per-rank counts
+        std::vector<unsigned long long> perRank((size_t)npes * nlev);
         repartRound();
-        MPI_Allreduce(cnt.data(), tot.data(), nlev, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
-        repartRound();
-        MPI_Exscan(cnt.data(), off.data(), nlev, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
-        if (rank == 0) std::fill(off.begin(), off.end(), 0ull);
+        MPI_Allgather(cnt.data(), nlev, MPI_UNSIGNED_LONG_LONG, perRank.data(),
+                      nlev, MPI_UNSIGNED_LONG_LONG, commActive);
+        for (int p = 0; p < npes; ++p)
+            for (unsigned int l = 0; l < nlev; ++l) {
+                if (p < rank) off[l] += perRank[(size_t)p * nlev + l];
+                tot[l] += perRank[(size_t)p * nlev + l];
+            }
         std::vector<unsigned int> lab(localSz);
         for (size_t i = 0; i < localSz; ++i) {
             const unsigned int l = oct_connectivity_map[i].level - lmin;
