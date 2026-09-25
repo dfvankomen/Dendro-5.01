@@ -6938,24 +6938,11 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         }
     }
 
-    // Phase 1: build phys_pos → cg lookups. Two maps:
-    //   localCgByPos: any cg at this phys_pos (LOCAL preferred over
-    //                 ghost). Used for the existing same-level
-    //                 wrong-phys patch path.
-    //   canonCgByPos: cg WITH a canonical writer at this phys_pos
-    //                 (LOCAL preferred over ghost). Used for the new
-    //                 dangling-cg redirect path.
-    std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash> localCgByPos;
-    std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash> canonCgByPos;
-#if DENDRO_OMP_ACTIVE
-    const int nThr = omp_get_max_threads();
-#else
-    const int nThr = 1;
-#endif
-    if (nThr > 1) {
-        localCgByPos.reserve(nTotal_cg);
-        canonCgByPos.reserve(nTotal_cg);
-    }
+    // Phase 1: every cg (local + ghost) keyed by its owner (e, n) phys_pos,
+    // sorted by (phys_pos, cg). Phase 2 folds a position's group on demand
+    // in ascending cg order, which is the order the old per-position maps
+    // were filled in, so the pick is unchanged; positions nobody asks about
+    // are never folded.
     const unsigned int nLE = m_uiNodeLocalEnd;
     // tie-break helper for choosing the canonical cg at a phys when
     // multiple cgs are at the same phys (e.g., shared boundaries between
@@ -6992,81 +6979,44 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         return (n_dg % npe) < (c_dg % npe);
     };
 
-    // build localCgByPos / canonCgByPos by folding every cg with
-    // better_canon (a strict total order: LOCAL>GHOST, with-canon>without,
-    // tn-tiebreak). result is independent of cg iteration order.
-    //
-    // when DENDRO_OMP_PART + _OPENMP are both defined, each thread folds
-    // its slice into a thread-local map, then a serial merge folds those
-    // into the canonical maps. determinism comes from better_canon being
-    // a strict total order — the max-of-set is well-defined regardless
-    // of insertion order.
-    std::vector<std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash>>
-        tlLocal(nThr);
-    std::vector<std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash>>
-        tlCanon(nThr);
-    {
-        const size_t guess = (size_t)((nTotal_cg - nLB) / nThr + 1);
-        for (int t = 0; t < nThr; t++) {
-            tlLocal[t].reserve(guess);
-            tlCanon[t].reserve(guess);
-        }
-    }
-    DENDRO_OMP_PRAGMA(omp parallel for schedule(static))
+
+    struct CgAtPos {
+        PhysKey3 pos;
+        unsigned int cg;
+    };
+    auto posLT = [](const PhysKey3& a, const PhysKey3& b) {
+        if (a.x != b.x) return a.x < b.x;
+        if (a.y != b.y) return a.y < b.y;
+        return a.z < b.z;
+    };
+    std::vector<CgAtPos> cgsByPos;
+    cgsByPos.reserve(nTotal_cg - nLB);
     for (unsigned int cg = nLB; cg < nTotal_cg; cg++) {
-#if DENDRO_OMP_ACTIVE
-        const int tid = omp_get_thread_num();
-#else
-        const int tid = 0;
-#endif
         const unsigned int dg = m_uiCG2DG[cg];
-        const unsigned int e  = dg / npe;
-        const unsigned int n  = dg % npe;
         PhysKey3 k;
-        if (!computePos(e, n, k)) continue;
-        const bool newIsCanon = hasCanonicalWriter[cg];
-        auto& mLocal = tlLocal[tid];
-        auto itL = mLocal.find(k);
-        if (itL == mLocal.end()) {
-            mLocal.emplace(k, cg);
-        } else if (better_canon(cg, itL->second)) {
-            itL->second = cg;
-        }
-        if (newIsCanon) {
-            auto& mCanon = tlCanon[tid];
-            auto itC = mCanon.find(k);
-            if (itC == mCanon.end()) {
-                mCanon.emplace(k, cg);
-            } else if (better_canon(cg, itC->second)) {
-                itC->second = cg;
-            }
-        }
+        if (!computePos(dg / npe, dg % npe, k)) continue;
+        cgsByPos.push_back({k, cg});
     }
-    // serial merge — deterministic by t order + better_canon tiebreak.
-    // a single thread already holds the folded maps; adopt them as-is.
-    if (nThr == 1) {
-        localCgByPos.swap(tlLocal[0]);
-        canonCgByPos.swap(tlCanon[0]);
-    } else {
-        for (int t = 0; t < nThr; t++) {
-            for (auto& kv : tlLocal[t]) {
-                auto it = localCgByPos.find(kv.first);
-                if (it == localCgByPos.end()) {
-                    localCgByPos.emplace(kv.first, kv.second);
-                } else if (better_canon(kv.second, it->second)) {
-                    it->second = kv.second;
-                }
-            }
-            for (auto& kv : tlCanon[t]) {
-                auto it = canonCgByPos.find(kv.first);
-                if (it == canonCgByPos.end()) {
-                    canonCgByPos.emplace(kv.first, kv.second);
-                } else if (better_canon(kv.second, it->second)) {
-                    it->second = kv.second;
-                }
-            }
+    std::sort(cgsByPos.begin(), cgsByPos.end(),
+              [&](const CgAtPos& a, const CgAtPos& b) {
+                  if (posLT(a.pos, b.pos)) return true;
+                  if (posLT(b.pos, a.pos)) return false;
+                  return a.cg < b.cg;
+              });
+    // canonOnly=false: any cg at this phys_pos (the old localCgByPos);
+    // canonOnly=true: only cgs with a canonical writer (canonCgByPos).
+    auto findCgAtPos = [&](const PhysKey3& k, bool canonOnly) -> unsigned int {
+        auto it = std::lower_bound(
+            cgsByPos.begin(), cgsByPos.end(), k,
+            [&](const CgAtPos& a, const PhysKey3& b) { return posLT(a.pos, b); });
+        unsigned int best = LOOK_UP_TABLE_DEFAULT;
+        for (; it != cgsByPos.end() && it->pos == k; ++it) {
+            if (canonOnly && !hasCanonicalWriter[it->cg]) continue;
+            if (best == LOOK_UP_TABLE_DEFAULT || better_canon(it->cg, best))
+                best = it->cg;
         }
-    }
+        return best;
+    };
 
     // Phase 2: walk ALL elements (locals + ghosts), audit each sub.
     // Ghost elements need auditing because their E2N_CG entries are
@@ -7085,434 +7035,465 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
     size_t dangling_patched  = 0;
     size_t dangling_unres    = 0;
 
-    auto auditOnce = [&]() {
-        size_t local_patched = 0;
-        size_t local_bug     = 0;
-        size_t local_hang    = 0;
-        size_t local_finer   = 0;
-        size_t local_unres   = 0;
-        size_t local_passd   = 0;
-        size_t local_dangling_class   = 0;
-        size_t local_dangling_patched = 0;
-        size_t local_dangling_unres   = 0;
-        // race-safe under OMP: each (e, n) slot is written by exactly one
-        // thread (the one owning that e), localCgByPos / canonCgByPos /
-        // m_uiCG2DG are read-only in this phase, counters are reductions.
-        DENDRO_OMP_PRAGMA(omp parallel for schedule(dynamic, 64)
-            reduction(+ : local_patched, local_bug, local_hang, local_finer,
-                          local_unres, local_passd, local_dangling_class,
-                          local_dangling_patched, local_dangling_unres))
-        for (unsigned int e = 0; e < eAllEnd; e++) {
-            const unsigned int eLev = pNodes[e].getLevel();
-            for (unsigned int n = 0; n < npe; n++) {
-                const unsigned int slot = e * npe + n;
-                const unsigned int cgIdx = m_uiE2NMapping_CG[slot];
-                if (cgIdx == LOOK_UP_TABLE_DEFAULT) continue;
-                if (cgIdx >= m_uiCG2DG.size()) continue;
+    struct AuditCounters {
+        size_t patched = 0, bug = 0, hang = 0, finer = 0, unres = 0, passd = 0,
+               dangling_class = 0, dangling_patched = 0, dangling_unres = 0;
+    };
+    // audit one (e, n) slot; true iff it was re-routed. a slot's verdict
+    // depends only on its own E2N_CG entry, so slots are independent and a
+    // later pass only needs to revisit the slots the previous pass patched.
+    auto auditSlot = [&](unsigned int e, unsigned int n,
+                         AuditCounters& c) -> bool {
+        const unsigned int eLev = pNodes[e].getLevel();
+        const unsigned int slot = e * npe + n;
+        const unsigned int cgIdx = m_uiE2NMapping_CG[slot];
+        if (cgIdx == LOOK_UP_TABLE_DEFAULT) return false;
+        if (cgIdx >= m_uiCG2DG.size()) return false;
 
-                PhysKey3 expected;
-                if (!computePos(e, n, expected)) continue;
+        PhysKey3 expected;
+        if (!computePos(e, n, expected)) return false;
 
-                const unsigned int dg = m_uiCG2DG[cgIdx];
-                const unsigned int oe = dg / npe;
-                const unsigned int on = dg % npe;
-                if (oe >= allElemSize) continue;
+        const unsigned int dg = m_uiCG2DG[cgIdx];
+        const unsigned int oe = dg / npe;
+        const unsigned int on = dg % npe;
+        if (oe >= allElemSize) return false;
 
-                PhysKey3 actual;
-                if (!computePos(oe, on, actual)) continue;
+        PhysKey3 actual;
+        if (!computePos(oe, on, actual)) return false;
 
 
-                // Dangling-cg case: cg has no canonical writer at all.
-                // Look up an alternative canonical cg at the OWNER's
-                // phys_pos (where the routing currently points to) and
-                // redirect. Works for both same-phys cases
-                // (actual == expected, e.g. direct duplicate) and
-                // hanging-edge cases (owner is coarser parent at a
-                // different phys; we still want the canonical CG at
-                // the parent's phys so the p2c interp reads the right
-                // value). Skip cgs PassD owns (cross-rank consolidation
-                // handles them separately).
-                if (cgIdx < nTotal_cg && !hasCanonicalWriter[cgIdx] &&
-                    m_uiPassDDemotedLocalCgs.count(cgIdx) == 0 &&
-                    m_uiPassDDemotedToGhostCg.count(cgIdx) == 0) {
-                    local_dangling_class++;
-                    auto itC = canonCgByPos.find(actual);
-                    // expected-phys fallback for misrouted non-hanging
-                    // slots: graph E2N can route a non-hanging interior
-                    // slot to a dangling corner cg (e.g. +X+Y edge slot
-                    // sharing the +X+Y+Z corner's cg). owner phys then
-                    // has no canonical alternative, but the slot's
-                    // expected phys typically does — and even if that
-                    // cg is itself dangling, its value is populated by
-                    // post-axpy sync / passD / ghost exchange. gated by
-                    // !isNodeHanging because hanging-edge p2c reads
-                    // must keep routing to the parent's phys for the
-                    // p2c kernel inside getElementNodalValues.
-                    if (itC == canonCgByPos.end()) {
-                        const unsigned int ni = n % (eOrd + 1);
-                        const unsigned int nj =
-                            (n / (eOrd + 1)) % (eOrd + 1);
-                        const unsigned int nk =
-                            n / ((eOrd + 1) * (eOrd + 1));
-                        if (!this->isNodeHanging(e, ni, nj, nk)) {
-                            auto itExp = canonCgByPos.find(expected);
-                            if (itExp != canonCgByPos.end()) {
-                                itC = itExp;
-                            } else {
-                                auto itExpL = localCgByPos.find(expected);
-                                if (itExpL != localCgByPos.end()) {
-                                    itC = itExpL;
-                                }
-                            }
-                        }
-                    }
-                    if (itC == canonCgByPos.end()) {
-                        local_dangling_unres++;
-                        if (dbg_on) {
-                            std::cout << "[E2N audit r"
-                                      << m_uiActiveRank
-                                      << "] DANGLING-UNRES elem=" << e
-                                      << " sub=" << n
-                                      << " cgIdx=" << cgIdx
-                                      << " ownerPhys=("
-                                      << actual.x << "," << actual.y
-                                      << "," << actual.z
-                                      << ") expectedPhys=("
-                                      << expected.x << "," << expected.y
-                                      << "," << expected.z
-                                      << ") (no canonical cg at phys)"
-                                      << std::endl;
-                        }
-                        continue;
-                    }
-                    const unsigned int newCg = itC->second;
-                    if (newCg == cgIdx) continue;
-                    if (dbg_on) {
-                        std::cout << "[E2N audit r"
-                                  << m_uiActiveRank
-                                  << "] DANGLING-PATCH elem=" << e
-                                  << " sub=" << n
-                                  << " elemTN=(" << pNodes[e].getX()
-                                  << "," << pNodes[e].getY()
-                                  << "," << pNodes[e].getZ()
-                                  << ",lev" << eLev
-                                  << ") expectedPhys=(" << expected.x
-                                  << "," << expected.y
-                                  << "," << expected.z
-                                  << ") ownerPhys=(" << actual.x
-                                  << "," << actual.y
-                                  << "," << actual.z
-                                  << ") oldCg=" << cgIdx
-                                  << " newCg=" << newCg
-                                  << std::endl;
-                    }
-                    m_uiE2NMapping_CG[slot] = newCg;
-                    if (newCg < m_uiCG2DG.size()) {
-                        const unsigned int newDg = m_uiCG2DG[newCg];
-                        if (slot < m_uiE2NMapping_DG.size()) {
-                            m_uiE2NMapping_DG[slot] = newDg;
-                        }
-                    }
-                    local_dangling_patched++;
-                    continue;
+        // Dangling-cg case: cg has no canonical writer at all.
+        // Look up an alternative canonical cg at the OWNER's
+        // phys_pos (where the routing currently points to) and
+        // redirect. Works for both same-phys cases
+        // (actual == expected, e.g. direct duplicate) and
+        // hanging-edge cases (owner is coarser parent at a
+        // different phys; we still want the canonical CG at
+        // the parent's phys so the p2c interp reads the right
+        // value). Skip cgs PassD owns (cross-rank consolidation
+        // handles them separately).
+        if (cgIdx < nTotal_cg && !hasCanonicalWriter[cgIdx] &&
+            m_uiPassDDemotedLocalCgs.count(cgIdx) == 0 &&
+            m_uiPassDDemotedToGhostCg.count(cgIdx) == 0) {
+            c.dangling_class++;
+            unsigned int newCg = findCgAtPos(actual, true);
+            // expected-phys fallback for misrouted non-hanging
+            // slots: graph E2N can route a non-hanging interior
+            // slot to a dangling corner cg (e.g. +X+Y edge slot
+            // sharing the +X+Y+Z corner's cg). owner phys then
+            // has no canonical alternative, but the slot's
+            // expected phys typically does — and even if that
+            // cg is itself dangling, its value is populated by
+            // post-axpy sync / passD / ghost exchange. gated by
+            // !isNodeHanging because hanging-edge p2c reads
+            // must keep routing to the parent's phys for the
+            // p2c kernel inside getElementNodalValues.
+            if (newCg == LOOK_UP_TABLE_DEFAULT) {
+                const unsigned int ni = n % (eOrd + 1);
+                const unsigned int nj =
+                    (n / (eOrd + 1)) % (eOrd + 1);
+                const unsigned int nk =
+                    n / ((eOrd + 1) * (eOrd + 1));
+                if (!this->isNodeHanging(e, ni, nj, nk)) {
+                    newCg = findCgAtPos(expected, true);
+                    if (newCg == LOOK_UP_TABLE_DEFAULT)
+                        newCg = findCgAtPos(expected, false);
                 }
-
-                if (actual == expected) continue;
-
-                const unsigned int oLev = pNodes[oe].getLevel();
-
-                if (oLev < eLev) {
-                    // Hanging-face/edge p2c: child sub routes to
-                    // coarser parent's CG. The routing is "legitimate"
-                    // structurally, but graph and SFC can pick DIFFERENT
-                    // lev<eLev parents sharing the cg position, giving
-                    // partition-dependent canonical-owner selection.
-                    // Canonicalize: redirect to canonical cg at the
-                    // MORTON-TREE PARENT's grid point at the child sub
-                    // indices (using parent spacing). This makes
-                    // routing partition-invariant.
-                    // see docs/findings_2026-05-14d.md follow-up.
-                    local_hang++;
-                    // default-OFF as of 2026-05-28: redundant for both
-                    // EM4 and NLSM given orphan-fill fix + Fix B +
-                    // post-axpy sync. DENDRO_E2N_HANG_CANONICALIZE=1
-                    // re-enables for A/B.
-                    static const char* hcEnv =
-                        std::getenv("DENDRO_E2N_HANG_CANONICALIZE");
-                    static const bool hcOn =
-                        hcEnv && hcEnv[0] == '1' && hcEnv[1] == '\0';
-                    if (!hcOn) continue;
-                    if (eLev == 0) continue;
-                    const unsigned long long childSize =
-                        1ULL << (m_uiMaxDepth - eLev);
-                    const unsigned long long parentSize = childSize * 2;
-                    const unsigned long long pmask = parentSize - 1;
-                    const unsigned long long parentOrigX =
-                        (unsigned long long)pNodes[e].getX() & ~pmask;
-                    const unsigned long long parentOrigY =
-                        (unsigned long long)pNodes[e].getY() & ~pmask;
-                    const unsigned long long parentOrigZ =
-                        (unsigned long long)pNodes[e].getZ() & ~pmask;
-                    const unsigned int ni = n % (eOrd + 1);
-                    const unsigned int nj =
-                        (n / (eOrd + 1)) % (eOrd + 1);
-                    const unsigned int nk =
-                        n / ((eOrd + 1) * (eOrd + 1));
-                    PhysKey3 parentExpected;
-                    parentExpected.x = parentOrigX * eOrd
-                        + (unsigned long long)ni * parentSize;
-                    parentExpected.y = parentOrigY * eOrd
-                        + (unsigned long long)nj * parentSize;
-                    parentExpected.z = parentOrigZ * eOrd
-                        + (unsigned long long)nk * parentSize;
-                    if (parentExpected == actual) continue;  // already canonical
-                    // try canonical (has canonical writer) first, fall
-                    // back to localCgByPos (any cg incl ghost).
-                    unsigned int newCg = LOOK_UP_TABLE_DEFAULT;
-                    auto itP = canonCgByPos.find(parentExpected);
-                    if (itP != canonCgByPos.end()) {
-                        newCg = itP->second;
-                    } else {
-                        auto itL = localCgByPos.find(parentExpected);
-                        if (itL != localCgByPos.end()) {
-                            newCg = itL->second;
-                        }
-                    }
-                    if (newCg == LOOK_UP_TABLE_DEFAULT) {
-                        if (dbg_on) {
-                            std::cout << "[E2N audit r" << m_uiActiveRank
-                                      << "] HANG-CANONICALIZE-UNRES"
-                                      << " elem=" << e
-                                      << " sub=" << n
-                                      << " elemTN=(" << pNodes[e].getX()
-                                      << "," << pNodes[e].getY()
-                                      << "," << pNodes[e].getZ()
-                                      << ",lev" << eLev
-                                      << ") parentExpectedPhys=("
-                                      << parentExpected.x << ","
-                                      << parentExpected.y << ","
-                                      << parentExpected.z
-                                      << ") actualPhys=("
-                                      << actual.x << "," << actual.y
-                                      << "," << actual.z
-                                      << ") cgIdx=" << cgIdx
-                                      << " ownerLev=" << oLev
-                                      << std::endl;
-                        }
-                        continue;
-                    }
-                    if (newCg == cgIdx) continue;
-                    if (dbg_on) {
-                        std::cout << "[E2N audit r" << m_uiActiveRank
-                                  << "] HANG-CANONICALIZE-PATCH"
-                                  << " elem=" << e
-                                  << " sub=" << n
-                                  << " elemTN=(" << pNodes[e].getX()
-                                  << "," << pNodes[e].getY()
-                                  << "," << pNodes[e].getZ()
-                                  << ",lev" << eLev
-                                  << ") parentExpectedPhys=("
-                                  << parentExpected.x << ","
-                                  << parentExpected.y << ","
-                                  << parentExpected.z
-                                  << ") oldActualPhys=("
-                                  << actual.x << "," << actual.y
-                                  << "," << actual.z
-                                  << ") oldCg=" << cgIdx
-                                  << " newCg=" << newCg
-                                  << std::endl;
-                    }
-                    m_uiE2NMapping_CG[slot] = newCg;
-                    if (newCg < m_uiCG2DG.size()) {
-                        const unsigned int newDg = m_uiCG2DG[newCg];
-                        if (slot < m_uiE2NMapping_DG.size()) {
-                            m_uiE2NMapping_DG[slot] = newDg;
-                        }
-                    }
-                    local_patched++;
-                    continue;
+            }
+            if (newCg == LOOK_UP_TABLE_DEFAULT) {
+                c.dangling_unres++;
+                if (dbg_on) {
+                    std::cout << "[E2N audit r"
+                              << m_uiActiveRank
+                              << "] DANGLING-UNRES elem=" << e
+                              << " sub=" << n
+                              << " cgIdx=" << cgIdx
+                              << " ownerPhys=("
+                              << actual.x << "," << actual.y
+                              << "," << actual.z
+                              << ") expectedPhys=("
+                              << expected.x << "," << expected.y
+                              << "," << expected.z
+                              << ") (no canonical cg at phys)"
+                              << std::endl;
                 }
-                if (oLev > eLev) {
-                    // Owner finer than this element — unexpected. This
-                    // happens when E2N_CG routing for a hanging-face
-                    // child node points to a corrupted (often finer)
-                    // cg in graph mode. The CORRECT routing for a
-                    // hanging-face child node at child-sub indices
-                    // (ni, nj, nk) is to the parent's grid point at
-                    // the SAME indices but with PARENT spacing.
-                    // see docs/findings_2026-05-14d.md follow-up.
-                    local_finer++;
-                    // default-OFF as of 2026-05-28 (see hcOn above).
-                    static const char* fnEnv =
-                        std::getenv("DENDRO_E2N_HANG_CANONICALIZE");
-                    static const bool fnOn =
-                        fnEnv && fnEnv[0] == '1' && fnEnv[1] == '\0';
-                    if (!fnOn) continue;
-                    if (eLev == 0) continue;  // no parent
-                    const unsigned long long childSize =
-                        1ULL << (m_uiMaxDepth - eLev);
-                    const unsigned long long parentSize = childSize * 2;
-                    const unsigned long long pmask = parentSize - 1;
-                    const unsigned long long parentOrigX =
-                        (unsigned long long)pNodes[e].getX() & ~pmask;
-                    const unsigned long long parentOrigY =
-                        (unsigned long long)pNodes[e].getY() & ~pmask;
-                    const unsigned long long parentOrigZ =
-                        (unsigned long long)pNodes[e].getZ() & ~pmask;
-                    const unsigned int ni = n % (eOrd + 1);
-                    const unsigned int nj =
-                        (n / (eOrd + 1)) % (eOrd + 1);
-                    const unsigned int nk =
-                        n / ((eOrd + 1) * (eOrd + 1));
-                    PhysKey3 parentExpected;
-                    parentExpected.x = parentOrigX * eOrd
-                        + (unsigned long long)ni * parentSize;
-                    parentExpected.y = parentOrigY * eOrd
-                        + (unsigned long long)nj * parentSize;
-                    parentExpected.z = parentOrigZ * eOrd
-                        + (unsigned long long)nk * parentSize;
-                    auto itP = canonCgByPos.find(parentExpected);
-                    if (itP == canonCgByPos.end()) {
-                        if (dbg_on) {
-                            std::cout << "[E2N audit r" << m_uiActiveRank
-                                      << "] FINER-OWNER-UNRES elem=" << e
-                                      << " sub=" << n
-                                      << " elemTN=(" << pNodes[e].getX()
-                                      << "," << pNodes[e].getY()
-                                      << "," << pNodes[e].getZ()
-                                      << ",lev" << eLev
-                                      << ") expectedChildPhys=("
-                                      << expected.x << "," << expected.y
-                                      << "," << expected.z
-                                      << ") expectedParentPhys=("
-                                      << parentExpected.x << ","
-                                      << parentExpected.y << ","
-                                      << parentExpected.z
-                                      << ") actualPhys=("
-                                      << actual.x << "," << actual.y
-                                      << "," << actual.z
-                                      << ") cgIdx=" << cgIdx
-                                      << " ownerLev=" << oLev
-                                      << std::endl;
-                        }
-                        continue;
-                    }
-                    const unsigned int newCg = itP->second;
-                    if (newCg == cgIdx) continue;
-                    if (dbg_on) {
-                        std::cout << "[E2N audit r" << m_uiActiveRank
-                                  << "] FINER-OWNER-PATCH elem=" << e
-                                  << " sub=" << n
-                                  << " elemTN=(" << pNodes[e].getX()
-                                  << "," << pNodes[e].getY()
-                                  << "," << pNodes[e].getZ()
-                                  << ",lev" << eLev
-                                  << ") parentPhys=("
-                                  << parentExpected.x << ","
-                                  << parentExpected.y << ","
-                                  << parentExpected.z
-                                  << ") oldCg=" << cgIdx
-                                  << " ownerLev=" << oLev
-                                  << " newCg=" << newCg
-                                  << std::endl;
-                    }
-                    m_uiE2NMapping_CG[slot] = newCg;
-                    if (newCg < m_uiCG2DG.size()) {
-                        const unsigned int newDg = m_uiCG2DG[newCg];
-                        if (slot < m_uiE2NMapping_DG.size()) {
-                            m_uiE2NMapping_DG[slot] = newDg;
-                        }
-                    }
-                    local_patched++;
-                    continue;
+                return false;
+            }
+            if (newCg == cgIdx) return false;
+            if (dbg_on) {
+                std::cout << "[E2N audit r"
+                          << m_uiActiveRank
+                          << "] DANGLING-PATCH elem=" << e
+                          << " sub=" << n
+                          << " elemTN=(" << pNodes[e].getX()
+                          << "," << pNodes[e].getY()
+                          << "," << pNodes[e].getZ()
+                          << ",lev" << eLev
+                          << ") expectedPhys=(" << expected.x
+                          << "," << expected.y
+                          << "," << expected.z
+                          << ") ownerPhys=(" << actual.x
+                          << "," << actual.y
+                          << "," << actual.z
+                          << ") oldCg=" << cgIdx
+                          << " newCg=" << newCg
+                          << std::endl;
+            }
+            m_uiE2NMapping_CG[slot] = newCg;
+            if (newCg < m_uiCG2DG.size()) {
+                const unsigned int newDg = m_uiCG2DG[newCg];
+                if (slot < m_uiE2NMapping_DG.size()) {
+                    m_uiE2NMapping_DG[slot] = newDg;
                 }
+            }
+            c.dangling_patched++;
+            return true;
+        }
 
-                // Same level + phys_pos mismatch == bug class.
-                local_bug++;
+        if (actual == expected) return false;
 
-                if (m_uiPassDDemotedLocalCgs.count(cgIdx) ||
-                    m_uiPassDDemotedToGhostCg.count(cgIdx)) {
-                    local_passd++;
-                    continue;
-                }
+        const unsigned int oLev = pNodes[oe].getLevel();
 
-                auto it = localCgByPos.find(expected);
-                if (it == localCgByPos.end()) {
-                    local_unres++;
-                    if (dbg_on) {
-                        std::cout << "[E2N audit r" << m_uiActiveRank
-                                  << "] UNRESOLVED elem=" << e
-                                  << " sub=" << n
-                                  << " elemTN=(" << pNodes[e].getX()
-                                  << "," << pNodes[e].getY()
-                                  << "," << pNodes[e].getZ()
-                                  << ",lev" << eLev
-                                  << ") expectedPhys=("
-                                  << expected.x << "," << expected.y
-                                  << "," << expected.z
-                                  << ") actualPhys=("
-                                  << actual.x << "," << actual.y
-                                  << "," << actual.z
-                                  << ") cgIdx=" << cgIdx
-                                  << " ownerElem=" << oe
-                                  << std::endl;
-                    }
-                    continue;
-                }
-
-                const unsigned int newCg = it->second;
-                if (newCg == cgIdx) continue;
-
+        if (oLev < eLev) {
+            // Hanging-face/edge p2c: child sub routes to
+            // coarser parent's CG. The routing is "legitimate"
+            // structurally, but graph and SFC can pick DIFFERENT
+            // lev<eLev parents sharing the cg position, giving
+            // partition-dependent canonical-owner selection.
+            // Canonicalize: redirect to canonical cg at the
+            // MORTON-TREE PARENT's grid point at the child sub
+            // indices (using parent spacing). This makes
+            // routing partition-invariant.
+            // see docs/findings_2026-05-14d.md follow-up.
+            c.hang++;
+            // default-OFF as of 2026-05-28: redundant for both
+            // EM4 and NLSM given orphan-fill fix + Fix B +
+            // post-axpy sync. DENDRO_E2N_HANG_CANONICALIZE=1
+            // re-enables for A/B.
+            static const char* hcEnv =
+                std::getenv("DENDRO_E2N_HANG_CANONICALIZE");
+            static const bool hcOn =
+                hcEnv && hcEnv[0] == '1' && hcEnv[1] == '\0';
+            if (!hcOn) return false;
+            if (eLev == 0) return false;
+            const unsigned long long childSize =
+                1ULL << (m_uiMaxDepth - eLev);
+            const unsigned long long parentSize = childSize * 2;
+            const unsigned long long pmask = parentSize - 1;
+            const unsigned long long parentOrigX =
+                (unsigned long long)pNodes[e].getX() & ~pmask;
+            const unsigned long long parentOrigY =
+                (unsigned long long)pNodes[e].getY() & ~pmask;
+            const unsigned long long parentOrigZ =
+                (unsigned long long)pNodes[e].getZ() & ~pmask;
+            const unsigned int ni = n % (eOrd + 1);
+            const unsigned int nj =
+                (n / (eOrd + 1)) % (eOrd + 1);
+            const unsigned int nk =
+                n / ((eOrd + 1) * (eOrd + 1));
+            PhysKey3 parentExpected;
+            parentExpected.x = parentOrigX * eOrd
+                + (unsigned long long)ni * parentSize;
+            parentExpected.y = parentOrigY * eOrd
+                + (unsigned long long)nj * parentSize;
+            parentExpected.z = parentOrigZ * eOrd
+                + (unsigned long long)nk * parentSize;
+            if (parentExpected == actual) return false;  // already canonical
+            // try canonical (has canonical writer) first, fall
+            // back to any cg at that phys (incl ghost).
+            unsigned int newCg = findCgAtPos(parentExpected, true);
+            if (newCg == LOOK_UP_TABLE_DEFAULT)
+                newCg = findCgAtPos(parentExpected, false);
+            if (newCg == LOOK_UP_TABLE_DEFAULT) {
                 if (dbg_on) {
                     std::cout << "[E2N audit r" << m_uiActiveRank
-                              << "] PATCH elem=" << e
+                              << "] HANG-CANONICALIZE-UNRES"
+                              << " elem=" << e
                               << " sub=" << n
                               << " elemTN=(" << pNodes[e].getX()
                               << "," << pNodes[e].getY()
                               << "," << pNodes[e].getZ()
                               << ",lev" << eLev
-                              << ") expectedPhys=("
-                              << expected.x << "," << expected.y
-                              << "," << expected.z
-                              << ") oldCg=" << cgIdx
-                              << " ownerOld=" << oe
-                              << " newCg=" << newCg
+                              << ") parentExpectedPhys=("
+                              << parentExpected.x << ","
+                              << parentExpected.y << ","
+                              << parentExpected.z
+                              << ") actualPhys=("
+                              << actual.x << "," << actual.y
+                              << "," << actual.z
+                              << ") cgIdx=" << cgIdx
+                              << " ownerLev=" << oLev
                               << std::endl;
                 }
-
-                m_uiE2NMapping_CG[slot] = newCg;
-                // Also update E2N_DG so REBUILD NODAL SCATTER MAPS
-                // and any downstream DG-based reads pick up the new
-                // canonical owner. Pattern matches patchE2NCgFromMasks
-                // at mesh.cpp:6010-6015.
-                if (newCg < m_uiCG2DG.size()) {
-                    const unsigned int newDg = m_uiCG2DG[newCg];
-                    if (slot < m_uiE2NMapping_DG.size()) {
-                        m_uiE2NMapping_DG[slot] = newDg;
-                    }
+                return false;
+            }
+            if (newCg == cgIdx) return false;
+            if (dbg_on) {
+                std::cout << "[E2N audit r" << m_uiActiveRank
+                          << "] HANG-CANONICALIZE-PATCH"
+                          << " elem=" << e
+                          << " sub=" << n
+                          << " elemTN=(" << pNodes[e].getX()
+                          << "," << pNodes[e].getY()
+                          << "," << pNodes[e].getZ()
+                          << ",lev" << eLev
+                          << ") parentExpectedPhys=("
+                          << parentExpected.x << ","
+                          << parentExpected.y << ","
+                          << parentExpected.z
+                          << ") oldActualPhys=("
+                          << actual.x << "," << actual.y
+                          << "," << actual.z
+                          << ") oldCg=" << cgIdx
+                          << " newCg=" << newCg
+                          << std::endl;
+            }
+            m_uiE2NMapping_CG[slot] = newCg;
+            if (newCg < m_uiCG2DG.size()) {
+                const unsigned int newDg = m_uiCG2DG[newCg];
+                if (slot < m_uiE2NMapping_DG.size()) {
+                    m_uiE2NMapping_DG[slot] = newDg;
                 }
-                local_patched++;
+            }
+            c.patched++;
+            return true;
+        }
+        if (oLev > eLev) {
+            // Owner finer than this element — unexpected. This
+            // happens when E2N_CG routing for a hanging-face
+            // child node points to a corrupted (often finer)
+            // cg in graph mode. The CORRECT routing for a
+            // hanging-face child node at child-sub indices
+            // (ni, nj, nk) is to the parent's grid point at
+            // the SAME indices but with PARENT spacing.
+            // see docs/findings_2026-05-14d.md follow-up.
+            c.finer++;
+            // default-OFF as of 2026-05-28 (see hcOn above).
+            static const char* fnEnv =
+                std::getenv("DENDRO_E2N_HANG_CANONICALIZE");
+            static const bool fnOn =
+                fnEnv && fnEnv[0] == '1' && fnEnv[1] == '\0';
+            if (!fnOn) return false;
+            if (eLev == 0) return false;  // no parent
+            const unsigned long long childSize =
+                1ULL << (m_uiMaxDepth - eLev);
+            const unsigned long long parentSize = childSize * 2;
+            const unsigned long long pmask = parentSize - 1;
+            const unsigned long long parentOrigX =
+                (unsigned long long)pNodes[e].getX() & ~pmask;
+            const unsigned long long parentOrigY =
+                (unsigned long long)pNodes[e].getY() & ~pmask;
+            const unsigned long long parentOrigZ =
+                (unsigned long long)pNodes[e].getZ() & ~pmask;
+            const unsigned int ni = n % (eOrd + 1);
+            const unsigned int nj =
+                (n / (eOrd + 1)) % (eOrd + 1);
+            const unsigned int nk =
+                n / ((eOrd + 1) * (eOrd + 1));
+            PhysKey3 parentExpected;
+            parentExpected.x = parentOrigX * eOrd
+                + (unsigned long long)ni * parentSize;
+            parentExpected.y = parentOrigY * eOrd
+                + (unsigned long long)nj * parentSize;
+            parentExpected.z = parentOrigZ * eOrd
+                + (unsigned long long)nk * parentSize;
+            const unsigned int newCg = findCgAtPos(parentExpected, true);
+            if (newCg == LOOK_UP_TABLE_DEFAULT) {
+                if (dbg_on) {
+                    std::cout << "[E2N audit r" << m_uiActiveRank
+                              << "] FINER-OWNER-UNRES elem=" << e
+                              << " sub=" << n
+                              << " elemTN=(" << pNodes[e].getX()
+                              << "," << pNodes[e].getY()
+                              << "," << pNodes[e].getZ()
+                              << ",lev" << eLev
+                              << ") expectedChildPhys=("
+                              << expected.x << "," << expected.y
+                              << "," << expected.z
+                              << ") expectedParentPhys=("
+                              << parentExpected.x << ","
+                              << parentExpected.y << ","
+                              << parentExpected.z
+                              << ") actualPhys=("
+                              << actual.x << "," << actual.y
+                              << "," << actual.z
+                              << ") cgIdx=" << cgIdx
+                              << " ownerLev=" << oLev
+                              << std::endl;
+                }
+                return false;
+            }
+            if (newCg == cgIdx) return false;
+            if (dbg_on) {
+                std::cout << "[E2N audit r" << m_uiActiveRank
+                          << "] FINER-OWNER-PATCH elem=" << e
+                          << " sub=" << n
+                          << " elemTN=(" << pNodes[e].getX()
+                          << "," << pNodes[e].getY()
+                          << "," << pNodes[e].getZ()
+                          << ",lev" << eLev
+                          << ") parentPhys=("
+                          << parentExpected.x << ","
+                          << parentExpected.y << ","
+                          << parentExpected.z
+                          << ") oldCg=" << cgIdx
+                          << " ownerLev=" << oLev
+                          << " newCg=" << newCg
+                          << std::endl;
+            }
+            m_uiE2NMapping_CG[slot] = newCg;
+            if (newCg < m_uiCG2DG.size()) {
+                const unsigned int newDg = m_uiCG2DG[newCg];
+                if (slot < m_uiE2NMapping_DG.size()) {
+                    m_uiE2NMapping_DG[slot] = newDg;
+                }
+            }
+            c.patched++;
+            return true;
+        }
+
+        // Same level + phys_pos mismatch == bug class.
+        c.bug++;
+
+        if (m_uiPassDDemotedLocalCgs.count(cgIdx) ||
+            m_uiPassDDemotedToGhostCg.count(cgIdx)) {
+            c.passd++;
+            return false;
+        }
+
+        const unsigned int newCg = findCgAtPos(expected, false);
+        if (newCg == LOOK_UP_TABLE_DEFAULT) {
+            c.unres++;
+            if (dbg_on) {
+                std::cout << "[E2N audit r" << m_uiActiveRank
+                          << "] UNRESOLVED elem=" << e
+                          << " sub=" << n
+                          << " elemTN=(" << pNodes[e].getX()
+                          << "," << pNodes[e].getY()
+                          << "," << pNodes[e].getZ()
+                          << ",lev" << eLev
+                          << ") expectedPhys=("
+                          << expected.x << "," << expected.y
+                          << "," << expected.z
+                          << ") actualPhys=("
+                          << actual.x << "," << actual.y
+                          << "," << actual.z
+                          << ") cgIdx=" << cgIdx
+                          << " ownerElem=" << oe
+                          << std::endl;
+            }
+            return false;
+        }
+
+        if (newCg == cgIdx) return false;
+
+        if (dbg_on) {
+            std::cout << "[E2N audit r" << m_uiActiveRank
+                      << "] PATCH elem=" << e
+                      << " sub=" << n
+                      << " elemTN=(" << pNodes[e].getX()
+                      << "," << pNodes[e].getY()
+                      << "," << pNodes[e].getZ()
+                      << ",lev" << eLev
+                      << ") expectedPhys=("
+                      << expected.x << "," << expected.y
+                      << "," << expected.z
+                      << ") oldCg=" << cgIdx
+                      << " ownerOld=" << oe
+                      << " newCg=" << newCg
+                      << std::endl;
+        }
+
+        m_uiE2NMapping_CG[slot] = newCg;
+        // Also update E2N_DG so REBUILD NODAL SCATTER MAPS
+        // and any downstream DG-based reads pick up the new
+        // canonical owner. Pattern matches patchE2NCgFromMasks
+        // at mesh.cpp:6010-6015.
+        if (newCg < m_uiCG2DG.size()) {
+            const unsigned int newDg = m_uiCG2DG[newCg];
+            if (slot < m_uiE2NMapping_DG.size()) {
+                m_uiE2NMapping_DG[slot] = newDg;
             }
         }
-        bug_class       += local_bug;
-        legitimate_hang += local_hang;
-        finer_owner_seen+= local_finer;
-        unresolved      += local_unres;
-        passd_skipped   += local_passd;
-        patched         += local_patched;
-        dangling_class  += local_dangling_class;
-        dangling_patched+= local_dangling_patched;
-        dangling_unres  += local_dangling_unres;
-        return local_patched + local_dangling_patched;
+        c.patched++;
+        return true;
+    };
+
+#if DENDRO_OMP_ACTIVE
+    const int nThr = omp_get_max_threads();
+#else
+    const int nThr = 1;
+#endif
+    std::vector<AuditCounters> threadCounts(nThr);
+    std::vector<std::vector<unsigned int>> threadPatched(nThr);
+    std::vector<unsigned int> revisit;
+    auto auditOnce = [&](bool firstPass) {
+        for (int t = 0; t < nThr; t++) threadPatched[t].clear();
+        if (firstPass) {
+            // race-safe under OMP: each (e, n) slot is written by exactly one
+            // thread (the one owning that e); cgsByPos / m_uiCG2DG are
+            // read-only in this phase.
+            DENDRO_OMP_PRAGMA(omp parallel for schedule(dynamic, 64))
+            for (unsigned int e = 0; e < eAllEnd; e++) {
+#if DENDRO_OMP_ACTIVE
+                const int tid = omp_get_thread_num();
+#else
+                const int tid = 0;
+#endif
+                for (unsigned int n = 0; n < npe; n++)
+                    if (auditSlot(e, n, threadCounts[tid]))
+                        threadPatched[tid].push_back(e * npe + n);
+            }
+        } else {
+            DENDRO_OMP_PRAGMA(omp parallel for schedule(static))
+            for (size_t i = 0; i < revisit.size(); i++) {
+#if DENDRO_OMP_ACTIVE
+                const int tid = omp_get_thread_num();
+#else
+                const int tid = 0;
+#endif
+                const unsigned int slot = revisit[i];
+                if (auditSlot(slot / npe, slot % npe, threadCounts[tid]))
+                    threadPatched[tid].push_back(slot);
+            }
+        }
+        revisit.clear();
+        for (int t = 0; t < nThr; t++)
+            revisit.insert(revisit.end(), threadPatched[t].begin(),
+                           threadPatched[t].end());
+        AuditCounters sum;
+        for (auto& c : threadCounts) {
+            sum.patched += c.patched;
+            sum.bug += c.bug;
+            sum.hang += c.hang;
+            sum.finer += c.finer;
+            sum.unres += c.unres;
+            sum.passd += c.passd;
+            sum.dangling_class += c.dangling_class;
+            sum.dangling_patched += c.dangling_patched;
+            sum.dangling_unres += c.dangling_unres;
+            c = AuditCounters{};
+        }
+        bug_class        += sum.bug;
+        legitimate_hang  += sum.hang;
+        finer_owner_seen += sum.finer;
+        unresolved       += sum.unres;
+        passd_skipped    += sum.passd;
+        patched          += sum.patched;
+        dangling_class   += sum.dangling_class;
+        dangling_patched += sum.dangling_patched;
+        dangling_unres   += sum.dangling_unres;
+        return revisit.size();
     };
 
     // Up to 3 passes; chains of wrong routings can require iteration
     // because patching A → A' may reveal that B (which A used to
-    // alias to) is also wrong.
-    size_t lastPass = auditOnce();
+    // alias to) is also wrong. the diagnostic counters of passes 2-3 only
+    // cover the revisited slots.
+    size_t lastPass = auditOnce(true);
     int passes      = 1;
     while (lastPass > 0 && passes < 3) {
-        lastPass = auditOnce();
+        lastPass = auditOnce(false);
         passes++;
     }
 
