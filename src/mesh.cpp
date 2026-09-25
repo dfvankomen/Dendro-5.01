@@ -7986,7 +7986,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
 void Mesh::pruneZipSync() {
     static const int level = [] {
         const char* e = std::getenv("DENDRO_ZIPSYNC_PRUNE");
-        return e ? std::atoi(e) : 0;
+        return e ? std::atoi(e) : 2;
     }();
     // DENDRO_ZIPSYNC_CHECK=1: keep the full lists, record the level-2 drop mask
     // and let syncZipNonPrimary report entries whose delivered value differs
@@ -7997,12 +7997,13 @@ void Mesh::pruneZipSync() {
     if ((level <= 0 && !check) || !m_uiIsActive || m_uiActiveNpes <= 1 ||
         m_uiZipSyncPruned)
         return;
-    // labelled meshes keep the full side-channel until the ghost-primary chain
-    // seen on BSSN (constraint vector NaN at every prune level) is understood;
-    // DENDRO_ZIPSYNC_PRUNE_LABELLED=1 prunes them too
+    // the BSSN NaN seen at every prune level was the transport reading IGT
+    // output ghost slots only this side-channel had ever filled (fixed by
+    // DENDRO_REDIST_CANON_FILL); labelled meshes are pruned like any other,
+    // DENDRO_ZIPSYNC_PRUNE_LABELLED=0 keeps their full side-channel
     static const bool pruneLabelled = [] {
         const char* e = std::getenv("DENDRO_ZIPSYNC_PRUNE_LABELLED");
-        return e && e[0] == '1';
+        return !(e && e[0] == '0');
     }();
     if (!pruneLabelled && !check && m_uiIsLabelledRebuild) return;
     const int npes = m_uiActiveNpes;

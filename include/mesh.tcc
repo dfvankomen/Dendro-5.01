@@ -6550,7 +6550,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // probe only: last write path per dst slot (1 auth, 2 non-auth, 3 orphan)
     std::vector<unsigned char> rpPath;
     if (rprobe) rpPath.assign(dstCgSz, 0);
-    // DENDRO_REDIST_CANON_FILL=1: every dst slot the transport is responsible
+    // DENDRO_REDIST_CANON_FILL (default on, =0 reverts): every dst slot the transport is responsible
     // for gets its value from a src LOCAL slot at the same canonical position.
     // Source ghost slots are never trusted: the source vector may not have had
     // a ghost exchange since it was written (an IGT output has none; only the
@@ -6560,7 +6560,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // the fallback for positions no src rank owns locally.
     static const bool canonFill = [] {
         const char* v = std::getenv("DENDRO_REDIST_CANON_FILL");
-        return v && v[0] == '1';
+        return !(v && v[0] == '0');
     }();
     std::vector<unsigned char> authAll;
     if (canonFill) authAll.assign(dstCgSz, 0);
