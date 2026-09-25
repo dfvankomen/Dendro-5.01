@@ -7580,35 +7580,46 @@ void Mesh::unifyE2NCgAcrossTNInstances() {
             (unsigned long long)nk * len;
     };
 
-    struct TNKey {
-        unsigned int x, y, z, lev;
-        bool operator==(const TNKey& o) const {
-            return x == o.x && y == o.y && z == o.z && lev == o.lev;
-        }
+    // element ids sorted by (TN, e): each run of equal TNs is one instance
+    // group, in ascending e. groups touch disjoint E2N_CG slots, so the order
+    // in which they are visited does not matter.
+    auto tnLT = [&](unsigned int a, unsigned int b) {
+        const ot::TreeNode& ta = pNodes[a];
+        const ot::TreeNode& tb = pNodes[b];
+        if (ta.getX() != tb.getX()) return ta.getX() < tb.getX();
+        if (ta.getY() != tb.getY()) return ta.getY() < tb.getY();
+        if (ta.getZ() != tb.getZ()) return ta.getZ() < tb.getZ();
+        return ta.getLevel() < tb.getLevel();
     };
-    struct TNKeyHash {
-        size_t operator()(const TNKey& k) const {
-            size_t h = std::hash<unsigned int>()(k.x);
-            h ^= std::hash<unsigned int>()(k.y) << 1;
-            h ^= std::hash<unsigned int>()(k.z) << 2;
-            h ^= std::hash<unsigned int>()(k.lev) << 3;
-            return h;
-        }
+    auto tnEQ = [&](unsigned int a, unsigned int b) {
+        return pNodes[a].getX() == pNodes[b].getX() &&
+               pNodes[a].getY() == pNodes[b].getY() &&
+               pNodes[a].getZ() == pNodes[b].getZ() &&
+               pNodes[a].getLevel() == pNodes[b].getLevel();
     };
-    std::unordered_map<TNKey, std::vector<unsigned int>, TNKeyHash> tnGroups;
-    for (unsigned int e = 0; e < nElTot; e++) {
-        TNKey k{pNodes[e].getX(), pNodes[e].getY(), pNodes[e].getZ(),
-                pNodes[e].getLevel()};
-        tnGroups[k].push_back(e);
-    }
+    std::vector<unsigned int> byTN(nElTot);
+    for (unsigned int e = 0; e < nElTot; e++) byTN[e] = e;
+    std::sort(byTN.begin(), byTN.end(), [&](unsigned int a, unsigned int b) {
+        if (tnLT(a, b)) return true;
+        if (tnLT(b, a)) return false;
+        return a < b;
+    });
     size_t e2n_cross_fixed = 0;
-    for (auto& kv : tnGroups) {
-        if (kv.second.size() <= 1) continue;
+    std::vector<unsigned int> group;
+    for (size_t gi = 0; gi < byTN.size();) {
+        size_t gj = gi + 1;
+        while (gj < byTN.size() && tnEQ(byTN[gj], byTN[gi])) gj++;
+        if (gj - gi <= 1) {
+            gi = gj;
+            continue;
+        }
+        group.assign(byTN.begin() + gi, byTN.begin() + gj);
+        gi = gj;
         for (unsigned int sub = 0; sub < npe; sub++) {
             unsigned long long ex, ey, ez;
-            encodeKey(kv.second[0], sub, ex, ey, ez);
+            encodeKey(group[0], sub, ex, ey, ez);
             unsigned int best_cg = LOOK_UP_TABLE_DEFAULT;
-            for (unsigned int e : kv.second) {
+            for (unsigned int e : group) {
                 unsigned int cg = m_uiE2NMapping_CG[e * npe + sub];
                 if (cg >= m_uiCG2DG.size()) continue;
                 unsigned int dg = m_uiCG2DG[cg];
@@ -7624,7 +7635,7 @@ void Mesh::unifyE2NCgAcrossTNInstances() {
                 }
             }
             if (best_cg == LOOK_UP_TABLE_DEFAULT) continue;
-            for (unsigned int e : kv.second) {
+            for (unsigned int e : group) {
                 unsigned int cg = m_uiE2NMapping_CG[e * npe + sub];
                 if (cg == best_cg) continue;
                 bool wrong = (cg >= m_uiCG2DG.size());
