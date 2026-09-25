@@ -143,6 +143,9 @@ option(DENDRO_UNZIP_OVERLAP
 option(DENDRO_HYBRID_OMP
        "Enable the hybrid OpenMP/MPI path (OpenMP threading on top of MPI; default OFF = MPI-first)"
        OFF)
+option(DENDRO_REPORT_BUILD_CONFIG
+       "Emit #pragma message banners at compile time reporting which unzip/SIMD optimizations are active (diagnostic)"
+       OFF)
 
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
@@ -312,6 +315,7 @@ dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 dendro_add_def(DENDRO_UNZIP_SCATTER_FAST DENDRO_UNZIP_SCATTER_FAST)
 dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD DENDRO_TENSOR_SIMD)
+dendro_add_def(DENDRO_REPORT_BUILD_CONFIG DENDRO_REPORT_BUILD_CONFIG)
 
 # Resolve the effective unzip/zip + threading flags. DENDRO_HYBRID_OMP is the
 # umbrella for all intra-rank OpenMP threading: it implies the block-parallel
