@@ -10112,6 +10112,27 @@ void Mesh::flagBlockGhostDependancies() {
             // "<<m_uiLocalBlockList[blk].getBlockNode()<<" independent :
             // "<<is_blk_independent<<std::endl;
         }
+
+        if (std::getenv("DENDRO_BLKDEP_STATS") != nullptr) {
+            // padded volume ~ RHS cost; one line per rank per mesh
+            unsigned long long nb[2] = {0, 0}, vol[2] = {0, 0}, ne[2] = {0, 0};
+            for (const auto &b : m_uiLocalBlockList) {
+                const int d = (b.getBlockType() == BlockType::UNZIP_DEPENDENT);
+                nb[d]++;
+                ne[d] += b.getLocalElementEnd() - b.getLocalElementBegin();
+                vol[d] += (unsigned long long)b.getAllocationSzX() *
+                          b.getAllocationSzY() * b.getAllocationSzZ();
+            }
+            std::fprintf(stderr,
+                         "[blkdep] rank %d/%d blocks indep=%llu dep=%llu "
+                         "elems indep=%llu dep=%llu padvol indep=%llu "
+                         "dep=%llu indep_vol_frac=%.4f\n",
+                         m_uiActiveRank, m_uiActiveNpes, nb[0], nb[1], ne[0],
+                         ne[1], vol[0], vol[1],
+                         (vol[0] + vol[1])
+                             ? (double)vol[0] / (double)(vol[0] + vol[1])
+                             : 0.0);
+        }
     }
 }
 
