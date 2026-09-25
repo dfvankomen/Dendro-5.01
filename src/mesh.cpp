@@ -6495,16 +6495,31 @@ void Mesh::buildUnzipCanonicalWriterTable() {
 
     const double d_compar_tol = 1e-10;
 
-    // candidate writers per (absolute bbuf offset). usually <=4 candidates.
-    // most slots are single-writer; we lazy-allocate via map.
-    std::unordered_map<unsigned int, std::vector<unsigned int>> candidates;
-    candidates.reserve(unSz / 8);
+    // pick canonical winner per multi-writer slot: rule mirrors
+    // canon_mode=2 — level asc then xyz desc. equivalently, canonical =
+    // smallest level, largest x, largest y, largest z (the natural
+    // "outermost-corner coarsest" candidate).
+    auto canon_better = [&](unsigned int cand, unsigned int cur) {
+        const ot::TreeNode& a = pNodes[cand];
+        const ot::TreeNode& b = pNodes[cur];
+        const unsigned int la = a.getLevel(), lb = b.getLevel();
+        if (la != lb) return la < lb;
+        if (a.getX() != b.getX()) return a.getX() > b.getX();
+        if (a.getY() != b.getY()) return a.getY() > b.getY();
+        return a.getZ() > b.getZ();
+    };
+
+    // running fold per (absolute bbuf offset): the first writer seeds the
+    // slot, later ones replace it only when strictly canon_better.
+    std::vector<unsigned int> best(unSz, LOOK_UP_TABLE_DEFAULT);
+    std::vector<unsigned int> cnt(unSz, 0);
 
     std::vector<ot::TreeNode> childOct;
     childOct.reserve(NUM_CHILDREN);
 
     auto record = [&](unsigned int idx, unsigned int ele) {
-        candidates[idx].push_back(ele);
+        if (idx >= unSz) return;
+        if (cnt[idx]++ == 0 || canon_better(ele, best[idx])) best[idx] = ele;
     };
 
     for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
@@ -6650,31 +6665,13 @@ void Mesh::buildUnzipCanonicalWriterTable() {
     }
 
 
-    // pick canonical winner per multi-writer slot: rule mirrors
-    // canon_mode=2 — level asc then xyz desc. equivalently, canonical =
-    // smallest level, largest x, largest y, largest z (the natural
-    // "outermost-corner coarsest" candidate).
-    auto canon_better = [&](unsigned int cand, unsigned int cur) {
-        const ot::TreeNode& a = pNodes[cand];
-        const ot::TreeNode& b = pNodes[cur];
-        const unsigned int la = a.getLevel(), lb = b.getLevel();
-        if (la != lb) return la < lb;
-        if (a.getX() != b.getX()) return a.getX() > b.getX();
-        if (a.getY() != b.getY()) return a.getY() > b.getY();
-        return a.getZ() > b.getZ();
-    };
-
     size_t mw_slots = 0;
     size_t mw_max   = 0;
-    for (auto it = candidates.begin(); it != candidates.end(); ++it) {
-        auto& eles = it->second;
-        if (eles.size() <= 1) continue;
+    for (unsigned int idx = 0; idx < unSz; idx++) {
+        if (cnt[idx] <= 1) continue;
         mw_slots++;
-        if (eles.size() > mw_max) mw_max = eles.size();
-        unsigned int best = eles[0];
-        for (unsigned int e : eles)
-            if (canon_better(e, best)) best = e;
-        m_uiUnzipCanonWriter[it->first] = best;
+        if (cnt[idx] > mw_max) mw_max = cnt[idx];
+        m_uiUnzipCanonWriter[idx] = best[idx];
     }
 
     m_uiUnzipCanonWriterBuilt = true;
