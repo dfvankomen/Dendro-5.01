@@ -8552,7 +8552,12 @@ void Mesh::buildZipPlan() {
         unsigned int interior;
     };
 
+    // global path: phys_pos -> winner. distributed path: one claim per cg,
+    // every claim at a phys_pos carries the same home-arbitrated winner, so
+    // the winner is indexed by cg through its claim index instead.
     std::unordered_map<PhysKey3, Winner, PhysKey3Hash> winners;
+    std::vector<Winner> winByClaim;
+    std::vector<int> winIdxOfCg;
     if (zpDist) {
         // Home-rank arbitration. Every downstream consumer of `winners` only
         // ever looks it up at a position where THIS rank holds a cg (plan build
@@ -8566,12 +8571,14 @@ void Mesh::buildZipPlan() {
                                          myTNLev, myCg, myInterior, use_packtn,
                                          winRank, winCg, winTNX, winTNY, winTNZ,
                                          winTNLev, winInterior);
-        winners.reserve(myCount);
+        winByClaim.resize(myCount);
+        winIdxOfCg.assign(nTotal_cg, -1);
         for (int i = 0; i < myCount; i++) {
-            if (winRank[i] < 0) continue;
-            winners[PhysKey3{myX[i], myY[i], myZ[i]}] =
+            winByClaim[i] =
                 Winner{winRank[i],  winCg[i],    winTNX[i], winTNY[i],
                        winTNZ[i],   winTNLev[i], winInterior[i]};
+            if (winRank[i] < 0) continue;
+            winIdxOfCg[myCg[i]] = i;
         }
     } else {
     winners.reserve(total);
@@ -8606,6 +8613,15 @@ void Mesh::buildZipPlan() {
         }
     }
     }  // end else: the global (replicated) winners build
+    auto findWinner = [&](unsigned int cg,
+                          const PhysKey3& k) -> const Winner* {
+        if (zpDist) {
+            const int i = winIdxOfCg[cg];
+            return i < 0 ? nullptr : &winByClaim[i];
+        }
+        auto it = winners.find(k);
+        return it == winners.end() ? nullptr : &it->second;
+    };
 
     // ---- Cleanup: remove cascade-primary cgs from PassD's demoted
     // mirror list ----
@@ -8634,10 +8650,15 @@ void Mesh::buildZipPlan() {
     size_t passDCleanupErased = 0;
     bool dbgWinnerCleanup =
         (DENDRO_PROBE_GETENV("DENDRO_PASSD_CLEANUP_DBG") != nullptr);
-    for (auto& kv : winners) {
-        if (kv.second.rank != m_uiActiveRank) continue;
-        if (m_uiPassDDemotedToGhostCg.erase(kv.second.cg)) passDCleanupErased++;
-        m_uiPassDDemotedLocalCgs.erase(kv.second.cg);
+    auto eraseWinnerFromPassD = [&](const Winner& w) {
+        if (w.rank != m_uiActiveRank) return;
+        if (m_uiPassDDemotedToGhostCg.erase(w.cg)) passDCleanupErased++;
+        m_uiPassDDemotedLocalCgs.erase(w.cg);
+    };
+    if (zpDist) {
+        for (const Winner& w : winByClaim) eraseWinnerFromPassD(w);
+    } else {
+        for (auto& kv : winners) eraseWinnerFromPassD(kv.second);
     }
     if (dbgWinnerCleanup) {
         std::cout << "[passd-cleanup r" << m_uiActiveRank
@@ -9002,21 +9023,21 @@ void Mesh::buildZipPlan() {
         unsigned long long x, y, z;
         encodeKey(e, n, x, y, z);
         PhysKey3 k{x, y, z};
-        auto wit = winners.find(k);
-        if (wit == winners.end()) continue;
+        const Winner* wit = findWinner(cg, k);
+        if (!wit) continue;
 
         // Non-primary case: someone else (or my different local cg)
         // is the primary. Look up the ghost cg on this rank whose
         // scatter source is the primary's local cg on the primary's
         // rank, and stash for sync.
-        const bool i_am_primary_rank = (wit->second.rank == m_uiActiveRank);
+        const bool i_am_primary_rank = (wit->rank == m_uiActiveRank);
         const bool this_is_primary_cg = i_am_primary_rank
-            && (wit->second.cg == cg);
+            && (wit->cg == cg);
         if (!this_is_primary_cg) {
             zpsNonPrimary++;
             const uint64_t key =
-                (uint64_t(wit->second.rank) << 32)
-                | uint64_t(wit->second.cg);
+                (uint64_t(wit->rank) << 32)
+                | uint64_t(wit->cg);
             auto iit = invScatter.find(key);
             if (iit != invScatter.end())
                 m_uiZipNonPrimaryToGhostCg[cg] = iit->second;
@@ -9144,7 +9165,7 @@ void Mesh::buildZipPlan() {
 
         std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash>
             posToLocalCg;
-        posToLocalCg.reserve(winners.size());
+        posToLocalCg.reserve(zpDist ? winByClaim.size() : winners.size());
         for (unsigned int cg = nLB; cg < nLE; cg++) {
             unsigned int dg = m_uiCG2DG[cg];
             if (dg == LOOK_UP_TABLE_DEFAULT) continue;
@@ -9154,11 +9175,10 @@ void Mesh::buildZipPlan() {
             unsigned long long x, y, z;
             encodeKey(e, n, x, y, z);
             PhysKey3 k{x, y, z};
-            auto wit = winners.find(k);
-            if (wit == winners.end()) continue;
+            const Winner* wit = findWinner(cg, k);
+            if (!wit) continue;
             const bool i_am_primary =
-                (wit->second.rank == m_uiActiveRank
-                 && wit->second.cg == cg);
+                (wit->rank == m_uiActiveRank && wit->cg == cg);
             const bool i_will_get_synced =
                 recvCgSet.count(cg) > 0;
             // Only consider cgs that will hold the consensus value
@@ -9192,10 +9212,9 @@ void Mesh::buildZipPlan() {
                 if (cgIdx == pit->second) continue;  // already correct
                 // Don't overwrite cgs that the primary's cleanup
                 // categories already manage correctly.
-                auto wfind = winners.find(k);
-                if (wfind != winners.end()
-                    && cgIdx == wfind->second.cg
-                    && wfind->second.rank == m_uiActiveRank) continue;
+                const Winner* wfind = findWinner(cgIdx, k);
+                if (wfind && cgIdx == wfind->cg
+                    && wfind->rank == m_uiActiveRank) continue;
                 m_uiZipGhostToLocalAtConsensus[cgIdx] = pit->second;
             }
         }
