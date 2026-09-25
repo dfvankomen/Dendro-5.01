@@ -7791,22 +7791,41 @@ void Mesh::buildZipPlanArbitrateDistributed(
     }
 
     // ---- arbitrate locally: this home owns every claim at these positions --
-    // iterate ORIGIN RANK ASCENDING, then sender order. This reproduces the
-    // default path's implicit "lowest rank wins" tie-break exactly.
-    std::unordered_map<PhysKey3, WinMsg, PhysKey3Hash> homeWin;
-    homeWin.reserve(nRecv);
-    for (int p = 0; p < npes; p++) {
-        for (int i = rOff[p]; i < rOff[p] + rCnt[p]; i++) {
-            const ClaimMsg& c = recvC[i];
-            PhysKey3 k{c.x, c.y, c.z};
-            auto it = homeWin.find(k);
-            if (it == homeWin.end()) {
-                homeWin[k] = WinMsg{p,      c.cg,    c.tnX,    c.tnY,
-                                    c.tnZ,  c.tnLev, c.interior};
-                continue;
-            }
-            WinMsg& w    = it->second;
-            bool replace = false;
+    // claims must be visited ORIGIN RANK ASCENDING, then sender order: that
+    // reproduces the default path's implicit "lowest rank wins" tie-break.
+    // recvC is already laid out that way, so sorting claim indices by
+    // (position, index) visits each position's claims in exactly that order
+    // and the fold over a group replays the per-position map's replacements.
+    std::vector<int> originOf(nRecv);
+    for (int p = 0; p < npes; p++)
+        std::fill(originOf.begin() + rOff[p],
+                  originOf.begin() + rOff[p] + rCnt[p], p);
+    struct PosIdx {
+        unsigned __int128 pos;  // (x, y, z) packed, 42 bits per axis
+        int idx;
+        bool operator<(const PosIdx& o) const {
+            return pos != o.pos ? pos < o.pos : idx < o.idx;
+        }
+    };
+    std::vector<PosIdx> byPos(nRecv);
+    for (int i = 0; i < nRecv; i++)
+        byPos[i] = PosIdx{((unsigned __int128)recvC[i].x << 84) |
+                              ((unsigned __int128)recvC[i].y << 42) |
+                              (unsigned __int128)recvC[i].z,
+                          i};
+    std::sort(byPos.begin(), byPos.end());
+
+    // ---- arbitrate each position, then hand its winner to every claim ----
+    std::vector<WinMsg> backSend(nRecv), backRecv(n);
+    for (int g = 0; g < nRecv;) {
+        const ClaimMsg& c0 = recvC[byPos[g].idx];
+        WinMsg w{originOf[byPos[g].idx], c0.cg,    c0.tnX,    c0.tnY,
+                 c0.tnZ,                 c0.tnLev, c0.interior};
+        int h = g + 1;
+        for (; h < nRecv && byPos[h].pos == byPos[g].pos; h++) {
+            const ClaimMsg& c = recvC[byPos[h].idx];
+            const int p       = originOf[byPos[h].idx];
+            bool replace      = false;
             if (c.interior != w.interior) {
                 replace = (c.interior > w.interior);
             } else if (claimLT(c.tnX, c.tnY, c.tnZ, c.tnLev, w.tnX, w.tnY,
@@ -7820,12 +7839,9 @@ void Mesh::buildZipPlanArbitrateDistributed(
             if (replace)
                 w = WinMsg{p, c.cg, c.tnX, c.tnY, c.tnZ, c.tnLev, c.interior};
         }
+        for (int k = g; k < h; k++) backSend[byPos[k].idx] = w;
+        g = h;
     }
-
-    // ---- return each claim's winner to its claimant --------------------
-    std::vector<WinMsg> backSend(nRecv), backRecv(n);
-    for (int i = 0; i < nRecv; i++)
-        backSend[i] = homeWin[PhysKey3{recvC[i].x, recvC[i].y, recvC[i].z}];
     {
         const int E = (int)sizeof(WinMsg);
         std::vector<int> sB(npes), sO(npes), rB(npes), rO(npes);
@@ -8229,10 +8245,6 @@ void Mesh::buildZipPlan() {
     // Build phys_pos -> (smallest-TreeNode-local-elem, sub) on this
     // rank under the cascade rule. We track elem and sub so the
     // primary writer is directly available without a second walk.
-    struct LocalWriter {
-        unsigned int elem;
-        unsigned int sub;
-    };
     // Helper: does (elem, sub) on this rank land in BLOCK INTERIOR
     // (i.e., the unzip buffer position for this (elem, sub) is in the
     // [PW, lx-1-PW] interior region where solverRHS actually writes)?
@@ -8305,86 +8317,76 @@ void Mesh::buildZipPlan() {
         legacy_pick_env && legacy_pick_env[0] == '1'
         && legacy_pick_env[1] == '\0';
 
-    std::unordered_map<PhysKey3, LocalWriter, PhysKey3Hash> myMin;
-    // single-source preference rule: interior > padding, cascade-owner >
-    // non-owner, smaller TN < larger TN. strict total order in practice,
-    // so max-of-set is well-defined regardless of insertion order — safe
-    // to parallelize via thread-local maps + serial merge under OMP.
-    auto tryReplaceMyMin = [&](
-        std::unordered_map<PhysKey3, LocalWriter, PhysKey3Hash>& m,
-        const PhysKey3& k, unsigned int e, unsigned int n,
-        bool interior, bool is_owner) {
-        auto it = m.find(k);
-        if (it == m.end()) {
-            m[k] = LocalWriter{e, n};
-            return;
-        }
-        const bool cur_interior =
-            isInteriorWriter(it->second.elem, it->second.sub);
-        const bool cur_is_owner =
-            !legacy_pick
-            && isCascadeOwner(it->second.elem, it->second.sub);
-        if (interior && !cur_interior) {
-            m[k] = LocalWriter{e, n};
-        } else if (interior == cur_interior) {
-            if (is_owner && !cur_is_owner) {
-                m[k] = LocalWriter{e, n};
-            } else if (is_owner == cur_is_owner) {
-                if (tnLT(e, it->second.elem))
-                    m[k] = LocalWriter{e, n};
-            }
-        }
+    // every local (e, n) claim, sorted by phys_pos then scan order and folded
+    // per position with the preference rule (interior > padding, cascade-
+    // owner > non-owner, smaller TN). visiting each position's claims in scan
+    // order keeps the map's first-inserted-wins tie behaviour; the lookups
+    // below are binary searches over the folded, still-sorted result.
+    struct LocalClaim {
+        unsigned __int128 pos;  // (x, y, z) packed, so ordering is one compare
+        unsigned int elem, sub;
+        bool interior, is_owner;
     };
-
-#if DENDRO_OMP_ACTIVE
-    const int nThr_mm = omp_get_max_threads();
-#else
-    const int nThr_mm = 1;
-#endif
-    std::vector<std::unordered_map<PhysKey3, LocalWriter, PhysKey3Hash>>
-        tlMyMin(nThr_mm);
+    // 42 bits per axis: coordinates are 32-bit and encodeKey scales by eOrd
+    auto packPos = [](unsigned long long x, unsigned long long y,
+                      unsigned long long z) -> unsigned __int128 {
+        return ((unsigned __int128)x << 84) | ((unsigned __int128)y << 42) |
+               (unsigned __int128)z;
+    };
+    std::vector<LocalClaim> myMin;
     {
         const size_t numElem =
             (size_t)(m_uiElementLocalEnd - m_uiElementLocalBegin);
-        const size_t guess = (numElem * npe) / nThr_mm + 1;
-        for (int t = 0; t < nThr_mm; t++) tlMyMin[t].reserve(guess);
-    }
-    DENDRO_OMP_PRAGMA(omp parallel for schedule(static))
-    for (unsigned int e = m_uiElementLocalBegin;
-         e < m_uiElementLocalEnd; e++) {
-#if DENDRO_OMP_ACTIVE
-        const int tid = omp_get_thread_num();
-#else
-        const int tid = 0;
-#endif
-        auto& m = tlMyMin[tid];
-        for (unsigned int n = 0; n < npe; n++) {
-            unsigned long long x, y, z;
-            encodeKey(e, n, x, y, z);
-            PhysKey3 k{x, y, z};
-            const bool interior = isInteriorWriter(e, n);
-            const bool is_owner =
-                !legacy_pick && isCascadeOwner(e, n);
-            tryReplaceMyMin(m, k, e, n, interior, is_owner);
-        }
-    }
-    // serial merge: deterministic by t order + preference rule.
-    if (nThr_mm == 1) {
-        myMin.swap(tlMyMin[0]);
-    } else {
-        for (int t = 0; t < nThr_mm; t++) {
-            for (auto& kv : tlMyMin[t]) {
-                const bool interior =
-                    isInteriorWriter(kv.second.elem, kv.second.sub);
-                const bool is_owner =
-                    !legacy_pick
-                    && isCascadeOwner(kv.second.elem, kv.second.sub);
-                tryReplaceMyMin(myMin, kv.first,
-                                kv.second.elem, kv.second.sub,
-                                interior, is_owner);
+        std::vector<LocalClaim> claims(numElem * npe);
+        DENDRO_OMP_PRAGMA(omp parallel for schedule(static))
+        for (unsigned int e = m_uiElementLocalBegin;
+             e < m_uiElementLocalEnd; e++) {
+            for (unsigned int n = 0; n < npe; n++) {
+                LocalClaim& c =
+                    claims[(size_t)(e - m_uiElementLocalBegin) * npe + n];
+                unsigned long long x, y, z;
+                encodeKey(e, n, x, y, z);
+                c.pos      = packPos(x, y, z);
+                c.elem     = e;
+                c.sub      = n;
+                c.interior = isInteriorWriter(e, n);
+                c.is_owner = !legacy_pick && isCascadeOwner(e, n);
             }
         }
+        // an element's own subs sit at distinct positions, so (pos, elem)
+        // already orders a position's claims in scan order
+        std::sort(claims.begin(), claims.end(),
+                  [](const LocalClaim& a, const LocalClaim& b) {
+                      return a.pos != b.pos ? a.pos < b.pos : a.elem < b.elem;
+                  });
+        for (size_t i = 0; i < claims.size();) {
+            LocalClaim w = claims[i];
+            size_t j     = i + 1;
+            for (; j < claims.size() && claims[j].pos == w.pos; j++) {
+                const LocalClaim& c = claims[j];
+                bool replace        = false;
+                if (c.interior && !w.interior) {
+                    replace = true;
+                } else if (c.interior == w.interior) {
+                    if (c.is_owner && !w.is_owner)
+                        replace = true;
+                    else if (c.is_owner == w.is_owner && tnLT(c.elem, w.elem))
+                        replace = true;
+                }
+                if (replace) w = c;
+            }
+            myMin.push_back(w);
+            i = j;
+        }
     }
+    auto findMyMin = [&](const PhysKey3& k) -> const LocalClaim* {
+        const unsigned __int128 pos = packPos(k.x, k.y, k.z);
+        auto it = std::lower_bound(
+            myMin.begin(), myMin.end(), pos,
+            [](const LocalClaim& c, unsigned __int128 p) { return c.pos < p; });
+        if (it == myMin.end() || it->pos != pos) return nullptr;
+        return &*it;
+    };
 
     // For each LOCAL cg, find its phys_pos via cg2dg. We advertise
     // (phys_pos, my_local_cg, my smallest-TreeNode local elem here:
@@ -8435,10 +8437,10 @@ void Mesh::buildZipPlan() {
         // destinations for the primary's value.
         const bool is_local = (cg >= nLB && cg < nLE);
         if (is_local) {
-            auto it = myMin.find(PhysKey3{x, y, z});
-            if (it != myMin.end()) {
-                unsigned int we = it->second.elem;
-                unsigned int wn = it->second.sub;
+            const LocalClaim* w = findMyMin(PhysKey3{x, y, z});
+            if (w) {
+                unsigned int we = w->elem;
+                unsigned int wn = w->sub;
                 tnX   = pNodes[we].getX();
                 tnY   = pNodes[we].getY();
                 tnZ   = pNodes[we].getZ();
@@ -9062,15 +9064,12 @@ void Mesh::buildZipPlan() {
             continue;
         }
         // Primary path falls through to plan-entry construction.
-        auto mit = myMin.find(k);
-        if (mit == myMin.end()) continue;  // I'm primary but have no
-                                            // local elem? shouldn't
-                                            // happen since we
-                                            // advertised based on
-                                            // myMin.
+        const LocalClaim* mit = findMyMin(k);
+        if (!mit) continue;  // I'm primary but have no local elem? shouldn't
+                             // happen since we advertised based on myMin.
 
-        const unsigned int writer_elem = mit->second.elem;
-        const unsigned int writer_sub  = mit->second.sub;
+        const unsigned int writer_elem = mit->elem;
+        const unsigned int writer_sub  = mit->sub;
 
         // Look up writer_elem's block to compute the unzipped buffer
         // index. m_uiE2BlkMap is indexed by (elem - eLB).
