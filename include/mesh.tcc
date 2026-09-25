@@ -13623,15 +13623,30 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
         sa_env && sa_env[0] == '1' && sa_env[1] == '\0';
     const int n_phases = (same_wins_on || src_aware_on) ? 2 : 1;
 
-    // canonical TN-sorted iteration of the outer element loop:
-    // (level desc, x asc, y asc, z asc) — coarser writes last.
-    // graph and SFC iterate elements in the same global order, so the
-    // same element wins last-writer at every multi-writer block-buffer
-    // position regardless of partition. validated 2026-05-12: reduces
-    // post-refinement-IGT block-buffer drift at hanging faces from
-    // 8.25e-9 to 2.05e-9 (4×). other sort orders (finer-last, Morton,
-    // reverse-Morton) tested and refuted — see
-    // findings_2026-05-13_iter_order_exhausted.md.
+    // canonical-writer gating: when m_uiUnzipCanonWriter[idx] is set
+    // (multi-writer slot), only the elected writer's value is committed.
+    // makes block-padding output partition-invariant — see
+    // findings_2026-05-13_real_bug.md / project_real_bug_unzip_writer_order.
+    const bool canon_writer_on =
+        m_uiUnzipCanonWriterBuilt &&
+        m_uiUnzipCanonWriter.size() == (size_t)unSz;
+    const unsigned int* canon_writer_tbl =
+        canon_writer_on ? m_uiUnzipCanonWriter.data() : nullptr;
+
+    // element iteration order. with the canonical-writer table every slot
+    // written more than once is gated to one element (the same element's
+    // repeated writes, coarser children sharing a face, keep their order
+    // inside the pair), so the order of elements cannot change the result
+    // and the natural (SFC) order is taken for its locality in the CG
+    // reads and block writes. without the table (or in the two-phase
+    // experiments) last-writer order matters and the canonical TN-sorted
+    // order (level desc, x asc, y asc, z asc — coarser writes last) is
+    // kept: graph and SFC iterate elements in the same global order, so
+    // the same element wins at every multi-writer block-buffer position
+    // regardless of partition. validated 2026-05-12; other sort orders
+    // tested and refuted — see findings_2026-05-13_iter_order_exhausted.md.
+    const unsigned int* ele_order = nullptr;
+    if (!(canon_writer_on && n_phases == 1)) {
     if (m_uiUnzipEleOrder.size() != (size_t)m_uiNumTotalElements) {
         m_uiUnzipEleOrder.resize(m_uiNumTotalElements);
         std::iota(m_uiUnzipEleOrder.begin(), m_uiUnzipEleOrder.end(), 0u);
@@ -13646,17 +13661,8 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
                 return na.getZ() < nb.getZ();
             });
     }
-    const std::vector<unsigned int>& ele_order = m_uiUnzipEleOrder;
-
-    // canonical-writer gating: when m_uiUnzipCanonWriter[idx] is set
-    // (multi-writer slot), only the elected writer's value is committed.
-    // makes block-padding output partition-invariant — see
-    // findings_2026-05-13_real_bug.md / project_real_bug_unzip_writer_order.
-    const bool canon_writer_on =
-        m_uiUnzipCanonWriterBuilt &&
-        m_uiUnzipCanonWriter.size() == (size_t)unSz;
-    const unsigned int* canon_writer_tbl =
-        canon_writer_on ? m_uiUnzipCanonWriter.data() : nullptr;
+    ele_order = m_uiUnzipEleOrder.data();
+    }
 
     auto has_hanging_face_or_edge = [this](unsigned int e) {
         unsigned int cnum;
@@ -13669,7 +13675,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
 
     for (int phase = 0; phase < n_phases; phase++)
     for (unsigned int e_idx = 0; e_idx < m_uiNumTotalElements; e_idx++) {
-        const unsigned int ele = ele_order[e_idx];
+        const unsigned int ele = ele_order ? ele_order[e_idx] : e_idx;
         if (m_e2b_unzip_counts[ele] == 0) continue;
 
         for (unsigned int ii = 0; ii < NUM_CHILDREN; ii++)
