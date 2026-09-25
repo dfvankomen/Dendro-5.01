@@ -13848,11 +13848,82 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
                 }
             };
 
-            // per-(element, block) write list: block slot + source node of
-            // every committed write, enumerated once and applied to all dof.
-            // slots within one pair are distinct, so applying dof-major keeps
-            // the per-point last-writer order.
+            // node grid of `node` scattered in integer slot arithmetic: its
+            // nodes are `step` block spacings apart (1 = same level as the
+            // block, 2 = one level finer, even eOrder), so node (i,j,k) lands
+            // at slot base+(i,j,k)/step and every (k,j) row is a contiguous
+            // run. per-pair slots are distinct, so the dof-major row copy
+            // keeps the per-point last-writer order. src_base is laid out
+            // [v * src_stride + node].
+            auto scatter_grid = [&](const ot::TreeNode& node, unsigned int step,
+                                    const T* src_base,
+                                    unsigned int src_stride) {
+                const long long sz = 1ll << (m_uiMaxDepth - bLev);
+                const int pw = (int)PW, n = (int)(eOrder / step);
+                const int ib = (int)(((long long)node.minX() - blkNode.minX()) *
+                                     eOrder / sz) + pw;
+                const int jb = (int)(((long long)node.minY() - blkNode.minY()) *
+                                     eOrder / sz) + pw;
+                const int kb = (int)(((long long)node.minZ() - blkNode.minZ()) *
+                                     eOrder / sz) + pw;
+                const int i_beg = std::max(0, -ib);
+                const int i_end = std::min(n, (int)lx - 1 - ib);
+                const int j_beg = std::max(0, -jb);
+                const int j_end = std::min(n, (int)ly - 1 - jb);
+                const int k_beg = std::max(0, -kb);
+                const int k_end = std::min(n, (int)lz - 1 - kb);
+                if (i_beg > i_end) return;
+                const unsigned int run = (unsigned int)(i_end - i_beg + 1);
+                for (int k = k_beg; k <= k_end; k++)
+                for (int j = j_beg; j <= j_end; j++) {
+                    const unsigned int slot =
+                        offset + (unsigned int)(kb + k) * lx * ly +
+                        (unsigned int)(jb + j) * lx +
+                        (unsigned int)(ib + i_beg);
+                    const unsigned int src =
+                        (unsigned int)k * step * (eOrder + 1) * (eOrder + 1) +
+                        (unsigned int)j * step * (eOrder + 1) +
+                        (unsigned int)i_beg * step;
+                    bool gated = false;
+                    if (canon_writer_tbl)
+                        for (unsigned int i = 0; i < run; i++) {
+                            const unsigned int canon =
+                                canon_writer_tbl[slot + i];
+                            if (canon != LOOK_UP_TABLE_DEFAULT &&
+                                canon != ele) {
+                                gated = true;
+                                break;
+                            }
+                        }
+                    if (!gated) {
+                        for (unsigned int v = 0; v < dof; v++) {
+                            T* dst       = uzWVec + v * unSz + slot;
+                            const T* row = src_base + v * src_stride + src;
+                            for (unsigned int i = 0; i < run; i++)
+                                dst[i] = row[i * step];
+                        }
+                    } else {
+                        for (unsigned int i = 0; i < run; i++) {
+                            const unsigned int canon =
+                                canon_writer_tbl[slot + i];
+                            if (canon != LOOK_UP_TABLE_DEFAULT &&
+                                canon != ele)
+                                continue;
+                            for (unsigned int v = 0; v < dof; v++)
+                                uzWVec[v * unSz + slot + i] =
+                                    src_base[v * src_stride + src + i * step];
+                        }
+                    }
+                }
+            };
+
+            // per-(element, block) write list for the per-point path: block
+            // slot + source node of every committed write, enumerated once
+            // and applied to all dof. src_aware pass 1 needs the per-node
+            // hanging test and the probe needs coordinates, so those take
+            // the per-point path; everything else takes scatter_grid.
             const bool src_aware_pass = src_aware_on && (phase == 1);
+            const bool grid_fast      = !uzprobe_fp && !src_aware_pass;
             w_slot.clear();
             w_src.clear();
             w_xyz.clear();
@@ -13860,69 +13931,8 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
             // no interpolation needed just copy.
             if (pNodes[ele].getLevel() == bLev) {
                 if (same_wins_on && phase != 1) continue;
-                // element and block share the grid spacing, so node (i,j,k)
-                // lands at block index base+(i,j,k) and every (k,j) row is a
-                // contiguous run of slots. src_aware pass 1 needs the
-                // per-node hanging test, the probe needs coordinates: both
-                // take the per-point path below.
-                if (!uzprobe_fp && !src_aware_pass) {
-                    const int sz = 1 << (m_uiMaxDepth - bLev);
-                    const int eo = (int)eOrder, pw = (int)PW;
-                    const int ib = ((int)pNodes[ele].minX() -
-                                    (int)blkNode.minX()) / sz * eo + pw;
-                    const int jb = ((int)pNodes[ele].minY() -
-                                    (int)blkNode.minY()) / sz * eo + pw;
-                    const int kb = ((int)pNodes[ele].minZ() -
-                                    (int)blkNode.minZ()) / sz * eo + pw;
-                    const int i_beg = std::max(0, -ib);
-                    const int i_end = std::min(eo, (int)lx - 1 - ib);
-                    const int j_beg = std::max(0, -jb);
-                    const int j_end = std::min(eo, (int)ly - 1 - jb);
-                    const int k_beg = std::max(0, -kb);
-                    const int k_end = std::min(eo, (int)lz - 1 - kb);
-                    if (i_beg > i_end) continue;
-                    const unsigned int run = (unsigned int)(i_end - i_beg + 1);
-                    for (int k = k_beg; k <= k_end; k++)
-                    for (int j = j_beg; j <= j_end; j++) {
-                        const unsigned int slot =
-                            offset + (unsigned int)(kb + k) * lx * ly +
-                            (unsigned int)(jb + j) * lx +
-                            (unsigned int)(ib + i_beg);
-                        const unsigned int src =
-                            (unsigned int)k * (eOrder + 1) * (eOrder + 1) +
-                            (unsigned int)j * (eOrder + 1) +
-                            (unsigned int)i_beg;
-                        bool gated = false;
-                        if (canon_writer_tbl)
-                            for (unsigned int i = 0; i < run; i++) {
-                                const unsigned int canon =
-                                    canon_writer_tbl[slot + i];
-                                if (canon != LOOK_UP_TABLE_DEFAULT &&
-                                    canon != ele) {
-                                    gated = true;
-                                    break;
-                                }
-                            }
-                        if (!gated) {
-                            for (unsigned int v = 0; v < dof; v++) {
-                                T* dst       = uzWVec + v * unSz + slot;
-                                const T* row = dgWVec + v * dgSz + src;
-                                for (unsigned int i = 0; i < run; i++)
-                                    dst[i] = row[i];
-                            }
-                        } else {
-                            for (unsigned int i = 0; i < run; i++) {
-                                const unsigned int canon =
-                                    canon_writer_tbl[slot + i];
-                                if (canon != LOOK_UP_TABLE_DEFAULT &&
-                                    canon != ele)
-                                    continue;
-                                for (unsigned int v = 0; v < dof; v++)
-                                    uzWVec[v * unSz + slot + i] =
-                                        dgWVec[v * dgSz + src + i];
-                            }
-                        }
-                    }
+                if (grid_fast) {
+                    scatter_grid(pNodes[ele], 1, dgWVec, dgSz);
                     continue;
                 }
 
@@ -13999,6 +14009,10 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
                 // src_aware: both phases run finer; pass 1 filters
                 // out hanging-source writes inside the (i,j,k) loop.
                 assert((bLev + 1) == pNodes[ele].getLevel());
+                if (grid_fast && (eOrder % 2 == 0)) {
+                    scatter_grid(pNodes[ele], 2, dgWVec, dgSz);
+                    continue;
+                }
 
                 const double hh =
                     (1u << (m_uiMaxDepth - pNodes[ele].getLevel())) /
@@ -14100,6 +14114,12 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
 
                         p2c_interp_valid[cnum] = true;
                     }
+                    // child interpolants are laid out [cnum][v][node]
+                    const T* const p2cI_c = p2cI_all.data() + cnum * dof * nPe;
+                    if (grid_fast) {
+                        scatter_grid(childOct[child], 1, p2cI_c, nPe);
+                        continue;
+                    }
 
                     w_slot.clear();
                     w_src.clear();
@@ -14159,9 +14179,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
                             }
                         }
                     }
-                    // child interpolants are laid out [cnum][v][node]
-                    commit_writes(p2cI_all.data() + cnum * dof * nPe, nPe,
-                                  "coarser");
+                    commit_writes(p2cI_c, nPe, "coarser");
                 }
             }
         }
