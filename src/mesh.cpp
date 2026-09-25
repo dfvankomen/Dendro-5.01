@@ -6936,8 +6936,15 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
     //                 dangling-cg redirect path.
     std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash> localCgByPos;
     std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash> canonCgByPos;
-    localCgByPos.reserve(nTotal_cg);
-    canonCgByPos.reserve(nTotal_cg);
+#if DENDRO_OMP_ACTIVE
+    const int nThr = omp_get_max_threads();
+#else
+    const int nThr = 1;
+#endif
+    if (nThr > 1) {
+        localCgByPos.reserve(nTotal_cg);
+        canonCgByPos.reserve(nTotal_cg);
+    }
     const unsigned int nLE = m_uiNodeLocalEnd;
     // tie-break helper for choosing the canonical cg at a phys when
     // multiple cgs are at the same phys (e.g., shared boundaries between
@@ -6983,11 +6990,6 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
     // into the canonical maps. determinism comes from better_canon being
     // a strict total order — the max-of-set is well-defined regardless
     // of insertion order.
-#if DENDRO_OMP_ACTIVE
-    const int nThr = omp_get_max_threads();
-#else
-    const int nThr = 1;
-#endif
     std::vector<std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash>>
         tlLocal(nThr);
     std::vector<std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash>>
@@ -7030,21 +7032,27 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         }
     }
     // serial merge — deterministic by t order + better_canon tiebreak.
-    for (int t = 0; t < nThr; t++) {
-        for (auto& kv : tlLocal[t]) {
-            auto it = localCgByPos.find(kv.first);
-            if (it == localCgByPos.end()) {
-                localCgByPos.emplace(kv.first, kv.second);
-            } else if (better_canon(kv.second, it->second)) {
-                it->second = kv.second;
+    // a single thread already holds the folded maps; adopt them as-is.
+    if (nThr == 1) {
+        localCgByPos.swap(tlLocal[0]);
+        canonCgByPos.swap(tlCanon[0]);
+    } else {
+        for (int t = 0; t < nThr; t++) {
+            for (auto& kv : tlLocal[t]) {
+                auto it = localCgByPos.find(kv.first);
+                if (it == localCgByPos.end()) {
+                    localCgByPos.emplace(kv.first, kv.second);
+                } else if (better_canon(kv.second, it->second)) {
+                    it->second = kv.second;
+                }
             }
-        }
-        for (auto& kv : tlCanon[t]) {
-            auto it = canonCgByPos.find(kv.first);
-            if (it == canonCgByPos.end()) {
-                canonCgByPos.emplace(kv.first, kv.second);
-            } else if (better_canon(kv.second, it->second)) {
-                it->second = kv.second;
+            for (auto& kv : tlCanon[t]) {
+                auto it = canonCgByPos.find(kv.first);
+                if (it == canonCgByPos.end()) {
+                    canonCgByPos.emplace(kv.first, kv.second);
+                } else if (better_canon(kv.second, it->second)) {
+                    it->second = kv.second;
+                }
             }
         }
     }
@@ -8350,16 +8358,20 @@ void Mesh::buildZipPlan() {
         }
     }
     // serial merge: deterministic by t order + preference rule.
-    for (int t = 0; t < nThr_mm; t++) {
-        for (auto& kv : tlMyMin[t]) {
-            const bool interior =
-                isInteriorWriter(kv.second.elem, kv.second.sub);
-            const bool is_owner =
-                !legacy_pick
-                && isCascadeOwner(kv.second.elem, kv.second.sub);
-            tryReplaceMyMin(myMin, kv.first,
-                            kv.second.elem, kv.second.sub,
-                            interior, is_owner);
+    if (nThr_mm == 1) {
+        myMin.swap(tlMyMin[0]);
+    } else {
+        for (int t = 0; t < nThr_mm; t++) {
+            for (auto& kv : tlMyMin[t]) {
+                const bool interior =
+                    isInteriorWriter(kv.second.elem, kv.second.sub);
+                const bool is_owner =
+                    !legacy_pick
+                    && isCascadeOwner(kv.second.elem, kv.second.sub);
+                tryReplaceMyMin(myMin, kv.first,
+                                kv.second.elem, kv.second.sub,
+                                interior, is_owner);
+            }
         }
     }
 
