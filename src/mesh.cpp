@@ -21593,7 +21593,7 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
     return flattened_recv_full_data;
 }
 
-// DENDRO_BCAST_PLAN_DIST=1: elect each position's winner at a home rank
+// DENDRO_BCAST_PLAN_DIST (default on, =0 reverts): elect each position's winner at a home rank
 // (hash of the position) instead of allgathering every rank's claims, so memory
 // and traffic are O(local) instead of O(global). The legacy rule is a total
 // order (local before ghost, then lowest rank, then lowest cg), so the home
@@ -21602,7 +21602,7 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
 void Mesh::buildBcastPlan() {
     static const bool planDist = [] {
         const char* e = std::getenv("DENDRO_BCAST_PLAN_DIST");
-        return e && e[0] == '1';
+        return !(e && e[0] == '0');
     }();
     static const bool planCheck = [] {
         const char* e = std::getenv("DENDRO_BCAST_PLAN_CHECK");
