@@ -8481,6 +8481,61 @@ void Mesh::buildZipPlan() {
     // never receive the primary's post-axpy value via sync — and unzip
     // on those ranks reads stale IC from those ghosts.
     const unsigned int nTotal_cg = m_uiNumActualNodes;
+    // DENDRO_ZIPPLAN_CLAIM_FILTER=1: a ghost cg's claim never wins and only
+    // feeds the side-channel lists, which pruneZipSync (level 2) keeps for a
+    // ghost slot only when it is read and undelivered or an exchange send
+    // source. Skip every other ghost claim before the arbitration: the same
+    // lists come out, with far fewer claims routed, sorted and answered.
+    // Only when that prune will run (level >= 2, no check mode, and the mesh
+    // is one it prunes); ghost-only positions elect among the kept claims.
+    static const bool claimFilterEnv = [] {
+        const char* e = std::getenv("DENDRO_ZIPPLAN_CLAIM_FILTER");
+        return e && e[0] == '1' && e[1] == '\0';
+    }();
+    static const int pruneLevelEnv = [] {
+        const char* e = std::getenv("DENDRO_ZIPSYNC_PRUNE");
+        return e ? std::atoi(e) : 2;
+    }();
+    static const bool pruneCheckEnv = [] {
+        const char* e = std::getenv("DENDRO_ZIPSYNC_CHECK");
+        return e && e[0] == '1';
+    }();
+    static const bool pruneLabelledEnv = [] {
+        const char* e = std::getenv("DENDRO_ZIPSYNC_PRUNE_LABELLED");
+        return !(e && e[0] == '0');
+    }();
+    const bool claimFilter = claimFilterEnv && pruneLevelEnv >= 2 &&
+                             !pruneCheckEnv && m_uiActiveNpes > 1 &&
+                             (pruneLabelledEnv || !m_uiIsLabelledRebuild) &&
+                             m_e2b_unzip_counts.size() == m_uiNumTotalElements;
+    std::vector<unsigned char> ghostKeep;
+    if (claimFilter) {
+        // mirrors pruneZipSync's level-2 keep rule for ghost slots
+        ghostKeep.assign(nTotal_cg, 0);
+        for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+            if (m_e2b_unzip_counts[e] == 0) continue;
+            for (unsigned int k = 0; k < npe; k++) {
+                const unsigned int c = m_uiE2NMapping_CG[e * npe + k];
+                if (c < nTotal_cg) ghostKeep[c] = 1;
+            }
+        }
+        for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
+            if (kv.second < nTotal_cg) ghostKeep[kv.second] = 1;
+        for (const auto& kv : m_uiPassDDemotedToGhostCg)
+            if (kv.second < nTotal_cg) ghostKeep[kv.second] = 1;
+        for (unsigned int c : m_uiScatterMapActualNodeRecv)
+            if (c < nTotal_cg) ghostKeep[c] = 0;  // delivered: not kept as read
+        const bool useDG = m_uiScatterMapSendIsDG.size() ==
+                           m_uiScatterMapActualNodeSend.size();
+        for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
+            unsigned int idx = m_uiScatterMapActualNodeSend[k];
+            if (useDG && m_uiScatterMapSendIsDG[k])
+                idx = m_uiE2NMapping_CG[(idx / npe + m_uiElementLocalBegin) * npe +
+                                        idx % npe];
+            if (idx < nTotal_cg) ghostKeep[idx] = 1;  // send source: kept
+        }
+    }
+    size_t __zp_nGhostSkipped = 0;
     for (unsigned int cg = 0; cg < nTotal_cg; cg++) {
         if (cg >= m_uiCG2DG.size()) continue;
         unsigned int dg = m_uiCG2DG[cg];
@@ -8488,16 +8543,20 @@ void Mesh::buildZipPlan() {
         unsigned int e = dg / npe;
         unsigned int n = dg % npe;
         if (e >= nElTot) continue;
-        unsigned long long x, y, z;
-        encodeKey(e, n, x, y, z);
-        unsigned int tnX = 0, tnY = 0, tnZ = 0, tnLev = TN_LEV_NONE;
-        unsigned int interior = 0u;
         // Only LOCAL cgs claim a tnLev != TN_LEV_NONE (cascade winner
         // pick uses myMin, which is built from local elements only).
         // Ghost cgs are added with TN_LEV_NONE so they NEVER win the
         // cross-rank cascade comparison — they only serve as recv
         // destinations for the primary's value.
         const bool is_local = (cg >= nLB && cg < nLE);
+        if (claimFilter && !is_local && !ghostKeep[cg]) {
+            __zp_nGhostSkipped++;
+            continue;
+        }
+        unsigned long long x, y, z;
+        encodeKey(e, n, x, y, z);
+        unsigned int tnX = 0, tnY = 0, tnZ = 0, tnLev = TN_LEV_NONE;
+        unsigned int interior = 0u;
         if (is_local) {
             const LocalClaim* w = findMyMin(PhysKey3{x, y, z});
             if (w) {
@@ -9369,6 +9428,8 @@ void Mesh::buildZipPlan() {
             (t_end - __zp_pre_unify) * 1e3, (t_end - __zp_t0) * 1e3,
             myCount, __zp_nLocalClaims, __zp_nGhostClaims, total,
             __zp_nUniquePos, __zp_nContested, m_uiActiveNpes);
+        std::printf("[zipplan-prof] ghost claims skipped by the filter: %zu\n",
+                    __zp_nGhostSkipped);
     }
 }
 
