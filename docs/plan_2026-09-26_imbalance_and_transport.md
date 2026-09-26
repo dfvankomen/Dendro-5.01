@@ -103,3 +103,35 @@ re-priced on Kingspeak with an EXP=S-style on/off profile pair.
   identical rerun under gdb and the `HINT=0` / `FILTER=0` arms exit 0, all on the references); the new
   defaults only moved the heap layout. Fixed in the BSSN repo (ctx deleted before its mesh; user
   commits); `nlsm_sdc.cpp:224` has the same order (not on any gated path).
+
+## Kingspeak round 1 (build 28412535, jobs 28412536–42) — T priced, L/U killed by a memory blow-up
+**T, EM4 d9, arms interleaved in one job, 2 rounds (wall s):**
+
+| np | sfc | refine, new defaults | refine, old (`HINT=0 FILTER=0`) | plain fastpart |
+|---|---|---|---|---|
+| 48 | 130.7 / 131.0 | 155.0 / 154.5 | 155.8 / 155.7 | 179.8 / 180.0 |
+| 192 | 51.2 | 63.5 / 63.2 | 64.0 | 80.3 |
+
+Fork-before vs fork-after (the two cuts): −0.6 % at 48, −0.8 % at 192. Refine vs SFC: 1.18× at 48,
+1.24× at 192. Per run at 192 (15 remeshes, 31 transport calls, max over ranks): transport 1690 → 1522 ms
+(the directory itself was ~5 ms per call), `block-decomposition` phase 1455 → 890 ms (the filter), s2g
+10163 → 9574 ms, sandwich 15139 → 14285 ms = −57 ms per remesh (−5.6 %). The first scatter-map build is
+now the biggest s2g phase (~140 ms per remesh). Plain fastpart completes at 192 ranks (the floor fired:
+1 rank filled, 64 elements) where it aborted every time on 2026-09-25.
+
+**L and U: every labelled arm died of OOM** (~47 GB per node cgroup cap vs ~9 GB for SFC), ~10–26 s in,
+right after the initial labelled transport. Root cause (local capped repro at np=24, gdb on the
+ballooning rank): `Mesh::buildBcastPlan` ← `broadcastCgValuesByPhysPosPlanned` ← `nlsm::redistributeDVec`
+← `remesh_and_gridtransfer` ← `ExplicitNUTS` ctor. The consensus pos-bcast plan (NLSM/BSSN; EM4 opts out)
+allgathered every rank's CG claims (3×u64 + cg + flag per slot, ~10–20 M slots on these meshes) and
+hashed all of them on every rank: O(N_global) memory per rank. SFC arms at np=48: `lts_substep_eff`
+0.568 (np=96: ele_imbalance 1.82, padded 2.x; np=192: 2.49 / 3.x) — the headroom is real.
+
+**Fix: `DENDRO_BCAST_PLAN_DIST`** (jj `xzuzoonw`, flipped `lkvzkqnx`): home-rank election by position
+hash (local before ghost, then lowest rank, then lowest cg = the legacy order), winners returned to
+claimants and notified to winners, plan vectors rebuilt in the legacy order; O(local) memory. Gate
+(`_CHECK` on): tp ×8 and EM4 ×4 on references (neither builds the plan), ragged + SFC ENUTS 18 digits
+(12 builds identical in all 9 vectors), BSSN graph + SFC on references (10 builds identical). Capped
+np=24 probe: legacy dies at 26 s in the first plan; distributed runs the whole init (7 sandwich remeshes
+to 56 232 elements). BSSN teardown fix confirmed 3/3 rc=0 on references. Round 2 submitted: build
+28412914, L 28412915–17 (48/96/192), U 28412918–19 (48/96); local defaults-path gate for the flip running.
