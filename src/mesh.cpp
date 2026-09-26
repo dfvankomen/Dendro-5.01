@@ -810,6 +810,15 @@ void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
             gated += fire * (double)levMax[l];
         }
         ltsEff = (gated > 0.0) ? ideal / gated : 0.0;
+        // DENDRO_PART_STATS=2: per-level totals and busiest rank
+        const char* ps = std::getenv("DENDRO_PART_STATS");
+        if (ps && ps[0] == '2') {
+            out << "[part-levels] " << tag << " lmin=" << lmin;
+            for (unsigned int l = 0; l < nlev; ++l)
+                out << " L" << (lmin + l) << "=" << levSum[l] << "/max" << levMax[l]
+                    << "/ideal" << (double)levSum[l] / (double)m_uiActiveNpes;
+            out << std::endl;
+        }
     }
 
     if (m_uiActiveRank == 0) {

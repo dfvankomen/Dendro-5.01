@@ -3029,7 +3029,7 @@ class Mesh {
     static bool partStatsEnabled() {
         static const bool on = [] {
             const char* e = std::getenv("DENDRO_PART_STATS");
-            return e && e[0] == '1';
+            return e && (e[0] == '1' || e[0] == '2');
         }();
         return on;
     }
