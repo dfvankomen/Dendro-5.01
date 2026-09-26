@@ -19972,7 +19972,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // origin rank of every new local element below)
     static const bool redistHint = [] {
         const char* e = std::getenv("DENDRO_REDIST_HINT");
-        return e && e[0] == '1';
+        return !(e && e[0] == '0');
     }();
     m_uiRepartHint = false;
     m_uiRepartPreTN.clear();

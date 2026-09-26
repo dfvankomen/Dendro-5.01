@@ -6232,7 +6232,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     } prof{comm, rank, rprof};
     if (rprof) prof.t0 = prof.last = MPI_Wtime();
 
-    // DENDRO_REDIST_HINT=1: the destination of every source element is
+    // DENDRO_REDIST_HINT (default on, =0 reverts): the destination of every source element is
     // already known when one side was labelled from the other (see
     // Mesh::m_uiRepartPreTN): s2g, dst was labelled from a copy of this
     // mesh's local elements -> dst rank = label; g2s, dst's local elements
@@ -6242,7 +6242,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // counts mismatches.
     static const bool redistHint = [] {
         const char* v = std::getenv("DENDRO_REDIST_HINT");
-        return v && v[0] == '1';
+        return !(v && v[0] == '0');
     }();
     static const bool hintCheck = [] {
         const char* v = std::getenv("DENDRO_REDIST_HINT_CHECK");
