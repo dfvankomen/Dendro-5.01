@@ -131,3 +131,11 @@ interleaved ×3, repeatability ≤ 1 %:
 - Kingspeak scratch layout and the four traps (ILP64 openblas, `bnxt_re0` UCX default of the `-gcc13`
   openmpi module, `CheckGit.cmake` needing a git repo, `-march=native`) are in the memory note.
 
+
+## 2026-09-26 — sandwich cut 1 landed
+`DENDRO_LAZY_ZIPPLAN_SUCCESSOR` (default on, `=0` reverts): the mesh `Mesh::ReMesh` builds defers its
+zip plan to its first unzip; in the sandwich solvers it never unzips, so 0.8–1.0 s of its 1.0 s ctor per
+remesh is gone (Kingspeak: sandwich 3.17 → 2.65 s at 192 ranks, 4.32 → 3.32 s at 48). Gated with the knob
+on and on the defaults path (tp ×16, EM4 ×4 both np, ENUTS ragged + SFC, BSSN graph + SFC at t_end 6.0
+bit-for-bit). Next: the zip-plan arbitration (`winners`, 1.0 s per rebuild at 192 ranks, the only phase
+that grows with rank count, and ~all of plain SFC's own remesh) — `docs/plan_2026-09-26_sandwich_cuts.md`.
