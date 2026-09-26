@@ -20728,6 +20728,66 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     buildNodalSM(nullptr);
     __phase("nodal-scatter-map");
 
+    // DENDRO_MINIMAL_SCATTER_FILTER=1: shrink the full map in place instead of
+    // rebuilding it. the rebuild drops a recv entry iff its slot is outside
+    // the keep set, before a per-peer dedup that is per slot and keeps order,
+    // so the kept lists are the full lists filtered; each sender learns which
+    // of its entries survive from one byte per entry. _CHECK=1 also rebuilds
+    // and compares every list
+    auto filterNodalSM = [&](const std::unordered_set<unsigned int>& keepSlots) {
+        const size_t totR = m_uiScatterMapActualNodeRecv.size();
+        const size_t totS = m_uiScatterMapActualNodeSend.size();
+        std::vector<int> rc(npes), ro(npes), sc(npes), so(npes);
+        for (int p = 0; p < npes; p++) {
+            rc[p] = (int)m_uiRecvNodeCount[p];
+            ro[p] = (int)m_uiRecvNodeOffset[p];
+            sc[p] = (int)m_uiSendNodeCount[p];
+            so[p] = (int)m_uiSendNodeOffset[p];
+        }
+        std::vector<unsigned char> keepR(totR), keepS(totS);
+        for (size_t i = 0; i < totR; i++)
+            keepR[i] = keepSlots.count(m_uiScatterMapActualNodeRecv[i]) ? 1 : 0;
+        repartRound();
+        MPI_Alltoallv(keepR.data(), rc.data(), ro.data(), MPI_UNSIGNED_CHAR,
+                      keepS.data(), sc.data(), so.data(), MPI_UNSIGNED_CHAR,
+                      commActive);
+        std::vector<int> nrc(npes, 0), nsc(npes, 0), nro(npes, 0), nso(npes, 0);
+        std::vector<unsigned int> nR, nS;
+        std::vector<unsigned char> nDG;
+        nR.reserve(totR);
+        nS.reserve(totS);
+        nDG.reserve(totS);
+        for (int p = 0; p < npes; p++) {
+            for (int i = ro[p]; i < ro[p] + rc[p]; i++)
+                if (keepR[i]) { nR.push_back(m_uiScatterMapActualNodeRecv[i]); nrc[p]++; }
+            for (int i = so[p]; i < so[p] + sc[p]; i++)
+                if (keepS[i]) {
+                    nS.push_back(m_uiScatterMapActualNodeSend[i]);
+                    nDG.push_back(m_uiScatterMapSendIsDG[i]);
+                    nsc[p]++;
+                }
+        }
+        for (int p = 1; p < npes; p++) {
+            nro[p] = nro[p - 1] + nrc[p - 1];
+            nso[p] = nso[p - 1] + nsc[p - 1];
+        }
+        m_uiSendNodeCount  = convertVectorType<int, unsigned int>(nsc);
+        m_uiRecvNodeCount  = convertVectorType<int, unsigned int>(nrc);
+        m_uiSendNodeOffset = convertVectorType<int, unsigned int>(nso);
+        m_uiRecvNodeOffset = convertVectorType<int, unsigned int>(nro);
+        std::swap(m_uiScatterMapActualNodeSend, nS);
+        std::swap(m_uiScatterMapActualNodeRecv, nR);
+        std::swap(m_uiScatterMapSendIsDG, nDG);
+        m_uiSendBufferNodes.resize(m_uiScatterMapActualNodeSend.size());
+        m_uiRecvBufferNodes.resize(m_uiScatterMapActualNodeRecv.size());
+        m_uiSendProcList.clear();
+        m_uiRecvProcList.clear();
+        for (unsigned int p = 0; p < m_uiActiveNpes; p++) {
+            if (m_uiSendNodeCount[p] != 0) m_uiSendProcList.push_back(p);
+            if (m_uiRecvNodeCount[p] != 0) m_uiRecvProcList.push_back(p);
+        }
+    };
+
     if (const char* e = std::getenv("DENDRO_UNREF_CHECK"); e && e[0] == '1') {
         std::vector<char> ref(m_uiNumActualNodes, 0);
         for (unsigned int el = m_uiElementPreGhostBegin; el < m_uiElementPostGhostEnd; el++)
@@ -21150,7 +21210,51 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     keepSlots.insert(kv.second);
                 for (const auto& kv : m_uiPassDDemotedToGhostCg)
                     keepSlots.insert(kv.second);
-                buildNodalSM(&keepSlots);
+                static const bool smFilter = [] {
+                    const char* e = std::getenv("DENDRO_MINIMAL_SCATTER_FILTER");
+                    return e && e[0] == '1';
+                }();
+                static const bool smFilterCheck = [] {
+                    const char* e = std::getenv("DENDRO_MINIMAL_SCATTER_FILTER_CHECK");
+                    return e && e[0] == '1';
+                }();
+                if (smFilter && smFilterCheck) {
+                    auto sSend = m_uiScatterMapActualNodeSend;
+                    auto sRecv = m_uiScatterMapActualNodeRecv;
+                    auto sDG = m_uiScatterMapSendIsDG;
+                    auto sSC = m_uiSendNodeCount, sRC = m_uiRecvNodeCount;
+                    auto sSO = m_uiSendNodeOffset, sRO = m_uiRecvNodeOffset;
+                    buildNodalSM(&keepSlots);
+                    const auto rSend = m_uiScatterMapActualNodeSend;
+                    const auto rRecv = m_uiScatterMapActualNodeRecv;
+                    const auto rDG = m_uiScatterMapSendIsDG;
+                    const auto rSC = m_uiSendNodeCount, rRC = m_uiRecvNodeCount;
+                    const auto rSO = m_uiSendNodeOffset, rRO = m_uiRecvNodeOffset;
+                    std::swap(m_uiScatterMapActualNodeSend, sSend);
+                    std::swap(m_uiScatterMapActualNodeRecv, sRecv);
+                    std::swap(m_uiScatterMapSendIsDG, sDG);
+                    m_uiSendNodeCount = sSC; m_uiRecvNodeCount = sRC;
+                    m_uiSendNodeOffset = sSO; m_uiRecvNodeOffset = sRO;
+                    filterNodalSM(keepSlots);
+                    unsigned long long bad[2] = {0, (unsigned long long)m_uiScatterMapActualNodeRecv.size()};
+                    bad[0] = (rSend != m_uiScatterMapActualNodeSend) + (rRecv != m_uiScatterMapActualNodeRecv)
+                             + (rDG != m_uiScatterMapSendIsDG) + (rSC != m_uiSendNodeCount)
+                             + (rRC != m_uiRecvNodeCount) + (rSO != m_uiSendNodeOffset)
+                             + (rRO != m_uiRecvNodeOffset);
+                    MPI_Allreduce(MPI_IN_PLACE, bad, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+                    if (!rank)
+                        std::cout << "[sm-filter-check] differing lists=" << bad[0]
+                                  << " (recv entries " << bad[1] << ")" << std::endl;
+                } else if (smFilter) {
+                    filterNodalSM(keepSlots);
+                } else {
+                    buildNodalSM(&keepSlots);
+                }
+                static bool smfAnnounced = false;
+                if (smFilter && !rank && !smfAnnounced) {
+                    smfAnnounced = true;
+                    std::cout << "[sm-filter] minimal scatter by in-place filter" << std::endl;
+                }
             }
 
             // coverage check (DENDRO_SM_COVERAGE_CHECK=1): does the recv
