@@ -139,3 +139,15 @@ remesh is gone (Kingspeak: sandwich 3.17 → 2.65 s at 192 ranks, 4.32 → 3.32 
 on and on the defaults path (tp ×16, EM4 ×4 both np, ENUTS ragged + SFC, BSSN graph + SFC at t_end 6.0
 bit-for-bit). Next: the zip-plan arbitration (`winners`, 1.0 s per rebuild at 192 ranks, the only phase
 that grows with rank count, and ~all of plain SFC's own remesh) — `docs/plan_2026-09-26_sandwich_cuts.md`.
+
+## 2026-09-26 — sandwich cut 2a landed: the zip-plan ghost-claim filter
+`[zipplan-arb]` sub-timers (`DENDRO_ZIPPLAN_PROF=1`) showed the arbitration is per-claim CPU at 48
+ranks and two dense Alltoallv rounds at 192, both ∝ claims, and 70–94 % of a rank's claims are ghost
+claims that exist only to be pruned later. `DENDRO_ZIPPLAN_CLAIM_FILTER` (default on, `=0` reverts)
+skips the ghost claims level-2 pruning would drop (winners are only consulted for local cgs, so the
+lists are identical after the prune). Kingspeak np=192: arbitration 1152 → 95 ms, labelled sandwich
+2.48 → 1.21 s per remesh, wall 85.0 → 65.9 s (SFC 59.6 → 51.9 s, its own arbitration 592 → 88 ms),
+checksums identical; every local gate bit-for-bit (knob on and defaults path). Wall vs SFC at 192 ranks
+is now 1.27× (was 1.56× yesterday). Commits: `vsymxzum` timers, `zrsmyuxw` filter, the flip, docs.
+Plan + tables: `docs/plan_2026-09-26_sandwich_cuts.md`.
+
