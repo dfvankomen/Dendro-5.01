@@ -19673,6 +19673,72 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                       << std::endl;
     };
 
+    // DENDRO_BLOCK_FLOOR=1: no target rank may end up without elements (the
+    // block/zip-plan collectives cannot handle an empty rank). a rank nobody
+    // labelled takes one whole block of its own pre-partition slice, from the
+    // current owner with the most elements that stays non-empty (then first
+    // by anchor), repeated until no rank is empty. costs one Allreduce of npes
+    // counts per partition and changes nothing when no rank is empty.
+    // DENDRO_BLOCK_FLOOR_TEST=r (test only) relabels everything labelled r to
+    // r+1 before the floor, to force the empty case at small np.
+    auto blockFloor = [&](std::vector<unsigned int>& parts) {
+        static const bool on = [] {
+            const char* e = std::getenv("DENDRO_BLOCK_FLOOR");
+            return e && e[0] == '1';
+        }();
+        static const int forceEmpty = [] {
+            const char* e = std::getenv("DENDRO_BLOCK_FLOOR_TEST");
+            return e ? atoi(e) : -1;
+        }();
+        if (forceEmpty >= 0 && forceEmpty < npes - 1)
+            for (auto& q : parts)
+                if (q == (unsigned int)forceEmpty) q = forceEmpty + 1;
+        if (!on) return;
+        std::map<AnchorKey, std::vector<size_t>> groups;
+        std::vector<std::vector<size_t>> singles;
+        for (size_t i = 0; i < localSz; ++i) {
+            const auto& oct = oct_connectivity_map[i];
+            if ((oct.blkMeta & (1u << 31)) == 0u) { singles.push_back({i}); continue; }
+            AnchorKey k{oct.blkAnchorX, oct.blkAnchorY, oct.blkAnchorZ, oct.blkAnchorLevel};
+            groups[k].push_back(i);
+        }
+        unsigned long long filled = 0, moved = 0;
+        int rounds = 0;
+        for (; rounds < 8; ++rounds) {
+            std::vector<unsigned long long> cnt(npes, 0);
+            for (size_t i = 0; i < localSz; ++i) cnt[parts[i]]++;
+            repartRound();
+            MPI_Allreduce(MPI_IN_PLACE, cnt.data(), npes, MPI_UNSIGNED_LONG_LONG,
+                          MPI_SUM, commActive);
+            bool anyEmpty = false;
+            for (int p = 0; p < npes; ++p) anyEmpty = anyEmpty || cnt[p] == 0;
+            if (!anyEmpty) break;
+            if (cnt[rank] != 0) continue;
+            const std::vector<size_t>* best = nullptr;
+            unsigned long long bestOwnerCnt = 0;
+            auto consider = [&](const std::vector<size_t>& g) {
+                const unsigned int q = parts[g[0]];
+                bool whole = true;  // the vote left blocks whole; singles trivially
+                for (size_t i : g) whole = whole && parts[i] == q;
+                if (!whole || cnt[q] <= g.size()) return;
+                if (!best || cnt[q] > bestOwnerCnt) { best = &g; bestOwnerCnt = cnt[q]; }
+            };
+            for (const auto& kv : groups) consider(kv.second);
+            for (const auto& g : singles) consider(g);
+            if (!best) continue;
+            for (size_t i : *best) parts[i] = rank;
+            filled++;
+            moved += best->size();
+        }
+        if (rounds > 0 || forceEmpty >= 0) {
+            unsigned long long loc[2] = {filled, moved}, tot[2];
+            MPI_Reduce(loc, tot, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            if (!rank)
+                std::cout << "[block-floor] rounds=" << rounds << " ranks_filled=" << tot[0]
+                          << " elements_moved=" << tot[1] << std::endl;
+        }
+    };
+
     // per-element target rank -> sorted global eids this rank will own
     auto partitionFromLabels = [&](const std::vector<unsigned int>& parts) {
         std::vector<D_INT_L> mine;
@@ -19745,6 +19811,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     } else if (m_partitionOption == PartitioningOptions::SFCLevelwise) {
         std::vector<unsigned int> parts = levelwiseLabels();
         blockVote(parts);
+        blockFloor(parts);
         takeLabels(parts);
     } else if (m_partitionOption == PartitioningOptions::fastpart) {
         // quick conversion of oct_connectivity_map to wanted format
@@ -19883,6 +19950,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }
 
         blockVote(parts);
+        blockFloor(parts);
         takeLabels(parts);
 #endif
 
