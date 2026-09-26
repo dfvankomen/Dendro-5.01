@@ -68,3 +68,12 @@ re-priced on Kingspeak with an EXP=S-style on/off profile pair.
 - Committed opt-in, not yet built: `DENDRO_BLOCK_FLOOR` (`kqzzstmp`), `DENDRO_MINIMAL_SCATTER_FILTER`
   (`lxwqxrrw`). Staged: `DENDRO_PART_STATS` print hook (padded_vol_imbalance / lts_substep_eff from
   both arms' meshes).
+- `DENDRO_REDIST_HINT` knob-on gate COMPLETE (bin `fs` = jj `kysqtzrm`, `_CHECK` + `DENDRO_REDIST_PROF` on):
+  EM4 np=4 `d7bbee89`/`a75a069e`, np=8 `d7bbee89`/`32eb202e`; ragged depth-9 ENUTS and its SFC arm at
+  the 18-digit reference; BSSN q1 graph `7a18bafe`/`c1508613`/`86470a02`/`ed1127e4`, SFC
+  `7a18bafe`/`2ffba783`/`86470a02`/`b50bc05f`. Proof: every labelled-arm transport call routed by hint
+  (EM4 8 labels + 7 origins, ENUTS 12 + 11 — NLSM's weighted SFC twin still matches the pre-partition
+  distribution — BSSN 10 + 9), 0 directory fallbacks, 0 mismatches vs the directory. Local
+  `[redist-prof]` (np=8, indicative only; route includes the check's directory): EM4 16–32 ms per call
+  (route 1–3, pack 5, xchg 7, write 4–10, canon 1–9), BSSN 209–243 ms (pack 67–74, xchg 66–86, write
+  45–56, canon 27–44).

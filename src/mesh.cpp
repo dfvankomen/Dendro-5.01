@@ -758,6 +758,10 @@ void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
     // element load balance + ghost-node communication surface. Comparable
     // SFC-vs-graph (unlike physics norms). Uses only already-built scatter
     // maps, so no extra communication beyond the two small reductions.
+    // computeMinMaxLevel is collective over the global comm when some ranks
+    // are inactive, so every rank takes part before the inactive ones leave
+    unsigned int lmin = 0, lmax = 0;
+    this->computeMinMaxLevel(lmin, lmax);
     if (!m_uiIsActive) return;
 
     const DendroIntL localEle  = (DendroIntL)m_uiNumLocalElements;
@@ -770,8 +774,6 @@ void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
     // This is the quantity the weighted partition (DENDRO_GRAPH_VTX_WEIGHTED=1)
     // aims to balance; comparing its imbalance vs the unweighted partition is
     // the static validation that the weights did their job.
-    unsigned int lmin = 0, lmax = 0;
-    this->computeMinMaxLevel(lmin, lmax);
     DendroIntL workLoad = 0;
     for (unsigned int ele = m_uiElementLocalBegin; ele < m_uiElementLocalEnd;
          ele++)
