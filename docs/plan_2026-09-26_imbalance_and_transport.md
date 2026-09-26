@@ -135,3 +135,35 @@ claimants and notified to winners, plan vectors rebuilt in the legacy order; O(l
 np=24 probe: legacy dies at 26 s in the first plan; distributed runs the whole init (7 sandwich remeshes
 to 56 232 elements). BSSN teardown fix confirmed 3/3 rc=0 on references. Round 2 submitted: build
 28412914, L 28412915–17 (48/96/192), U 28412918–19 (48/96); local defaults-path gate for the flip running.
+
+## Kingspeak round 2 (build 28412914) — the imbalance cases at np=48: no win, and why
+With `DENDRO_BCAST_PLAN_DIST` every labelled arm survives (round 1: all OOM).
+
+**L, NLSM d11 LTS, np=48, round 1 (wall s):** sfc 142.3 · lw (levelwise+refine) 191.4 · lvl (plain
+levelwise) 190.5. `lts_substep_eff` (labelled rebuild's stats): sfc 0.568 → lw 0.721 / lvl 0.713;
+total work imbalance (`LD Bal`) 1.001 → 1.28 / 1.25; ghost elements per rank (mean) 2 007 → 6 295 /
+6 626; ghost send nodes 1.75× / 1.95×. Per-step unzip_async mean 0.046 → 0.057 s, max 0.078 → 0.067
+(lw). The wall gap is mostly the labelled sandwiches: 10 rebuilds = 20.3 s of `[repart] TOTAL`, printed
+sandwiches 5.0–6.5 s each (s2g ~4.5 s) — this case runs 10 coarse steps against ~8 remeshes (init
+loop + LTS init), so it measures NLSM's sandwich, not the stepping. The solution also blows up by
+t=1.0 (U_PHI ±400; ±2.5 at t=0.3) and the arms then differ at 13–15 digits — the case needs a t_end
+before the blow-up and many more coarse steps per remesh.
+
+**Why levelwise stops at 0.71 (local np=48 per-level probe, `DENDRO_PART_STATS=2`):** busiest-rank
+elements per level vs ideal — L9 (704 elements, fires 64× per coarse step): levelwise 64 vs ideal
+14.7 (SFC 88); L8: 952 vs 704 (SFC 911); L7: 410 vs 361 (SFC 936); L3: 16 vs 9.3 (SFC 68). Levelwise
+balances the middle and coarse levels, but the partition is **block-atomic** and the finest level
+comes in 64-element unzip blocks: at most ~11 of 48 ranks can hold level-9 work. The offline study's
+eff ≈ 1.0 labelled single elements. Any LTS win at scale needs finer blocks at the finest level (or a
+block decomposition chosen after the labelling), not a better labeller.
+
+**U, BSSN q1 min-depth 5, np=48, 2 rounds (wall s):** sfc 289.2 / 287.2 · pv (refine=3 + vtx weights 2
++ balance 20) 352.0 / 352.6 (1.22×). padded_vol_imbalance 1.656 → 1.172 (the objective works), busiest
+ghost send 0.81×, but ele_imbalance 1.07 → 1.48; BH locations md5 identical (`1d61595e`). Labelled
+rebuilds 5 × ~1.2 s. Padded volume is not BSSN's whole per-step cost: per-element terms dominate the
+imbalance it creates.
+
+**New since round 1, gated locally, not yet on Kingspeak:** nodal scatter-map dedup by a per-slot
+stamp (jj `qvlnxuyv`; `DENDRO_SM_SET_DEDUP=1` reverts) — scatter-map build 322 → 98 ms over 8 EM4 np=8
+rebuilds (same binary, interleaved, md5 identical), full gate green (tp ×8, EM4 ×4, ENUTS ×2, BSSN ×2);
+`DENDRO_PART_STATS=2` per-level print.

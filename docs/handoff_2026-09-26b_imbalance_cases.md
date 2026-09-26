@@ -5,7 +5,7 @@ session) and the vault's Repartitioning Index / Open Questions / Roadmap. Supers
 `docs/handoff_2026-09-26_sandwich_next.md` where they differ. Everything is on the jj line, local only.
 
 ## State in one paragraph
-Four more changes are on by default, each gated knob-on then on the defaults path, bit-for-bit on every
+Four more changes are on by default (a fifth, the scatter-map stamp dedup, is gated but unpriced), each gated knob-on then on the defaults path, bit-for-bit on every
 reference (`=0` reverts each): the transport routes by the partition's labels (s2g) and origin ranks
 (g2s) instead of a TN-hash directory (`DENDRO_REDIST_HINT`); a rank no label reaches gets one block of
 its own pre-partition slice instead of `MPI_Abort(7)` (`DENDRO_BLOCK_FLOOR`); the minimal scatter map is
@@ -43,14 +43,37 @@ with more than one knob through `bash`, not zsh (no word splitting).
 - **Puncture (Kingspeak U)**: BSSN q1, `BSSN_MINDEPTH=5`, refinement mode 3 → 37 304 elements (777/rank
   at 48). Arms: sfc / pv (`DENDRO_GRAPH_REFINE=3` + `DENDRO_GRAPH_VTX_WEIGHTED=2` + `DENDRO_GRAPH_BALANCE_ROUNDS=20`).
 
-## Results of round 2 (build 28412914, L 28412915–17, U 28412918–19)
-*(pending when this was written — see the plan's log)*
+## Results of round 2 (build 28412914, L 28412915–17, U 28412918–19) — no win yet, three reasons
+Wall, same job, arms interleaved, 2 rounds, repeatable within 1 % (ratios are labelled vs SFC):
+
+| case | np | SFC s | labelled s | ratio | target metric SFC → labelled |
+|---|---|---|---|---|---|
+| L (levelwise+refine / plain levelwise) | 48 | 142.3 / 141.8 | 191.4 / 190.5 | 1.34× | lts_substep_eff 0.568 → 0.721 / 0.713 |
+| L | 96 | 90.1 / 90.1 | 130.9 / 132.3 | 1.45× | 0.455 → 0.741 / 0.740 |
+| U (refine=3 + vtxw 2 + balance 20) | 48 | 289.2 / 287.2 | 352.0 / 352.6 | 1.22× | padded_vol_imb 1.656 → 1.172 |
+| U | 96 | 174.9 / 174.7 | 214.6 / 218.1 | 1.24× | padded_vol_imb 1.51 → 1.07 |
+
+L at 192 (28412917) was still queued at write-up — read it with `kp/fetch.sh`.
+1. **The labelled path's own cost dominates.** NLSM sandwiches are 5–6.5 s each at np=48 (s2g ~4.5 s;
+   10 labelled rebuilds = 20 s against 10 coarse steps); BSSN at np=96 spends 38 s more inside ETS, of
+   which ~14 s are sandwiches and ~24 s per-step extras of the labelled path (suspect: the consensus
+   pos-bcast after every step, on for NLSM/BSSN, off for EM4).
+2. **Block atomicity caps LTS balance.** Per-level busiest rank at np=48 (levelwise): L9 64 vs ideal
+   14.7 (704 elements in 64-element unzip blocks → ~11 of 48 ranks can own level 9), L8 952 vs 704.
+   The offline eff ≈ 1.0 labelled single elements. Levelwise also triples ghost elements per rank.
+3. **Padded volume is not BSSN's per-step cost.** The objective is met (1.07) with fewer ghost bytes,
+   and the step is not faster.
+Correctness at scale: BH locations identical between arms (U 48 `1d61595e`, U 96 `d996be97`). The L
+case blows up by t=1.0 (U_PHI ±400); next time use t_end ≤ 0.3 and more coarse steps per remesh.
 
 ## What to do next
-1. Read L/U (`kp/fetch.sh`; lines include `part-stats`, `redist-prof`, `LD Bal`, wall). If lw/lvl
-   lift `lts_substep_eff` toward 1.0 and wall drops vs sfc, that is the first measured win — write it
-   up as such, with every ratio labelled.
-2. The next sandwich cut is the **first** nodal scatter-map build (~140 ms per remesh at 192, now the
+1. **The per-step labelled tax** (hits every labelled case): profile a BSSN/NLSM labelled step vs SFC
+   at scale (`DENDRO_COMM_STATS`, pos-bcast bytes per step); a pos-bcast that ships only consensus
+   positions whose value changed, or none where the zip plan already makes duplicates identical.
+2. **Block granularity for LTS** (a design decision for the user): finer unzip blocks at the finest
+   level (or blocks chosen after labelling) trade unzip efficiency for sub-step balance.
+3. Price the stamp dedup (`qvlnxuyv`, local 3.3× on the scatter-map build) on Kingspeak (T pair).
+4. The next sandwich cut is the **first** nodal scatter-map build (~140 ms per remesh at 192, now the
    largest s2g phase), then the canonical pull's key Allgatherv (~17 ms per call at 192), then inherited
    labels. The directory rendezvous turned out to be ~5 ms per call — do not re-estimate from totals.
 3. Commit in the BSSN repo (user): `bssngr_main.cpp` deletes the ctx before its mesh (the teardown
