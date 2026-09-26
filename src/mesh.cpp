@@ -20577,6 +20577,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             }
         }
 
+        __phase("  sm: walk");
         // Dedup per-rank: prefer CG entry over DG entry for the same
         // cgIdx. CG path goes via the canonical owner (which is the
         // physical "source of truth" for the CG slot under master's
@@ -20584,6 +20585,11 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // f(element's own sub) — only correct when receiver's E2N
         // self-owns this CG, otherwise it'd deliver the wrong physical
         // value for hanging cases.
+        static const bool smSetDedup = [] {
+            const char* e = std::getenv("DENDRO_SM_SET_DEDUP");
+            return e && e[0] == '1';
+        }();
+        std::vector<unsigned int> smStamp(m_uiNumActualNodes, 0u);
         for (unsigned int p = 0; p < npes; p++) {
             std::vector<unsigned int> outSM;
             std::vector<unsigned int> outDGG;
@@ -20592,10 +20598,19 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             outDGG.reserve(recvNodeSM_r[p].size());
             outIsDG.reserve(recvNodeSM_r[p].size());
             std::set<unsigned int> seen;
+            // first time slot c is kept for peer p (stamp = p+1, no reset
+            // between peers); DENDRO_SM_SET_DEDUP=1 keeps the std::set
+            auto firstSeen = [&](unsigned int c) {
+                if (smSetDedup) return seen.insert(c).second;
+                if (c >= smStamp.size()) smStamp.resize(c + 1, 0u);
+                if (smStamp[c] == (unsigned int)p + 1u) return false;
+                smStamp[c] = (unsigned int)p + 1u;
+                return true;
+            };
             // First pass: keep CG entries
             for (size_t i = 0; i < recvNodeSM_r[p].size(); i++) {
                 if (!recvNodeIsDG[p][i] &&
-                    seen.insert(recvNodeSM_r[p][i]).second) {
+                    firstSeen(recvNodeSM_r[p][i])) {
                     outSM.push_back(recvNodeSM_r[p][i]);
                     outDGG.push_back(recvNodeDGG[p][i]);
                     outIsDG.push_back(recvNodeIsDG[p][i]);
@@ -20604,7 +20619,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             // Second pass: keep DG entries for cgIdx not already seen
             for (size_t i = 0; i < recvNodeSM_r[p].size(); i++) {
                 if (recvNodeIsDG[p][i] &&
-                    seen.insert(recvNodeSM_r[p][i]).second) {
+                    firstSeen(recvNodeSM_r[p][i])) {
                     outSM.push_back(recvNodeSM_r[p][i]);
                     outDGG.push_back(recvNodeDGG[p][i]);
                     outIsDG.push_back(recvNodeIsDG[p][i]);
@@ -20616,6 +20631,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             recvCount[p] = recvNodeSM_r[p].size();
         }
 
+        __phase("  sm: dedup");
         // Offsets
         std::vector<int> recvOff(npes, 0);
         for (int p = 1; p < npes; p++)
@@ -20649,6 +20665,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         MPI_Alltoallv(recvBuf.data(), recvCount.data(), recvOff.data(),
                       MPI_UINT64_T, sendBuf.data(), sendCount.data(),
                       sendOff.data(), MPI_UINT64_T, commActive);
+        __phase("  sm: exchange");
         std::vector<unsigned char> sendIsDGBuf(totalSend);
         for (int i = 0; i < totalSend; i++) {
             sendIsDGBuf[i] = (sendBuf[i] & kIsDGBit) ? 1 : 0;
@@ -20705,6 +20722,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             }
         }
 
+        __phase("  sm: decode");
         // Flatten recv scatter map
         std::vector<unsigned int> recvSM(totalRecv);
         {
