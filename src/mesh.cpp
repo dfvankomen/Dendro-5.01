@@ -19891,6 +19891,25 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     }
     __phase("partition-decision");
 
+    // DENDRO_REDIST_HINT: keep what the transport would otherwise ask a
+    // directory for (pre-partition local elements + their labels here, the
+    // origin rank of every new local element below)
+    static const bool redistHint = [] {
+        const char* e = std::getenv("DENDRO_REDIST_HINT");
+        return e && e[0] == '1';
+    }();
+    m_uiRepartHint = false;
+    m_uiRepartPreTN.clear();
+    m_uiRepartPreLabel.clear();
+    m_uiRepartOrigin.clear();
+    const bool keepHint = redistHint && pushPath &&
+                          npes == (int)this->getMPICommSizeGlobal();
+    if (keepHint) {
+        m_uiRepartPreTN.assign(m_uiAllElements.begin() + m_uiElementLocalBegin,
+                               m_uiAllElements.begin() + m_uiElementLocalEnd);
+        m_uiRepartPreLabel = pushLabels;
+    }
+
     // forward push of the owned set + R1/R2/R3 closure. the source of an
     // element knows its label and its 26 neighbour ids, so "rank p needs g at
     // ring d" claims travel to g's source (3 claim rounds, one per ring), then
@@ -20234,6 +20253,21 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         bi.anchorLevel = oct.blkAnchorLevel;
         bi.meta        = oct.blkMeta;
         newBlockInfo.push_back(bi);
+    }
+    if (keepHint) {
+        m_uiRepartOrigin.reserve(newLocalEnd - newLocalBegin);
+        for (size_t i = newLocalBegin; i < newLocalEnd; i++) {
+            const D_INT_L eid = new_oct_connectivity_map[i].eid;
+            const int org = (int)(std::upper_bound(ele_offsets.begin(),
+                                                   ele_offsets.end(), eid) -
+                                  ele_offsets.begin()) - 1;
+            m_uiRepartOrigin.emplace_back(newAllElements[i], org);
+        }
+        std::sort(m_uiRepartOrigin.begin(), m_uiRepartOrigin.end(),
+                  [](const auto& a, const auto& b) {
+                      return repartTNKeyLess(a.first, b.first);
+                  });
+        m_uiRepartHint = true;
     }
     std::swap(m_uiAllElements, newAllElements);
     m_uiUnzipEleOrder.clear();

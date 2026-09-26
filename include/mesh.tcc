@@ -6207,7 +6207,103 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     const unsigned int srcLocalEnd   = m_uiIsActive ? m_uiElementLocalEnd : 0;
     std::vector<int> srcTarget(srcLocalEnd - srcLocalBegin, -1);
 
-    if (routeDir) {
+    // DENDRO_REDIST_PROF=1: per-phase ms, max over ranks (no barriers; a
+    // phase includes its wait inside the collectives it calls)
+    static const bool rprof = [] {
+        const char* v = std::getenv("DENDRO_REDIST_PROF");
+        return v && v[0] == '1';
+    }();
+    struct RProf {
+        MPI_Comm c; int r; bool on; int mode = -1;
+        double t0 = 0, last = 0, ph[6] = {0, 0, 0, 0, 0, 0};
+        void mark(int i) { if (!on) return; double t = MPI_Wtime(); ph[i] += t - last; last = t; }
+        ~RProf() {
+            if (!on) return;
+            double loc[7], mx[7];
+            for (int i = 0; i < 6; i++) loc[i] = ph[i] * 1e3;
+            loc[6] = (MPI_Wtime() - t0) * 1e3;
+            MPI_Reduce(loc, mx, 7, MPI_DOUBLE, MPI_MAX, 0, c);
+            if (!r)
+                std::cout << "[redist-prof] mode=" << mode << " route=" << mx[0]
+                          << " pack=" << mx[1] << " xchg=" << mx[2]
+                          << " write=" << mx[3] << " canon=" << mx[4]
+                          << " total=" << mx[6] << " ms (max over ranks)" << std::endl;
+        }
+    } prof{comm, rank, rprof};
+    if (rprof) prof.t0 = prof.last = MPI_Wtime();
+
+    // DENDRO_REDIST_HINT=1: the destination of every source element is
+    // already known when one side was labelled from the other (see
+    // Mesh::m_uiRepartPreTN): s2g, dst was labelled from a copy of this
+    // mesh's local elements -> dst rank = label; g2s, dst's local elements
+    // are this labelled mesh's pre-partition ones -> dst rank = origin.
+    // Used only when every rank matches (one Allreduce), else the
+    // directory. DENDRO_REDIST_HINT_CHECK=1 also runs the directory and
+    // counts mismatches.
+    static const bool redistHint = [] {
+        const char* v = std::getenv("DENDRO_REDIST_HINT");
+        return v && v[0] == '1';
+    }();
+    static const bool hintCheck = [] {
+        const char* v = std::getenv("DENDRO_REDIST_HINT_CHECK");
+        return v && v[0] == '1';
+    }();
+    int hintMode = 0;
+    std::vector<int> hintTarget;
+    if (redistHint) {
+        int code = 0;
+        const bool allActive = m_uiIsActive && dstMesh->isActive() &&
+                               (int)getMPICommSize() == npes &&
+                               (int)dstMesh->getMPICommSize() == npes;
+        if (allActive) {
+            const size_t nSrc = srcLocalEnd - srcLocalBegin;
+            const auto* pNO   = m_uiAllElements.data();
+            const auto& dPre  = dstMesh->m_uiRepartPreTN;
+            if (dstMesh->m_uiRepartHint && dPre.size() == nSrc &&
+                dstMesh->m_uiRepartPreLabel.size() == nSrc) {
+                bool eq = true;
+                for (size_t i = 0; i < nSrc && eq; i++)
+                    eq = repartTNKeySame(pNO[srcLocalBegin + i], dPre[i]);
+                if (eq) {
+                    code = 1;
+                    hintTarget.assign(dstMesh->m_uiRepartPreLabel.begin(),
+                                      dstMesh->m_uiRepartPreLabel.end());
+                }
+            }
+            const size_t nDst = dstMesh->getElementLocalEnd() -
+                                dstMesh->getElementLocalBegin();
+            if (!code && m_uiRepartHint && m_uiRepartPreTN.size() == nDst &&
+                m_uiRepartOrigin.size() == nSrc) {
+                const auto* pND = dstMesh->getAllElements().data();
+                const unsigned int dB = dstMesh->getElementLocalBegin();
+                bool eq = true;
+                for (size_t i = 0; i < nDst && eq; i++)
+                    eq = repartTNKeySame(pND[dB + i], m_uiRepartPreTN[i]);
+                if (eq) {
+                    hintTarget.assign(nSrc, -1);
+                    for (size_t i = 0; i < nSrc && eq; i++) {
+                        const ot::TreeNode& t = pNO[srcLocalBegin + i];
+                        auto it = std::lower_bound(
+                            m_uiRepartOrigin.begin(), m_uiRepartOrigin.end(), t,
+                            [](const auto& a, const ot::TreeNode& b) {
+                                return repartTNKeyLess(a.first, b);
+                            });
+                        eq = it != m_uiRepartOrigin.end() &&
+                             repartTNKeySame(it->first, t);
+                        if (eq) hintTarget[i] = it->second;
+                    }
+                    if (eq) code = 2;
+                }
+            }
+        }
+        int mm[2] = {code, -code};
+        MPI_Allreduce(MPI_IN_PLACE, mm, 2, MPI_INT, MPI_MIN, comm);
+        if (mm[0] == -mm[1] && mm[0] > 0) hintMode = mm[0];
+    }
+    prof.mode = hintMode;
+    const bool needDir = (hintMode == 0 || hintCheck);
+
+    if (needDir && routeDir) {
         const MPI_Datatype tnType = par::Mpi_datatype<ot::TreeNode>::value();
         TNHash tnHash;
         auto dirOf = [&](const ot::TreeNode& t) {
@@ -6294,7 +6390,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             std::cout << "[redist-route] directory path: " << stats[1]
                       << " elements routed by TN-hash rendezvous" << std::endl;
         }
-    } else {
+    } else if (needDir) {
         // ---- Step 1: Allgatherv each rank's local TreeNodes on dstMesh, build
         //              a global TreeNode -> rank map (hashed for speed).
         std::vector<ot::TreeNode> myLocal;
@@ -6343,6 +6439,25 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             }
         }
     }
+
+    if (hintMode) {
+        if (hintCheck) {
+            unsigned long long mis[2] = {0, (unsigned long long)srcTarget.size()};
+            for (size_t i = 0; i < srcTarget.size(); i++)
+                if (srcTarget[i] != hintTarget[i]) mis[0]++;
+            MPI_Allreduce(MPI_IN_PLACE, mis, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+            if (!rank)
+                std::cout << "[redist-hint-check] mode=" << hintMode
+                          << " mismatches=" << mis[0] << " of " << mis[1]
+                          << std::endl;
+        }
+        srcTarget.swap(hintTarget);
+    }
+    if (redistHint && !rank)
+        std::cout << "[redist-hint] mode="
+                  << (hintMode == 1 ? "labels" : hintMode == 2 ? "origins" : "directory")
+                  << std::endl;
+    prof.mark(0);
 
     // ---- Step 2: walk this mesh's local elements, pack per-element DG
     //              values via E2N_CG (canonical owner's CG value) into
@@ -6441,6 +6556,8 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         }
     }
 
+    prof.mark(1);
+
     // ---- Step 3: alltoallv TreeNodes (per elem) + flags (per node) +
     //              DG values (per node * dof). TN/flag counts are dof-
     //              independent; only DG counts scale with dof.
@@ -6504,6 +6621,8 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     MPI_Alltoallv(flatFlag.data(), sendCntFlag.data(), sendOffFlag.data(),
                   MPI_UNSIGNED_CHAR, recvFlag.data(), recvCntFlag.data(),
                   recvOffFlag.data(), MPI_UNSIGNED_CHAR, comm);
+
+    prof.mark(2);
 
     // ---- Step 4: write into dstMesh's CG via E2N_CG and refresh
     //              m_uiLocalNodalDG (used by graph-partition DG ghost path).
@@ -6661,6 +6780,8 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         }
     }
 
+
+    prof.mark(3);
 
     // ---- Step 5: orphan fill. Dst local CGs NOT referenced by any dst
     //              local element ("orphans") don't get written by the
@@ -6824,7 +6945,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                       << " total_keys=" << oTotal << std::endl;
         }
     }
-    if (oTotal == 0) { rpReport(); return; }  // no orphans anywhere, done
+    if (oTotal == 0) { rpReport(); prof.mark(4); return; }  // no orphans anywhere, done
 
     std::vector<int>          oAllRank(oTotal);
     std::vector<unsigned int> oAllCG(oTotal);
@@ -7052,6 +7173,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                       << std::endl;
     }
     rpReport();
+    prof.mark(4);
 }
 
 template <typename T>

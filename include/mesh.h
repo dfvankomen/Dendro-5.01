@@ -516,6 +516,19 @@ inline unsigned int oct_work_weight(unsigned int level, unsigned int lmin,
     return (w < 1u) ? 1u : w;
 }
 
+/** octant identity for the transport hints: anchor + level, flags ignored
+ *  (refinement flags ride on the TreeNodes through g2s) */
+inline bool repartTNKeySame(const ot::TreeNode& a, const ot::TreeNode& b) {
+    return a.getX() == b.getX() && a.getY() == b.getY() &&
+           a.getZ() == b.getZ() && a.getLevel() == b.getLevel();
+}
+inline bool repartTNKeyLess(const ot::TreeNode& a, const ot::TreeNode& b) {
+    if (a.getX() != b.getX()) return a.getX() < b.getX();
+    if (a.getY() != b.getY()) return a.getY() < b.getY();
+    if (a.getZ() != b.getZ()) return a.getZ() < b.getZ();
+    return a.getLevel() < b.getLevel();
+}
+
 /**
  * @breif Contains all the information needed to build neighbourhood information
  * for the balanced octree based on treeSearch.
@@ -717,6 +730,17 @@ class Mesh {
      *  enforcement (zero metric, det=0) — BSSN registers flat-space
      *  values. Indexed by dof var; vars beyond the vector size fill 0. */
     std::vector<double> m_uiPhantomFill;
+
+    /** Transport hints kept by repartitionMeshGlobal (DENDRO_REDIST_HINT=1):
+     *  the pre-partition local elements on this rank with their labels,
+     *  and for each new local element the rank it came from (sorted by
+     *  x,y,z,level). redistributeVec routes by them instead of the TN-hash
+     *  directory when the other mesh's local elements equal
+     *  m_uiRepartPreTN on every rank. */
+    bool m_uiRepartHint = false;
+    std::vector<ot::TreeNode> m_uiRepartPreTN;
+    std::vector<unsigned int> m_uiRepartPreLabel;
+    std::vector<std::pair<ot::TreeNode, int>> m_uiRepartOrigin;
 
     /** Cached pos-bcast plan (mesh-only; see buildBcastPlan). Invalidated
      *  wherever CG2DG / all-elements / node ranges are rebuilt. */
