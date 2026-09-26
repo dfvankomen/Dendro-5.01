@@ -61,23 +61,34 @@ Decisions on ratios within a round; report the deterministic counters next to ev
 ## Results
 
 **Experiment A, EM4 depth 9 (22.5k elements at t=0, 154 steps, 15 remeshes), Kingspeak guest c24 m128
-nodes, 24 ranks/node, arms interleaved in one job; `rkstep` / `unzip_async` / `remesh` = max over ranks
-from `em4_prof_final.prof` (s); `bytes` = ghost-exchange bytes, `sync` = side-channel bytes (whole run).**
+nodes (E5-2680 v3), 24 ranks/node, five arms interleaved in one job, three rounds; `rkstep` /
+`unzip_async` / `remesh` = max over ranks from `em4_prof_final.prof`; `ghost` = ghost-exchange bytes,
+`sync` = side-channel bytes over the whole run. Repeatability inside a job is ≤ 1 %.**
 
-| np | arm | wall s | rkstep | unzip_async | remesh | ghost bytes | sync bytes |
+| np | arm | wall s (3 rounds) | rkstep s | unzip_async s | remesh s | ghost GB | sync GB |
 |---|---|---|---|---|---|---|---|
-| 48 | sfc_p0 (full side-channel) | 222.5 | 184.6 | 127.4 | 15.0 | 290 GB | 1460 GB |
-| 48 | sfc (defaults) | 138.5 | 107.1 | 60.9 | 15.9 | 290 GB | 0 |
-| 48 | graph_p0 (plain fastpart, prune 0) | 422.1 | 331.9 | 253.3 | 52.6 | 328 GB | 2849 GB |
-| 96 | sfc_p0 | 175.2 | 142.8 | 107.5 | 11.5 | 400 GB | 2105 GB |
-| 96 | sfc | 83.5 | 59.4 | 35.9 | 11.6 | 400 GB | 0 |
-| 96 | graph_p0 | 408.4 | 325.6 | 268.9 | 42.9 | 443 GB | 4236 GB |
-| 96 | graph (defaults) | 141.6 | 80.7 | 54.0 | 44.3 | 443 GB | 0.15 GB |
-| 96 | refine (`DENDRO_GRAPH_REFINE=1`, SFC-identical labelling) | 115.7 | 62.0 | 35.7 | 39.2 | 394 GB | 0.02 GB |
-| 192 | sfc_p0 (3 rounds) | 113.4 / 113.2 / 113.7 | 83.1 / 83.1 / 83.3 | 64.3 | 10.9 | 539 GB | 2978 GB |
-| 192 | sfc (2 rounds) | 59.4 / 60.0 | 34.1 / 34.6 | 21.2 | 11.1 | 539 GB | 0 |
-| 192 | refine (2 rounds) | 93.2 / 92.6 | 36.4 / 36.1 | 22.2 | 40.5 | 531 GB | 0.02 GB |
-| 192 | graph, graph_p0 | rc=7 at step 50, both rounds | | | | | |
+| 48 | sfc_p0 (full side-channel) | 222.5 / 222.3 / 222.4 | 184.6 / 184.7 / 184.8 | 127.4 / 127.3 / 127.3 | 15.0 / 15.0 / 15.1 | 290 | 1460 |
+| 48 | sfc (defaults) | 138.5 / 138.6 / 138.4 | 107.1 / 107.2 / 106.9 | 60.9 / 61.1 / 60.9 | 15.9 / 16.1 / 16.0 | 290 | 0 |
+| 48 | graph_p0 (plain fastpart, prune 0) | 422.1 / 418.6 / 423.2 | 331.9 / 328.7 / 332.3 | 253.3 / 251.2 / 254.4 | 52.6 / 52.5 / 52.7 | 328 | 2849 |
+| 48 | graph (plain fastpart, defaults) | 208.9 / 208.8 / 208.6 | 131.8 / 131.7 / 131.8 | 81.2 / 80.9 / 81.1 | 56.9 / 56.9 / 56.7 | 328 | 0 |
+| 48 | refine (`DENDRO_GRAPH_REFINE=1`, SFC-identical) | 181.3 / 181.2 / 181.8 | 111.7 / 111.7 / 112.0 | 60.4 / 60.5 / 60.5 | 51.8 / 51.8 / 52.0 | 285 | 0 |
+| 96 | sfc_p0 | 175.2 / 175.0 / 174.9 | 142.8 / 143.0 / 142.8 | 107.5 / 107.6 / 107.3 | 11.5 / 11.4 / 11.5 | 400 | 2105 |
+| 96 | sfc | 83.5 / 83.2 / 83.2 | 59.4 / 59.5 / 59.2 | 35.9 / 35.8 / 35.6 | 11.6 / 11.6 / 11.5 | 400 | 0 |
+| 96 | graph_p0 | 408.4 / 404.9 / 407.8 | 325.6 / 322.2 / 324.9 | 268.9 / 265.7 / 268.2 | 42.9 / 42.9 / 42.9 | 443 | 4236 |
+| 96 | graph | 141.6 / 141.8 / 141.9 | 80.7 / 80.9 / 80.7 | 54.0 / 54.3 / 54.0 | 44.3 / 44.1 / 44.3 | 443 | 0 |
+| 96 | refine | 115.7 / 115.9 / 116.0 | 62.0 / 61.9 / 61.9 | 35.7 / 35.6 / 35.6 | 39.2 / 39.3 / 39.5 | 394 | 0 |
+| 192 | sfc_p0 | 113.4 / 113.2 / 113.7 | 83.1 / 83.1 / 83.3 | 64.3 / 64.3 / 64.4 | 10.8 / 10.9 / 11.1 | 539 | 2978 |
+| 192 | sfc | 59.4 / 60.0 / 59.6 | 34.1 / 34.6 / 34.5 | 21.2 / 21.7 / 21.4 | 11.0 / 11.1 / 10.9 | 539 | 0 |
+| 192 | graph_p0, graph | `MPI_Abort(7)` ×3 each: a rank owns zero elements after labelling | | | | | |
+| 192 | refine | 93.2 / 92.6 / 93.2 | 36.4 / 36.1 / 36.4 | 22.2 / 22.1 / 22.3 | 40.5 / 40.3 / 40.4 | 531 | 0 |
+
+Ratios of round means (same nodes, same job):
+
+| np | side-channel removal, rkstep (sfc_p0/sfc) | same on ragged labelling (graph_p0/graph) | refine/sfc rkstep | refine/sfc wall | refine/sfc remesh | graph/sfc rkstep |
+|---|---|---|---|---|---|---|
+| 48 | 1.72× | 2.51× | 1.045 | 1.31 | 3.2× | 1.23 |
+| 96 | 2.41× | 4.01× | 1.043 | 1.39 | 3.4× | 1.36 |
+| 192 | 2.42× | (crash) | 1.055 | 1.56 | 3.7× | — |
 
 Readings (ratios inside a round, same nodes):
 - **The side-channel removal is the answer to the question asked**: RK step 1.72× faster at np=48,
@@ -91,8 +102,28 @@ Readings (ratios inside a round, same nodes):
 - On this symmetric EM4 case there is no win to have (the refined labelling *is* SFC); the repartitioning
   benefit lives on asymmetric/LTS cases, which this rung set could not measure (below).
 
+**Experiment C, BSSN q1 tinytest (5.9k elements, `BSSN_REFINEMENT_MODE=3`, t_end 3.0), np=48, one round:**
+
+| arm | wall s | BH locations | constraints | GW_L2 |
+|---|---|---|---|---|
+| sfc (defaults) | 72.7 | `00c4db2c…` | `249f7eec…` | `e5171c05…` |
+| graph (defaults, vote 28 elements) | 124.7 | `00c4db2c…` | `3a282e62…` | `e5171c05…` |
+| graph_p0 (prune 0 control) | 232.8 | `00c4db2c…` | `3a282e62…` | `e5171c05…` |
+
+`graph = graph_p0` bit-for-bit at 48 ranks on a ragged labelling: the defaults gate holds at scale; the
+side-channel removal is 1.87× in wall on BSSN's labelled path. BH locations agree with SFC bit-for-bit;
+the constraint CSV differs between SFC and graph (as locally: different partition, same physics to the
+printed digits, C_HAM 9.20684e-06 vs 9.20534e-06). Graph is still 1.7× SFC in wall on this 123-element-
+per-rank case — the sandwich, not the step. NLSM (experiment B) was cancelled at np=48 too: 0 runs in
+40 min on a 4.7k-element case; a scale-sized NLSM case is a separate, locally gated job.
+
 **Defects surfaced at scale (not seen at np≤8):**
-- ragged fastpart arms at np=192: rc=7 at step 50 (after the remesh at 50), both prune levels.
+- ragged fastpart arms at np=192: `MPI_Abort(7)` from the fork's own guard `[repart] a rank owns zero
+  elements after labelling` (mesh.cpp:19882) at the step-50 remesh: 24445 elements over 192 ranks, and
+  the block-atomic vote (34 of 134 elements moved) left a rank empty. Needs a one-block floor per rank
+  in the vote/partitioner (Roadmap), not a correctness issue. Also cosmetic: the labelled build prints
+  `# of CG nodes (vertices) : 114682492337` (an unset counter) and the `DENDRO_ZIPSYNC_CHECK` report fired
+  on ranks with an empty sync list (fixed locally, probe-only).
 - `nlsmNUTS` levelwise arm hangs after `[repart] TOTAL` at np=96 and np=192: the gated depth-9 case has
   only 17 elements when the LTS driver first partitions, so most ranks are inactive — the labelled rebuild
   with inactive ranks hangs. Experiment B needs a case sized for ≥48 ranks (depth 10–11, tighter tol),

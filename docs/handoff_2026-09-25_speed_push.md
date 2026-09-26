@@ -108,3 +108,25 @@ Full plan, probes and every table: `docs/plan_2026-09-25_transport_read.md`.
 - Gate scripts and references for this session live in the session scratchpad `gate/` and `ref/`
   (copies of `tp_base/`, the EM4 param files, the NLSM d9 par, the q1 TOML and the TwoPunctures
   solution); `bin_def/` holds the defaults-gate binaries.
+
+## Kingspeak, 2026-09-25 evening — the communication drop priced at 48–192 ranks
+Plan, setup traps and every table: `docs/plan_2026-09-25_kingspeak.md`; memory
+`project_kingspeak_setup_2026-09-25`. EM4 depth 9 (22.5k elements), guest c24 nodes, five arms
+interleaved ×3, repeatability ≤ 1 %:
+- **The side-channel removal (this week's default) is 1.72× / 2.41× / 2.42× on the RK step at np =
+  48 / 96 / 192 on plain SFC** (side-channel bytes 1.5–3.0 TB per run → 0), and 2.5× / 4.0× on the
+  ragged fastpart labelling at 48 / 96. The old fork's SFC baseline was paying two thirds of its step
+  for it at 192 ranks; every earlier "graph vs SFC" comparison was between two taxed arms.
+- **Repartitioning vs SFC, per step, on the new defaults:** the refined (SFC-identical) labelling is
+  within 4.5 % (48), 4.3 % (96) and 5.5 % (192) of SFC on `rkstep`; plain fastpart +23 % / +36 %.
+- **What is left is the sandwich:** remesh 3.2–3.7× SFC's per run and flat with np, so wall is 1.31 /
+  1.39 / 1.56× SFC. On this symmetric case there is no win to have; the benefit cases (asymmetric /
+  LTS) still need a scale-sized, locally gated NLSM/BSSN case.
+- BSSN q1 at np=48: `graph = graph_p0` bit-for-bit on a ragged labelling (the defaults gate holds at
+  scale), 1.87× faster in wall; SFC 72.7 s vs graph 124.7 s (sandwich).
+- **New defects at scale:** plain fastpart at np=192 on 24k elements leaves a rank with zero elements
+  after the block vote → the fork's own `MPI_Abort(7)` guard (needs a one-block floor per rank);
+  `nlsmNUTS` levelwise hangs when the first LTS mesh has fewer elements than ranks (17 at np ≥ 48).
+- Kingspeak scratch layout and the four traps (ILP64 openblas, `bnxt_re0` UCX default of the `-gcc13`
+  openmpi module, `CheckGit.cmake` needing a git repo, `-march=native`) are in the memory note.
+
