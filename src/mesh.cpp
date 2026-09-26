@@ -336,6 +336,9 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         }
     }
 
+    // DENDRO_PART_STATS=1: partition snapshot of every block-building mesh
+    // (the SFC arm's meshes; print only)
+    if (m_uiIsBlockSetup && partStatsEnabled()) dumpPartitionStats(std::cout, "ctor");
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished building the mesh!");
 }
@@ -621,6 +624,9 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         }
     }
 
+    // DENDRO_PART_STATS=1: partition snapshot of every block-building mesh
+    // (the SFC arm's meshes; print only)
+    if (m_uiIsBlockSetup && partStatsEnabled()) dumpPartitionStats(std::cout, "ctor");
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished building the mesh!");
 }
@@ -21474,6 +21480,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         std::cout << "[repart] TOTAL: "
                   << (MPI_Wtime() - __t_start) * 1e3 << " ms" << std::endl;
     }
+    if (partStatsEnabled()) dumpPartitionStats(std::cout, "repart");
 }
 
 template <typename T>

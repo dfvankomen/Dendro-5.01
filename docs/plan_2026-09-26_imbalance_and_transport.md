@@ -53,3 +53,18 @@ scatter-map double build (`DENDRO_MINIMAL_SCATTER_FILTER`), inherited labels. Ea
 re-priced on Kingspeak with an EXP=S-style on/off profile pair.
 
 ## Log
+- Sizing, NLSM (SFC, np=8, one coarse step): the first partition is on the pre-init mesh (min-depth
+  floor, ~512–540 octants), not `function2Octree`'s output. d9/1e-5 → 4 096 after init (est. LTS
+  speedup 2.73); d10/1e-6 → 6 504 (3.66); d10/1e-7 → 44 248 (1.15); d11/1e-7 → 44 080 (2.30).
+  `NLSM_MINDEPTH=5` makes the first mesh 32 796 (170/rank at 192). The init loop flip-flops
+  24 648 ↔ 44 080 (AMR factor 1.0); the 24 648 state has est. speedup 4.04 (704 elements at level 9).
+  AMR-factor sweep (0.01, 0.001) pending.
+- Sizing, BSSN q1 (SFC, np=8, t_end 0.7): `BSSN_MINDEPTH=4` → 9 080 after the first remesh;
+  `=5` → 37 304 (777/rank at 48, 389 at 96).
+- `DENDRO_REDIST_HINT` (jj `nowultmy`) gate, knob on with `_CHECK` and `DENDRO_REDIST_PROF`:
+  testPartitioning four arms incl. ragged at np=4 and np=8 IDENTICAL to base; every transport call took
+  the hint (7 labels + 5 origins per run, 0 directory), 0 mismatches against the directory in 12 checks
+  per run. EM4 / ENUTS / BSSN arms pending (the combined build was killed under memory pressure).
+- Committed opt-in, not yet built: `DENDRO_BLOCK_FLOOR` (`kqzzstmp`), `DENDRO_MINIMAL_SCATTER_FILTER`
+  (`lxwqxrrw`). Staged: `DENDRO_PART_STATS` print hook (padded_vol_imbalance / lts_substep_eff from
+  both arms' meshes).

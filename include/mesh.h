@@ -3024,6 +3024,13 @@ class Mesh {
      * (not gated by DENDRO_COMM_STATS) so it can be called at each repartition;
      * callers gate the call site. */
     void dumpPartitionStats(std::ostream& out, const char* tag);
+    static bool partStatsEnabled() {
+        static const bool on = [] {
+            const char* e = std::getenv("DENDRO_PART_STATS");
+            return e && e[0] == '1';
+        }();
+        return on;
+    }
 
     /**@brief : returns the coarset block level allowed. */
     inline unsigned int getCoarsetBlockLevAllowed() const {
