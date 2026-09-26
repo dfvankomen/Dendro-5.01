@@ -77,3 +77,29 @@ re-priced on Kingspeak with an EXP=S-style on/off profile pair.
   `[redist-prof]` (np=8, indicative only; route includes the check's directory): EM4 16–32 ms per call
   (route 1–3, pack 5, xchg 7, write 4–10, canon 1–9), BSSN 209–243 ms (pack 67–74, xchg 66–86, write
   45–56, canon 27–44).
+- Knob-on gates, bin `fs`: `DENDRO_BLOCK_FLOOR=1` tp ×8 IDENTICAL; forced empty rank
+  (`DENDRO_BLOCK_FLOOR_TEST=1`, ragged np=4): floor on → 21 PASSED, `[block-floor] rounds=1
+  ranks_filled=1 elements_moved=1`; floor off → `MPI_Abort(7)` "a rank owns zero elements" (the 192-rank
+  Kingspeak failure). `DENDRO_MINIMAL_SCATTER_FILTER=1` + `_CHECK`: tp ×8 IDENTICAL, EM4 ×4 on
+  references, ragged + SFC ENUTS 18 digits, BSSN graph + SFC on references; filter vs rebuild 0
+  differing lists in every check (10 per tp arm, 8 per labelled EM4 run, 12 ENUTS, 10 BSSN).
+- Defaults flipped (`yoyvsrkp` hint, `onktvnlq` floor, `tvpmvwuu` filter; `=0` reverts each) plus
+  `fix(mesh)` for `dumpPartitionStats` on meshes with inactive ranks (a global Bcast inside
+  `computeMinMaxLevel` the inactive ranks skipped — hung/truncated NLSM's pre-init mesh under
+  `DENDRO_PART_STATS=1`). Defaults-path gate, bin `def` = `xzuzoonw`, nothing on the command line:
+  tp ×8 IDENTICAL (hint 7+5 per run, filter active, floor silent), EM4 ×4 on references (hint 8+7),
+  ragged + SFC ENUTS 18 digits (hint 12+11), BSSN SFC on references rc=0, **BSSN graph on all four
+  references but rc=139: SIGSEGV on rank 0 after `ETS time (max)`, i.e. at teardown** — open, repro
+  under gdb + `HINT=0` / `FILTER=0` bisection running. The flip is not closed until that is explained.
+- d11 LTS gate (bin `def`, `DENDRO_PART_STATS=1`): SFC vs levelwise+refine identical to 18 digits at
+  np=4 and np=8 (U_CHI −1.49655671350051605e-13 / 1.10899864922085034, U_PHI −2.36383893241567700 /
+  2.50214029822932194; 3 coarse steps, 56 232 elements, est. LTS speedup 2.52). **But the labelling is
+  SFC-identical at np ≤ 8** (block vote 0, identical ghost volume and `LD Bal`): the centred pulse is
+  per-level balanced by SFC there (`lts_substep_eff` 1.000 both arms). Next: the same stats at np=48
+  oversubscribed (deterministic) before any cluster time, and an off-centre variant.
+- The BSSN rc=139 is a pre-existing use-after-free, not the flip: `bssngr_main.cpp:674` deleted the mesh
+  before the ctx, and `~BSSNCtx` → `dealloc_mpi_ctx(m_uiMesh, …)` reads the freed mesh's scatter counts
+  (core backtrace: `dealloc_mpi_ctx` ← `~BSSNCtx` ← `main`). Intermittent (1 of 4 graph-arm runs; the
+  identical rerun under gdb and the `HINT=0` / `FILTER=0` arms exit 0, all on the references); the new
+  defaults only moved the heap layout. Fixed in the BSSN repo (ctx deleted before its mesh; user
+  commits); `nlsm_sdc.cpp:224` has the same order (not on any gated path).

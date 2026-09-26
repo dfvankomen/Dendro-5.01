@@ -21593,7 +21593,206 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
     return flattened_recv_full_data;
 }
 
+// DENDRO_BCAST_PLAN_DIST=1: elect each position's winner at a home rank
+// (hash of the position) instead of allgathering every rank's claims, so memory
+// and traffic are O(local) instead of O(global). The legacy rule is a total
+// order (local before ghost, then lowest rank, then lowest cg), so the home
+// elects the same winner; the plan vectors are rebuilt in the legacy order.
+// DENDRO_BCAST_PLAN_CHECK=1 builds both and counts differing vectors.
 void Mesh::buildBcastPlan() {
+    static const bool planDist = [] {
+        const char* e = std::getenv("DENDRO_BCAST_PLAN_DIST");
+        return e && e[0] == '1';
+    }();
+    static const bool planCheck = [] {
+        const char* e = std::getenv("DENDRO_BCAST_PLAN_CHECK");
+        return e && e[0] == '1';
+    }();
+    if (!planDist) { buildBcastPlanLegacy(); return; }
+    buildBcastPlanDist();
+    if (!planCheck) return;
+    const auto sc = m_uiBcastSendCounts, rc = m_uiBcastRecvCounts;
+    const auto so = m_uiBcastSendOffsets, ro = m_uiBcastRecvOffsets;
+    const auto ss = m_uiBcastSendSrcCg, rd = m_uiBcastRecvDstCg;
+    const auto id = m_uiBcastIntraDst, is = m_uiBcastIntraSrc, ph = m_uiBcastPhantomCg;
+    buildBcastPlanLegacy();
+    unsigned long long bad = (sc != m_uiBcastSendCounts) + (rc != m_uiBcastRecvCounts) +
+                             (so != m_uiBcastSendOffsets) + (ro != m_uiBcastRecvOffsets) +
+                             (ss != m_uiBcastSendSrcCg) + (rd != m_uiBcastRecvDstCg) +
+                             (id != m_uiBcastIntraDst) + (is != m_uiBcastIntraSrc) +
+                             (ph != m_uiBcastPhantomCg);
+    MPI_Allreduce(MPI_IN_PLACE, &bad, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, m_uiCommActive);
+    if (m_uiActiveRank == 0)
+        std::cout << "[bcast-plan-check] differing vectors=" << bad << std::endl;
+}
+
+void Mesh::buildBcastPlanDist() {
+    const unsigned int npe       = m_uiNpE;
+    const unsigned int eOrd      = m_uiElementOrder;
+    const unsigned int nTotal_cg = m_uiNumActualNodes;
+    const unsigned int nLB       = m_uiNodeLocalBegin;
+    const unsigned int nLE       = m_uiNodeLocalEnd;
+    const int nP                 = (int)m_uiActiveNpes;
+    const int me                 = (int)m_uiActiveRank;
+
+    struct Claim {
+        unsigned long long x, y, z;
+        unsigned int cg, idx;
+        unsigned int local;
+    };
+    struct Ans {
+        unsigned int idx, wCg;
+        int wRank;
+        unsigned int wLocal;
+    };
+    struct Note {
+        int p;
+        unsigned int idx, wCg;
+    };
+    // same claim list, same order as the legacy build
+    std::vector<unsigned int> myCg;
+    std::vector<std::vector<Claim>> out(nP);
+    auto homeOf = [&](unsigned long long x, unsigned long long y, unsigned long long z) {
+        unsigned long long h = PhysKey3Hash{}(PhysKey3{x, y, z});
+        h ^= h >> 33;
+        h *= 0xff51afd7ed558ccdULL;
+        h ^= h >> 33;
+        return (int)(h % (unsigned long long)nP);
+    };
+    myCg.reserve(nTotal_cg);
+    for (unsigned int cg = 0; cg < nTotal_cg; cg++) {
+        if (cg >= m_uiCG2DG.size()) continue;
+        const unsigned int dg = m_uiCG2DG[cg];
+        if (dg == LOOK_UP_TABLE_DEFAULT) continue;
+        const unsigned int e = dg / npe;
+        const unsigned int n = dg % npe;
+        if (e >= m_uiAllElements.size()) continue;
+        const ot::TreeNode& tn = m_uiAllElements[e];
+        const unsigned int lev = tn.getLevel();
+        if (lev > m_uiMaxDepth) continue;
+        const unsigned long long len =
+            (unsigned long long)1 << (m_uiMaxDepth - lev);
+        const unsigned int ni = n % (eOrd + 1);
+        const unsigned int nj = (n / (eOrd + 1)) % (eOrd + 1);
+        const unsigned int nk = n / ((eOrd + 1) * (eOrd + 1));
+        Claim c;
+        c.x     = (unsigned long long)tn.getX() * eOrd + (unsigned long long)ni * len;
+        c.y     = (unsigned long long)tn.getY() * eOrd + (unsigned long long)nj * len;
+        c.z     = (unsigned long long)tn.getZ() * eOrd + (unsigned long long)nk * len;
+        c.cg    = cg;
+        c.idx   = (unsigned int)myCg.size();
+        c.local = (cg >= nLB && cg < nLE) ? 1u : 0u;
+        out[homeOf(c.x, c.y, c.z)].push_back(c);
+        myCg.push_back(cg);
+    }
+
+    // byte-typed Alltoallv of per-destination buckets; rc/ro in elements
+    auto exchange = [&](auto& buckets, std::vector<int>& rc, std::vector<int>& ro) {
+        using V = typename std::decay_t<decltype(buckets)>::value_type::value_type;
+        std::vector<int> sc(nP), so(nP, 0), scb(nP), sob(nP), rcb(nP), rob(nP);
+        for (int p = 0; p < nP; p++) sc[p] = (int)buckets[p].size();
+        rc.assign(nP, 0);
+        ro.assign(nP, 0);
+        MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, m_uiCommActive);
+        for (int p = 1; p < nP; p++) {
+            so[p] = so[p - 1] + sc[p - 1];
+            ro[p] = ro[p - 1] + rc[p - 1];
+        }
+        std::vector<V> flat;
+        flat.reserve(so[nP - 1] + sc[nP - 1]);
+        for (auto& b : buckets) flat.insert(flat.end(), b.begin(), b.end());
+        std::vector<V> recv(ro[nP - 1] + rc[nP - 1]);
+        for (int p = 0; p < nP; p++) {
+            scb[p] = sc[p] * (int)sizeof(V); sob[p] = so[p] * (int)sizeof(V);
+            rcb[p] = rc[p] * (int)sizeof(V); rob[p] = ro[p] * (int)sizeof(V);
+        }
+        MPI_Alltoallv(flat.data(), scb.data(), sob.data(), MPI_BYTE, recv.data(),
+                      rcb.data(), rob.data(), MPI_BYTE, m_uiCommActive);
+        return recv;
+    };
+
+    std::vector<int> cRc, cRo;
+    std::vector<Claim> claims = exchange(out, cRc, cRo);
+    out.clear();
+    out.shrink_to_fit();
+
+    // elect per position: local before ghost, then lowest rank, then lowest cg
+    struct W { int rank; unsigned int cg, local; };
+    std::unordered_map<PhysKey3, W, PhysKey3Hash> win;
+    win.reserve(claims.size());
+    for (int p = 0; p < nP; p++)
+        for (int i = cRo[p]; i < cRo[p] + cRc[p]; i++) {
+            const Claim& c = claims[i];
+            auto it = win.find(PhysKey3{c.x, c.y, c.z});
+            if (it == win.end()) { win.emplace(PhysKey3{c.x, c.y, c.z}, W{p, c.cg, c.local}); continue; }
+            W& w = it->second;
+            const bool better = (c.local && !w.local) ||
+                                (c.local == w.local && (p < w.rank || (p == w.rank && c.cg < w.cg)));
+            if (better) w = W{p, c.cg, c.local};
+        }
+
+    std::vector<std::vector<Ans>> ansOut(nP);
+    std::vector<std::vector<Note>> noteOut(nP);
+    for (int p = 0; p < nP; p++)
+        for (int i = cRo[p]; i < cRo[p] + cRc[p]; i++) {
+            const Claim& c = claims[i];
+            const W& w = win.find(PhysKey3{c.x, c.y, c.z})->second;
+            ansOut[p].push_back(Ans{c.idx, w.cg, w.rank, w.local});
+            if (w.rank != p) noteOut[w.rank].push_back(Note{p, c.idx, w.cg});
+        }
+    claims.clear();
+    claims.shrink_to_fit();
+    win.clear();
+    std::vector<int> aRc, aRo, nRc, nRo;
+    const std::vector<Ans> ans   = exchange(ansOut, aRc, aRo);
+    std::vector<Note> notes      = exchange(noteOut, nRc, nRo);
+
+    const size_t myCount = myCg.size();
+    std::vector<Ans> mine(myCount);
+    for (const Ans& a : ans) mine[a.idx] = a;
+
+    m_uiBcastSendCounts.assign(nP, 0);
+    m_uiBcastRecvCounts.assign(nP, 0);
+    m_uiBcastSendOffsets.assign(nP, 0);
+    m_uiBcastRecvOffsets.assign(nP, 0);
+    for (size_t i = 0; i < myCount; i++)
+        if (mine[i].wRank != me) m_uiBcastRecvCounts[mine[i].wRank]++;
+    for (const Note& n : notes) m_uiBcastSendCounts[n.p]++;
+    for (int p = 1; p < nP; p++) {
+        m_uiBcastSendOffsets[p] = m_uiBcastSendOffsets[p - 1] + m_uiBcastSendCounts[p - 1];
+        m_uiBcastRecvOffsets[p] = m_uiBcastRecvOffsets[p - 1] + m_uiBcastRecvCounts[p - 1];
+    }
+    // sender side: per claimant rank, its claims' order
+    std::sort(notes.begin(), notes.end(), [](const Note& a, const Note& b) {
+        return a.p != b.p ? a.p < b.p : a.idx < b.idx;
+    });
+    m_uiBcastSendSrcCg.resize(notes.size());
+    for (size_t k = 0; k < notes.size(); k++) m_uiBcastSendSrcCg[k] = notes[k].wCg;
+    m_uiBcastRecvDstCg.assign(m_uiBcastRecvOffsets[nP - 1] + m_uiBcastRecvCounts[nP - 1], 0);
+    std::vector<int> recvPos(m_uiBcastRecvOffsets);
+    m_uiBcastIntraDst.clear();
+    m_uiBcastIntraSrc.clear();
+    m_uiBcastPhantomCg.clear();
+    for (size_t i = 0; i < myCount; i++) {
+        const Ans& a = mine[i];
+        if (a.wRank != me) m_uiBcastRecvDstCg[recvPos[a.wRank]++] = myCg[i];
+        else if (myCg[i] != a.wCg) {
+            m_uiBcastIntraDst.push_back(myCg[i]);
+            m_uiBcastIntraSrc.push_back(a.wCg);
+        }
+    }
+    for (size_t i = 0; i < myCount; i++)
+        if (!mine[i].wLocal) m_uiBcastPhantomCg.push_back(myCg[i]);
+    m_uiBcastPlanBuilt = true;
+    static bool announced = false;
+    if (!announced && me == 0) {
+        announced = true;
+        std::cout << "[bcast-plan] distributed election: " << myCount
+                  << " claims on r0" << std::endl;
+    }
+}
+
+void Mesh::buildBcastPlanLegacy() {
     // mirrors broadcastCgValuesByPhysPosLegacy steps 1-4 + intra/phantom
     // derivation; everything here is mesh-only.
     const unsigned int npe       = m_uiNpE;

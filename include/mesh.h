@@ -1543,6 +1543,8 @@ class Mesh {
 
     /** collective: builds the m_uiBcast* plan from the global claim set. */
     void buildBcastPlan();
+    void buildBcastPlanDist();
+    void buildBcastPlanLegacy();
 
 
     /**
