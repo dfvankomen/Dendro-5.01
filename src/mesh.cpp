@@ -7686,6 +7686,14 @@ void Mesh::buildZipPlanArbitrateDistributed(
     // must match buildZipPlan's local constant: a ghost-only claim carries
     // this level and can never win the cascade.
     const unsigned int TN_LEV_NONE = (unsigned int)-1;
+    // DENDRO_ZIPPLAN_PROF=1: sub-phase split of this function, max over ranks
+    static const bool arbProf = [] {
+        const char* e = std::getenv("DENDRO_ZIPPLAN_PROF");
+        return e && e[0] == '1' && e[1] == '\0';
+    }();
+    double tArb[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    auto tick = [&](int k) { if (arbProf) tArb[k] = MPI_Wtime(); };
+    tick(0);
 
     winRank.assign(n, -1);
     winCg.assign(n, 0);
@@ -7777,10 +7785,12 @@ void Mesh::buildZipPlanArbitrateDistributed(
             rB[p] = rCnt[p] * E;
             rO[p] = rOff[p] * E;
         }
+        tick(1);
         repartRound();
         MPI_Alltoallv(sendC.data(), sB.data(), sO.data(), MPI_BYTE,
                       recvC.data(), rB.data(), rO.data(), MPI_BYTE,
                       m_uiCommActive);
+        tick(2);
     }
 
     // ---- arbitrate locally: this home owns every claim at these positions --
@@ -7807,6 +7817,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
                               (unsigned __int128)recvC[i].z,
                           i};
     std::sort(byPos.begin(), byPos.end());
+    tick(3);
 
     // ---- arbitrate each position, then hand its winner to every claim ----
     std::vector<WinMsg> backSend(nRecv), backRecv(n);
@@ -7844,10 +7855,12 @@ void Mesh::buildZipPlanArbitrateDistributed(
             rB[p] = sCnt[p] * E;
             rO[p] = sOff[p] * E;
         }
+        tick(4);
         repartRound();
         MPI_Alltoallv(backSend.data(), sB.data(), sO.data(), MPI_BYTE,
                       backRecv.data(), rB.data(), rO.data(), MPI_BYTE,
                       m_uiCommActive);
+        tick(5);
     }
     for (int i = 0; i < n; i++) {
         const WinMsg& w = backRecv[myPos[i]];
@@ -7947,6 +7960,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
             rB[p] = qrC[p] * E;
             rO[p] = qrO[p] * E;
         }
+        tick(6);
         repartRound();
         MPI_Alltoallv(qs.data(), sB.data(), sO.data(), MPI_BYTE, qr.data(),
                       rB.data(), rO.data(), MPI_BYTE, m_uiCommActive);
@@ -7981,6 +7995,24 @@ void Mesh::buildZipPlanArbitrateDistributed(
             m_uiZipSyncSendCg[m_uiZipSyncSendOffsets[p] + k] =
                 (it != posToWinCg.end()) ? it->second : LOOK_UP_TABLE_DEFAULT;
         }
+    }
+    if (arbProf) {
+        tArb[7] = MPI_Wtime();
+        double loc[8] = {tArb[1] - tArb[0], tArb[2] - tArb[1], tArb[3] - tArb[2],
+                         tArb[4] - tArb[3], tArb[5] - tArb[4], tArb[6] - tArb[5],
+                         tArb[7] - tArb[6], (double)n};
+        double mx[8];
+        MPI_Allreduce(loc, mx, 8, MPI_DOUBLE, MPI_MAX, m_uiCommActive);
+        double sums[2] = {(double)n, (double)nRecv}, gs[2];
+        MPI_Allreduce(sums, gs, 2, MPI_DOUBLE, MPI_SUM, m_uiCommActive);
+        if (!myRank)
+            std::printf("[zipplan-arb] bucket=%.1f route_a2av=%.1f sort=%.1f "
+                        "elect=%.1f back_a2av=%.1f lists=%.1f req_a2av+map=%.1f "
+                        "ms (max over ranks) claims/rank max=%.0f mean=%.0f "
+                        "msg=%zuB\n",
+                        mx[0] * 1e3, mx[1] * 1e3, mx[2] * 1e3, mx[3] * 1e3,
+                        mx[4] * 1e3, mx[5] * 1e3, mx[6] * 1e3, mx[7],
+                        gs[0] / npes, sizeof(ClaimMsg));
     }
 }
 
