@@ -580,6 +580,10 @@ class Mesh {
      *  (graph meshes need the sync side-channels before first ghost
      *  exchange). */
     bool m_uiZipPlanBuilt = false;
+    /** one-shot: the next constructor defers its zip plan like DENDRO_LAZY_ZIPPLAN
+     *  (set by ReMesh under DENDRO_LAZY_ZIPPLAN_SUCCESSOR; the remesh successor is
+     *  only the s2g transport source in the sandwich solvers) */
+    static bool s_uiNextCtorLazyZipPlan;
     // zip-plan entries grouped by block (for block-local zips on labelled meshes)
     bool m_uiBlkZipPlanBuilt = false;
     std::vector<unsigned int> m_uiBlkZipPlanStart;

@@ -57,6 +57,7 @@ double t_blk_g[3];
 // #define DEBUG_MESH_GENERATION
 
 namespace ot {
+bool Mesh::s_uiNextCtorLazyZipPlan = false;
 
 namespace {
 // scaled-int (x, y, z) phys-position key used by audit, buildZipPlan,
@@ -243,7 +244,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                     std::getenv("DENDRO_LAZY_ZIPPLAN");
                 static const bool lzp_on =
                     lzp_env && lzp_env[0] == '1' && lzp_env[1] == '\0';
-                if (!lzp_on) {
+                if (!lzp_on && !s_uiNextCtorLazyZipPlan) {
                     tb0 = MPI_Wtime();
                     buildUnzipCanonicalWriterTable();
                     tb_canon = MPI_Wtime() - tb0;
@@ -532,7 +533,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                     std::getenv("DENDRO_LAZY_ZIPPLAN");
                 static const bool lzp_on =
                     lzp_env && lzp_env[0] == '1' && lzp_env[1] == '\0';
-                if (!lzp_on) {
+                if (!lzp_on && !s_uiNextCtorLazyZipPlan) {
                     tb0 = MPI_Wtime();
                     buildUnzipCanonicalWriterTable();
                     tb_canon = MPI_Wtime() - tb0;
@@ -16094,10 +16095,19 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
         }
     }
 
+    // DENDRO_LAZY_ZIPPLAN_SUCCESSOR=1: the successor defers its zip plan to its
+    // first unzip; in the sandwich solvers it never unzips (the labelled mesh
+    // is built from it), which is 0.8-1.0 s of its 1.0 s ctor per remesh
+    static const bool lazySuccessor = [] {
+        const char* e = std::getenv("DENDRO_LAZY_ZIPPLAN_SUCCESSOR");
+        return e && e[0] == '1' && e[1] == '\0';
+    }();
+    s_uiNextCtorLazyZipPlan = lazySuccessor;
     ot::Mesh *pMesh =
         new ot::Mesh(balOct1, 1, m_uiElementOrder, m_uiCommGlobal,
                      m_uiIsBlockSetup, m_uiScatterMapType, grainSz, ld_tol, sfK,
                      getWeight, blk_tags, blk_tag_sz);
+    s_uiNextCtorLazyZipPlan = false;
     pMesh->setDomainBounds(m_uiDMinPt, m_uiDMaxPt);
 
     dendro::logger::info(dendro::logger::Scope{"MESH"},
