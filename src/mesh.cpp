@@ -19681,7 +19681,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                       << std::endl;
     };
 
-    // DENDRO_BLOCK_FLOOR=1: no target rank may end up without elements (the
+    // DENDRO_BLOCK_FLOOR (default on, =0 reverts): no target rank may end up without elements (the
     // block/zip-plan collectives cannot handle an empty rank). a rank nobody
     // labelled takes one whole block of its own pre-partition slice, from the
     // current owner with the most elements that stays non-empty (then first
@@ -19692,7 +19692,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     auto blockFloor = [&](std::vector<unsigned int>& parts) {
         static const bool on = [] {
             const char* e = std::getenv("DENDRO_BLOCK_FLOOR");
-            return e && e[0] == '1';
+            return !(e && e[0] == '0');
         }();
         static const int forceEmpty = [] {
             const char* e = std::getenv("DENDRO_BLOCK_FLOOR_TEST");
