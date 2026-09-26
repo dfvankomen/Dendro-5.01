@@ -8481,7 +8481,7 @@ void Mesh::buildZipPlan() {
     // never receive the primary's post-axpy value via sync — and unzip
     // on those ranks reads stale IC from those ghosts.
     const unsigned int nTotal_cg = m_uiNumActualNodes;
-    // DENDRO_ZIPPLAN_CLAIM_FILTER=1: a ghost cg's claim never wins and only
+    // DENDRO_ZIPPLAN_CLAIM_FILTER (default on, =0 reverts): a ghost cg's claim never wins and only
     // feeds the side-channel lists, which pruneZipSync (level 2) keeps for a
     // ghost slot only when it is read and undelivered or an exchange send
     // source. Skip every other ghost claim before the arbitration: the same
@@ -8490,7 +8490,7 @@ void Mesh::buildZipPlan() {
     // is one it prunes); ghost-only positions elect among the kept claims.
     static const bool claimFilterEnv = [] {
         const char* e = std::getenv("DENDRO_ZIPPLAN_CLAIM_FILTER");
-        return e && e[0] == '1' && e[1] == '\0';
+        return !(e && e[0] == '0');
     }();
     static const int pruneLevelEnv = [] {
         const char* e = std::getenv("DENDRO_ZIPSYNC_PRUNE");
