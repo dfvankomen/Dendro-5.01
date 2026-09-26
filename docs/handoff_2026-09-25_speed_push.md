@@ -114,7 +114,8 @@ Plan, setup traps and every table: `docs/plan_2026-09-25_kingspeak.md`; memory
 `project_kingspeak_setup_2026-09-25`. EM4 depth 9 (22.5k elements), guest c24 nodes, five arms
 interleaved ×3, repeatability ≤ 1 %:
 - **The side-channel removal (this week's default) is 1.72× / 2.41× / 2.42× on the RK step at np =
-  48 / 96 / 192 on plain SFC** (side-channel bytes 1.5–3.0 TB per run → 0), and 2.5× / 4.0× on the
+  48 / 96 / 192 on plain SFC** — the fork's SFC path before vs after, *not* a speedup over SFC; against
+  SFC (no repartitioning) the fork is still 1.31 / 1.39 / 1.56× slower in wall, all of it sandwich (side-channel bytes 1.5–3.0 TB per run → 0), and 2.5× / 4.0× on the
   ragged fastpart labelling at 48 / 96. The old fork's SFC baseline was paying two thirds of its step
   for it at 192 ranks; every earlier "graph vs SFC" comparison was between two taxed arms.
 - **Repartitioning vs SFC, per step, on the new defaults:** the refined (SFC-identical) labelling is

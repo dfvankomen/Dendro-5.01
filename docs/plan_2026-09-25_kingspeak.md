@@ -90,6 +90,12 @@ Ratios of round means (same nodes, same job):
 | 96 | 2.41× | 4.01× | 1.043 | 1.39 | 3.4× | 1.36 |
 | 192 | 2.42× | (crash) | 1.055 | 1.56 | 3.7× | — |
 
+**What compares to what (user asked, 2026-09-25 evening):** the 1.72× / 2.41× / 2.42× is *not* a speedup
+over SFC — both arms are SFC (method 0); it is the fork's SFC path before this week (with the side-channel)
+vs now. Against SFC itself (no repartitioning, same fork, same defaults) repartitioning is still **slower**:
+1.31 / 1.39 / 1.56× in wall, 4–6 % per step, 3.2–3.7× per remesh. No wall-clock win over SFC has been
+measured; the candidate wins (LTS balance, asymmetric meshes) need a scale-sized case.
+
 Readings (ratios inside a round, same nodes):
 - **The side-channel removal is the answer to the question asked**: RK step 1.72× faster at np=48,
   2.40× at np=96, 2.43× at np=192 on plain SFC; 4.0× on the ragged labelling at np=96. The side-channel
