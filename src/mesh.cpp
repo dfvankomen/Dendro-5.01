@@ -16095,12 +16095,12 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
         }
     }
 
-    // DENDRO_LAZY_ZIPPLAN_SUCCESSOR=1: the successor defers its zip plan to its
+    // DENDRO_LAZY_ZIPPLAN_SUCCESSOR (default on, =0 reverts): the successor defers its zip plan to its
     // first unzip; in the sandwich solvers it never unzips (the labelled mesh
     // is built from it), which is 0.8-1.0 s of its 1.0 s ctor per remesh
     static const bool lazySuccessor = [] {
         const char* e = std::getenv("DENDRO_LAZY_ZIPPLAN_SUCCESSOR");
-        return e && e[0] == '1' && e[1] == '\0';
+        return !(e && e[0] == '0');
     }();
     s_uiNextCtorLazyZipPlan = lazySuccessor;
     ot::Mesh *pMesh =

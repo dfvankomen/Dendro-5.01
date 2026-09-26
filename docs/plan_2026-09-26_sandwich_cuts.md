@@ -34,4 +34,9 @@ zip-plan time 23/24 (labelled arms) and 16/17 (SFC arms; the one is the initial 
 ENUTS and its SFC arm identical to the 18-digit reference; BSSN q1 t_end 6.0 graph `7a18bafe…` /
 `c1508613…` / `86470a02…` / `ed1127e4…` and SFC `7a18bafe…` / `2ffba783…` / `86470a02…` / `b50bc05f…`,
 all equal to the defaults-gate references. → default on (`=0` reverts), defaults-path gate below.
+**Defaults-path gate (knob default on, nothing on the command line):** testPartitioning four arms at
+np=4 and np=8 IDENTICAL; EM4 np=4 `d7bbee89`/`a75a069e`, np=8 `d7bbee89`/`32eb202e`; successor ctors
+with zero zip time 23/24 and 16/17; ragged and SFC ENUTS at 18 digits. `DENDRO_LAZY_ZIPPLAN_SUCCESSOR`
+is on by default (`=0` reverts). Expected at scale (measured with the equivalent global knob on
+Kingspeak): sandwich 4.32 → 3.32 s per remesh at 48 ranks, 3.17 → 2.65 s at 192.
 
