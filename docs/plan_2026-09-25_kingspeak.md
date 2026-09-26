@@ -151,3 +151,22 @@ per-rank case — the sandwich, not the step. NLSM (experiment B) was cancelled 
   NLSM case (depth 9, tol 1e-5, t_end 0.5, grain 100) — the bundle's tol-1e-4/t_end-4 case was never
   gated and is not a valid control.
 
+## Phase profile of the labelled rebuild at scale (`DENDRO_REPART_PHASE_PROF=1`, barrier-timed, ms per remesh)
+
+| np | block-decomposition (incl. canon table + zip plan) | nodal-scatter-map | e2n-audit | E2N expand | buildE2NMap | partition-decision | fetches | rebuild sum | s2g total | remesh+IGT | g2s |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 48 | 312 | 221 | 143 | 111 | 35 | 8 | 12 | ~840 | 2581 | 1566 | 311 |
+| 96 | 204 | 173 | 102 | 79 | 26 | 8 | 13 | ~600 | 2074 | 1165 | 226 |
+
+At np=48 the profiled rebuild is ~0.84 s of s2g's 2.58 s: the other ~1.7 s is `buildGraphTwin`'s
+`createMesh` (a second SFC mesh of the remeshed octree, E2E_ONLY) plus `redistributeDVec`. fastpart's
+decision is 8 ms and the fetch rounds 12 ms — the partitioner and the collectives are not the cost; the
+map builds and the duplicate mesh construction are. The profiled rebuild shrinks with np (840 → 600 ms) but s2g's unprofiled part (twin `createMesh`,
+`redistributeDVec`, and whatever the barrier-timed phases do not cover) stays ~1.5–1.7 s: that is the
+flat term. Follow-up job (EXP=Q, np 48/192) adds `DENDRO_MESH_PROF=1` and a `DENDRO_LAZY_ZIPPLAN=1` arm.
+Two exploration memos rank the cuts: `docs/audit_2026-09-25_s2g_cost.md` (what s2g does; lazy zip plan
+for the successor −0.5–0.6 s, neighbour-routed zip-plan arbitration −0.35–0.5 s, claim/scatter filters
+−0.2–0.35 s; partitioner 0.5 %) and `docs/design_2026-09-25_remesh_without_twin.md` (Design A: the
+balance is already partition-agnostic; the blockers are ReMesh's flag sync-back, IGT's positional
+receive and the bit-exact last-writer rule; staged S0–S3, verdict "not yet").
+
