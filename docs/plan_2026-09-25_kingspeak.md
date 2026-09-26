@@ -157,6 +157,10 @@ per-rank case — the sandwich, not the step. NLSM (experiment B) was cancelled 
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 48 | 312 | 221 | 143 | 111 | 35 | 8 | 12 | ~840 | 2581 | 1566 | 311 |
 | 96 | 204 | 173 | 102 | 79 | 26 | 8 | 13 | ~600 | 2074 | 1165 | 226 |
+| 192 | 176 | 149 | 75 | 60 | 21 | 8 | 13 | ~500 | 1954 | 1039 | 185 |
+
+`[zipplan-prof] winners` (the home-rank arbitration inside the labelled rebuild): 960 ms at np=48,
+**1057 ms at np=192** — the only phase that grows with rank count while every other one shrinks.
 
 At np=48 the profiled rebuild is ~0.84 s of s2g's 2.58 s: the other ~1.7 s is `buildGraphTwin`'s
 `createMesh` (a second SFC mesh of the remeshed octree, E2E_ONLY) plus `redistributeDVec`. fastpart's
@@ -193,4 +197,12 @@ receive and the bit-exact last-writer rule; staged S0–S3, verdict "not yet").
   rank-independent geometric rule computed locally from the closure with no exchange) is a speedup for
   the fork's SFC path too; it changes primary choice, so it is a bit-identity item, not a byte-identity
   one; (3) the rest of the labelled rebuild's hash maps.
+
+**Follow-up profile Q at np=192:** refine remesh+IGT 1004 → 518 ms with the lazy successor (sandwich
+3.17 → 2.65 s per remesh, `remesh(oct+LB)` 43.7 → 36.1 s per run, md5 identical `68191978`); the
+successor ctor's zip plan 802 → 0 ms; plain SFC's own remesh 14.0 s per run = 0.93 s per remesh, of
+which its successor ctor's zip plan is 945 ms. So at 192 ranks: SFC remesh ≈ 0.93 s (≈ all zip-plan
+arbitration); labelled sandwich 3.17 s = 0.19 g2s + 1.0 successor (0.8 zip) + 1.95 s2g (≈ 1.06 zip
+arbitration + 0.5 rebuild phases + ~0.4 transport/other). Lazy successor alone: −0.5 s (byte-identical);
+a cheaper arbitration: up to −1.0 s labelled and −0.9 s on SFC's own remesh.
 
