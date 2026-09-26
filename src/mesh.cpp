@@ -20736,7 +20736,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     buildNodalSM(nullptr);
     __phase("nodal-scatter-map");
 
-    // DENDRO_MINIMAL_SCATTER_FILTER=1: shrink the full map in place instead of
+    // DENDRO_MINIMAL_SCATTER_FILTER (default on, =0 reverts): shrink the full map in place instead of
     // rebuilding it. the rebuild drops a recv entry iff its slot is outside
     // the keep set, before a per-peer dedup that is per slot and keeps order,
     // so the kept lists are the full lists filtered; each sender learns which
@@ -21220,7 +21220,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     keepSlots.insert(kv.second);
                 static const bool smFilter = [] {
                     const char* e = std::getenv("DENDRO_MINIMAL_SCATTER_FILTER");
-                    return e && e[0] == '1';
+                    return !(e && e[0] == '0');
                 }();
                 static const bool smFilterCheck = [] {
                     const char* e = std::getenv("DENDRO_MINIMAL_SCATTER_FILTER_CHECK");
