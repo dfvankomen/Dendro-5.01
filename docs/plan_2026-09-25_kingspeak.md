@@ -170,3 +170,27 @@ for the successor −0.5–0.6 s, neighbour-routed zip-plan arbitration −0.35�
 balance is already partition-agnostic; the blockers are ReMesh's flag sync-back, IGT's positional
 receive and the bit-exact last-writer rule; staged S0–S3, verdict "not yet").
 
+## Follow-up profile Q at np=48 (`DENDRO_MESH_PROF=1`, one round): where the flat term is
+
+| arm | wall | remesh(oct+LB) total | per remesh: g2s / remesh+IGT / s2g | successor ctor: blk (zip) | CSV md5 |
+|---|---|---|---|---|---|
+| refine | 192.6 | 54.4 s | 303 / 1383 / 2630 ms | 1085 ms (zip 989) | `1e27c7ab` |
+| refine + `DENDRO_LAZY_ZIPPLAN=1` | 175.8 | 41.5 s | 301 / 469 / 2545 ms | 105 ms (zip 0) | `1e27c7ab` (identical) |
+| sfc | 145.2 | 17.0 s | — (1.13 s per remesh) | 1013–1073 ms (zip 913–977) | `af968a0b` |
+
+- **`buildZipPlan` is the flat term, on SFC too.** Every remesh's successor ctor spends 0.91–0.98 s in
+  the zip plan (`[zipplan-prof]`: `winners` = the home-rank arbitration ≈ 0.96 s of 1.18 s per labelled
+  rebuild), on a mesh of 470 elements per rank. SFC's whole remesh is 1.13 s, of which ~0.9 s is this.
+- **Lazy zip plan for the remesh successor**: −0.9 s per remesh, sandwich 4.32 → 3.32 s at np=48,
+  byte-identical on the refine arm (same md5). The successor never unzips (the graph twin is built from
+  it), so the plan is pure waste there; the global knob is unsafe only because NLSM unzips on the g2s
+  twin — a successor-only knob is safe for all three solvers.
+- The twin constructions are small: g2s no-block twin ctor 165 ms, graph twin `createMesh(E2E_ONLY)`
+  69–92 ms. s2g's remaining ~2.5 s = labelled rebuild (~0.84 s profiled phases) + its own zip plan
+  (~1.2 s, inside the "block-decomposition" phase only partly) + `redistributeDVec` (~0.2 s).
+- So the ranking is: (1) successor-only lazy zip plan (measured); (2) the zip-plan arbitration itself —
+  it costs ~0.9 s on every remesh of *plain SFC* as well, so a cheaper election (neighbour-routed, or a
+  rank-independent geometric rule computed locally from the closure with no exchange) is a speedup for
+  the fork's SFC path too; it changes primary choice, so it is a bit-identity item, not a byte-identity
+  one; (3) the rest of the labelled rebuild's hash maps.
+
