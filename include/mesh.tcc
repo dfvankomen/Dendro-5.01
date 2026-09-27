@@ -941,7 +941,28 @@ void Mesh::broadcastCgValuesByPhysPos(T* vec, unsigned int dof) {
         return;
     }
     if (!check_on) {
+        // DENDRO_BCAST_PROF=1: plan build vs apply, max over ranks
+        static const bool prof = [] {
+            const char* e = std::getenv("DENDRO_BCAST_PROF");
+            return e && e[0] == '1';
+        }();
+        if (!prof) {
+            broadcastCgValuesByPhysPosPlanned(vec, dof);
+            return;
+        }
+        MPI_Barrier(m_uiCommActive);
+        const double t0 = MPI_Wtime();
+        const bool built = m_uiBcastPlanBuilt;
+        if (!built) buildBcastPlan();
+        const double t1 = MPI_Wtime();
         broadcastCgValuesByPhysPosPlanned(vec, dof);
+        double loc[2] = {t1 - t0, MPI_Wtime() - t1}, mx[2];
+        MPI_Reduce(loc, mx, 2, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
+        unsigned long long n[2] = {m_uiBcastRecvDstCg.size(), m_uiBcastSendSrcCg.size()}, nm[2];
+        MPI_Reduce(n, nm, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, m_uiCommActive);
+        if (m_uiActiveRank == 0)
+            std::printf("[bcast-prof] dof=%u build=%.1f apply=%.1f ms (max) recv=%llu%s\n",
+                        dof, mx[0] * 1e3, mx[1] * 1e3, nm[0], built ? "" : " (new plan)");
         return;
     }
     const size_t n = (size_t)dof * m_uiNumActualNodes;

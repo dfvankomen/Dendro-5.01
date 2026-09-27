@@ -21641,11 +21641,10 @@ bool Mesh::posBcastGateOn() const {
     return m_uiPosBcastEnabled;
 }
 
-void Mesh::buildBcastStepPlan() {
+std::vector<char> Mesh::bcastKeepSlots() const {
     // keep a destination slot iff something can read it before the next ghost
     // exchange overwrites it: local slots, undelivered ghosts the unzip or a
     // mirror reads, and ghost-exchange send sources (pruneZipSync level 2)
-    const int nP = m_uiActiveNpes;
     const unsigned int N = m_uiNumActualNodes;
     std::vector<char> keepSlot(N, 0);
     for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd; cg++) keepSlot[cg] = 1;
@@ -21677,6 +21676,12 @@ void Mesh::buildBcastStepPlan() {
             if (idx < N) keepSlot[idx] = 1;
         }
     }
+    return keepSlot;
+}
+
+void Mesh::buildBcastStepPlan() {
+    const int nP = m_uiActiveNpes;
+    const std::vector<char> keepSlot = bcastKeepSlots();
     const size_t recvN = m_uiBcastRecvDstCg.size();
     const size_t sendN = m_uiBcastSendSrcCg.size();
     std::vector<unsigned char> keepR(recvN), keepS(sendN);
@@ -21754,7 +21759,7 @@ void Mesh::buildBcastPlan() {
         std::cout << "[bcast-plan-check] differing vectors=" << bad << std::endl;
 }
 
-void Mesh::buildBcastPlanDist() {
+void Mesh::buildBcastPlanDist(int claimLevel) {
     const unsigned int npe       = m_uiNpE;
     const unsigned int eOrd      = m_uiElementOrder;
     const unsigned int nTotal_cg = m_uiNumActualNodes;
@@ -21787,9 +21792,73 @@ void Mesh::buildBcastPlanDist() {
         h ^= h >> 33;
         return (int)(h % (unsigned long long)nP);
     };
+    // DENDRO_BCAST_CLAIM_FILTER=1: ghost slots outside bcastKeepSlots() do not
+    // claim. a ghost claim never beats a local one and a position with no local
+    // claim is phantom-filled whoever wins, so every remaining claim gets the
+    // same value; the dropped slots are refreshed by the next ghost exchange or
+    // never read. off under DENDRO_BCAST_PLAN_CHECK (it compares to the legacy
+    // claim set)
+    //
+    // =2 also keeps interior local slots out of the election: a local slot no
+    // ghost element references and the ghost exchange does not send cannot be
+    // claimed by another rank, so its winner is itself or the lowest local cg
+    // at its position (intra copy, resolved here). a phantom position that
+    // matches a skipped slot would disprove that; the plan is then rebuilt at =1
+    static const int claimEnv = [] {
+        const char* e = std::getenv("DENDRO_BCAST_CLAIM_FILTER");
+        const char* c = std::getenv("DENDRO_BCAST_PLAN_CHECK");
+        if (c && c[0] == '1') return 0;
+        return e ? std::atoi(e) : 0;
+    }();
+    const int claimLvl     = claimLevel >= 0 ? claimLevel : claimEnv;
+    const bool claimFilter = claimLvl >= 1;
+    // DENDRO_BCAST_PROF=1: sub-phase times (max over ranks)
+    static const bool prof = [] {
+        const char* e = std::getenv("DENDRO_BCAST_PROF");
+        return e && e[0] == '1';
+    }();
+    double tp[8] = {0};
+    int ip = 0;
+    double tl = MPI_Wtime();
+    auto mark = [&]() {
+        if (!prof) return;
+        const double t = MPI_Wtime();
+        tp[ip++] += t - tl;
+        tl = t;
+    };
+    std::vector<char> keepSlot, bnd;
+    if (claimFilter) keepSlot = bcastKeepSlots();
+    if (claimLvl >= 2) {
+        bnd.assign(nTotal_cg, 0);
+        for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+            if (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd) continue;
+            for (unsigned int k = 0; k < npe; k++) {
+                const unsigned int cg = m_uiE2NMapping_CG[e * npe + k];
+                if (cg < nTotal_cg) bnd[cg] = 1;
+            }
+        }
+        const bool useDG = m_uiScatterMapSendIsDG.size() ==
+                           m_uiScatterMapActualNodeSend.size();
+        for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
+            unsigned int idx = m_uiScatterMapActualNodeSend[k];
+            if (useDG && m_uiScatterMapSendIsDG[k])
+                idx = m_uiE2NMapping_CG[(idx / npe + m_uiElementLocalBegin) * npe +
+                                        idx % npe];
+            if (idx < nTotal_cg) bnd[idx] = 1;
+        }
+        for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
+            if (kv.first < nTotal_cg) bnd[kv.first] = 1;
+        for (const auto& kv : m_uiPassDDemotedToGhostCg)
+            if (kv.first < nTotal_cg) bnd[kv.first] = 1;
+    }
+    // =2: every local claim, sorted by position to find the interior groups
+    struct Loc { unsigned long long x, y, z; unsigned int cg, b; };
+    std::vector<Loc> loc;
+    mark();  // 0 keep
     myCg.reserve(nTotal_cg);
     for (unsigned int cg = 0; cg < nTotal_cg; cg++) {
         if (cg >= m_uiCG2DG.size()) continue;
+        if (claimFilter && !keepSlot[cg]) continue;
         const unsigned int dg = m_uiCG2DG[cg];
         if (dg == LOOK_UP_TABLE_DEFAULT) continue;
         const unsigned int e = dg / npe;
@@ -21810,8 +21879,50 @@ void Mesh::buildBcastPlanDist() {
         c.cg    = cg;
         c.idx   = (unsigned int)myCg.size();
         c.local = (cg >= nLB && cg < nLE) ? 1u : 0u;
+        if (claimLvl >= 2 && c.local) {
+            loc.push_back(Loc{c.x, c.y, c.z, cg, (unsigned int)bnd[cg]});
+            continue;
+        }
         out[homeOf(c.x, c.y, c.z)].push_back(c);
         myCg.push_back(cg);
+    }
+    // interior groups: resolved here; any group with a boundary member claims
+    std::vector<unsigned int> locIntraDst, locIntraSrc;
+    std::vector<PhysKey3> skipPos;
+    if (claimLvl >= 2) {
+        std::sort(loc.begin(), loc.end(), [](const Loc& a, const Loc& b) {
+            if (a.x != b.x) return a.x < b.x;
+            if (a.y != b.y) return a.y < b.y;
+            if (a.z != b.z) return a.z < b.z;
+            return a.cg < b.cg;
+        });
+        for (size_t i = 0; i < loc.size();) {
+            size_t j = i + 1;
+            unsigned int anyB = loc[i].b;
+            while (j < loc.size() && loc[j].x == loc[i].x && loc[j].y == loc[i].y &&
+                   loc[j].z == loc[i].z)
+                anyB |= loc[j++].b;
+            if (anyB) {
+                for (size_t k = i; k < j; k++) {
+                    Claim c;
+                    c.x = loc[k].x; c.y = loc[k].y; c.z = loc[k].z;
+                    c.cg = loc[k].cg;
+                    c.idx = (unsigned int)myCg.size();
+                    c.local = 1u;
+                    out[homeOf(c.x, c.y, c.z)].push_back(c);
+                    myCg.push_back(c.cg);
+                }
+            } else {
+                skipPos.push_back(PhysKey3{loc[i].x, loc[i].y, loc[i].z});
+                for (size_t k = i + 1; k < j; k++) {
+                    locIntraDst.push_back(loc[k].cg);
+                    locIntraSrc.push_back(loc[i].cg);
+                }
+            }
+            i = j;
+        }
+        loc.clear();
+        loc.shrink_to_fit();
     }
 
     // byte-typed Alltoallv of per-destination buckets; rc/ro in elements
@@ -21839,8 +21950,10 @@ void Mesh::buildBcastPlanDist() {
         return recv;
     };
 
+    mark();  // 1 claims
     std::vector<int> cRc, cRo;
     std::vector<Claim> claims = exchange(out, cRc, cRo);
+    mark();  // 2 claim exchange
     out.clear();
     out.shrink_to_fit();
 
@@ -21859,6 +21972,46 @@ void Mesh::buildBcastPlanDist() {
             if (better) w = W{p, c.cg, c.local};
         }
 
+    mark();  // 3 elect
+    if (claimLvl >= 2) {
+        // phantom positions (no local claim reached the election) must not be
+        // a skipped interior slot anywhere
+        std::vector<unsigned long long> ph;
+        for (const auto& kv : win)
+            if (!kv.second.local) {
+                ph.push_back(kv.first.x);
+                ph.push_back(kv.first.y);
+                ph.push_back(kv.first.z);
+            }
+        int nph = (int)ph.size();
+        std::vector<int> pc(nP), po(nP, 0);
+        MPI_Allgather(&nph, 1, MPI_INT, pc.data(), 1, MPI_INT, m_uiCommActive);
+        for (int p = 1; p < nP; p++) po[p] = po[p - 1] + pc[p - 1];
+        std::vector<unsigned long long> all(po[nP - 1] + pc[nP - 1]);
+        MPI_Allgatherv(ph.data(), nph, MPI_UNSIGNED_LONG_LONG, all.data(),
+                       pc.data(), po.data(), MPI_UNSIGNED_LONG_LONG, m_uiCommActive);
+        auto lessK = [](const PhysKey3& a, const PhysKey3& b) {
+            if (a.x != b.x) return a.x < b.x;
+            if (a.y != b.y) return a.y < b.y;
+            return a.z < b.z;
+        };
+        unsigned long long hits = 0;
+        for (size_t k = 0; k + 2 < all.size(); k += 3)
+            if (std::binary_search(skipPos.begin(), skipPos.end(),
+                                   PhysKey3{all[k], all[k + 1], all[k + 2]}, lessK))
+                hits++;
+        MPI_Allreduce(MPI_IN_PLACE, &hits, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
+                      m_uiCommActive);
+        if (hits) {
+            if (me == 0)
+                std::cout << "[bcast-plan] claim filter 2: " << hits
+                          << " phantom positions hit skipped interior slots;"
+                             " rebuilding at level 1"
+                          << std::endl;
+            buildBcastPlanDist(1);
+            return;
+        }
+    }
     std::vector<std::vector<Ans>> ansOut(nP);
     std::vector<std::vector<Note>> noteOut(nP);
     for (int p = 0; p < nP; p++)
@@ -21872,8 +22025,10 @@ void Mesh::buildBcastPlanDist() {
     claims.shrink_to_fit();
     win.clear();
     std::vector<int> aRc, aRo, nRc, nRo;
+    mark();  // 4 answer build
     const std::vector<Ans> ans   = exchange(ansOut, aRc, aRo);
     std::vector<Note> notes      = exchange(noteOut, nRc, nRo);
+    mark();  // 5 answer exchange
 
     const size_t myCount = myCg.size();
     std::vector<Ans> mine(myCount);
@@ -21909,8 +22064,22 @@ void Mesh::buildBcastPlanDist() {
             m_uiBcastIntraSrc.push_back(a.wCg);
         }
     }
+    m_uiBcastIntraDst.insert(m_uiBcastIntraDst.end(), locIntraDst.begin(), locIntraDst.end());
+    m_uiBcastIntraSrc.insert(m_uiBcastIntraSrc.end(), locIntraSrc.begin(), locIntraSrc.end());
     for (size_t i = 0; i < myCount; i++)
         if (!mine[i].wLocal) m_uiBcastPhantomCg.push_back(myCg[i]);
+    mark();  // 6 assemble
+    if (prof) {
+        double mx[7];
+        unsigned long long c = myCg.size(), cm = 0;
+        MPI_Reduce(tp, mx, 7, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
+        MPI_Reduce(&c, &cm, 1, MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, m_uiCommActive);
+        if (me == 0)
+            std::printf("[bcast-plan-prof] keep=%.1f claims=%.1f xchg=%.1f elect=%.1f "
+                        "ans=%.1f ans_xchg=%.1f assemble=%.1f ms max_claims=%llu\n",
+                        mx[0] * 1e3, mx[1] * 1e3, mx[2] * 1e3, mx[3] * 1e3,
+                        mx[4] * 1e3, mx[5] * 1e3, mx[6] * 1e3, cm);
+    }
     m_uiBcastPlanBuilt = true;
     static bool announced = false;
     if (!announced && me == 0) {

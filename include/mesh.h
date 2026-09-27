@@ -1556,11 +1556,15 @@ class Mesh {
 
     /** collective: builds the m_uiBcast* plan from the global claim set. */
     void buildBcastPlan();
-    void buildBcastPlanDist();
+    void buildBcastPlanDist(int claimLevel = -1);
     void buildBcastPlanLegacy();
     /** collective: filters the built plan to its per-step subset (see
      *  broadcastCgValuesByPhysPosStep). */
     void buildBcastStepPlan();
+    /** slots a reader can see before the next ghost exchange overwrites them:
+     *  local, undelivered ghosts the unzip or a mirror reads, exchange send
+     *  sources (the pruneZipSync level-2 keep set). */
+    std::vector<char> bcastKeepSlots() const;
     /** the pos-bcast gate: active, >1 rank, enabled (or DENDRO_FORCE_POS_BCAST). */
     bool posBcastGateOn() const;
 
