@@ -926,15 +926,7 @@ void Mesh::broadcastCgValuesByPhysPos(T* vec, unsigned int dof) {
     // setPosBcastEnabled on their graph twins; EM4-minimal leaves it off
     // since it costs an extra allgather + alltoallv per call).
     // DENDRO_FORCE_POS_BCAST=1/0 overrides either way for A/B runs.
-    if (!m_uiIsActive) return;
-    if (m_uiActiveNpes <= 1) return;
-    static const char* gate_env = std::getenv("DENDRO_FORCE_POS_BCAST");
-    bool gate_on = m_uiPosBcastEnabled;
-    if (gate_env && gate_env[1] == '\0') {
-        if (gate_env[0] == '1') gate_on = true;
-        if (gate_env[0] == '0') gate_on = false;
-    }
-    if (!gate_on) return;
+    if (!posBcastGateOn()) return;
 
     // DENDRO_BCAST_PLAN=0 reverts to the per-call rebuild; the probe
     // (EM4_BCAST_PROBE_DIR) only exists on the legacy path.
@@ -972,11 +964,128 @@ void Mesh::broadcastCgValuesByPhysPos(T* vec, unsigned int dof) {
 }
 
 template <typename T>
+void Mesh::broadcastCgValuesByPhysPosStep(T* vec, unsigned int dof) {
+    static const int prune = [] {
+        const char* e = std::getenv("DENDRO_BCAST_STEP_PRUNE");
+        return e ? std::atoi(e) : 0;
+    }();
+    // the probe and the legacy/check paths only exist on the full plan
+    static const bool full = [] {
+        const char* p = std::getenv("DENDRO_BCAST_PLAN");
+        const char* c = std::getenv("DENDRO_BCAST_PLAN_CHECK");
+        return (p && p[0] == '0') || (c && c[0] == '1') ||
+               DENDRO_PROBE_GETENV("EM4_BCAST_PROBE_DIR") != nullptr;
+    }();
+    if (prune <= 0 || full) {
+        broadcastCgValuesByPhysPos(vec, dof);
+        return;
+    }
+    if (!posBcastGateOn()) return;
+    if (!m_uiBcastPlanBuilt) buildBcastPlan();
+    if (!m_uiBcastStepBuilt) buildBcastStepPlan();
+    // DENDRO_BCAST_STEP_CHECK=1: also run the full plan on a copy; every slot
+    // the step plan keeps must come out bit-identical
+    static const bool check = [] {
+        const char* e = std::getenv("DENDRO_BCAST_STEP_CHECK");
+        return e && e[0] == '1';
+    }();
+    const unsigned int N = m_uiNumActualNodes;
+    std::vector<T> ref;
+    if (check) {
+        ref.assign(vec, vec + (size_t)dof * N);
+        broadcastCgValuesByPhysPosPlanned(ref.data(), dof);
+    }
+    const size_t sendN = m_uiBcastStepSendSrcCg.size();
+    const size_t recvN = m_uiBcastStepRecvDstCg.size();
+    if (this->commStatsOn()) {
+        s_uiCommStatBcastBytesAll += (DendroIntL)(sendN * dof * sizeof(T));
+        s_uiCommStatBcastCallsAll++;
+    }
+    std::vector<T> sendBuf(sendN * dof), recvBuf(recvN * dof);
+    for (size_t k = 0; k < sendN; k++) {
+        const unsigned int cg = m_uiBcastStepSendSrcCg[k];
+        T* dst = sendBuf.data() + k * dof;
+        for (unsigned int v = 0; v < dof; v++) dst[v] = vec[v * N + cg];
+    }
+    std::vector<MPI_Request> reqs;
+    reqs.reserve(2 * m_uiActiveNpes);
+    for (int p = 0; p < (int)m_uiActiveNpes; p++)
+        if (m_uiBcastStepRecvCounts[p]) {
+            reqs.emplace_back();
+            par::Mpi_Irecv(recvBuf.data() + (size_t)m_uiBcastStepRecvOffsets[p] * dof,
+                           m_uiBcastStepRecvCounts[p] * (int)dof, p, 0x2aa,
+                           m_uiCommActive, &reqs.back());
+        }
+    for (int p = 0; p < (int)m_uiActiveNpes; p++)
+        if (m_uiBcastStepSendCounts[p]) {
+            reqs.emplace_back();
+            par::Mpi_Isend(sendBuf.data() + (size_t)m_uiBcastStepSendOffsets[p] * dof,
+                           m_uiBcastStepSendCounts[p] * (int)dof, p, 0x2aa,
+                           m_uiCommActive, &reqs.back());
+        }
+    if (!reqs.empty())
+        MPI_Waitall((int)reqs.size(), reqs.data(), MPI_STATUSES_IGNORE);
+    for (size_t k = 0; k < recvN; k++) {
+        const unsigned int cg = m_uiBcastStepRecvDstCg[k];
+        const T* src = recvBuf.data() + k * dof;
+        for (unsigned int v = 0; v < dof; v++) vec[v * N + cg] = src[v];
+    }
+    // same order as the full plan: intra copies, then the phantom fill
+    for (size_t k = 0; k < m_uiBcastStepIntraDst.size(); k++) {
+        const unsigned int d = m_uiBcastStepIntraDst[k];
+        const unsigned int s = m_uiBcastStepIntraSrc[k];
+        for (unsigned int v = 0; v < dof; v++) vec[v * N + d] = vec[v * N + s];
+    }
+    for (const unsigned int cg : m_uiBcastPhantomCg) {
+        for (unsigned int v = 0; v < dof; v++)
+            vec[v * N + cg] = (v < m_uiPhantomFill.size())
+                                  ? (T)m_uiPhantomFill[v]
+                                  : (T)0;
+    }
+    if (check) {
+        std::vector<char> kept(N, 0);
+        for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd; cg++) kept[cg] = 1;
+        for (const auto cg : m_uiBcastStepRecvDstCg) kept[cg] = 1;
+        for (const auto cg : m_uiBcastStepIntraDst) kept[cg] = 1;
+        for (const auto cg : m_uiBcastPhantomCg) kept[cg] = 1;
+        unsigned long long bad[2] = {0, 0};
+        for (unsigned int cg = 0; cg < N; cg++)
+            for (unsigned int v = 0; v < dof; v++)
+                if (std::memcmp(&ref[(size_t)v * N + cg], &vec[(size_t)v * N + cg],
+                                sizeof(T)) != 0) {
+                    bad[kept[cg] ? 0 : 1]++;
+                    break;
+                }
+        MPI_Allreduce(MPI_IN_PLACE, bad, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
+                      m_uiCommActive);
+        static int calls = 0;
+        if (m_uiActiveRank == 0 && (calls < 12 || bad[0]))
+            std::cout << "[bcast-step-check] call=" << calls
+                      << " kept_mismatch=" << bad[0]
+                      << " dropped_differ=" << bad[1] << std::endl;
+        calls++;
+    }
+}
+
+template <typename T>
 void Mesh::broadcastCgValuesByPhysPosPlanned(T* vec, unsigned int dof) {
     if (!m_uiBcastPlanBuilt) buildBcastPlan();
     const unsigned int N = m_uiNumActualNodes;
     const size_t sendN = m_uiBcastSendSrcCg.size();
     const size_t recvN = m_uiBcastRecvDstCg.size();
+    // DENDRO_BCAST_DIFF_STATS=1: count the plan entries whose write actually
+    // changes a value, split by destination kind (probe only, collective)
+    static const bool diffStats = [] {
+        const char* e = std::getenv("DENDRO_BCAST_DIFF_STATS");
+        return e && e[0] == '1';
+    }();
+    const double tBc0 = MPI_Wtime();
+    std::vector<T> before;
+    if (diffStats) before.assign(vec, vec + (size_t)dof * N);
+    if (this->commStatsOn()) {
+        s_uiCommStatBcastBytesAll += (DendroIntL)(sendN * dof * sizeof(T));
+        s_uiCommStatBcastCallsAll++;
+    }
     std::vector<T> sendBuf(sendN * dof);
     std::vector<T> recvBuf(recvN * dof);
     for (size_t k = 0; k < sendN; k++) {
@@ -1011,6 +1120,60 @@ void Mesh::broadcastCgValuesByPhysPosPlanned(T* vec, unsigned int dof) {
             vec[v * N + cg] = (v < m_uiPhantomFill.size())
                                   ? (T)m_uiPhantomFill[v]
                                   : (T)0;
+    }
+    if (diffStats) {
+        // [0..2] recv entries (local / ghost delivered by the ghost exchange /
+        // ghost undelivered), [3..5] intra, [6] phantom; [7..13] how many of
+        // each changed a value; [14..16] slot counts local/ghost-deliv/ghost-undeliv
+        std::vector<char> deliv(N, 0);
+        for (const auto cg : m_uiScatterMapActualNodeRecv)
+            if (cg < N) deliv[cg] = 1;
+        auto kind = [&](unsigned int cg) {
+            if (cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd) return 0;
+            return deliv[cg] ? 1 : 2;
+        };
+        auto changed = [&](unsigned int cg) {
+            for (unsigned int v = 0; v < dof; v++)
+                if (std::memcmp(&before[(size_t)v * N + cg], &vec[(size_t)v * N + cg],
+                                sizeof(T)) != 0)
+                    return true;
+            return false;
+        };
+        DendroIntL c[17] = {0};
+        for (size_t k = 0; k < recvN; k++) {
+            const unsigned int cg = m_uiBcastRecvDstCg[k];
+            const int kd = kind(cg);
+            c[kd]++;
+            if (changed(cg)) c[7 + kd]++;
+        }
+        for (size_t k = 0; k < nIntra; k++) {
+            const unsigned int cg = m_uiBcastIntraDst[k];
+            const int kd = kind(cg);
+            c[3 + kd]++;
+            if (changed(cg)) c[10 + kd]++;
+        }
+        for (const unsigned int cg : m_uiBcastPhantomCg) {
+            c[6]++;
+            if (changed(cg)) c[13]++;
+        }
+        for (unsigned int cg = 0; cg < N; cg++) c[14 + kind(cg)]++;
+        DendroIntL g[17];
+        par::Mpi_Reduce(c, g, 17, MPI_SUM, 0, m_uiCommActive);
+        double dt = MPI_Wtime() - tBc0, dtMax = 0;
+        par::Mpi_Reduce(&dt, &dtMax, 1, MPI_MAX, 0, m_uiCommActive);
+        static int calls = 0;
+        if (m_uiActiveRank == 0 && (calls < 40 || calls % 25 == 0))
+            std::printf("[bcast-diff] call=%d dof=%u slots(l/gd/gu)=%lld/%lld/%lld "
+                        "recv(l/gd/gu)=%lld/%lld/%lld chg=%lld/%lld/%lld "
+                        "intra=%lld/%lld/%lld chg=%lld/%lld/%lld phantom=%lld chg=%lld "
+                        "ms=%.2f\n",
+                        calls, dof, (long long)g[14], (long long)g[15], (long long)g[16],
+                        (long long)g[0], (long long)g[1], (long long)g[2],
+                        (long long)g[7], (long long)g[8], (long long)g[9],
+                        (long long)g[3], (long long)g[4], (long long)g[5],
+                        (long long)g[10], (long long)g[11], (long long)g[12],
+                        (long long)g[6], (long long)g[13], dtMax * 1e3);
+        calls++;
     }
 }
 

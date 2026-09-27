@@ -1061,7 +1061,7 @@ void ETS<T, Ctx>::evolve() {
             // phys_pos into bit-identity across ranks, plus zeros out
             // cgs at phys positions with no canonical writer anywhere
             // (matches SFC's far-field hanging-position IC).
-            pMeshMut->broadcastCgValuesByPhysPosPublic(dvec_ptr, DOFV);
+            pMeshMut->broadcastCgValuesByPhysPosStep(dvec_ptr, DOFV);
             em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                          "50_postBcast", trace_step, -1);
             ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),

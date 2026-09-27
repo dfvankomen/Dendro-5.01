@@ -750,7 +750,17 @@ class Mesh {
     std::vector<unsigned int> m_uiBcastSendSrcCg, m_uiBcastRecvDstCg;
     std::vector<unsigned int> m_uiBcastIntraDst, m_uiBcastIntraSrc;
     std::vector<unsigned int> m_uiBcastPhantomCg;
-    inline void invalidateBcastPlan() { m_uiBcastPlanBuilt = false; }
+    // per-step subset of the plan (DENDRO_BCAST_STEP_PRUNE, buildBcastStepPlan):
+    // only writes a later reader can see before the next ghost exchange
+    bool m_uiBcastStepBuilt = false;
+    std::vector<int> m_uiBcastStepSendCounts, m_uiBcastStepSendOffsets;
+    std::vector<int> m_uiBcastStepRecvCounts, m_uiBcastStepRecvOffsets;
+    std::vector<unsigned int> m_uiBcastStepSendSrcCg, m_uiBcastStepRecvDstCg;
+    std::vector<unsigned int> m_uiBcastStepIntraDst, m_uiBcastStepIntraSrc;
+    inline void invalidateBcastPlan() {
+        m_uiBcastPlanBuilt = false;
+        m_uiBcastStepBuilt = false;
+    }
 
     // m_uiCanonicalOverride was an old experiment in routing zip
     // writes; superseded by the explicit zip plan
@@ -992,6 +1002,9 @@ class Mesh {
     static DendroIntL s_uiCommStatExchangesAll;
     static DendroIntL s_uiCommStatSyncBytesAll;
     static DendroIntL s_uiCommStatSyncCallsAll;
+    // consensus pos-bcast (broadcastCgValuesByPhysPos) tally, same gate
+    static DendroIntL s_uiCommStatBcastBytesAll;
+    static DendroIntL s_uiCommStatBcastCallsAll;
 
     /**@brief : number of elements that needed to be sent to each processor*/
     std::vector<unsigned int> m_uiSendEleCount;
@@ -1545,6 +1558,11 @@ class Mesh {
     void buildBcastPlan();
     void buildBcastPlanDist();
     void buildBcastPlanLegacy();
+    /** collective: filters the built plan to its per-step subset (see
+     *  broadcastCgValuesByPhysPosStep). */
+    void buildBcastStepPlan();
+    /** the pos-bcast gate: active, >1 rank, enabled (or DENDRO_FORCE_POS_BCAST). */
+    bool posBcastGateOn() const;
 
 
     /**
@@ -2091,6 +2109,16 @@ class Mesh {
     inline void broadcastCgValuesByPhysPosPublic(T* vec, unsigned int dof) {
         this->broadcastCgValuesByPhysPos(vec, dof);
     }
+
+    /**@brief The consensus pos-bcast at the end of a time step. With
+     * DENDRO_BCAST_STEP_PRUNE=1 it applies only the plan entries whose
+     * destination is a local slot, a ghost slot the ghost exchange does not
+     * deliver but the unzip or a mirror reads, or a ghost-exchange send source
+     * (the pruneZipSync level-2 keep set); every other ghost slot is either
+     * overwritten by the next ghost exchange or never read. Otherwise the same
+     * as broadcastCgValuesByPhysPosPublic. */
+    template <typename T>
+    void broadcastCgValuesByPhysPosStep(T* vec, unsigned int dof);
 
     /**@brief Enable/disable the consensus pos-bcast structurally (vs the
      * DENDRO_FORCE_POS_BCAST env override). Full-machinery solvers set

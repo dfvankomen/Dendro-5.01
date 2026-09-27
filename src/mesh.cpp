@@ -675,6 +675,8 @@ DendroIntL Mesh::s_uiCommStatMsgRecvAll   = 0;
 DendroIntL Mesh::s_uiCommStatExchangesAll = 0;
 DendroIntL Mesh::s_uiCommStatSyncBytesAll = 0;
 DendroIntL Mesh::s_uiCommStatSyncCallsAll = 0;
+DendroIntL Mesh::s_uiCommStatBcastBytesAll = 0;
+DendroIntL Mesh::s_uiCommStatBcastCallsAll = 0;
 double Mesh::s_dProfGhostBegin = 0.0;
 double Mesh::s_dProfGhostEnd   = 0.0;
 double Mesh::s_dProfUnzip      = 0.0;
@@ -684,14 +686,16 @@ void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
 
     // [0]=bytesSent [1]=bytesRecv [2]=nodesSent [3]=nodesRecv [4]=exchanges
     // [5]=zip-sync bytes sent [6]=zip-sync collective calls
-    DendroIntL local[7] = {s_uiCommStatBytesSentAll, s_uiCommStatBytesRecvAll,
+    // [7]=pos-bcast bytes sent [8]=pos-bcast calls
+    DendroIntL local[9] = {s_uiCommStatBytesSentAll, s_uiCommStatBytesRecvAll,
                            s_uiCommStatNodesSentAll, s_uiCommStatNodesRecvAll,
                            s_uiCommStatExchangesAll,  s_uiCommStatSyncBytesAll,
-                           s_uiCommStatSyncCallsAll};
-    DendroIntL sum[7]   = {0, 0, 0, 0, 0, 0, 0};
-    DendroIntL maxv[7]  = {0, 0, 0, 0, 0, 0, 0};
-    par::Mpi_Reduce(local, sum, 7, MPI_SUM, 0, m_uiCommActive);
-    par::Mpi_Reduce(local, maxv, 7, MPI_MAX, 0, m_uiCommActive);
+                           s_uiCommStatSyncCallsAll,  s_uiCommStatBcastBytesAll,
+                           s_uiCommStatBcastCallsAll};
+    DendroIntL sum[9]   = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    DendroIntL maxv[9]  = {0, 0, 0, 0, 0, 0, 0, 0, 0};
+    par::Mpi_Reduce(local, sum, 9, MPI_SUM, 0, m_uiCommActive);
+    par::Mpi_Reduce(local, maxv, 9, MPI_MAX, 0, m_uiCommActive);
 
     if (m_uiActiveRank == 0) {
         const double meanBytesSent =
@@ -707,6 +711,7 @@ void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
             << " max_rank_bytes_sent=" << maxv[0]
             << " bytes_sent_imbalance=" << imbal
             << " sync_bytes_sent=" << sum[5] << " sync_calls=" << maxv[6]
+            << " bcast_bytes_sent=" << sum[7] << " bcast_calls=" << maxv[8]
             << std::endl;
     }
     if (meshProfOn()) {
@@ -21626,6 +21631,102 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
 // order (local before ghost, then lowest rank, then lowest cg), so the home
 // elects the same winner; the plan vectors are rebuilt in the legacy order.
 // DENDRO_BCAST_PLAN_CHECK=1 builds both and counts differing vectors.
+bool Mesh::posBcastGateOn() const {
+    if (!m_uiIsActive || m_uiActiveNpes <= 1) return false;
+    static const char* gate_env = std::getenv("DENDRO_FORCE_POS_BCAST");
+    if (gate_env && gate_env[1] == '\0') {
+        if (gate_env[0] == '1') return true;
+        if (gate_env[0] == '0') return false;
+    }
+    return m_uiPosBcastEnabled;
+}
+
+void Mesh::buildBcastStepPlan() {
+    // keep a destination slot iff something can read it before the next ghost
+    // exchange overwrites it: local slots, undelivered ghosts the unzip or a
+    // mirror reads, and ghost-exchange send sources (pruneZipSync level 2)
+    const int nP = m_uiActiveNpes;
+    const unsigned int N = m_uiNumActualNodes;
+    std::vector<char> keepSlot(N, 0);
+    for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd; cg++) keepSlot[cg] = 1;
+    std::vector<char> delivered(N, 0);
+    for (const auto cg : m_uiScatterMapActualNodeRecv)
+        if (cg < N) delivered[cg] = 1;
+    // without the block e2b counts, treat every element as read
+    const bool haveE2B = m_e2b_unzip_counts.size() >= m_uiNumTotalElements;
+    for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+        if (haveE2B && m_e2b_unzip_counts[e] == 0) continue;
+        for (unsigned int n = 0; n < m_uiNpE; n++) {
+            const unsigned int cg = m_uiE2NMapping_CG[e * m_uiNpE + n];
+            if (cg < N && !delivered[cg]) keepSlot[cg] = 1;
+        }
+    }
+    for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
+        if (kv.second < N && !delivered[kv.second]) keepSlot[kv.second] = 1;
+    for (const auto& kv : m_uiPassDDemotedToGhostCg)
+        if (kv.second < N && !delivered[kv.second]) keepSlot[kv.second] = 1;
+    {
+        const bool useDG = m_uiScatterMapSendIsDG.size() ==
+                           m_uiScatterMapActualNodeSend.size();
+        for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
+            unsigned int idx = m_uiScatterMapActualNodeSend[k];
+            if (useDG && m_uiScatterMapSendIsDG[k])
+                idx = m_uiE2NMapping_CG[(idx / m_uiNpE + m_uiElementLocalBegin) *
+                                            m_uiNpE +
+                                        idx % m_uiNpE];
+            if (idx < N) keepSlot[idx] = 1;
+        }
+    }
+    const size_t recvN = m_uiBcastRecvDstCg.size();
+    const size_t sendN = m_uiBcastSendSrcCg.size();
+    std::vector<unsigned char> keepR(recvN), keepS(sendN);
+    for (size_t k = 0; k < recvN; k++) keepR[k] = keepSlot[m_uiBcastRecvDstCg[k]];
+    // my recv block from rank p is p's send block to me, in the same order
+    MPI_Alltoallv(keepR.data(), m_uiBcastRecvCounts.data(),
+                  m_uiBcastRecvOffsets.data(), MPI_UNSIGNED_CHAR, keepS.data(),
+                  m_uiBcastSendCounts.data(), m_uiBcastSendOffsets.data(),
+                  MPI_UNSIGNED_CHAR, m_uiCommActive);
+    auto compact = [nP](const std::vector<unsigned int>& cgIn,
+                        const std::vector<int>& cntIn,
+                        const std::vector<int>& offIn,
+                        const std::vector<unsigned char>& keep,
+                        std::vector<unsigned int>& cg, std::vector<int>& cnt,
+                        std::vector<int>& off) {
+        cg.clear();
+        cnt.assign(nP, 0);
+        off.assign(nP, 0);
+        for (int p = 0; p < nP; p++) {
+            off[p] = (int)cg.size();
+            for (int k = offIn[p]; k < offIn[p] + cntIn[p]; k++)
+                if (keep[k]) cg.push_back(cgIn[k]);
+            cnt[p] = (int)cg.size() - off[p];
+        }
+    };
+    compact(m_uiBcastRecvDstCg, m_uiBcastRecvCounts, m_uiBcastRecvOffsets, keepR,
+            m_uiBcastStepRecvDstCg, m_uiBcastStepRecvCounts, m_uiBcastStepRecvOffsets);
+    compact(m_uiBcastSendSrcCg, m_uiBcastSendCounts, m_uiBcastSendOffsets, keepS,
+            m_uiBcastStepSendSrcCg, m_uiBcastStepSendCounts, m_uiBcastStepSendOffsets);
+    // intra sources are this rank's own winners, never a recv destination
+    m_uiBcastStepIntraDst.clear();
+    m_uiBcastStepIntraSrc.clear();
+    for (size_t k = 0; k < m_uiBcastIntraDst.size(); k++)
+        if (keepSlot[m_uiBcastIntraDst[k]]) {
+            m_uiBcastStepIntraDst.push_back(m_uiBcastIntraDst[k]);
+            m_uiBcastStepIntraSrc.push_back(m_uiBcastIntraSrc[k]);
+        }
+    m_uiBcastStepBuilt = true;
+    if (std::getenv("DENDRO_BCAST_STEP_STATS")) {
+        unsigned long long c[4] = {recvN, m_uiBcastStepRecvDstCg.size(),
+                                   m_uiBcastIntraDst.size(),
+                                   m_uiBcastStepIntraDst.size()};
+        MPI_Allreduce(MPI_IN_PLACE, c, 4, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
+                      m_uiCommActive);
+        if (m_uiActiveRank == 0)
+            std::cout << "[bcast-step] recv " << c[0] << "->" << c[1] << " intra "
+                      << c[2] << "->" << c[3] << std::endl;
+    }
+}
+
 void Mesh::buildBcastPlan() {
     static const bool planDist = [] {
         const char* e = std::getenv("DENDRO_BCAST_PLAN_DIST");
