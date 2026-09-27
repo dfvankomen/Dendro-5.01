@@ -2111,12 +2111,12 @@ class Mesh {
     }
 
     /**@brief The consensus pos-bcast at the end of a time step. With
-     * DENDRO_BCAST_STEP_PRUNE=1 it applies only the plan entries whose
+     * DENDRO_BCAST_STEP_PRUNE (default 1) it applies only the plan entries whose
      * destination is a local slot, a ghost slot the ghost exchange does not
      * deliver but the unzip or a mirror reads, or a ghost-exchange send source
      * (the pruneZipSync level-2 keep set); every other ghost slot is either
      * overwritten by the next ghost exchange or never read. Otherwise the same
-     * as broadcastCgValuesByPhysPosPublic. */
+     * as broadcastCgValuesByPhysPosPublic. Default on; =0 applies the full plan. */
     template <typename T>
     void broadcastCgValuesByPhysPosStep(T* vec, unsigned int dof);
 

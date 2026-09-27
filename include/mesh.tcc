@@ -967,7 +967,7 @@ template <typename T>
 void Mesh::broadcastCgValuesByPhysPosStep(T* vec, unsigned int dof) {
     static const int prune = [] {
         const char* e = std::getenv("DENDRO_BCAST_STEP_PRUNE");
-        return e ? std::atoi(e) : 0;
+        return e ? std::atoi(e) : 1;
     }();
     // the probe and the legacy/check paths only exist on the full plan
     static const bool full = [] {

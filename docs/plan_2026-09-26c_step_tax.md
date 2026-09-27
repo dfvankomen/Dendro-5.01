@@ -32,3 +32,11 @@ BSSN np=4: recv entries 1 896 169 → 192, intra 211 → 71, kept_mismatch 0.
 
 Gates: BSSN graph + SFC md5 vs references; EM4 np=8 graph with `DENDRO_FORCE_POS_BCAST=1`, prune
 0 vs 1 md5; tp/EM4/ENUTS unaffected (no ETS pos-bcast) but run on the defaults path after the flip.
+
+## Gates (knob on, bin `bstep`, jj `tszvxsqm`)
+- BSSN q1 tinytest np=4, `PRUNE=1 CHECK=1`: graph 7a18bafe / c1508613 / 86470a02 / ed1127e4, SFC
+  7a18bafe / 2ffba783 / 86470a02 / b50bc05f — all on references; kept_mismatch 0 on every call;
+  every rebuild recv 1 896 169 → 192, intra 211 → 71.
+- EM4 np=8 with `DENDRO_FORCE_POS_BCAST=1`, prune 0 vs 1 (+CHECK): graph 32eb202e both, SFC d7bbee89.
+  Bytes: the full plan ships ~101 MB per call (10.8 GB over 107 calls, more than the whole ghost
+  exchange's 10.2 GB in that run); the pruned step plan ~5.7 kB per call (77 step calls).
