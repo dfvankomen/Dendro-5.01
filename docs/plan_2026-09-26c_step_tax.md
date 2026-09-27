@@ -40,3 +40,9 @@ Gates: BSSN graph + SFC md5 vs references; EM4 np=8 graph with `DENDRO_FORCE_POS
 - EM4 np=8 with `DENDRO_FORCE_POS_BCAST=1`, prune 0 vs 1 (+CHECK): graph 32eb202e both, SFC d7bbee89.
   Bytes: the full plan ships ~101 MB per call (10.8 GB over 107 calls, more than the whole ghost
   exchange's 10.2 GB in that run); the pruned step plan ~5.7 kB per call (77 step calls).
+
+## Flip (jj `lvmprtyo`, bin `sdef`) — defaults path green
+tp np=4 ×4 arms IDENTICAL to base (incl. ragged); EM4 np4 a75a069e/d7bbee89, np8 32eb202e/d7bbee89;
+ragged ENUTS U_CHI/U_PHI on the 18-digit reference; BSSN graph + SFC on all 8 reference md5s.
+Local wall is not evidence (shared box, another user's jobs). Next: price on Kingspeak (U pair at
+np=48/96, where the handoff saw ~24 s per-step tax beyond sandwiches) — needs the user's OK.
