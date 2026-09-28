@@ -76,3 +76,30 @@ nobody else claims.
   "interior" positions. EM4 does not run the pos-bcast by default. NLSM/BSSN never fell back.
 - Flip (jj `yzowpssm`, bin `cdef`): defaults path green (tp ×4, EM4 np4/8, d11 np8, ragged ENUTS, BSSN).
   Kingspeak X (build 28414412, np=48 28414413, np=96 28414414): L case sfc / lw / lw_f0 (`=0`).
+
+## Kingspeak X (build 28414412; L case, 2 rounds, wall s)
+| np | sfc | lw, filter 0 | lw, filter 2 (default) | lw/sfc |
+|---|---|---|---|---|
+| 48 | 144.9 / 144.8 | 191.9 / 192.7 | 179.8 / 179.2 | 1.33× → 1.24× |
+| 96 | 97.1 / 95.3 | 136.9 / 137.2 | 125.8 / 126.4 | 1.43× → 1.31× |
+Election per rebuild 1.7 s → 0.26 s (np=48), 1.57 → 0.15 s (np=96). Remaining per rebuild at np=96:
+`[repart] TOTAL` ~1.75 s (10 rebuilds), g2s ~1.0 s on the init sandwich.
+
+## The labelled rebuild (NLSM d11 lw, np=8, phase prof)
+repart TOTAL ~3.8 s: buildZipPlan 2.2 s (claims 0.64, home arbitration 1.2 over 1.5 M local claims),
+e2n-audit 0.5 s, buildE2NWithSM 0.29 s, unzip canon writer 0.13 s, buildE2NMap 0.11 s.
+- `DENDRO_ZIPPLAN_LOCAL_ARB` (default on, jj mpmxmslz + uurlksqq): a position whose canonical
+  position is not a node of any ghost element, holds no ghost claim of mine and no zip mirror slot is
+  folded on-rank (same fold, same claim order); only ~4 % of claims are routed. A position the home
+  saw with only ghost claims that a rank settled locally is re-routed (targeted, recursive) — never
+  fired on any gate. First try marked every node of round-1 send elements + exchange send sources:
+  71 % routed on the fragmented levelwise mesh.
+- `DENDRO_ZIPPLAN_MYMIN_HASH` (default on): myMin grouped by an open-addressing table instead of a
+  sort (the fold is a strict total order, so order-free): mymin 430 → 280 ms.
+- `DENDRO_E2N_AUDIT_LAZY` (default on): the audit's sorted (pos, cg) index (~470 ms) is built on the
+  first lookup; most rebuilds make 0–223 lookups. e2n-audit 500 → 146 ms.
+Zip plan 2.2 → ~1.2 s; gates (knob on and defaults path) all bit-for-bit: tp ×8 (np4+np8, ragged),
+EM4 ×4, d11 np4+np8 sfc = lw 18 digits, ragged ENUTS, BSSN 8 md5s.
+Note: at np=96 per-rank data is ~12× smaller than np=8 locally, yet repart TOTAL is 1.75 s — most of
+it is not local compute. Kingspeak Y (build 28415655, np=48 28415656, np=96 28415657): sfc / lw /
+lw_old (the three cuts reverted), full phase profiles.
