@@ -7145,6 +7145,11 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         const unsigned int cgIdx = m_uiE2NMapping_CG[slot];
         if (cgIdx == LOOK_UP_TABLE_DEFAULT) return false;
         if (cgIdx >= m_uiCG2DG.size()) return false;
+        // the slot is its cg's owner node, so owner and expected positions are
+        // the same node; with a canonical writer nothing below applies
+        if (m_uiCG2DG[cgIdx] == slot && cgIdx < nTotal_cg &&
+            hasCanonicalWriter[cgIdx])
+            return false;
 
         PhysKey3 expected;
         if (!computePos(e, n, expected)) return false;
@@ -9025,7 +9030,17 @@ void Mesh::buildZipPlan() {
                 seen[c] = 1;
                 const unsigned int dg = m_uiCG2DG[c];
                 if (dg == LOOK_UP_TABLE_DEFAULT || dg / npe >= nElTot) return;
-                const LocalClaim* w = findMyMinDg(dg / npe, dg % npe);
+                const unsigned int oe = dg / npe, on = dg % npe;
+                if (oe < m_uiElementLocalBegin || oe >= m_uiElementLocalEnd) {
+                    // strictly inside a ghost element: no local element has it
+                    const unsigned int ni = on % (eOrd + 1);
+                    const unsigned int nj = (on / (eOrd + 1)) % (eOrd + 1);
+                    const unsigned int nk = on / ((eOrd + 1) * (eOrd + 1));
+                    if (ni > 0 && ni < eOrd && nj > 0 && nj < eOrd && nk > 0 &&
+                        nk < eOrd)
+                        return;
+                }
+                const LocalClaim* w = findMyMinDg(oe, on);
                 if (w) bndG[w - myMin.data()] = 1;
             };
             for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
