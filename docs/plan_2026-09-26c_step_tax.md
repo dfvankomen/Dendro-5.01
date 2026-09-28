@@ -103,3 +103,32 @@ EM4 ×4, d11 np4+np8 sfc = lw 18 digits, ragged ENUTS, BSSN 8 md5s.
 Note: at np=96 per-rank data is ~12× smaller than np=8 locally, yet repart TOTAL is 1.75 s — most of
 it is not local compute. Kingspeak Y (build 28415655, np=48 28415656, np=96 28415657): sfc / lw /
 lw_old (the three cuts reverted), full phase profiles.
+
+## Kingspeak Y and Z (L case, 2 rounds, wall s)
+Y (build 28415655: local arb + myMin hash + lazy audit vs those reverted): np=48 172.7/172.8 vs
+176.1/175.2 (−3 s), np=96 125.5/124.0 vs 125.2/125.6 (0) — local compute was not the np=96 cost.
+Y's np=96 phase profile: ghost nodes per rank ~2× local (labelled 24.7 M vs SFC 13.8 M send nodes), so
+every phase walking local+ghost elements stays flat with np; block-decomposition tail 334 ms
+(hash sets), E2NWithSM 256 ms (sort-unique), zip `inv` 102 ms (hash of every recv entry).
+
+Z (build 28415800 = defaults through jj lkzqtxqx; lw_old = every sandwich cut of 2026-09-27/28 reverted):
+| np | sfc | lw_old | lw | lw/sfc |
+|---|---|---|---|---|
+| 48 | 137.8 / 137.4 | 183.6 / 187.9 | 166.8 / 164.7 | 1.35× → 1.20× |
+| 96 | 87.7 / 87.0 | 127.3 / 125.8 | 112.5 / 108.8 | 1.45× → 1.27× |
+| 192 | 67.5 / 66.7 | 124.1 / 110.3 | 89.9 / 89.0 | 1.75× → 1.33× |
+np=192 rebuild 0.96 s: e2n-audit 250 (4197 lookups → index built), sm 222, zip plan 210, E2NWithSM 101,
+E2NMap 63; bcast election 131; g2s 564 (init), SFC remesh+IGT 290–470.
+
+## Cuts after Z (gated as a batch)
+- SlotFlags (vector<char>) for the minimal-scatter keep set and pruneZipSync sets: tail 450 → 25 ms (np8).
+- Sorted-unique DG indices by marking in both E2N builders (`DENDRO_E2N_SORT_UNIQUE=1` reverts):
+  E2NWithSM 265 → 108 ms.
+- `DENDRO_ZIPPLAN_INV_QUERY` (default on): resolve only the asked keys, inv 75 → ~2 ms.
+- myMin slot groups (lookups by cg2dg element-node slot; interior nodes skip the table):
+  claims 730 → 400, plan 270 → 40 ms.
+- E2N audit: owner slot with a canonical writer returns early (walk 130 → 73 ms).
+- Local-arb marking skips nodes strictly inside ghost elements (100–230 → 72–132 ms).
+- Hoisted interior-writer block lookup in the myMin build.
+- Pos-bcast level 2: marking by ghost-element boundary positions, hash grouping, phantom hits routed
+  instead of a level-1 rebuild; build ~600 → ~450 ms (np8). EM4 forced bcast: one reroute per rebuild.
