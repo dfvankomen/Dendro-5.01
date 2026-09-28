@@ -551,6 +551,7 @@ if(BUILD_DENDRO_EXAMPLES)
   endfunction()
 
   dendro_add_doctest(testTensorKernels test/src/testTensorKernels.cpp)
+  dendro_add_doctest(testProlongation test/src/testProlongation.cpp)
   dendro_add_example(testZipExact test/src/testZipExact.cpp)
   foreach(SAB 1 2 3)
     dendro_add_example(testZipExact_sabotage${SAB} test/src/testZipExact.cpp)
