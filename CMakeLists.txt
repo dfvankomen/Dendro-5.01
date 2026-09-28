@@ -527,7 +527,7 @@ if(BUILD_DENDRO_EXAMPLES)
   add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
 
   # Self-checking, no arguments, no MPI, well under a second each.
-  foreach(T testCloneNewSize testExplicitSimd testKOMatrix testKOSign testKOSimd)
+  foreach(T testCloneNewSize testDerivSet testExplicitSimd testKOMatrix testKOSign testKOSimd)
     add_test(NAME ${T} COMMAND ${T})
     set_tests_properties(${T} PROPERTIES TIMEOUT 120 LABELS unit)
   endforeach()

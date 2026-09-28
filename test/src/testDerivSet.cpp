@@ -27,6 +27,25 @@ static double maxdiff_active(const double *a, const double *b, unsigned int n,
     return m;
 }
 
+static double maxabs_active(const double *a, unsigned int n, unsigned int pw) {
+    double m = 0.0;
+    for (unsigned int k = pw; k < n - pw; k++)
+        for (unsigned int j = pw; j < n - pw; j++)
+            for (unsigned int i = pw; i < n - pw; i++)
+                m = std::max(m, std::fabs(a[i + n * (j + n * k)]));
+    return m;
+}
+
+// grad_set batches the same arithmetic in a different order, so it agrees to
+// roundoff rather than bit-for-bit. Scale by the derivative magnitude: 2nd
+// derivatives carry 1/h^2, so an absolute bound would not travel across axes.
+static bool agrees(const double *a, const double *b, unsigned int n,
+                   unsigned int pw, double &md) {
+    const double rtol = 1e-12, atol = 1e-14;
+    md                = maxdiff_active(a, b, n, pw);
+    return md <= atol + rtol * maxabs_active(b, n, pw);
+}
+
 int main() {
     const unsigned int eo = 6, n = 2 * eo + 1, pw = eo / 2;
     const size_t tot = (size_t)n * n * n;
@@ -80,9 +99,8 @@ int main() {
                 for (int b = 0; b < 9; b++) {
                     if (!(mask & (1u << b))) continue;
                     checked++;
-                    const double md =
-                        maxdiff_active(got[b].data(), ref[b].data(), n, pw);
-                    if (md != 0.0) {
+                    double md = 0.0;
+                    if (!agrees(got[b].data(), ref[b].data(), n, pw, md)) {
                         bad++;
                         if (bad <= 20)
                             std::printf("  MISMATCH %s/%s bflag=%u mask=%u %s "
@@ -106,8 +124,9 @@ int main() {
                                   dz, sz, bf);
                 dd.grad_x_last(r2.data(), u2.data(), dx, sz, bf);
                 checked += 2;
-                if (maxdiff_active(o1.data(), ref[0].data(), n, pw) != 0.0 ||
-                    maxdiff_active(o2.data(), r2.data(), n, pw) != 0.0) {
+                double mdb1 = 0.0, mdb2 = 0.0;
+                if (!agrees(o1.data(), ref[0].data(), n, pw, mdb1) ||
+                    !agrees(o2.data(), r2.data(), n, pw, mdb2)) {
                     bad++;
                     std::printf("  MISMATCH batch %s bflag=%u\n",
                                 e.first.c_str(), bf);
