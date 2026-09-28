@@ -524,6 +524,9 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(benchUnzipSameLevel test/src/benchUnzipSameLevel.cpp)
   dendro_add_example(benchUnzipGather test/src/benchUnzipGather.cpp)
   dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
+  dendro_add_example(testUnzipExact test/src/testUnzipExact.cpp)
+  add_test(NAME testUnzipExact COMMAND testUnzipExact 6 1e-3)
+  set_tests_properties(testUnzipExact PROPERTIES TIMEOUT 600)
   add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
 
   # Self-checking, no arguments, no MPI, well under a second each.
