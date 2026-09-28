@@ -38,7 +38,7 @@ int main() {
     unsigned long checked = 0, bad = 0;
 
     for (const std::string order : {"KO2", "KO4", "KO6", "KO8"}) {
-        for (unsigned int eo : {6u, 8u, 10u}) {
+        for (unsigned int eo : {4u, 6u, 8u, 10u}) {
             const unsigned int n = 2 * eo + 1, pw = eo / 2;
             const size_t tot = (size_t)n * n * n;
             const unsigned int sz[3] = {n, n, n};

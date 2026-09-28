@@ -135,9 +135,9 @@ class ExplicitKODissO2 : public Filters {
     template <typename... Args>
     ExplicitKODissO2(unsigned int ele_order, Args &&...) : Filters(ele_order) {
         if (p_pw == 2) {
-            kox_func = &ko_deriv21_x<3>;
-            koy_func = &ko_deriv21_y<3>;
-            koz_func = &ko_deriv21_z<3>;
+            kox_func = &ko_deriv21_x<2>;
+            koy_func = &ko_deriv21_y<2>;
+            koz_func = &ko_deriv21_z<2>;
         } else if (p_pw == 3) {
             kox_func = &ko_deriv21_x<3>;
             koy_func = &ko_deriv21_y<3>;
@@ -152,7 +152,7 @@ class ExplicitKODissO2 : public Filters {
             koz_func = &ko_deriv21_z<5>;
         } else {
             throw std::invalid_argument(
-                "Explicit KODissO4 requires a padding width of 3 to 5! pw=" +
+                "Explicit KODissO2 requires a padding width of 2 to 5! pw=" +
                 std::to_string(p_ele_order));
         }
     }
@@ -293,7 +293,7 @@ class ExplicitKODissO6 : public Filters {
             koz_func = &ko_deriv64_z<5>;
         } else {
             throw std::invalid_argument(
-                "Explicit KODissO4 requires a padding width of 4 to 5! pw=" +
+                "Explicit KODissO6 requires a padding width of 4 to 5! pw=" +
                 std::to_string(p_ele_order));
         }
     }
@@ -425,7 +425,7 @@ class ExplicitKODissO8 : public Filters {
             koz_func = &ko_deriv64_z<5>;
         } else {
             throw std::invalid_argument(
-                "Explicit KODissO4 requires a padding width of 2 to 5! pw=" +
+                "Explicit KODissO8 requires a padding width of 2 to 5! pw=" +
                 std::to_string(p_ele_order));
         }
     }
