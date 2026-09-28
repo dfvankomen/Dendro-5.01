@@ -68,3 +68,11 @@ nobody else claims.
   (winner = lowest local cg at the position, intra copy); a phantom position matching a skipped slot
   rebuilds at 1. Claims 1.5 M → 0.41 M per rank, build 1.75 → 0.72–0.87 s; remaining cost is the local
   sort (~0.4 s).
+- **V np=48** (28414344): sfc 281.8 / 281.8 · pv 335.3 / 334.7 · pv_full 343.3 / 343.3 — prune −8 s (−2.4 %),
+  labelled vs SFC 1.22× → 1.19× (the dense Alltoallv it removes grows with np; −14–21 s at 96).
+- Knob-on gates at =2: d11 np4 + np8 sfc = lw 18 digits, ragged ENUTS, BSSN 8 md5s, tp ×4, EM4 np8
+  forced bcast on reference — **but EM4 forced hits the phantom check every rebuild (~100k) and falls
+  back to 1**: EM4's minimal scatter drops exchange sends, so remote undelivered+read ghosts sit at
+  "interior" positions. EM4 does not run the pos-bcast by default. NLSM/BSSN never fell back.
+- Flip (jj `yzowpssm`, bin `cdef`): defaults path green (tp ×4, EM4 np4/8, d11 np8, ragged ENUTS, BSSN).
+  Kingspeak X (build 28414412, np=48 28414413, np=96 28414414): L case sfc / lw / lw_f0 (`=0`).
