@@ -132,3 +132,17 @@ E2NMap 63; bcast election 131; g2s 564 (init), SFC remesh+IGT 290–470.
 - Hoisted interior-writer block lookup in the myMin build.
 - Pos-bcast level 2: marking by ghost-element boundary positions, hash grouping, phantom hits routed
   instead of a level-1 rebuild; build ~600 → ~450 ms (np8). EM4 forced bcast: one reroute per rebuild.
+
+## Z2 (build 28415961 = batch through jj vwnvorlx) and where the gap is now
+| np | sfc | lw_old | lw | lw/sfc |
+|---|---|---|---|---|
+| 48 | 136.5 / 135.8 | 183.3 / 183.3 | 162.9 / 162.9 | 1.35× → 1.20× |
+| 96 | 86.6 / 85.6 | 125.2 / 125.2 | 107.3 / 107.9 | 1.45× → 1.25× |
+| 192 | 67.1 / 65.4 | 109.7 / 109.3 | 88.8 / 88.4 | 1.65× → 1.34× |
+Only −2–3 s over Z: the rebuild internals are in diminishing returns. The NLSM prof line says why: at
+np=192 levelwise ranks carry **3.9× SFC's ghost elements** (mean 3 897 vs 999, max 6 203 vs 2 082) for the
+same ~293 local elements — levelwise hands each rank a separate piece per level, each with its own ghost
+shell. Every remaining rebuild phase (audit walk, zip marking, E2N expansion, sm walk) and the
+per-step exchange scale with that shell. Next lever: labellings whose per-level pieces sit next to each
+other (fewer ghost shells), or a cheaper per-ghost path; after this batch the global-to-local element map
+is an unordered_map (sm decode 66 → 26 ms, gated after Z2).
