@@ -23,6 +23,7 @@
  * */
 
 #include "mesh.h"
+#include <mutex>
 
 #include "TreeNode.h"
 #include "dendro.h"
@@ -7019,25 +7020,35 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
     }();
     const double auT0 = auProf ? MPI_Wtime() : 0.0;
     size_t auLookups = 0;
+    // DENDRO_E2N_AUDIT_LAZY (default on, =0 builds eagerly): most audits make
+    // no position lookup at all, so the sorted (pos, cg) array is built on
+    // the first one
+    static const bool auLazy = [] {
+        const char* e = std::getenv("DENDRO_E2N_AUDIT_LAZY");
+        return !(e && e[0] == '0');
+    }();
     std::vector<CgAtPos> cgsByPos;
-    cgsByPos.reserve(nTotal_cg - nLB);
-    for (unsigned int cg = nLB; cg < nTotal_cg; cg++) {
-        const unsigned int dg = m_uiCG2DG[cg];
-        PhysKey3 k;
-        if (!computePos(dg / npe, dg % npe, k)) continue;
-        cgsByPos.push_back({k, cg});
-    }
-    std::sort(cgsByPos.begin(), cgsByPos.end(),
-              [&](const CgAtPos& a, const CgAtPos& b) {
-                  if (posLT(a.pos, b.pos)) return true;
-                  if (posLT(b.pos, a.pos)) return false;
-                  return a.cg < b.cg;
-              });
-    // canonOnly=false: any cg at this phys_pos (the old localCgByPos);
-    // canonOnly=true: only cgs with a canonical writer (canonCgByPos).
+    std::once_flag byPosOnce;
+    auto buildByPos = [&]() {
+        cgsByPos.reserve(nTotal_cg - nLB);
+        for (unsigned int cg = nLB; cg < nTotal_cg; cg++) {
+            const unsigned int dg = m_uiCG2DG[cg];
+            PhysKey3 k;
+            if (!computePos(dg / npe, dg % npe, k)) continue;
+            cgsByPos.push_back({k, cg});
+        }
+        std::sort(cgsByPos.begin(), cgsByPos.end(),
+                  [&](const CgAtPos& a, const CgAtPos& b) {
+                      if (posLT(a.pos, b.pos)) return true;
+                      if (posLT(b.pos, a.pos)) return false;
+                      return a.cg < b.cg;
+                  });
+    };
+    if (!auLazy) std::call_once(byPosOnce, buildByPos);
     const double auT1 = auProf ? MPI_Wtime() : 0.0;
     auto findCgAtPos = [&](const PhysKey3& k, bool canonOnly) -> unsigned int {
         auLookups++;
+        std::call_once(byPosOnce, buildByPos);
         auto it = std::lower_bound(
             cgsByPos.begin(), cgsByPos.end(), k,
             [&](const CgAtPos& a, const PhysKey3& b) { return posLT(a.pos, b); });
@@ -8731,11 +8742,11 @@ void Mesh::buildZipPlan() {
             if (idx < nTotal_cg) ghostKeep[idx] = 1;  // send source: kept
         }
     }
-    // DENDRO_ZIPPLAN_LOCAL_ARB=1: a position where this rank holds every claim
+    // DENDRO_ZIPPLAN_LOCAL_ARB (default on, =0 routes every claim): a position where this rank holds every claim
     // (no slot of it is remote-visible) is arbitrated here, not routed
     static const bool localArbEnv = [] {
         const char* e = std::getenv("DENDRO_ZIPPLAN_LOCAL_ARB");
-        return e && e[0] == '1';
+        return !(e && e[0] == '0');
     }();
     std::vector<int> myGrp;  // myMin index of each claim's position, or -1
     if (localArbEnv) myGrp.reserve(reserveN);
