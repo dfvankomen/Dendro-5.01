@@ -22045,41 +22045,6 @@ bool Mesh::posBcastGateOn() const {
     return m_uiPosBcastEnabled;
 }
 
-std::vector<char> Mesh::remoteVisibleCgs() const {
-    const unsigned int N   = m_uiNumActualNodes;
-    const unsigned int npe = m_uiNpE;
-    std::vector<char> vis(N, 0);
-    auto markElem = [&](unsigned int e) {
-        for (unsigned int k = 0; k < npe; k++) {
-            const unsigned int cg = m_uiE2NMapping_CG[(size_t)e * npe + k];
-            if (cg < N) vis[cg] = 1;
-        }
-    };
-    for (unsigned int e = 0; e < m_uiNumTotalElements; e++)
-        if (e < m_uiElementLocalBegin || e >= m_uiElementLocalEnd) markElem(e);
-    for (const unsigned int le : m_uiScatterMapElementRound1)
-        if (le + m_uiElementLocalBegin < m_uiElementLocalEnd)
-            markElem(le + m_uiElementLocalBegin);
-    const bool useDG = m_uiScatterMapSendIsDG.size() ==
-                       m_uiScatterMapActualNodeSend.size();
-    for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
-        unsigned int idx = m_uiScatterMapActualNodeSend[k];
-        if (useDG && m_uiScatterMapSendIsDG[k])
-            idx = m_uiE2NMapping_CG[(idx / npe + m_uiElementLocalBegin) * npe +
-                                    idx % npe];
-        if (idx < N) vis[idx] = 1;
-    }
-    for (const auto& kv : m_uiZipNonPrimaryToGhostCg) {
-        if (kv.first < N) vis[kv.first] = 1;
-        if (kv.second < N) vis[kv.second] = 1;
-    }
-    for (const auto& kv : m_uiPassDDemotedToGhostCg) {
-        if (kv.first < N) vis[kv.first] = 1;
-        if (kv.second < N) vis[kv.second] = 1;
-    }
-    return vis;
-}
-
 std::vector<char> Mesh::bcastKeepSlots() const {
     // keep a destination slot iff something can read it before the next ghost
     // exchange overwrites it: local slots, undelivered ghosts the unzip or a
@@ -22198,7 +22163,8 @@ void Mesh::buildBcastPlan() {
         std::cout << "[bcast-plan-check] differing vectors=" << bad << std::endl;
 }
 
-void Mesh::buildBcastPlanDist(int claimLevel) {
+void Mesh::buildBcastPlanDist(int claimLevel,
+                               const std::vector<unsigned long long>* forceRoute) {
     const unsigned int npe       = m_uiNpE;
     const unsigned int eOrd      = m_uiElementOrder;
     const unsigned int nTotal_cg = m_uiNumActualNodes;
@@ -22238,11 +22204,12 @@ void Mesh::buildBcastPlanDist(int claimLevel) {
     // never read. off under DENDRO_BCAST_PLAN_CHECK (it compares to the legacy
     // claim set)
     //
-    // =2 also keeps interior local slots out of the election: a local slot no
-    // ghost element references and the ghost exchange does not send cannot be
-    // claimed by another rank, so its winner is itself or the lowest local cg
-    // at its position (intra copy, resolved here). a phantom position that
-    // matches a skipped slot would disprove that; the plan is then rebuilt at =1
+    // =2 also keeps interior local positions out of the election: another
+    // rank's local slot there would be a node of one of my ghost elements, so
+    // a position no ghost element node, mirror or ghost claim of mine reaches
+    // has only my claims; its winner is the lowest local cg there (intra copy,
+    // resolved here). a remote ghost claim there shows up as a phantom
+    // position at its home; those positions are then routed and re-elected
     static const int claimEnv = [] {
         const char* e = std::getenv("DENDRO_BCAST_CLAIM_FILTER");
         const char* c = std::getenv("DENDRO_BCAST_PLAN_CHECK");
@@ -22267,7 +22234,51 @@ void Mesh::buildBcastPlanDist(int claimLevel) {
     };
     std::vector<char> keepSlot, bnd;
     if (claimFilter) keepSlot = bcastKeepSlots();
-    if (claimLvl >= 2) bnd = remoteVisibleCgs();
+    // =2: a local group routes if a member is a local slot on a ghost element's
+    // boundary node or a mirror slot, or its position holds a ghost slot of
+    // mine there, one of my ghost claims, or a forced position
+    std::vector<PhysKey3> exPos;
+    auto cgPos = [&](unsigned int c, PhysKey3& k) -> bool {
+        if (c >= m_uiCG2DG.size()) return false;
+        const unsigned int dg = m_uiCG2DG[c];
+        if (dg == LOOK_UP_TABLE_DEFAULT || dg / npe >= m_uiAllElements.size()) return false;
+        const ot::TreeNode& tn = m_uiAllElements[dg / npe];
+        if (tn.getLevel() > m_uiMaxDepth) return false;
+        const unsigned long long len = 1ULL << (m_uiMaxDepth - tn.getLevel());
+        const unsigned int q = dg % npe;
+        k.x = (unsigned long long)tn.getX() * eOrd + (unsigned long long)(q % (eOrd + 1)) * len;
+        k.y = (unsigned long long)tn.getY() * eOrd + (unsigned long long)((q / (eOrd + 1)) % (eOrd + 1)) * len;
+        k.z = (unsigned long long)tn.getZ() * eOrd + (unsigned long long)(q / ((eOrd + 1) * (eOrd + 1))) * len;
+        return true;
+    };
+    if (claimLvl >= 2) {
+        bnd.assign(nTotal_cg, 0);
+        std::vector<char> seen(nTotal_cg, 0);
+        auto markCg = [&](unsigned int c) {
+            if (c >= nTotal_cg || seen[c]) return;
+            seen[c] = 1;
+            if (c >= nLB && c < nLE) { bnd[c] = 1; return; }
+            PhysKey3 k;
+            if (cgPos(c, k)) exPos.push_back(k);
+        };
+        for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+            if (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd) continue;
+            for (unsigned int q = 0; q < npe; q++) {
+                const unsigned int ni = q % (eOrd + 1);
+                const unsigned int nj = (q / (eOrd + 1)) % (eOrd + 1);
+                const unsigned int nk = q / ((eOrd + 1) * (eOrd + 1));
+                if (ni > 0 && ni < eOrd && nj > 0 && nj < eOrd && nk > 0 && nk < eOrd)
+                    continue;  // strictly inside a ghost element
+                markCg(m_uiE2NMapping_CG[(size_t)e * npe + q]);
+            }
+        }
+        for (const auto& kv : m_uiZipNonPrimaryToGhostCg) { markCg(kv.first); markCg(kv.second); }
+        for (const auto& kv : m_uiPassDDemotedToGhostCg) { markCg(kv.first); markCg(kv.second); }
+        if (forceRoute)
+            for (size_t k = 0; k + 2 < forceRoute->size(); k += 3)
+                exPos.push_back(PhysKey3{(*forceRoute)[k], (*forceRoute)[k + 1],
+                                         (*forceRoute)[k + 2]});
+    }
     // =2: every local claim, sorted by position to find the interior groups
     struct Loc { unsigned long long x, y, z; unsigned int cg, b; };
     std::vector<Loc> loc;
@@ -22300,43 +22311,101 @@ void Mesh::buildBcastPlanDist(int claimLevel) {
             loc.push_back(Loc{c.x, c.y, c.z, cg, (unsigned int)bnd[cg]});
             continue;
         }
+        if (claimLvl >= 2) exPos.push_back(PhysKey3{c.x, c.y, c.z});
         out[homeOf(c.x, c.y, c.z)].push_back(c);
         myCg.push_back(cg);
     }
-    // interior groups: resolved here; any group with a boundary member claims
+    // interior groups: resolved here; any group with a boundary member claims.
+    // a cg owned by a node strictly inside a local element is alone at its
+    // position (no other element has it, cg2dg is one-to-one); the rest are
+    // grouped by position in an open-addressing table
     std::vector<unsigned int> locIntraDst, locIntraSrc;
-    std::vector<PhysKey3> skipPos;
+    std::vector<unsigned long long> gKx, gKy, gKz;  // group key
+    std::vector<unsigned int> gMin;                 // lowest cg = winner
+    std::vector<char> gB, gSkip;                    // routes / resolved here
+    std::vector<int> tab;
+    size_t tabMask = 0;
+    auto tabSlot = [&](unsigned long long x, unsigned long long y, unsigned long long z) {
+        unsigned long long h = PhysKey3Hash{}(PhysKey3{x, y, z});
+        h ^= h >> 33;
+        h *= 0xff51afd7ed558ccdULL;
+        h ^= h >> 33;
+        return (size_t)h & tabMask;
+    };
+    auto tabFind = [&](unsigned long long x, unsigned long long y, unsigned long long z) -> int {
+        if (tab.empty()) return -1;
+        size_t h = tabSlot(x, y, z);
+        while (tab[h] >= 0) {
+            const int g = tab[h];
+            if (gKx[g] == x && gKy[g] == y && gKz[g] == z) return g;
+            h = (h + 1) & tabMask;
+        }
+        return -1;
+    };
     if (claimLvl >= 2) {
-        std::sort(loc.begin(), loc.end(), [](const Loc& a, const Loc& b) {
+        auto keyLT = [](const PhysKey3& a, const PhysKey3& b) {
             if (a.x != b.x) return a.x < b.x;
             if (a.y != b.y) return a.y < b.y;
-            if (a.z != b.z) return a.z < b.z;
-            return a.cg < b.cg;
-        });
-        for (size_t i = 0; i < loc.size();) {
-            size_t j = i + 1;
-            unsigned int anyB = loc[i].b;
-            while (j < loc.size() && loc[j].x == loc[i].x && loc[j].y == loc[i].y &&
-                   loc[j].z == loc[i].z)
-                anyB |= loc[j++].b;
-            if (anyB) {
-                for (size_t k = i; k < j; k++) {
-                    Claim c;
-                    c.x = loc[k].x; c.y = loc[k].y; c.z = loc[k].z;
-                    c.cg = loc[k].cg;
-                    c.idx = (unsigned int)myCg.size();
-                    c.local = 1u;
-                    out[homeOf(c.x, c.y, c.z)].push_back(c);
-                    myCg.push_back(c.cg);
-                }
-            } else {
-                skipPos.push_back(PhysKey3{loc[i].x, loc[i].y, loc[i].z});
-                for (size_t k = i + 1; k < j; k++) {
-                    locIntraDst.push_back(loc[k].cg);
-                    locIntraSrc.push_back(loc[i].cg);
-                }
+            return a.z < b.z;
+        };
+        std::sort(exPos.begin(), exPos.end(), keyLT);
+        auto routeLoc = [&](const Loc& l) {
+            Claim c;
+            c.x = l.x; c.y = l.y; c.z = l.z;
+            c.cg = l.cg;
+            c.idx = (unsigned int)myCg.size();
+            c.local = 1u;
+            out[homeOf(c.x, c.y, c.z)].push_back(c);
+            myCg.push_back(c.cg);
+        };
+        size_t cap = 16;
+        while (cap < loc.size() + loc.size() / 3) cap <<= 1;
+        tabMask = cap - 1;
+        tab.assign(cap, -1);
+        std::vector<int> gOf(loc.size(), -1);
+        for (size_t i = 0; i < loc.size(); i++) {
+            const Loc& l = loc[i];
+            const unsigned int dg = m_uiCG2DG[l.cg];
+            const unsigned int q  = dg % npe;
+            const unsigned int ni = q % (eOrd + 1);
+            const unsigned int nj = (q / (eOrd + 1)) % (eOrd + 1);
+            const unsigned int nk = q / ((eOrd + 1) * (eOrd + 1));
+            const unsigned int oe = dg / npe;
+            if (oe >= m_uiElementLocalBegin && oe < m_uiElementLocalEnd && ni > 0 &&
+                ni < eOrd && nj > 0 && nj < eOrd && nk > 0 && nk < eOrd) {
+                if (l.b) routeLoc(l);  // a mirror slot
+                continue;              // alone at its position otherwise
             }
-            i = j;
+            size_t h = tabSlot(l.x, l.y, l.z);
+            int g = -1;
+            while (tab[h] >= 0) {
+                const int t = tab[h];
+                if (gKx[t] == l.x && gKy[t] == l.y && gKz[t] == l.z) { g = t; break; }
+                h = (h + 1) & tabMask;
+            }
+            if (g < 0) {
+                g = (int)gMin.size();
+                tab[h] = g;
+                gKx.push_back(l.x); gKy.push_back(l.y); gKz.push_back(l.z);
+                gMin.push_back(l.cg);
+                gB.push_back(std::binary_search(exPos.begin(), exPos.end(),
+                                                PhysKey3{l.x, l.y, l.z}, keyLT) ? 1 : 0);
+            } else if (l.cg < gMin[g]) {
+                gMin[g] = l.cg;
+            }
+            if (l.b) gB[g] = 1;
+            gOf[i] = g;
+        }
+        gSkip.assign(gMin.size(), 0);
+        for (size_t g = 0; g < gMin.size(); g++) gSkip[g] = !gB[g];
+        for (size_t i = 0; i < loc.size(); i++) {
+            const int g = gOf[i];
+            if (g < 0) continue;
+            if (gB[g]) routeLoc(loc[i]);
+            else if (loc[i].cg != gMin[g]) {
+                locIntraDst.push_back(loc[i].cg);
+                locIntraSrc.push_back(gMin[g]);
+            }
         }
         loc.clear();
         loc.shrink_to_fit();
@@ -22407,25 +22476,26 @@ void Mesh::buildBcastPlanDist(int claimLevel) {
         std::vector<unsigned long long> all(po[nP - 1] + pc[nP - 1]);
         MPI_Allgatherv(ph.data(), nph, MPI_UNSIGNED_LONG_LONG, all.data(),
                        pc.data(), po.data(), MPI_UNSIGNED_LONG_LONG, m_uiCommActive);
-        auto lessK = [](const PhysKey3& a, const PhysKey3& b) {
-            if (a.x != b.x) return a.x < b.x;
-            if (a.y != b.y) return a.y < b.y;
-            return a.z < b.z;
-        };
+        // a phantom position cannot be strictly inside a local element, so
+        // the table covers every locally resolved position it could hit
         unsigned long long hits = 0;
-        for (size_t k = 0; k + 2 < all.size(); k += 3)
-            if (std::binary_search(skipPos.begin(), skipPos.end(),
-                                   PhysKey3{all[k], all[k + 1], all[k + 2]}, lessK))
-                hits++;
+        for (size_t k = 0; k + 2 < all.size(); k += 3) {
+            const int g = tabFind(all[k], all[k + 1], all[k + 2]);
+            if (g >= 0 && gSkip[g]) hits++;
+        }
         MPI_Allreduce(MPI_IN_PLACE, &hits, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
                       m_uiCommActive);
         if (hits) {
             if (me == 0)
                 std::cout << "[bcast-plan] claim filter 2: " << hits
                           << " phantom positions hit skipped interior slots;"
-                             " rebuilding at level 1"
+                             " routing them"
                           << std::endl;
-            buildBcastPlanDist(1);
+            // every rank routes its groups at the gathered phantom positions
+            std::vector<unsigned long long> forced(all);
+            if (forceRoute)
+                forced.insert(forced.end(), forceRoute->begin(), forceRoute->end());
+            buildBcastPlanDist(claimLvl, &forced);
             return;
         }
     }
