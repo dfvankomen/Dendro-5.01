@@ -67,6 +67,6 @@ int main() {
         }
         std::printf("  %s/%s filter %-6s: copies agree on unseen sizes 61, 67\n", c.d1.c_str(), c.d2.c_str(), c.filt.c_str());
     }
-    std::printf("clone-then-new-size: %lu checks, %lu failures -> %s\n", checked, bad, bad == 0 ? "PASS" : "FAIL");
-    return bad == 0 ? 0 : 1;
+    std::printf("clone-then-new-size: %lu checks, %lu failures -> %s\n", checked, bad, (bad == 0 && checked > 0) ? "PASS" : "FAIL");
+    return (bad == 0 && checked > 0) ? 0 : 1;
 }

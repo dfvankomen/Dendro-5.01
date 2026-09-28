@@ -125,6 +125,6 @@ int main() {
     }
     std::printf("KO simd filters: %lu checks, %lu failures, interior %s -> %s\n", checked, bad,
                 all_bitwise ? "bit-identical to the stencil" : "within roundoff of the stencil",
-                bad == 0 ? "PASS" : "FAIL");
-    return bad == 0 ? 0 : 1;
+                (bad == 0 && checked > 0) ? "PASS" : "FAIL");
+    return (bad == 0 && checked > 0) ? 0 : 1;
 }

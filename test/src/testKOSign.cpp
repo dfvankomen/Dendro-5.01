@@ -189,6 +189,6 @@ int main() {
             std::printf("  info: JTT6 grad_x with in-matrix %s (coeff 0.5) vs none: max rel diff %.3e  [%s]\n", f.c_str(), md / sc, b.toString().c_str());
         } catch (const std::exception &e) { std::printf("  info: in-matrix %s: %s\n", f.c_str(), e.what()); }
     }
-    std::printf("KO sign gate: %lu checks, %lu failures -> %s\n", checked, bad, bad == 0 ? "PASS" : "FAIL");
-    return bad == 0 ? 0 : 1;
+    std::printf("KO sign gate: %lu checks, %lu failures -> %s\n", checked, bad, (bad == 0 && checked > 0) ? "PASS" : "FAIL");
+    return (bad == 0 && checked > 0) ? 0 : 1;
 }

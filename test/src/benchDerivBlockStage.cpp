@@ -55,6 +55,15 @@ static double maxdiff_active(const double *a, const double *b, unsigned int n,
     return m;
 }
 
+static double maxabs_active(const double *a, unsigned int n, unsigned int pw) {
+    double m = 0.0;
+    for (unsigned int k = pw; k < n - pw; k++)
+        for (unsigned int j = pw; j < n - pw; j++)
+            for (unsigned int i = pw; i < n - pw; i++)
+                m = std::max(m, std::fabs(a[i + n * (j + n * k)]));
+    return m;
+}
+
 enum Mode { PLAIN, LAST, SET };
 
 static void block_stage(DendroDerivatives &D, BlockWork &w, Mode mode,
@@ -119,11 +128,17 @@ int main(int argc, char **argv) {
 
     BlockWork ref(tot), wk(tot);
     block_stage(dd, ref, PLAIN, dx, sz, bf);
+    // the _last and grad_set paths reorder the same arithmetic, so they agree to
+    // roundoff rather than bit-for-bit
     auto check = [&](BlockWork &w) {
-        double m = 0.0;
-        for (size_t a = 0; a < w.d.size(); a++)
-            m = std::max(m, maxdiff_active(w.d[a].data(), ref.d[a].data(), n, pw));
-        return m;
+        double worst = 0.0;
+        for (size_t a = 0; a < w.d.size(); a++) {
+            const double md =
+                maxdiff_active(w.d[a].data(), ref.d[a].data(), n, pw);
+            const double scale = maxabs_active(ref.d[a].data(), n, pw);
+            worst = std::max(worst, md / (1e-14 + 1e-12 * scale));
+        }
+        return worst;
     };
 
     const double t_plain = time_us([&]() { block_stage(dd, wk, PLAIN, dx, sz, bf); }, iters);
@@ -132,8 +147,8 @@ int main(int argc, char **argv) {
     const double t_set   = time_us([&]() { block_stage(dd, wk, SET, dx, sz, bf); }, iters);
     const double md_set  = check(wk);
     std::printf("  plain (as generated today) : %8.1f us/block\n", t_plain);
-    std::printf("  terminal calls via _last   : %8.1f us/block  (%.2fx)  maxdiff=%g\n", t_last, t_plain / t_last, md_last);
-    std::printf("  grad_set per variable      : %8.1f us/block  (%.2fx)  maxdiff=%g\n", t_set, t_plain / t_set, md_set);
+    std::printf("  terminal calls via _last   : %8.1f us/block  (%.2fx)  err/tol=%.2f\n", t_last, t_plain / t_last, md_last);
+    std::printf("  grad_set per variable      : %8.1f us/block  (%.2fx)  err/tol=%.2f\n", t_set, t_plain / t_set, md_set);
 
     {
         std::vector<double> out(tot), wx(tot), wy(tot), wz(tot), coeff(tot, 0.1);
@@ -200,8 +215,8 @@ int main(int argc, char **argv) {
         std::printf("  threads=%d  plain %.1f  grad_set %.1f  (%.2fx)\n", nt, mp, ms, mp / ms);
     }
 
-    const bool ok = (md_last == 0.0 && md_set == 0.0);
-    std::printf("%s\n", ok ? "PASS — all three issue paths bit-identical on the active region"
+    const bool ok = (md_last <= 1.0 && md_set <= 1.0);
+    std::printf("%s\n", ok ? "PASS — all three issue paths agree to roundoff on the active region"
                            : "FAIL — issue paths differ");
     return ok ? 0 : 1;
 }

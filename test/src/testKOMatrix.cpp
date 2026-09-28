@@ -124,6 +124,6 @@ int main() {
         }
     }
     std::printf("KO matrix filters: %lu checks, %lu failures -> %s\n", checked,
-                bad, bad == 0 ? "PASS" : "FAIL");
-    return bad == 0 ? 0 : 1;
+                bad, (bad == 0 && checked > 0) ? "PASS" : "FAIL");
+    return (bad == 0 && checked > 0) ? 0 : 1;
 }

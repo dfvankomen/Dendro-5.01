@@ -82,6 +82,6 @@ int main() {
                         order.c_str(), n, worst, tm(*dl), tm(*ds), tm(*dl) / tm(*ds));
         }
     }
-    std::printf("simd explicit engines: %lu checks, %lu failures -> %s\n", checked, bad, bad == 0 ? "PASS" : "FAIL");
-    return bad == 0 ? 0 : 1;
+    std::printf("simd explicit engines: %lu checks, %lu failures -> %s\n", checked, bad, (bad == 0 && checked > 0) ? "PASS" : "FAIL");
+    return (bad == 0 && checked > 0) ? 0 : 1;
 }

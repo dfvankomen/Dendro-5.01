@@ -25,12 +25,12 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &npes);
 
-    if (argc < 4) {
+    if (argc < 5) {
         if (!rank)
             std::cout << "Usage: " << argv[0]
                       << " maxDepth wavelet_tol partition_tol eleOrder"
                       << std::endl;
-        MPI_Abort(comm, 0);
+        MPI_Abort(comm, 1);
     }
 
     m_uiMaxDepth            = atoi(argv[1]);
