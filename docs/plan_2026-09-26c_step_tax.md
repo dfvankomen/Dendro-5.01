@@ -46,3 +46,25 @@ tp np=4 ×4 arms IDENTICAL to base (incl. ragged); EM4 np4 a75a069e/d7bbee89, np
 ragged ENUTS U_CHI/U_PHI on the 18-digit reference; BSSN graph + SFC on all 8 reference md5s.
 Local wall is not evidence (shared box, another user's jobs). Next: price on Kingspeak (U pair at
 np=48/96, where the handoff saw ~24 s per-step tax beyond sandwiches) — needs the user's OK.
+
+## Kingspeak round 3 (build 28414343 = jj lvmprtyo, V 28414344/5, W 28414346)
+**V, BSSN puncture (U case), np=96, 2 rounds (wall s):** sfc 171.6 / 177.2 · pv (step prune, default)
+192.7 / 187.0 · pv_full (`DENDRO_BCAST_STEP_PRUNE=0`) 206.8 / 208.4. The prune is −14 to −21 s per run
+(the handoff's ~24 s tax); labelled vs SFC 1.19× → 1.08×. Step plan per rebuild: recv 35 981 217 → 49.
+**W, EM4 d9 np=192 (stamp dedup priced):** stamp 63.9 / 63.8 · set (`DENDRO_SM_SET_DEDUP=1`) 65.2 / 64.4 ·
+sfc 51.7 / 51.3: −1 %, traffic byte-identical.
+**L np=192 from round 2 (28412917):** sfc 65.4 / 64.9 · lvl 103.6 / 103.1 · lw 111.4 / 111.0 (1.59× /
+1.71×); lts_substep_eff 0.34 → 0.58.
+
+## The sandwich's pos-bcast election (NLSM d11 lw, np=8, `DENDRO_BCAST_PROF=1`)
+After each labelled rebuild `nlsm::redistributeDVec` runs the full pos-bcast on the new mesh; its plan
+election is 1.7–1.8 s per rebuild (apply ~70 ms), ~1/3 of s2g. Sub-phases: elect ~0.8 s, answer build
+~0.65 s, answer exchange ~0.45 s over 1.5 M claims per rank — nearly all local slots at positions
+nobody else claims.
+- `DENDRO_BCAST_CLAIM_FILTER=1`: ghost slots outside the step keep set do not claim (a ghost claim
+  never beats a local one; phantom positions are filled whoever wins). recv → ~0, build 1.75 → ~1.3 s.
+  Gates green: d11 np8 sfc = lw 18 digits, ragged ENUTS, BSSN 8 md5s, EM4 np8 forced-bcast, tp ×4.
+- `=2`: local slots no ghost element references and the exchange does not send resolve on-rank
+  (winner = lowest local cg at the position, intra copy); a phantom position matching a skipped slot
+  rebuilds at 1. Claims 1.5 M → 0.41 M per rank, build 1.75 → 0.72–0.87 s; remaining cost is the local
+  sort (~0.4 s).
