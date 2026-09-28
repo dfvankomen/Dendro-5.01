@@ -8615,6 +8615,9 @@ void Mesh::buildZipPlan() {
         return tnLT(c.elem, w.elem);
     };
     std::vector<LocalClaim> myMin;
+    // hash path: group of every local (e, n) slot; nodes strictly inside an
+    // element sit at a position no other element has, so they skip the table
+    std::vector<int> slotGrp;
     if (mmHash) {
         const size_t numElem =
             (size_t)(m_uiElementLocalEnd - m_uiElementLocalBegin);
@@ -8624,8 +8627,15 @@ void Mesh::buildZipPlan() {
         mmKey.assign(cap, 0);
         mmVal.assign(cap, -1);
         myMin.reserve(numElem * npe / 2);
+        slotGrp.assign(numElem * npe, -1);
         for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
             for (unsigned int n = 0; n < npe; n++) {
+                const size_t sl = (size_t)(e - m_uiElementLocalBegin) * npe + n;
+                const unsigned int ni = n % (eOrd + 1);
+                const unsigned int nj = (n / (eOrd + 1)) % (eOrd + 1);
+                const unsigned int nk = n / ((eOrd + 1) * (eOrd + 1));
+                const bool inner = ni > 0 && ni < eOrd && nj > 0 && nj < eOrd &&
+                                   nk > 0 && nk < eOrd;
                 LocalClaim c;
                 unsigned long long x, y, z;
                 encodeKey(e, n, x, y, z);
@@ -8634,6 +8644,11 @@ void Mesh::buildZipPlan() {
                 c.sub      = n;
                 c.interior = isInteriorWriter(e, n);
                 c.is_owner = !legacy_pick && isCascadeOwner(e, n);
+                if (inner) {
+                    slotGrp[sl] = (int)myMin.size();
+                    myMin.push_back(c);
+                    continue;
+                }
                 size_t h = mmSlot(c.pos);
                 while (mmVal[h] >= 0 && mmKey[h] != c.pos) h = (h + 1) & mmMask;
                 if (mmVal[h] < 0) {
@@ -8643,6 +8658,7 @@ void Mesh::buildZipPlan() {
                 } else if (better(c, myMin[mmVal[h]])) {
                     myMin[mmVal[h]] = c;
                 }
+                slotGrp[sl] = mmVal[h];
             }
         }
     } else {
@@ -8707,6 +8723,17 @@ void Mesh::buildZipPlan() {
             [](const LocalClaim& c, unsigned __int128 p) { return c.pos < p; });
         if (it == myMin.end() || it->pos != pos) return nullptr;
         return &*it;
+    };
+    // the group at the position of element node (e, n); every lookup here is
+    // a cg's cg2dg node, and for a local element that is a slot read
+    auto findMyMinDg = [&](unsigned int e, unsigned int n) -> const LocalClaim* {
+        if (mmHash && e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd) {
+            const int g = slotGrp[(size_t)(e - m_uiElementLocalBegin) * npe + n];
+            return g < 0 ? nullptr : &myMin[g];
+        }
+        unsigned long long x, y, z;
+        encodeKey(e, n, x, y, z);
+        return findMyMin(PhysKey3{x, y, z});
     };
 
     // For each LOCAL cg, find its phys_pos via cg2dg. We advertise
@@ -8826,11 +8853,11 @@ void Mesh::buildZipPlan() {
         unsigned int tnX = 0, tnY = 0, tnZ = 0, tnLev = TN_LEV_NONE;
         unsigned int interior = 0u;
         if (localArbEnv && !is_local) {
-            const LocalClaim* w = findMyMin(PhysKey3{x, y, z});
+            const LocalClaim* w = findMyMinDg(e, n);
             myGrp.push_back(w ? (int)(w - myMin.data()) : -1);
         }
         if (is_local) {
-            const LocalClaim* w = findMyMin(PhysKey3{x, y, z});
+            const LocalClaim* w = findMyMinDg(e, n);
             if (localArbEnv) myGrp.push_back(w ? (int)(w - myMin.data()) : -1);
             if (w) {
                 unsigned int we = w->elem;
@@ -8985,6 +9012,7 @@ void Mesh::buildZipPlan() {
             winInterior;
         std::vector<int> localGrp;
         const bool localArb = localArbEnv && (int)myGrp.size() == myCount;
+        const double __zp_tMark = __zp_on ? MPI_Wtime() : 0.0;
         if (localArb) {
             // a group is local unless another rank can hold a local slot at its
             // position -- the canonical position of any node of a ghost element
@@ -8997,9 +9025,7 @@ void Mesh::buildZipPlan() {
                 seen[c] = 1;
                 const unsigned int dg = m_uiCG2DG[c];
                 if (dg == LOOK_UP_TABLE_DEFAULT || dg / npe >= nElTot) return;
-                unsigned long long x, y, z;
-                encodeKey(dg / npe, dg % npe, x, y, z);
-                const LocalClaim* w = findMyMin(PhysKey3{x, y, z});
+                const LocalClaim* w = findMyMinDg(dg / npe, dg % npe);
                 if (w) bndG[w - myMin.data()] = 1;
             };
             for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
@@ -9021,6 +9047,8 @@ void Mesh::buildZipPlan() {
                 if (g >= 0 && !bndG[g]) localGrp[i] = g;
             }
         }
+        if (__zp_on && !m_uiActiveRank)
+            std::printf("[zipplan-mark] %.1f ms (r0)\n", (MPI_Wtime() - __zp_tMark) * 1e3);
         buildZipPlanArbitrateDistributed(
             myX, myY, myZ, myTNX, myTNY, myTNZ, myTNLev, myCg, myInterior,
             use_packtn, winRank, winCg, winTNX, winTNY, winTNZ, winTNLev,
@@ -9413,6 +9441,16 @@ void Mesh::buildZipPlan() {
     // can build (source_rank, source_cg) -> ghost_cg.
     m_uiZipNonPrimaryToGhostCg.clear();
     std::unordered_map<uint64_t, unsigned int> invScatter;
+    // DENDRO_ZIPPLAN_INV_QUERY (default on, =0 builds the whole inverse map):
+    // only non-primary local cgs look up (source rank, source cg) -> ghost
+    // cg; collect those keys and resolve them in one pass over the recv
+    // entries (same order, so the first occurrence still wins)
+    static const bool invQuery = [] {
+        const char* v = std::getenv("DENDRO_ZIPPLAN_INV_QUERY");
+        return !(v && v[0] == '0');
+    }();
+    std::vector<unsigned int> invRecvSrc;  // src cg per recv entry
+    std::vector<std::pair<unsigned int, uint64_t>> invAsk;  // (cg, key)
     if (m_uiActiveNpes > 1) {  // collective: every rank joins, empty maps send nothing
         const size_t sendN = m_uiScatterMapActualNodeSend.size();
         const size_t recvN = m_uiScatterMapActualNodeRecv.size();
@@ -9436,8 +9474,9 @@ void Mesh::buildZipPlan() {
         MPI_Alltoallv(sendBuf.data(), sCounts.data(), sOffs.data(),
                       MPI_UNSIGNED, recvBuf.data(), rCounts.data(),
                       rOffs.data(), MPI_UNSIGNED, m_uiCommActive);
-        invScatter.reserve(recvN);
-        for (int p = 0; p < m_uiActiveNpes; p++) {
+        if (invQuery) invRecvSrc.swap(recvBuf);
+        if (!invQuery) invScatter.reserve(recvN);
+        for (int p = 0; p < m_uiActiveNpes && !invQuery; p++) {
             const unsigned int base = m_uiRecvNodeOffset[p];
             const unsigned int cnt  = m_uiRecvNodeCount[p];
             for (unsigned int k = 0; k < cnt; k++) {
@@ -9492,6 +9531,10 @@ void Mesh::buildZipPlan() {
             const uint64_t key =
                 (uint64_t(wit->rank) << 32)
                 | uint64_t(wit->cg);
+            if (invQuery) {
+                invAsk.emplace_back(cg, key);
+                continue;
+            }
             auto iit = invScatter.find(key);
             if (iit != invScatter.end())
                 m_uiZipNonPrimaryToGhostCg[cg] = iit->second;
@@ -9502,7 +9545,7 @@ void Mesh::buildZipPlan() {
             continue;
         }
         // Primary path falls through to plan-entry construction.
-        const LocalClaim* mit = findMyMin(k);
+        const LocalClaim* mit = findMyMinDg(e, n);
         if (!mit) continue;  // I'm primary but have no local elem? shouldn't
                              // happen since we advertised based on myMin.
 
@@ -9543,6 +9586,32 @@ void Mesh::buildZipPlan() {
             + (ei * eOrd + i + paddWidth);
         m_uiZipPlanCg.push_back(cg);
         m_uiZipPlanUnzipIdx.push_back(unzip_idx);
+    }
+    if (invQuery && !invAsk.empty()) {
+        std::unordered_map<uint64_t, unsigned int> ans;  // key -> ghost cg
+        ans.reserve(invAsk.size());
+        for (const auto& q : invAsk) ans.emplace(q.second, LOOK_UP_TABLE_DEFAULT);
+        if (!invRecvSrc.empty())
+            for (int p = 0; p < m_uiActiveNpes; p++) {
+                const unsigned int base = m_uiRecvNodeOffset[p];
+                const unsigned int cnt  = m_uiRecvNodeCount[p];
+                for (unsigned int k = 0; k < cnt; k++) {
+                    const uint64_t key =
+                        (uint64_t(p) << 32) | uint64_t(invRecvSrc[base + k]);
+                    auto it = ans.find(key);
+                    if (it != ans.end() && it->second == LOOK_UP_TABLE_DEFAULT)
+                        it->second = m_uiScatterMapActualNodeRecv[base + k];
+                }
+            }
+        for (const auto& q : invAsk) {
+            const unsigned int g = ans[q.second];
+            if (g != LOOK_UP_TABLE_DEFAULT)
+                m_uiZipNonPrimaryToGhostCg[q.first] = g;
+            else {
+                zpsInvMiss++;
+                zpsMissCgs.push_back(q.first);
+            }
+        }
     }
 
     if (__zp_on) __zp_plan = MPI_Wtime();
