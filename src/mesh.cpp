@@ -69,6 +69,16 @@ struct PhysKey3 {
         return x == o.x && y == o.y && z == o.z;
     }
 };
+// set of cg slots with the unordered_set calls the scatter-map code uses;
+// slots are dense indices below the node count, so a flag per slot
+struct SlotFlags {
+    std::vector<char> f;
+    explicit SlotFlags(size_t n) : f(n, 0) {}
+    void insert(unsigned int c) {
+        if (c < f.size()) f[c] = 1;
+    }
+    size_t count(unsigned int c) const { return c < f.size() && f[c]; }
+};
 struct PhysKey3Hash {
     size_t operator()(const PhysKey3& k) const {
         size_t h = std::hash<unsigned long long>()(k.x);
@@ -3666,8 +3676,30 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
     }
 
     e2n_cg = e2n_dg;
-    std::sort(e2n_dg.begin(), e2n_dg.end());
-    e2n_dg.erase(std::unique(e2n_dg.begin(), e2n_dg.end()), e2n_dg.end());
+    {
+        // sorted unique dg indices: they are dense below nPe * elements, so
+        // mark and read in order (DENDRO_E2N_SORT_UNIQUE=1 or any index out
+        // of range falls back to the sort)
+        static const bool sortUnique = [] {
+            const char* v = std::getenv("DENDRO_E2N_SORT_UNIQUE");
+            return v && v[0] == '1';
+        }();
+        const size_t dgN = (size_t)nPe_3d * m_uiNumTotalElements;
+        bool inRange = !sortUnique;
+        if (inRange)
+            for (const unsigned int v : e2n_dg)
+                if (v >= dgN) { inRange = false; break; }
+        if (inRange) {
+            std::vector<char> used(dgN, 0);
+            for (const unsigned int v : e2n_dg) used[v] = 1;
+            e2n_dg.clear();
+            for (size_t i = 0; i < dgN; i++)
+                if (used[i]) e2n_dg.push_back((unsigned int)i);
+        } else {
+            std::sort(e2n_dg.begin(), e2n_dg.end());
+            e2n_dg.erase(std::unique(e2n_dg.begin(), e2n_dg.end()), e2n_dg.end());
+        }
+    }
 
     std::vector<unsigned int> cg2dg;
     cg2dg.resize(e2n_dg.size());
@@ -5336,9 +5368,30 @@ void Mesh::buildE2NMap() {
     dg2dg_p.resize(m_uiAllElements.size() * m_uiNpE, LOOK_UP_TABLE_DEFAULT);
 
     // 3. Update DG indexing with CG indexing.
-    std::sort(E2N_DG_Sorted.begin(), E2N_DG_Sorted.end());
-    E2N_DG_Sorted.erase(std::unique(E2N_DG_Sorted.begin(), E2N_DG_Sorted.end()),
-                        E2N_DG_Sorted.end());
+    {
+        // sorted unique, by marking (see buildE2NWithSMRepartitioned)
+        static const bool sortUnique = [] {
+            const char* v = std::getenv("DENDRO_E2N_SORT_UNIQUE");
+            return v && v[0] == '1';
+        }();
+        const size_t dgN = m_uiAllElements.size() * m_uiNpE;
+        bool inRange = !sortUnique;
+        if (inRange)
+            for (const unsigned int v : E2N_DG_Sorted)
+                if (v >= dgN) { inRange = false; break; }
+        if (inRange) {
+            std::vector<char> used(dgN, 0);
+            for (const unsigned int v : E2N_DG_Sorted) used[v] = 1;
+            E2N_DG_Sorted.clear();
+            for (size_t i = 0; i < dgN; i++)
+                if (used[i]) E2N_DG_Sorted.push_back((unsigned int)i);
+        } else {
+            std::sort(E2N_DG_Sorted.begin(), E2N_DG_Sorted.end());
+            E2N_DG_Sorted.erase(
+                std::unique(E2N_DG_Sorted.begin(), E2N_DG_Sorted.end()),
+                E2N_DG_Sorted.end());
+        }
+    }
 
     unsigned int owner1, ii_x1, jj_y1, kk_z1;
     unsigned int owner2, ii_x2, jj_y2, kk_z2;
@@ -8183,14 +8236,13 @@ void Mesh::pruneZipSync() {
     }();
     if (!pruneLabelled && !check && m_uiIsLabelledRebuild) return;
     const int npes = m_uiActiveNpes;
-    std::unordered_set<unsigned int> delivered(
-        m_uiScatterMapActualNodeRecv.begin(),
-        m_uiScatterMapActualNodeRecv.end());
+    SlotFlags delivered(m_uiNumActualNodes);
+    for (const unsigned int c : m_uiScatterMapActualNodeRecv) delivered.insert(c);
     // slots this rank sends from must stay fresh: the ghost-exchange pack
     // sources and the side-channel's own send sources (a position's winner can
     // be a ghost slot here)
-    std::unordered_set<unsigned int> sendSrc(m_uiZipSyncSendCg.begin(),
-                                             m_uiZipSyncSendCg.end());
+    SlotFlags sendSrc(m_uiNumActualNodes);
+    for (const unsigned int c : m_uiZipSyncSendCg) sendSrc.insert(c);
     size_t ghostWinners = 0;
     for (unsigned int cg : m_uiZipSyncSendCg)
         if (cg < m_uiNodeLocalBegin || cg >= m_uiNodeLocalEnd) ghostWinners++;
@@ -8209,7 +8261,7 @@ void Mesh::pruneZipSync() {
     // level 2 also drops undelivered ghost slots nothing on this rank reads:
     // the unzip reads the nodes of every element feeding a local block, the
     // mirrors read their ghost sources
-    std::unordered_set<unsigned int> readSet;
+    SlotFlags readSet(level >= 2 ? m_uiNumActualNodes : 0);
     if (level >= 2) {
         for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
             if (m_e2b_unzip_counts[e] == 0) continue;
@@ -20740,8 +20792,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         std::cout << "[minimal-scatter] shrinking per-step nodal scatter "
                      "map to consumer-read slots"
                   << std::endl;
-    auto buildNodalSM = [&](const std::unordered_set<unsigned int>*
-                                keepSlots) {
+    auto buildNodalSM = [&](const SlotFlags* keepSlots) {
         std::vector<unsigned int> recvNodeSM_r[npes];
         std::vector<unsigned int> recvNodeDGG[npes];
         std::vector<unsigned char> recvNodeIsDG[npes];
@@ -21017,7 +21068,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // so the kept lists are the full lists filtered; each sender learns which
     // of its entries survive from one byte per entry. _CHECK=1 also rebuilds
     // and compares every list
-    auto filterNodalSM = [&](const std::unordered_set<unsigned int>& keepSlots) {
+    auto filterNodalSM = [&](const SlotFlags& keepSlots) {
         const size_t totR = m_uiScatterMapActualNodeRecv.size();
         const size_t totS = m_uiScatterMapActualNodeSend.size();
         std::vector<int> rc(npes), ro(npes), sc(npes), so(npes);
@@ -21455,7 +21506,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             // the default path). Collective — every active rank passes
             // through here.
             if (minimalScatter) {
-                std::unordered_set<unsigned int> keepSlots;
+                SlotFlags keepSlots(m_uiNumActualNodes);
                 // (1) ghost slots read via local elements' E2N (shared
                 // faces / hanging interpolation / elemental loops)
                 for (unsigned int e = m_uiElementLocalBegin;
