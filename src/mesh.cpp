@@ -7012,6 +7012,13 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         if (a.y != b.y) return a.y < b.y;
         return a.z < b.z;
     };
+    // DENDRO_E2N_AUDIT_PROF=1: sort vs walk time and lookup count (r0)
+    static const bool auProf = [] {
+        const char* e = std::getenv("DENDRO_E2N_AUDIT_PROF");
+        return e && e[0] == '1';
+    }();
+    const double auT0 = auProf ? MPI_Wtime() : 0.0;
+    size_t auLookups = 0;
     std::vector<CgAtPos> cgsByPos;
     cgsByPos.reserve(nTotal_cg - nLB);
     for (unsigned int cg = nLB; cg < nTotal_cg; cg++) {
@@ -7028,7 +7035,9 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
               });
     // canonOnly=false: any cg at this phys_pos (the old localCgByPos);
     // canonOnly=true: only cgs with a canonical writer (canonCgByPos).
+    const double auT1 = auProf ? MPI_Wtime() : 0.0;
     auto findCgAtPos = [&](const PhysKey3& k, bool canonOnly) -> unsigned int {
+        auLookups++;
         auto it = std::lower_bound(
             cgsByPos.begin(), cgsByPos.end(), k,
             [&](const CgAtPos& a, const PhysKey3& b) { return posLT(a.pos, b); });
@@ -7562,6 +7571,10 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
                   << std::endl;
     }
 
+    if (auProf && m_uiActiveRank == 0)
+        std::printf("[e2n-audit-prof] sort=%.1f walk=%.1f ms lookups=%zu slots=%zu\n",
+                    (auT1 - auT0) * 1e3, (MPI_Wtime() - auT1) * 1e3, auLookups,
+                    (size_t)eAllEnd * npe);
     return patched + dangling_patched;
 }
 
@@ -7701,7 +7714,8 @@ void Mesh::buildZipPlanArbitrateDistributed(
     std::vector<int>& winRank, std::vector<unsigned int>& winCg,
     std::vector<unsigned int>& winTNX, std::vector<unsigned int>& winTNY,
     std::vector<unsigned int>& winTNZ, std::vector<unsigned int>& winTNLev,
-    std::vector<unsigned int>& winInterior) {
+    std::vector<unsigned int>& winInterior, const std::vector<int>* localGrp,
+    int nGrp) {
     const int npes   = m_uiActiveNpes;
     const int myRank = m_uiActiveRank;
     const int n      = (int)myX.size();
@@ -7774,11 +7788,19 @@ void Mesh::buildZipPlanArbitrateDistributed(
     // ---- route claims to their home rank ------------------------------
     // bucket PRESERVING original per-rank order: the default path's tie-break
     // depends on claim order within a rank, not just on rank order.
+    // localGrp (DENDRO_ZIPPLAN_LOCAL_ARB): claims with a group id >= 0 sit at a
+    // position no other rank claims; they are folded here per group in claim
+    // order (what the home would do with only this rank's claims) and never
+    // routed
+    auto routed = [&](int i) { return !localGrp || (*localGrp)[i] < 0; };
     std::vector<int> sCnt(npes, 0), sOff(npes, 0), rCnt(npes, 0), rOff(npes, 0);
-    std::vector<int> homeIdx(n);
+    std::vector<int> homeIdx(n, -1);
+    int nRouted = 0;
     for (int i = 0; i < n; i++) {
+        if (!routed(i)) continue;
         homeIdx[i] = homeOf(myX[i], myY[i], myZ[i]);
         sCnt[homeIdx[i]]++;
+        nRouted++;
     }
     for (int p = 1; p < npes; p++) sOff[p] = sOff[p - 1] + sCnt[p - 1];
     repartRound();
@@ -7787,9 +7809,10 @@ void Mesh::buildZipPlanArbitrateDistributed(
     for (int p = 1; p < npes; p++) rOff[p] = rOff[p - 1] + rCnt[p - 1];
     const int nRecv = (npes > 0) ? (rOff[npes - 1] + rCnt[npes - 1]) : 0;
 
-    std::vector<ClaimMsg> sendC(n);
-    std::vector<int> myPos(n), slot(sOff);
+    std::vector<ClaimMsg> sendC(nRouted);
+    std::vector<int> myPos(n, -1), slot(sOff);
     for (int i = 0; i < n; i++) {
+        if (!routed(i)) continue;
         const int s = slot[homeIdx[i]]++;
         myPos[i]    = s;
         sendC[s]    = ClaimMsg{myX[i],   myY[i],   myZ[i],
@@ -7842,7 +7865,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
     tick(3);
 
     // ---- arbitrate each position, then hand its winner to every claim ----
-    std::vector<WinMsg> backSend(nRecv), backRecv(n);
+    std::vector<WinMsg> backSend(nRecv), backRecv(nRouted);
     for (int g = 0; g < nRecv;) {
         const ClaimMsg& c0 = recvC[byPos[g].idx];
         WinMsg w{originOf[byPos[g].idx], c0.cg,    c0.tnX,    c0.tnY,
@@ -7868,6 +7891,66 @@ void Mesh::buildZipPlanArbitrateDistributed(
         for (int k = g; k < h; k++) backSend[byPos[k].idx] = w;
         g = h;
     }
+    if (localGrp) {
+        // a position whose home saw only ghost claims must not be one this
+        // rank arbitrated locally (a remote ghost slot there would miss its
+        // value); if any is, redo everything routed
+        std::vector<unsigned long long> gp;
+        for (int g = 0; g < nRecv;) {
+            int h = g + 1;
+            while (h < nRecv && byPos[h].pos == byPos[g].pos) h++;
+            if (backSend[byPos[g].idx].tnLev == TN_LEV_NONE) {
+                const ClaimMsg& c = recvC[byPos[g].idx];
+                gp.push_back(c.x);
+                gp.push_back(c.y);
+                gp.push_back(c.z);
+            }
+            g = h;
+        }
+        int ng = (int)gp.size();
+        std::vector<int> gc(npes), go(npes, 0);
+        MPI_Allgather(&ng, 1, MPI_INT, gc.data(), 1, MPI_INT, m_uiCommActive);
+        for (int p = 1; p < npes; p++) go[p] = go[p - 1] + gc[p - 1];
+        std::vector<unsigned long long> ga(go[npes - 1] + gc[npes - 1]);
+        MPI_Allgatherv(gp.data(), ng, MPI_UNSIGNED_LONG_LONG, ga.data(),
+                       gc.data(), go.data(), MPI_UNSIGNED_LONG_LONG,
+                       m_uiCommActive);
+        // my locally arbitrated claims at such positions go back to routing
+        std::vector<unsigned __int128> gpos;
+        gpos.reserve(ga.size() / 3);
+        for (size_t k = 0; k + 2 < ga.size(); k += 3)
+            gpos.push_back(((unsigned __int128)ga[k] << 84) |
+                           ((unsigned __int128)ga[k + 1] << 42) |
+                           (unsigned __int128)ga[k + 2]);
+        std::sort(gpos.begin(), gpos.end());
+        std::vector<int> grp2;
+        unsigned long long hits = 0;
+        if (!gpos.empty())
+            for (int i = 0; i < n; i++) {
+                if ((*localGrp)[i] < 0) continue;
+                const unsigned __int128 q = ((unsigned __int128)myX[i] << 84) |
+                                            ((unsigned __int128)myY[i] << 42) |
+                                            (unsigned __int128)myZ[i];
+                if (!std::binary_search(gpos.begin(), gpos.end(), q)) continue;
+                if (grp2.empty()) grp2 = *localGrp;
+                grp2[i] = -1;
+                hits++;
+            }
+        MPI_Allreduce(MPI_IN_PLACE, &hits, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
+                      m_uiCommActive);
+        if (hits) {
+            if (!myRank)
+                std::cout << "[zipplan-arb] local arbitration: " << hits
+                          << " claims sat at ghost-only positions; rerouting them"
+                          << std::endl;
+            if (grp2.empty()) grp2 = *localGrp;
+            buildZipPlanArbitrateDistributed(
+                myX, myY, myZ, myTNX, myTNY, myTNZ, myTNLev, myCg, myInterior,
+                use_packtn, winRank, winCg, winTNX, winTNY, winTNZ, winTNLev,
+                winInterior, &grp2, nGrp);
+            return;
+        }
+    }
     {
         const int E = (int)sizeof(WinMsg);
         std::vector<int> sB(npes), sO(npes), rB(npes), rO(npes);
@@ -7884,8 +7967,29 @@ void Mesh::buildZipPlanArbitrateDistributed(
                       m_uiCommActive);
         tick(5);
     }
+    std::vector<WinMsg> grpWin;
+    if (localGrp) {
+        // the home's fold, over this rank's claims only (origin rank equal)
+        grpWin.resize(nGrp);
+        std::vector<char> grpSet(nGrp, 0);
+        for (int i = 0; i < n; i++) {
+            const int g = (*localGrp)[i];
+            if (g < 0) continue;
+            const WinMsg c{myRank, myCg[i], myTNX[i], myTNY[i],
+                           myTNZ[i], myTNLev[i], myInterior[i]};
+            if (!grpSet[g]) { grpWin[g] = c; grpSet[g] = 1; continue; }
+            WinMsg& w    = grpWin[g];
+            bool replace = false;
+            if (c.interior != w.interior)
+                replace = (c.interior > w.interior);
+            else if (claimLT(c.tnX, c.tnY, c.tnZ, c.tnLev, w.tnX, w.tnY,
+                             w.tnZ, w.tnLev))
+                replace = true;
+            if (replace) w = c;
+        }
+    }
     for (int i = 0; i < n; i++) {
-        const WinMsg& w = backRecv[myPos[i]];
+        const WinMsg& w = routed(i) ? backRecv[myPos[i]] : grpWin[(*localGrp)[i]];
         winRank[i]      = w.rank;
         winCg[i]        = w.cg;
         winTNX[i]       = w.tnX;
@@ -7990,9 +8094,10 @@ void Mesh::buildZipPlanArbitrateDistributed(
 
     // my winning cg per position (all my claims at a position agree on it)
     std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash> posToWinCg;
-    posToWinCg.reserve(n);
+    posToWinCg.reserve(nRouted);
+    // requests only arrive for routed positions
     for (int i = 0; i < n; i++)
-        if (winRank[i] == myRank)
+        if (winRank[i] == myRank && routed(i))
             posToWinCg[PhysKey3{myX[i], myY[i], myZ[i]}] = winCg[i];
 
     // sort each requester's block by the SAME total key the requester used
@@ -8025,6 +8130,11 @@ void Mesh::buildZipPlanArbitrateDistributed(
                          tArb[7] - tArb[6], (double)n};
         double mx[8];
         MPI_Allreduce(loc, mx, 8, MPI_DOUBLE, MPI_MAX, m_uiCommActive);
+        double rt = (double)nRouted, rtm = 0;
+        MPI_Allreduce(&rt, &rtm, 1, MPI_DOUBLE, MPI_MAX, m_uiCommActive);
+        if (!myRank)
+            std::printf("[zipplan-arb] routed claims/rank max=%.0f local_arb=%d labelled=%d\n",
+                        rtm, localGrp ? 1 : 0, (int)m_uiIsLabelledRebuild);
         double sums[2] = {(double)n, (double)nRecv}, gs[2];
         MPI_Allreduce(sums, gs, 2, MPI_DOUBLE, MPI_SUM, m_uiCommActive);
         if (!myRank)
@@ -8417,8 +8527,62 @@ void Mesh::buildZipPlan() {
         return ((unsigned __int128)x << 84) | ((unsigned __int128)y << 42) |
                (unsigned __int128)z;
     };
+    // DENDRO_ZIPPLAN_MYMIN_HASH (default on, =0 reverts to the sort): the fold
+    // is a strict total order over distinct elements (interior, owner, TN), so
+    // its result does not depend on visiting order; group by an open-addressing
+    // table on the packed position instead of sorting every (e, n)
+    static const bool mmHash = [] {
+        const char* e = std::getenv("DENDRO_ZIPPLAN_MYMIN_HASH");
+        return !(e && e[0] == '0');
+    }();
+    std::vector<unsigned __int128> mmKey;
+    std::vector<int> mmVal;
+    size_t mmMask = 0;
+    auto mmSlot = [&](unsigned __int128 p) -> size_t {
+        unsigned long long h = (unsigned long long)(p >> 64) * 0x9E3779B97F4A7C15ULL;
+        h ^= (unsigned long long)p + 0x9E3779B97F4A7C15ULL + (h << 6) + (h >> 2);
+        h ^= h >> 33;
+        h *= 0xFF51AFD7ED558CCDULL;
+        h ^= h >> 33;
+        return (size_t)h & mmMask;
+    };
+    auto better = [&](const LocalClaim& c, const LocalClaim& w) {
+        if (c.interior != w.interior) return c.interior;
+        if (c.is_owner != w.is_owner) return c.is_owner;
+        return tnLT(c.elem, w.elem);
+    };
     std::vector<LocalClaim> myMin;
-    {
+    if (mmHash) {
+        const size_t numElem =
+            (size_t)(m_uiElementLocalEnd - m_uiElementLocalBegin);
+        size_t cap = 16;
+        while (cap < numElem * npe + numElem * npe / 3) cap <<= 1;
+        mmMask = cap - 1;
+        mmKey.assign(cap, 0);
+        mmVal.assign(cap, -1);
+        myMin.reserve(numElem * npe / 2);
+        for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
+            for (unsigned int n = 0; n < npe; n++) {
+                LocalClaim c;
+                unsigned long long x, y, z;
+                encodeKey(e, n, x, y, z);
+                c.pos      = packPos(x, y, z);
+                c.elem     = e;
+                c.sub      = n;
+                c.interior = isInteriorWriter(e, n);
+                c.is_owner = !legacy_pick && isCascadeOwner(e, n);
+                size_t h = mmSlot(c.pos);
+                while (mmVal[h] >= 0 && mmKey[h] != c.pos) h = (h + 1) & mmMask;
+                if (mmVal[h] < 0) {
+                    mmKey[h] = c.pos;
+                    mmVal[h] = (int)myMin.size();
+                    myMin.push_back(c);
+                } else if (better(c, myMin[mmVal[h]])) {
+                    myMin[mmVal[h]] = c;
+                }
+            }
+        }
+    } else {
         const size_t numElem =
             (size_t)(m_uiElementLocalEnd - m_uiElementLocalBegin);
         std::vector<LocalClaim> claims(numElem * npe);
@@ -8463,8 +8627,18 @@ void Mesh::buildZipPlan() {
             i = j;
         }
     }
+    const double __zp_tMin = __zp_on ? MPI_Wtime() : 0.0;
     auto findMyMin = [&](const PhysKey3& k) -> const LocalClaim* {
         const unsigned __int128 pos = packPos(k.x, k.y, k.z);
+        if (mmHash) {
+            if (myMin.empty()) return nullptr;
+            size_t h = mmSlot(pos);
+            while (mmVal[h] >= 0) {
+                if (mmKey[h] == pos) return &myMin[mmVal[h]];
+                h = (h + 1) & mmMask;
+            }
+            return nullptr;
+        }
         auto it = std::lower_bound(
             myMin.begin(), myMin.end(), pos,
             [](const LocalClaim& c, unsigned __int128 p) { return c.pos < p; });
@@ -8557,7 +8731,16 @@ void Mesh::buildZipPlan() {
             if (idx < nTotal_cg) ghostKeep[idx] = 1;  // send source: kept
         }
     }
+    // DENDRO_ZIPPLAN_LOCAL_ARB=1: a position where this rank holds every claim
+    // (no slot of it is remote-visible) is arbitrated here, not routed
+    static const bool localArbEnv = [] {
+        const char* e = std::getenv("DENDRO_ZIPPLAN_LOCAL_ARB");
+        return e && e[0] == '1';
+    }();
+    std::vector<int> myGrp;  // myMin index of each claim's position, or -1
+    if (localArbEnv) myGrp.reserve(reserveN);
     size_t __zp_nGhostSkipped = 0;
+    const double __zp_tKeep = __zp_on ? MPI_Wtime() : 0.0;
     for (unsigned int cg = 0; cg < nTotal_cg; cg++) {
         if (cg >= m_uiCG2DG.size()) continue;
         unsigned int dg = m_uiCG2DG[cg];
@@ -8579,8 +8762,13 @@ void Mesh::buildZipPlan() {
         encodeKey(e, n, x, y, z);
         unsigned int tnX = 0, tnY = 0, tnZ = 0, tnLev = TN_LEV_NONE;
         unsigned int interior = 0u;
+        if (localArbEnv && !is_local) {
+            const LocalClaim* w = findMyMin(PhysKey3{x, y, z});
+            myGrp.push_back(w ? (int)(w - myMin.data()) : -1);
+        }
         if (is_local) {
             const LocalClaim* w = findMyMin(PhysKey3{x, y, z});
+            if (localArbEnv) myGrp.push_back(w ? (int)(w - myMin.data()) : -1);
             if (w) {
                 unsigned int we = w->elem;
                 unsigned int wn = w->sub;
@@ -8610,7 +8798,13 @@ void Mesh::buildZipPlan() {
     }
 
 
-    if (__zp_on) __zp_claims = MPI_Wtime();
+    if (__zp_on) {
+        __zp_claims = MPI_Wtime();
+        if (!m_uiActiveRank)
+            std::printf("[zipplan-claims] mymin=%.1f keep=%.1f loop=%.1f ms (r0) mymin_n=%zu\n",
+                        (__zp_tMin - __zp_t0) * 1e3, (__zp_tKeep - __zp_tMin) * 1e3,
+                        (__zp_claims - __zp_tKeep) * 1e3, myMin.size());
+    }
 
     // DENDRO_ZIPPLAN_DIST=1: arbitrate on home ranks instead of replicating
     // the whole global picture on every rank. Same rule, same winners; the
@@ -8726,10 +8920,48 @@ void Mesh::buildZipPlan() {
         std::vector<int> winRank;
         std::vector<unsigned int> winCg, winTNX, winTNY, winTNZ, winTNLev,
             winInterior;
-        buildZipPlanArbitrateDistributed(myX, myY, myZ, myTNX, myTNY, myTNZ,
-                                         myTNLev, myCg, myInterior, use_packtn,
-                                         winRank, winCg, winTNX, winTNY, winTNZ,
-                                         winTNLev, winInterior);
+        std::vector<int> localGrp;
+        const bool localArb = localArbEnv && (int)myGrp.size() == myCount;
+        if (localArb) {
+            // a group is local unless another rank can hold a local slot at its
+            // position -- the canonical position of any node of a ghost element
+            // -- or it holds one of my ghost claims or a zip mirror slot. a
+            // remote ghost claim there is caught by the arbitration's check
+            std::vector<char> bndG(myMin.size(), 0);
+            std::vector<char> seen(nTotal_cg, 0);
+            auto markCg = [&](unsigned int c) {
+                if (c >= nTotal_cg || seen[c] || c >= m_uiCG2DG.size()) return;
+                seen[c] = 1;
+                const unsigned int dg = m_uiCG2DG[c];
+                if (dg == LOOK_UP_TABLE_DEFAULT || dg / npe >= nElTot) return;
+                unsigned long long x, y, z;
+                encodeKey(dg / npe, dg % npe, x, y, z);
+                const LocalClaim* w = findMyMin(PhysKey3{x, y, z});
+                if (w) bndG[w - myMin.data()] = 1;
+            };
+            for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+                if (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd) continue;
+                for (unsigned int k = 0; k < npe; k++)
+                    markCg(m_uiE2NMapping_CG[(size_t)e * npe + k]);
+            }
+            for (const auto& kv : m_uiZipNonPrimaryToGhostCg) { markCg(kv.first); markCg(kv.second); }
+            for (const auto& kv : m_uiPassDDemotedToGhostCg) { markCg(kv.first); markCg(kv.second); }
+            for (int i = 0; i < myCount; i++) {
+                const int g = myGrp[i];
+                if (g < 0) continue;
+                const unsigned int c = myCg[i];
+                if (c < nLB || c >= nLE) bndG[g] = 1;
+            }
+            localGrp.assign(myCount, -1);
+            for (int i = 0; i < myCount; i++) {
+                const int g = myGrp[i];
+                if (g >= 0 && !bndG[g]) localGrp[i] = g;
+            }
+        }
+        buildZipPlanArbitrateDistributed(
+            myX, myY, myZ, myTNX, myTNY, myTNZ, myTNLev, myCg, myInterior,
+            use_packtn, winRank, winCg, winTNX, winTNY, winTNZ, winTNLev,
+            winInterior, localArb ? &localGrp : nullptr, (int)myMin.size());
         winByClaim.resize(myCount);
         winIdxOfCg.assign(nTotal_cg, -1);
         for (int i = 0; i < myCount; i++) {
@@ -21641,6 +21873,41 @@ bool Mesh::posBcastGateOn() const {
     return m_uiPosBcastEnabled;
 }
 
+std::vector<char> Mesh::remoteVisibleCgs() const {
+    const unsigned int N   = m_uiNumActualNodes;
+    const unsigned int npe = m_uiNpE;
+    std::vector<char> vis(N, 0);
+    auto markElem = [&](unsigned int e) {
+        for (unsigned int k = 0; k < npe; k++) {
+            const unsigned int cg = m_uiE2NMapping_CG[(size_t)e * npe + k];
+            if (cg < N) vis[cg] = 1;
+        }
+    };
+    for (unsigned int e = 0; e < m_uiNumTotalElements; e++)
+        if (e < m_uiElementLocalBegin || e >= m_uiElementLocalEnd) markElem(e);
+    for (const unsigned int le : m_uiScatterMapElementRound1)
+        if (le + m_uiElementLocalBegin < m_uiElementLocalEnd)
+            markElem(le + m_uiElementLocalBegin);
+    const bool useDG = m_uiScatterMapSendIsDG.size() ==
+                       m_uiScatterMapActualNodeSend.size();
+    for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
+        unsigned int idx = m_uiScatterMapActualNodeSend[k];
+        if (useDG && m_uiScatterMapSendIsDG[k])
+            idx = m_uiE2NMapping_CG[(idx / npe + m_uiElementLocalBegin) * npe +
+                                    idx % npe];
+        if (idx < N) vis[idx] = 1;
+    }
+    for (const auto& kv : m_uiZipNonPrimaryToGhostCg) {
+        if (kv.first < N) vis[kv.first] = 1;
+        if (kv.second < N) vis[kv.second] = 1;
+    }
+    for (const auto& kv : m_uiPassDDemotedToGhostCg) {
+        if (kv.first < N) vis[kv.first] = 1;
+        if (kv.second < N) vis[kv.second] = 1;
+    }
+    return vis;
+}
+
 std::vector<char> Mesh::bcastKeepSlots() const {
     // keep a destination slot iff something can read it before the next ghost
     // exchange overwrites it: local slots, undelivered ghosts the unzip or a
@@ -21828,29 +22095,7 @@ void Mesh::buildBcastPlanDist(int claimLevel) {
     };
     std::vector<char> keepSlot, bnd;
     if (claimFilter) keepSlot = bcastKeepSlots();
-    if (claimLvl >= 2) {
-        bnd.assign(nTotal_cg, 0);
-        for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
-            if (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd) continue;
-            for (unsigned int k = 0; k < npe; k++) {
-                const unsigned int cg = m_uiE2NMapping_CG[e * npe + k];
-                if (cg < nTotal_cg) bnd[cg] = 1;
-            }
-        }
-        const bool useDG = m_uiScatterMapSendIsDG.size() ==
-                           m_uiScatterMapActualNodeSend.size();
-        for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
-            unsigned int idx = m_uiScatterMapActualNodeSend[k];
-            if (useDG && m_uiScatterMapSendIsDG[k])
-                idx = m_uiE2NMapping_CG[(idx / npe + m_uiElementLocalBegin) * npe +
-                                        idx % npe];
-            if (idx < nTotal_cg) bnd[idx] = 1;
-        }
-        for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
-            if (kv.first < nTotal_cg) bnd[kv.first] = 1;
-        for (const auto& kv : m_uiPassDDemotedToGhostCg)
-            if (kv.first < nTotal_cg) bnd[kv.first] = 1;
-    }
+    if (claimLvl >= 2) bnd = remoteVisibleCgs();
     // =2: every local claim, sorted by position to find the interior groups
     struct Loc { unsigned long long x, y, z; unsigned int cg, b; };
     std::vector<Loc> loc;

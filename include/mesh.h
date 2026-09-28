@@ -1411,7 +1411,13 @@ class Mesh {
         std::vector<int>& winRank, std::vector<unsigned int>& winCg,
         std::vector<unsigned int>& winTNX, std::vector<unsigned int>& winTNY,
         std::vector<unsigned int>& winTNZ, std::vector<unsigned int>& winTNLev,
-        std::vector<unsigned int>& winInterior);
+        std::vector<unsigned int>& winInterior,
+        const std::vector<int>* localGrp = nullptr, int nGrp = 0);
+
+    /** cgs another rank can hold a slot for at the same position: nodes of
+     *  ghost elements and of local elements another rank holds as ghosts,
+     *  ghost-exchange send sources, zip mirror slots. */
+    std::vector<char> remoteVisibleCgs() const;
 
     /**@brief Unify E2N_CG across duplicate TreeNode instances (deeper
      * ghost layers). Mutates E2N_CG, so it must run eagerly at mesh
