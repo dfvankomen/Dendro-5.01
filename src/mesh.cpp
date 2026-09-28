@@ -21792,7 +21792,7 @@ void Mesh::buildBcastPlanDist(int claimLevel) {
         h ^= h >> 33;
         return (int)(h % (unsigned long long)nP);
     };
-    // DENDRO_BCAST_CLAIM_FILTER=1: ghost slots outside bcastKeepSlots() do not
+    // DENDRO_BCAST_CLAIM_FILTER (default 2, =0 all claims) =1: ghost slots outside bcastKeepSlots() do not
     // claim. a ghost claim never beats a local one and a position with no local
     // claim is phantom-filled whoever wins, so every remaining claim gets the
     // same value; the dropped slots are refreshed by the next ghost exchange or
@@ -21808,7 +21808,7 @@ void Mesh::buildBcastPlanDist(int claimLevel) {
         const char* e = std::getenv("DENDRO_BCAST_CLAIM_FILTER");
         const char* c = std::getenv("DENDRO_BCAST_PLAN_CHECK");
         if (c && c[0] == '1') return 0;
-        return e ? std::atoi(e) : 0;
+        return e ? std::atoi(e) : 2;
     }();
     const int claimLvl     = claimLevel >= 0 ? claimLevel : claimEnv;
     const bool claimFilter = claimLvl >= 1;
