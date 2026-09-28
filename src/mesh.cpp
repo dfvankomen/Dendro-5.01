@@ -20679,7 +20679,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // Create global-to-local map. Prefer LOCAL element indices over
     // ghost indices so that scatter map lookups find CG values in the
     // local range (populated by createVector).
-    std::map<D_INT_L, D_INT_L> globaltoNewLocal;
+    // only ever looked up (find / count / operator[]), never iterated
+    std::unordered_map<D_INT_L, D_INT_L> globaltoNewLocal;
+    globaltoNewLocal.reserve(newNumEle);
     // First pass: all elements
     for (size_t eid_local = 0; eid_local < newNumEle; eid_local++) {
         globaltoNewLocal[new_oct_connectivity_map[eid_local].eid] = eid_local;
@@ -21109,8 +21111,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 static_cast<unsigned int>(sendBuf[i] / m_uiNpE);
             unsigned int nid =
                 static_cast<unsigned int>(sendBuf[i] % m_uiNpE);
-            unsigned int localEle = globaltoNewLocal.count(gid)
-                                        ? globaltoNewLocal[gid]
+            const auto git = globaltoNewLocal.find(gid);
+            unsigned int localEle = git != globaltoNewLocal.end()
+                                        ? (unsigned int)git->second
                                         : m_uiElementLocalBegin;
             const bool inLocalRange =
                 (localEle >= m_uiElementLocalBegin &&
