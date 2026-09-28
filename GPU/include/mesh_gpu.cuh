@@ -2242,22 +2242,24 @@ GLOBAL_FUNC __launch_bounds__(64) void __write_sb_dg__(
     const DEVICE_UINT tx = GPUDevice::thread_id_x();
     const DEVICE_UINT ty = GPUDevice::thread_id_y();
     // const DEVICE_UINT tz   = GPUDevice::thread_id_z();
-    const DEVICE_UINT nx = dptr_mesh->m_ele_order + 1;
-    if (tx < nx && ty < nx) {
-        const DEVICE_UINT nPe    = nx * nx * nx;
+    const DEVICE_UINT nx     = dptr_mesh->m_ele_order + 1;
+    const DEVICE_UINT sx     = GPUDevice::block_dim_x();
+    const DEVICE_UINT sy     = GPUDevice::block_dim_y();
 
-        const DEVICE_UINT dg_sz  = dptr_mesh->m_oct_local_sz;
-        const DEVICE_UINT lb     = dptr_mesh->m_num_pre_ghost_elements;
+    const DEVICE_UINT nPe    = nx * nx * nx;
+    const DEVICE_UINT dg_sz  = dptr_mesh->m_oct_local_sz;
+    const DEVICE_UINT lb     = dptr_mesh->m_num_pre_ghost_elements;
+    const DEVICE_UINT sf     = dptr_mesh->m_elem_send_f[proc_id];
+    const DEVICE_UINT sc     = dptr_mesh->m_elem_send_c[proc_id];
+    const DEVICE_UINT sm_ele = dptr_mesh->m_elem_send_sm[sf + ele_id] + lb;
 
-        const DEVICE_UINT sf     = dptr_mesh->m_elem_send_f[proc_id];
-        const DEVICE_UINT sc     = dptr_mesh->m_elem_send_c[proc_id];
-        const DEVICE_UINT sm_ele = dptr_mesh->m_elem_send_sm[sf + ele_id] + lb;
-
-        for (DEVICE_UINT tz = 0; tz < nx; tz++)
-            dptr_out[dof * nPe * sf + var * nPe * sc + ele_id * nPe +
-                     IDX_DG(tx, ty, tz)] =
-                dptr_in[var * dg_sz + sm_ele * nPe + IDX_DG(tx, ty, tz)];
-    }
+    // the launch tile is smaller than (p+1)^2 for p >= 8, so stride over it
+    for (DEVICE_UINT jy = ty; jy < nx; jy += sy)
+        for (DEVICE_UINT jx = tx; jx < nx; jx += sx)
+            for (DEVICE_UINT tz = 0; tz < nx; tz++)
+                dptr_out[dof * nPe * sf + var * nPe * sc + ele_id * nPe +
+                         IDX_DG(jx, jy, tz)] =
+                    dptr_in[var * dg_sz + sm_ele * nPe + IDX_DG(jx, jy, tz)];
 
     return;
 }
@@ -2278,21 +2280,22 @@ GLOBAL_FUNC __launch_bounds__(64) void __read_rb_dg__(
     const DEVICE_UINT ty = GPUDevice::thread_id_y();
     const DEVICE_UINT nx = dptr_mesh->m_ele_order + 1;
 
-    if (tx < nx && ty < nx) {
-        const DEVICE_UINT nPe    = nx * nx * nx;
+    const DEVICE_UINT sx     = GPUDevice::block_dim_x();
+    const DEVICE_UINT sy     = GPUDevice::block_dim_y();
 
-        const DEVICE_UINT dg_sz  = dptr_mesh->m_oct_local_sz;
-        const DEVICE_UINT lb     = dptr_mesh->m_num_pre_ghost_elements;
+    const DEVICE_UINT nPe    = nx * nx * nx;
+    const DEVICE_UINT dg_sz  = dptr_mesh->m_oct_local_sz;
+    const DEVICE_UINT rf     = dptr_mesh->m_elem_recv_f[proc_id];
+    const DEVICE_UINT rc     = dptr_mesh->m_elem_recv_c[proc_id];
+    const DEVICE_UINT rm_ele = dptr_mesh->m_elem_recv_sm[rf + ele_id];
 
-        const DEVICE_UINT rf     = dptr_mesh->m_elem_recv_f[proc_id];
-        const DEVICE_UINT rc     = dptr_mesh->m_elem_recv_c[proc_id];
-        const DEVICE_UINT rm_ele = dptr_mesh->m_elem_recv_sm[rf + ele_id];
-
-        for (DEVICE_UINT tz = 0; tz < nx; tz++)
-            dptr_out[var * dg_sz + rm_ele * nPe + IDX_DG(tx, ty, tz)] =
-                dptr_in[dof * rf * nPe + var * nPe * rc + ele_id * nPe +
-                        IDX_DG(tx, ty, tz)];
-    }
+    // the launch tile is smaller than (p+1)^2 for p >= 8, so stride over it
+    for (DEVICE_UINT jy = ty; jy < nx; jy += sy)
+        for (DEVICE_UINT jx = tx; jx < nx; jx += sx)
+            for (DEVICE_UINT tz = 0; tz < nx; tz++)
+                dptr_out[var * dg_sz + rm_ele * nPe + IDX_DG(jx, jy, tz)] =
+                    dptr_in[dof * rf * nPe + var * nPe * rc + ele_id * nPe +
+                            IDX_DG(jx, jy, tz)];
     return;
 }
 
@@ -2436,7 +2439,8 @@ void MeshGPU::destroyVec(T* vec_ptr) {
 // ot::Block always sets PW = p/2. dispatch on the mesh's real element order --
 // these launches used to hard-code <T,6,3>, which faulted on any other order.
 // order 8 would want (p+1)^2 = 81 threads, past the __launch_bounds__(64) these
-// kernels carry, so it is deliberately not here.
+// kernels carry, so it is deliberately not here and the default aborts rather
+// than leaving the unzip buffer untouched.
 #define DENDRO_GPU_ZIP_DISPATCH(porder, KERNEL, gb, tb, s, ...)          \
     do {                                                                 \
         switch (porder) {                                                \
@@ -2450,8 +2454,11 @@ void MeshGPU::destroyVec(T* vec_ptr) {
                 KERNEL<T, 6, 3><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
                 break;                                                   \
             default:                                                     \
-                std::cout << "[MeshGPU]: element order " << (porder)     \
-                          << " is not supported by " #KERNEL << std::endl; \
+                std::cerr << "[MeshGPU]: element order " << (porder)      \
+                          << " is not supported by " #KERNEL              \
+                          << "; zip/unzip would silently no-op"           \
+                          << std::endl;                                   \
+                MPI_Abort(MPI_COMM_WORLD, 1);                             \
                 break;                                                   \
         }                                                                \
     } while (0)
