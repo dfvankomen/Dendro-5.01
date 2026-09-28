@@ -348,6 +348,14 @@ if(DENDRO_UNZIP_SPEEDUP OR DENDRO_UNZIP_OMP_EFFECTIVE)
   set(DENDRO_TENSOR_SIMD_EFFECTIVE ON)
   set(DENDRO_UNZIP_SPEEDUP_EFFECTIVE ON)
 endif()
+
+# a requested OFF that gets forced back ON is otherwise invisible
+foreach(_flag DENDRO_UNZIP_SCATTER_FAST DENDRO_TENSOR_SIMD DENDRO_UNZIP_OMP)
+  if(NOT ${_flag} AND ${_flag}_EFFECTIVE)
+    message(STATUS "${_flag}=OFF overridden to ON by the unzip master/OMP switches")
+  endif()
+endforeach()
+
 message(STATUS
         "Dendro unzip/zip speedups: master=${DENDRO_UNZIP_SPEEDUP_EFFECTIVE} "
         "scatter_fast=${DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE} "
