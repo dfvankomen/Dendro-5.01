@@ -526,6 +526,12 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
   add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
 
+  # Self-checking, no arguments, no MPI, well under a second each.
+  foreach(T testCloneNewSize testExplicitSimd testKOMatrix testKOSign testKOSimd)
+    add_test(NAME ${T} COMMAND ${T})
+    set_tests_properties(${T} PROPERTIES TIMEOUT 120 LABELS unit)
+  endforeach()
+
   # --- doctest-based unit tests (serial, registered with ctest) ---
   if(NOT TARGET doctest::doctest)
     FetchContent_Declare(
