@@ -94,7 +94,7 @@ option(DENDRO_UNZIP_SPEEDUP
        "Master toggle for the MPI-safe unzip/zip speedups (integer-index scatter fast path + SIMD wavelet tensor kernels)"
        OFF)
 option(DENDRO_UNZIP_SCATTER_FAST
-       "Use the integer-index same-level scatter fast path in Mesh::unzip_scatter (Phase 1 optimization)"
+       "Use the integer-index same-level scatter fast path in Mesh::unzip_scatter (Phase 1 optimization). No effect when DENDRO_UNZIP_OMP is ON: that path always uses the integer kernels."
        OFF)
 option(DENDRO_ZIP_PLAN
        "Precompute zip()'s ownership filter into a flat index plan (~12 bytes per owned node)"
@@ -115,7 +115,7 @@ option(DENDRO_UNZIP_BATCH
        "Use Mesh::unzip_scatter_batch in Ctx::unzip (dof x smaller DG scratch, one fork/join per batch; default OFF = unchanged)"
        OFF)
 option(DENDRO_TENSOR_SIMD
-       "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=7 for eO=6)"
+       "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=5, 7, 9 for eO=4, 6, 8). Requires the compiler to target AVX2+FMA (e.g. -march=native)."
        OFF)
 # Opt-in OpenMP threading INSIDE the Mesh constructor (src/mesh.cpp), which is
 # otherwise serial-per-rank -- so under DENDRO_HYBRID_OMP with T threads, T-1 sit
@@ -158,6 +158,9 @@ set(NUM_NPES_THRESHOLD 2 CACHE STRING "NPES Threshold")
 # DEPENDENCIES
 # ==========================
 include(FetchContent)
+
+# ctest registration (only populated when BUILD_DENDRO_EXAMPLES is on)
+enable_testing()
 
 # OpenMP
 find_package(OpenMP REQUIRED)
@@ -314,6 +317,10 @@ dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 dendro_add_def(DENDRO_UNZIP_SCATTER_FAST DENDRO_UNZIP_SCATTER_FAST)
 dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
+
+if(DENDRO_UNZIP_OMP AND NOT DENDRO_UNZIP_SCATTER_FAST)
+  message(STATUS "DENDRO_UNZIP_SCATTER_FAST=OFF has no effect: DENDRO_UNZIP_OMP always uses the integer scatter kernels")
+endif()
 dendro_add_def(DENDRO_TENSOR_SIMD DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_REPORT_BUILD_CONFIG DENDRO_REPORT_BUILD_CONFIG)
 
@@ -512,12 +519,39 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(benchUnzipSameLevel test/src/benchUnzipSameLevel.cpp)
   dendro_add_example(benchUnzipGather test/src/benchUnzipGather.cpp)
   dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
+  add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
+
+  # --- doctest-based unit tests (serial, registered with ctest) ---
+  if(NOT TARGET doctest::doctest)
+    FetchContent_Declare(
+        doctest
+        GIT_REPOSITORY https://github.com/doctest/doctest.git
+        GIT_TAG        v2.5.3
+    )
+    FetchContent_MakeAvailable(doctest)
+  endif()
+  list(APPEND CMAKE_MODULE_PATH ${doctest_SOURCE_DIR}/scripts/cmake)
+  include(doctest)
+
+  function(dendro_add_doctest TARGET_NAME)
+    add_executable(${TARGET_NAME} ${ARGN})
+    target_link_libraries(${TARGET_NAME} PRIVATE dendro5 MPI::MPI_CXX doctest::doctest quadmath m)
+    doctest_discover_tests(${TARGET_NAME})
+  endfunction()
+
+  dendro_add_doctest(testTensorKernels test/src/testTensorKernels.cpp)
   dendro_add_example(testZipExact test/src/testZipExact.cpp)
   foreach(SAB 1 2 3)
     dendro_add_example(testZipExact_sabotage${SAB} test/src/testZipExact.cpp)
     target_compile_definitions(testZipExact_sabotage${SAB} PRIVATE ZIP_GATE_SABOTAGE=${SAB})
   endforeach()
   dendro_add_example(testStabilityEvolution test/src/testStabilityEvolution.cpp)
+  # Smoke test: reports a checksum but does not assert on it. The TIMEOUT is the
+  # point -- a broken eO=8 interpolation shows up as runaway refinement, not a
+  # bad exit code.
+  add_test(NAME testStabilityEvolution_eO8
+           COMMAND testStabilityEvolution 8 1e-4 0.1 8 5 24 1e-6)
+  set_tests_properties(testStabilityEvolution_eO8 PROPERTIES TIMEOUT 300)
   dendro_add_example(testIsReMeshUnzip test/src/testIsReMeshUnzip.cpp)
   dendro_add_example(testInterpFaceClamp test/src/testInterpFaceClamp.cpp)
   dendro_add_example(testAehBhahahaGuards test/src/testAehBhahahaGuards.cpp)
