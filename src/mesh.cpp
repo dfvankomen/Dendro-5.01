@@ -8634,6 +8634,25 @@ void Mesh::buildZipPlan() {
         myMin.reserve(numElem * npe / 2);
         slotGrp.assign(numElem * npe, -1);
         for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
+            // isInteriorWriter's block lookup, once per element
+            bool blkOk = false;
+            unsigned int bI0 = 0, bJ0 = 0, bK0 = 0, bLx = 0, bLy = 0, bLz = 0, bPW = 0;
+            if ((e - m_uiElementLocalBegin) < m_uiE2BlkMap.size()) {
+                const unsigned int blk = m_uiE2BlkMap[e - m_uiElementLocalBegin];
+                if (blk != LOOK_UP_TABLE_DEFAULT && blk < m_uiLocalBlockList.size()) {
+                    const auto& block          = m_uiLocalBlockList[blk];
+                    const ot::TreeNode blkNode = block.getBlockNode();
+                    const unsigned int regLev  = block.getRegularGridLev();
+                    bLx = block.getAllocationSzX();
+                    bLy = block.getAllocationSzY();
+                    bLz = block.getAllocationSzZ();
+                    bPW = block.get1DPadWidth();
+                    bI0 = ((pNodes[e].getX() - blkNode.getX()) >> (m_uiMaxDepth - regLev)) * eOrd + bPW;
+                    bJ0 = ((pNodes[e].getY() - blkNode.getY()) >> (m_uiMaxDepth - regLev)) * eOrd + bPW;
+                    bK0 = ((pNodes[e].getZ() - blkNode.getZ()) >> (m_uiMaxDepth - regLev)) * eOrd + bPW;
+                    blkOk = true;
+                }
+            }
             for (unsigned int n = 0; n < npe; n++) {
                 const size_t sl = (size_t)(e - m_uiElementLocalBegin) * npe + n;
                 const unsigned int ni = n % (eOrd + 1);
@@ -8647,7 +8666,14 @@ void Mesh::buildZipPlan() {
                 c.pos      = packPos(x, y, z);
                 c.elem     = e;
                 c.sub      = n;
-                c.interior = isInteriorWriter(e, n);
+                if (blkOk) {
+                    const unsigned int bi = bI0 + ni, bj = bJ0 + nj, bk = bK0 + nk;
+                    c.interior = (bi >= bPW && bi <= (bLx - 1 - bPW)) &&
+                                 (bj >= bPW && bj <= (bLy - 1 - bPW)) &&
+                                 (bk >= bPW && bk <= (bLz - 1 - bPW));
+                } else {
+                    c.interior = false;
+                }
                 c.is_owner = !legacy_pick && isCascadeOwner(e, n);
                 if (inner) {
                     slotGrp[sl] = (int)myMin.size();
