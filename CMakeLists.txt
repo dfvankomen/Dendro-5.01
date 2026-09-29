@@ -526,6 +526,14 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
   dendro_add_example(testUnzipExact test/src/testUnzipExact.cpp)
   dendro_add_example(testMeshInvariants test/src/testMeshInvariants.cpp)
+  dendro_add_example(testOctreeStructure test/src/testOctreeStructure.cpp)
+  add_test(NAME testOctreeStructure COMMAND testOctreeStructure 6 1e-3)
+  add_test(NAME testOctreeStructure_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testOctreeStructure>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3)
+  set_tests_properties(testOctreeStructure testOctreeStructure_2rank
+                       PROPERTIES TIMEOUT 600)
   add_test(NAME testMeshInvariants COMMAND testMeshInvariants 6 1e-3)
   add_test(NAME testMeshInvariants_2rank
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
@@ -567,6 +575,18 @@ if(BUILD_DENDRO_EXAMPLES)
   foreach(SAB 1 2 3)
     dendro_add_example(testZipExact_sabotage${SAB} test/src/testZipExact.cpp)
     target_compile_definitions(testZipExact_sabotage${SAB} PRIVATE ZIP_GATE_SABOTAGE=${SAB})
+  endforeach()
+
+  foreach(EO 4 6 8)
+    add_test(NAME testZipExact_eO${EO} COMMAND testZipExact 6 1e-3 0.1 ${EO} 4)
+    set_tests_properties(testZipExact_eO${EO} PROPERTIES TIMEOUT 600)
+  endforeach()
+  # the sabotage builds exist to show the gate can go red, so require that
+  foreach(SAB 1 2 3)
+    add_test(NAME testZipExact_sabotage${SAB}
+             COMMAND testZipExact_sabotage${SAB} 6 1e-3 0.1 6 4)
+    set_tests_properties(testZipExact_sabotage${SAB}
+                         PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
   endforeach()
   dendro_add_example(testStabilityEvolution test/src/testStabilityEvolution.cpp)
   # Smoke test: reports a checksum but does not assert on it. The TIMEOUT is the
