@@ -106,3 +106,8 @@ no-op remesh skip, coarse-level merge, minimax refine, offline async critical-pa
 - Wall s (np48 / np96 / np192): sfc 140.2 / 88.8 / 63.9; sfc_sc 128.1 / 81.5 / 59.4; lvl_sc 125.2 / 79.7 / 54.0; lw_sc 129.2 / 81.3 / 55.5. np48 also: lw 153.8, lw_initold 164.7 (S1 = -11 s, S2 on lw = -25 s).
 - lvl_sc / sfc = 0.89 / 0.90 / 0.85; lvl_sc / sfc_sc = 0.98 / 0.98 / 0.91 (was lvl/sfc 1.14 / 1.20 / 1.18 in run M). partial_total lvl_sc / sfc_sc = 0.93 / 0.92 / 0.82.
 - np192 lts_substep_eff lvl 0.58 (block cap) -> S4 target.
+
+### Kingspeak K3 (2026-09-29) S4 at np192, job 28495053, snapshot 8505ed25, 2 rounds
+- Wall s: sfc_sc 59.25, lvl_sc 54.55, lvl_sc_ad 53.55, lw_sc_ad 53.85 (lvl_sc_ad / sfc_sc 0.90, / sfc(K2) 0.84).
+- lvl_sc -> lvl_sc_ad: lts_substep_eff 0.58 -> 0.93, work_imb 1.61 -> 1.05, padded_vol_imb 1.55 -> 1.33, rhs+zipDG max 9.5 -> 7.0 s, eledg_end mean 10.8 -> 9.2 s, but sync_blk_ts+post mean 12.6 -> 15.1 s (smaller blocks = more dependent padding elements to time-sync); partial_total 37.5 -> 36.1 s. Ghost send nodes +4 %.
+- Verdict: S4 recovers eff as modelled, but sync_blk_timestep eats most of it. Next lever: sync_blk_timestep cost (38 % of partial time on every arm, grows with block surface/volume).
