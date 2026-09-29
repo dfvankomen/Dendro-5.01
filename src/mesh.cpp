@@ -20405,6 +20405,16 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         m_uiRepartPreLabel = pushLabels;
     }
 
+    // DENDRO_REPART_GHOST_RINGS (default 3): how many 26-rings of ghost elements
+    // the labelled rebuild fetches. R3 is ~40 % of a labelled ghost layer, but
+    // =2 is WRONG as it stands (testPartitioning 7b: 100 errors > 0.5, EM4 md5
+    // moves) -- R2's canonical owners need R3 (see the legacy path's R3 note);
+    // kept only for A/B while a trimmed-R3 variant is explored
+    static const unsigned char ghostRings = [] {
+        const char* e = std::getenv("DENDRO_REPART_GHOST_RINGS");
+        const int v = e ? std::atoi(e) : 3;
+        return (unsigned char)(v < 2 ? 2 : (v > 3 ? 3 : v));
+    }();
     // forward push of the owned set + R1/R2/R3 closure. the source of an
     // element knows its label and its 26 neighbour ids, so "rank p needs g at
     // ring d" claims travel to g's source (3 claim rounds, one per ring), then
@@ -20433,7 +20443,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             return true;
         };
         for (size_t i = 0; i < localSz; ++i) frontier.emplace_back(i, pushLabels[i]);
-        for (unsigned char d = 1; d <= 3; ++d) {
+        for (unsigned char d = 1; d <= ghostRings; ++d) {
             next.clear();
             std::vector<std::vector<unsigned long long>> out(npes);
             auto emit = [&](unsigned int p, D_INT_L g) {
@@ -20634,6 +20644,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // ownership, which later makes createVector on different ranks
     // write different f(physical_pos) values at the same CG slot.
     std::set<D_INT_L> r3_keys;
+    if (ghostRings >= 3) {
     collectNeighborKeys(r2_fetched, r3_keys);
     collectNeighborKeys(r2_local, r3_keys);
     for (auto id : present) r3_keys.erase(id);
@@ -20651,6 +20662,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                                     r3_fetched.begin(), r3_fetched.end());
     new_oct_connectivity_map.insert(new_oct_connectivity_map.end(),
                                     r3_local.begin(), r3_local.end());
+    }
     }
 
     std::sort(new_oct_connectivity_map.begin(),
