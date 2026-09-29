@@ -20291,10 +20291,14 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             ele_counts_fp[rk] = ele_counts[rk];
         }
 
-        if (do_fastpart_filesave) {
+        // DENDRO_DUMP_OCT=<prefix>: dump every labelled rebuild's input graph
+        // (overwritten each time, so the file holds the last one) for offline
+        // scoring with edgeCutCompare --oct
+        const char* dumpEnv = std::getenv("DENDRO_DUMP_OCT");
+        if (do_fastpart_filesave || dumpEnv) {
             dumpOctDataParallel(temp_oct_data, vtx_dist, ele_counts_fp,
                                 oct_connectivity_map.size(),
-                                fileprefix.c_str());
+                                dumpEnv ? dumpEnv : fileprefix.c_str());
         }
 
         // TEMP: skip doing all of this, because we just need to save

@@ -137,6 +137,11 @@ struct Metrics {
     double lts_eff_bound = 0.0;  // ceil-granularity ceiling on lts_eff
     double lts_comm_scoped_ratio = 0.0;  // scoped-exchange comms / full-every-substep
     long long n_elements = 0;
+    // partition shape (stencil26): ghost elements per rank = distinct elements
+    // of other ranks touching the rank (Dendro's first ghost ring); pieces =
+    // connected components of each rank's elements
+    double ghost_ele_mean = 0.0, pieces_mean = 0.0;
+    long long ghost_ele_max = 0, pieces_max = 0;
 };
 
 /** Per-sub-step ENUTS parallel efficiency of a labelling.
@@ -334,10 +339,181 @@ void emit(std::ostream& os, const Opts& o, unsigned int npes,
        << ",\"lts_eff\":" << m.lts_eff
        << ",\"lts_eff_bound\":" << m.lts_eff_bound
        << ",\"lts_comm_scoped_ratio\":" << m.lts_comm_scoped_ratio
+       << ",\"ghost_ele_mean\":" << m.ghost_ele_mean
+       << ",\"ghost_ele_max\":" << m.ghost_ele_max
+       << ",\"pieces_mean\":" << m.pieces_mean
+       << ",\"pieces_max\":" << m.pieces_max
        << "}}" << std::endl;
 }
 
 }  // namespace
+
+// the whole stencil26 graph on rank 0, CSR by global id (the meshes scored
+// here are small enough)
+struct GlobalAdj {
+    std::vector<unsigned int> off, nbr;
+};
+GlobalAdj gather_adj_root(const std::vector<std::vector<unsigned int>>& adj,
+                          const std::vector<unsigned int>& local_gids,
+                          unsigned int num_ele_global, MPI_Comm comm) {
+    int rank, npes;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &npes);
+    std::vector<unsigned int> flat;  // gid, deg, nbrs...
+    for (size_t i = 0; i < adj.size(); ++i) {
+        flat.push_back(local_gids[i]);
+        flat.push_back((unsigned int)adj[i].size());
+        flat.insert(flat.end(), adj[i].begin(), adj[i].end());
+    }
+    int n = (int)flat.size();
+    std::vector<int> cnt(npes), disp(npes, 0);
+    MPI_Gather(&n, 1, MPI_INT, cnt.data(), 1, MPI_INT, 0, comm);
+    std::vector<unsigned int> all;
+    if (!rank) {
+        for (int p = 1; p < npes; ++p) disp[p] = disp[p - 1] + cnt[p - 1];
+        all.resize(disp[npes - 1] + cnt[npes - 1]);
+    }
+    MPI_Gatherv(flat.data(), n, MPI_UNSIGNED, all.data(), cnt.data(), disp.data(),
+                MPI_UNSIGNED, 0, comm);
+    GlobalAdj g;
+    if (rank) return g;
+    std::vector<unsigned int> deg(num_ele_global, 0);
+    for (size_t k = 0; k < all.size();) {
+        deg[all[k]] = all[k + 1];
+        k += 2 + all[k + 1];
+    }
+    g.off.assign(num_ele_global + 1, 0);
+    for (unsigned int v = 0; v < num_ele_global; ++v) g.off[v + 1] = g.off[v] + deg[v];
+    g.nbr.resize(g.off[num_ele_global]);
+    for (size_t k = 0; k < all.size();) {
+        const unsigned int v = all[k], d = all[k + 1];
+        std::copy(all.begin() + k + 2, all.begin() + k + 2 + d, g.nbr.begin() + g.off[v]);
+        k += 2 + d;
+    }
+    return g;
+}
+
+// ghost elements and connected pieces per rank (rank 0 only)
+void shape_metrics(const GlobalAdj& g, const std::vector<unsigned int>& label,
+                   unsigned int npes, Metrics& m) {
+    const unsigned int N = (unsigned int)label.size();
+    std::vector<unsigned int> par(N);
+    for (unsigned int v = 0; v < N; ++v) par[v] = v;
+    auto find = [&](unsigned int v) {
+        while (par[v] != v) { par[v] = par[par[v]]; v = par[v]; }
+        return v;
+    };
+    std::vector<std::pair<unsigned int, unsigned int>> gh;  // (rank, ghost gid)
+    for (unsigned int v = 0; v < N; ++v)
+        for (unsigned int k = g.off[v]; k < g.off[v + 1]; ++k) {
+            const unsigned int w = g.nbr[k];
+            if (label[w] == label[v]) {
+                const unsigned int a = find(v), b = find(w);
+                if (a != b) par[a] = b;
+            } else {
+                gh.emplace_back(label[v], w);
+            }
+        }
+    std::sort(gh.begin(), gh.end());
+    gh.erase(std::unique(gh.begin(), gh.end()), gh.end());
+    std::vector<long long> ghosts(npes, 0), pieces(npes, 0);
+    for (const auto& x : gh) ghosts[x.first]++;
+    for (unsigned int v = 0; v < N; ++v)
+        if (find(v) == v) pieces[label[v]]++;
+    long long gs = 0, ps = 0;
+    for (unsigned int p = 0; p < npes; ++p) {
+        gs += ghosts[p];
+        ps += pieces[p];
+        m.ghost_ele_max = std::max(m.ghost_ele_max, ghosts[p]);
+        m.pieces_max = std::max(m.pieces_max, pieces[p]);
+    }
+    m.ghost_ele_mean = (double)gs / npes;
+    m.pieces_mean = (double)ps / npes;
+}
+
+// min-cost assignment, n x n (Hungarian, O(n^3)); returns col of each row
+std::vector<int> hungarian(const std::vector<std::vector<double>>& a) {
+    const int n = (int)a.size();
+    const double INF = 1e300;
+    std::vector<double> u(n + 1, 0), v(n + 1, 0);
+    std::vector<int> p(n + 1, 0), way(n + 1, 0);
+    for (int i = 1; i <= n; ++i) {
+        p[0] = i;
+        int j0 = 0;
+        std::vector<double> minv(n + 1, INF);
+        std::vector<char> used(n + 1, 0);
+        do {
+            used[j0] = 1;
+            const int i0 = p[j0];
+            double delta = INF;
+            int j1 = 0;
+            for (int j = 1; j <= n; ++j)
+                if (!used[j]) {
+                    const double cur = a[i0 - 1][j - 1] - u[i0] - v[j];
+                    if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+                    if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+                }
+            for (int j = 0; j <= n; ++j)
+                if (used[j]) { u[p[j]] += delta; v[j] -= delta; }
+                else minv[j] -= delta;
+            j0 = j1;
+        } while (p[j0] != 0);
+        do {
+            const int j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+        } while (j0);
+    }
+    std::vector<int> col(n, -1);
+    for (int j = 1; j <= n; ++j)
+        if (p[j]) col[p[j] - 1] = j - 1;
+    return col;
+}
+
+// levelwise chunks, chunk -> rank chosen per level to maximise 26-adjacency
+// with what the rank already holds on the other levels (rank 0 only). the
+// chunks are exactly sfc_levelwise's, so per-level balance is unchanged
+std::vector<unsigned int> levelwise_matched(const GlobalAdj& g,
+                                            const std::vector<unsigned int>& lw,
+                                            const std::vector<unsigned int>& glev,
+                                            unsigned int npes, int sweeps) {
+    const unsigned int N = (unsigned int)lw.size();
+    unsigned int nlev = 0;
+    for (unsigned int v = 0; v < N; ++v) nlev = std::max(nlev, glev[v] + 1);
+    std::vector<long long> nOf(nlev, 0);
+    for (unsigned int v = 0; v < N; ++v) nOf[glev[v]]++;
+    std::vector<unsigned int> order;
+    for (unsigned int l = 0; l < nlev; ++l)
+        if (nOf[l]) order.push_back(l);
+    std::sort(order.begin(), order.end(),
+              [&](unsigned int a, unsigned int b) { return nOf[a] > nOf[b]; });
+    // perm[l][chunk] = rank; unassigned levels are -1
+    std::vector<std::vector<int>> perm(nlev, std::vector<int>(npes, -1));
+    auto labelOf = [&](unsigned int v) { return perm[glev[v]][lw[v]]; };
+    for (int s = 0; s <= sweeps; ++s)
+        for (size_t oi = 0; oi < order.size(); ++oi) {
+            const unsigned int L = order[oi];
+            if (s == 0 && oi == 0) {  // the biggest level anchors: identity
+                for (unsigned int c = 0; c < npes; ++c) perm[L][c] = (int)c;
+                continue;
+            }
+            std::vector<std::vector<double>> cost(npes, std::vector<double>(npes, 0.0));
+            for (unsigned int v = 0; v < N; ++v) {
+                if (glev[v] != L) continue;
+                for (unsigned int k = g.off[v]; k < g.off[v + 1]; ++k) {
+                    const unsigned int w = g.nbr[k];
+                    if (glev[w] == L) continue;
+                    const int r = labelOf(w);
+                    if (r >= 0) cost[lw[v]][r] -= 1.0;
+                }
+            }
+            const std::vector<int> col = hungarian(cost);
+            for (unsigned int c = 0; c < npes; ++c) perm[L][c] = col[c];
+        }
+    std::vector<unsigned int> out(N);
+    for (unsigned int v = 0; v < N; ++v) out[v] = (unsigned int)labelOf(v);
+    return out;
+}
 
 int main(int argc, char** argv) {
     MPI_Init(&argc, &argv);
@@ -738,6 +914,7 @@ int main(int argc, char** argv) {
         os = &fout;
     }
 
+    const GlobalAdj gadj = gather_adj_root(adj_sten, local_gids, num_ele_global, comm);
     for (const std::string& v : split_csv(o.variants)) {
         std::vector<unsigned int> label_of_gid;
 
@@ -747,6 +924,12 @@ int main(int argc, char** argv) {
             label_of_gid = sfc_weighted_label;
         } else if (v == "sfc_levelwise") {
             label_of_gid = sfc_levelwise_label;
+        } else if (v == "levelwise_matched" || v == "levelwise_matched0") {
+            label_of_gid.assign(num_ele_global, 0);
+            if (!rank)
+                label_of_gid = levelwise_matched(gadj, sfc_levelwise_label, glev, npes,
+                                                 v == "levelwise_matched" ? 2 : 0);
+            MPI_Bcast(label_of_gid.data(), (int)num_ele_global, MPI_UNSIGNED, 0, comm);
         } else if (v == "sfc_mc_contig") {
             label_of_gid = sfc_mc_contig_label;
         } else if (v == "fastpart" || v == "fastpart_fullstencil" ||
@@ -853,6 +1036,7 @@ int main(int argc, char** argv) {
                            npes, comm, ms);
         mf.lts_eff       = ms.lts_eff;
         mf.lts_eff_bound = ms.lts_eff_bound;
+        if (!rank) shape_metrics(gadj, label_of_gid, npes, ms);
         if (rank == 0) {
             emit(*os, o, npes, v, "face6", mf);
             emit(*os, o, npes, v, "stencil26", ms);
