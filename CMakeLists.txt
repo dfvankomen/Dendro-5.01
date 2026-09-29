@@ -641,7 +641,16 @@ if(BUILD_DENDRO_EXAMPLES)
     target_link_libraries(testMeshGpuVsCpu PRIVATE dendro5)
     target_include_directories(testMeshGpuVsCpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GPU/include)
     set_target_properties(testMeshGpuVsCpu PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-    add_test(NAME testMeshGpuVsCpu COMMAND testMeshGpuVsCpu 5 1e-3 6)
-    set_tests_properties(testMeshGpuVsCpu PROPERTIES TIMEOUT 600 LABELS gpu)
+    add_test(NAME testMeshGpuVsCpu_eO4 COMMAND testMeshGpuVsCpu 5 1e-3 4)
+    add_test(NAME testMeshGpuVsCpu_eO6 COMMAND testMeshGpuVsCpu 5 1e-3 6)
+    # two ranks is the only coverage the DG ghost packers get
+    add_test(NAME testMeshGpuVsCpu_2rank
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshGpuVsCpu>
+                     ${MPIEXEC_POSTFLAGS} 5 1e-3 6)
+    set_tests_properties(testMeshGpuVsCpu_eO4 testMeshGpuVsCpu_eO6
+                         testMeshGpuVsCpu_2rank
+                         PROPERTIES TIMEOUT 600 LABELS gpu
+                                    SKIP_RETURN_CODE 77)
   endif()
 endif()

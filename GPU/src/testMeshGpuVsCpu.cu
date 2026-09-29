@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
     if (n_dev < 1) {
         if (!rank) std::printf("no CUDA device available\n");
         MPI_Finalize();
-        return 0;
+        return 77;  // ctest SKIP_RETURN_CODE
     }
     cudaSetDevice(rank % n_dev);
 
@@ -194,6 +194,10 @@ int main(int argc, char** argv) {
         mesh_gpu.createUnZippedVector<double, device::vec_type::device>(dof);
     double* d_dg_uz =
         mesh_gpu.createUnZippedVector<double, device::vec_type::device>(dof);
+    double* d_cg_z =
+        mesh_gpu.createVector<double, device::vec_type::device>(dof);
+    double* d_dg_z =
+        mesh_gpu.createDGVector<double, device::vec_type::device>(dof);
 
     int bad = 0;
     if (lmin == lmax) {
@@ -258,6 +262,53 @@ int main(int argc, char** argv) {
         if (d == 3) {
             bad += report("unzip_cg", vcg, rank);
             bad += report("unzip_dg", vdg, rank);
+
+            // zip inverts unzip on owned entries, so the round trip returns the
+            // input; this is the only coverage zip_cg / zip_dg have
+            const size_t cgSz = mesh->getDegOfFreedom();
+            const size_t dgSz = mesh->getDegOfFreedomDG();
+            const unsigned int nPe = mesh->getNumNodesPerElement();
+            std::vector<double> zc_cpu(cgSz * dof, SENTINEL),
+                zc_gpu(cgSz * dof, SENTINEL), zd_gpu(dgSz * dof, SENTINEL);
+
+            for (unsigned int v = 0; v < dof; v++)
+                mesh->zip(cg_cpu.data() + v * unSz, zc_cpu.data() + v * cgSz);
+
+            GPUDevice::host_to_device<DEVICE_REAL>(zc_gpu.data(), d_cg_z,
+                                                   cgSz * dof);
+            GPUDevice::host_to_device<DEVICE_REAL>(zd_gpu.data(), d_dg_z,
+                                                   dgSz * dof);
+            mesh_gpu.zip_cg(mesh, dptr_mesh, d_cg_uz, d_cg_z, dof,
+                            (cudaStream_t)0);
+            mesh_gpu.zip_dg(mesh, dptr_mesh, d_dg_uz, d_dg_z, dof,
+                            (cudaStream_t)0);
+            GPUDevice::device_synchronize();
+            GPUDevice::device_to_host<DEVICE_REAL>(zc_gpu.data(), d_cg_z,
+                                                   cgSz * dof);
+            GPUDevice::device_to_host<DEVICE_REAL>(zd_gpu.data(), d_dg_z,
+                                                   dgSz * dof);
+
+            double wc = 0.0, wg = 0.0, wd = 0.0;
+            for (unsigned int v = 0; v < dof; v++) {
+                for (unsigned int i = mesh->getNodeLocalBegin();
+                     i < mesh->getNodeLocalEnd(); i++) {
+                    const double t = u_cg[v * cgSz + i];
+                    wc = std::max(wc, std::fabs(zc_cpu[v * cgSz + i] - t));
+                    wg = std::max(wg, std::fabs(zc_gpu[v * cgSz + i] - t));
+                }
+                for (size_t i = (size_t)mesh->getElementLocalBegin() * nPe;
+                     i < (size_t)mesh->getElementLocalEnd() * nPe; i++)
+                    wd = std::max(wd, std::fabs(zd_gpu[v * dgSz + i] -
+                                                u_dg[v * dgSz + i]));
+            }
+            const double zip_tol = 1e-11;
+            const bool zbad = (wc > zip_tol || wg > zip_tol || wd > zip_tol);
+            if (!rank)
+                std::printf(
+                    "  zip round trip  cg_cpu=%.2e cg_gpu=%.2e dg_gpu=%.2e  "
+                    "%s\n",
+                    wc, wg, wd, zbad ? "FAIL" : "ok");
+            if (zbad) bad++;
         }
 
         if (d <= eOrder) {
