@@ -534,6 +534,20 @@ inline bool repartTNKeyLess(const ot::TreeNode& a, const ot::TreeNode& b) {
  * for the balanced octree based on treeSearch.
  * */
 
+/** per-mesh plan for the level-scoped element-DG ghost exchange: each peer's
+ *  send/recv segment is stably permuted so entries sort by ascending timestep
+ *  factor (finest first); the entries active at a partial step then form a
+ *  prefix whose length per peer is cnt[d * npes + peer], d indexing the
+ *  ascending distinct timestep factors. */
+struct EleDGScopedPlan {
+    std::vector<unsigned int> sendPerm;  // segment slot -> original k
+    std::vector<unsigned int> recvPerm;
+    std::vector<unsigned int> sendCnt;   // [d * npes + peer]
+    std::vector<unsigned int> recvCnt;
+    unsigned int npes = 0;
+    unsigned int nd   = 0;
+};
+
 class Mesh {
    private:
     /** Element to Element mapping data. Array size:
@@ -3570,6 +3584,26 @@ class Mesh {
      */
     template <typename T>
     void readFromGhostEndEleDGVec(T *vec, unsigned int dof = 1);
+
+    /** level-scoped element-DG exchange: only the first sendCnt[peer] /
+     *  recvCnt[peer] entries of each (permuted) segment travel. sendCnt and
+     *  recvCnt point at the plan's row for the current partial step. Every
+     *  rank must call Begin/End in the same order as the full exchange. */
+    template <typename T>
+    void readFromGhostBeginEleDGVecScoped(T *vec, unsigned int dof,
+                                          const EleDGScopedPlan &plan,
+                                          const unsigned int *sendCnt,
+                                          const unsigned int *recvCnt);
+    template <typename T>
+    void readFromGhostEndEleDGVecScoped(T *vec, unsigned int dof,
+                                        const EleDGScopedPlan &plan,
+                                        const unsigned int *recvCnt);
+
+    /** builds the scoped plan from a per-element timestep factor (indexed by
+     *  element id incl. ghosts) and the ascending distinct factors. */
+    void buildEleDGScopedPlan(const std::vector<unsigned int> &dtOfElem,
+                              const std::vector<unsigned int> &distinctDT,
+                              EleDGScopedPlan &plan) const;
 
     /**
      * @brief : begin of the write from ghost.

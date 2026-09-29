@@ -52,6 +52,23 @@ struct EnutsProf {
         static EnutsProf p;
         return p;
     }
+    /** DENDRO_ENUTS_SCOPED_EXCH=1: level-scoped element-DG ghost exchange;
+     *  =CHECK-style verification via DENDRO_ENUTS_SCOPED_EXCH_CHECK=1 */
+    static bool scoped() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_SCOPED_EXCH");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    static bool scopedCheck() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_SCOPED_EXCH_CHECK");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    unsigned long long chk_cmp = 0, chk_bad = 0;
 };
 }  // namespace ts
 
@@ -318,6 +335,19 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief per local block, its unzip dependent elements (SFC order); rebuilt per mesh */
     std::vector<std::vector<unsigned int>> m_uiBlkDepEid;
 
+    /**@brief level-scoped element-DG exchange plan (DENDRO_ENUTS_SCOPED_EXCH);
+     * rebuilt per mesh, cleared with m_uiBlkDepEid. m_uiScopedOk false =
+     * preconditions failed (divisibility chain, level range), full exchange. */
+    ot::EleDGScopedPlan m_uiScopedPlan;
+    const ot::Mesh* m_uiScopedMesh = nullptr;
+    bool m_uiScopedOk              = false;
+    std::vector<unsigned int> m_uiScopedDTs;   // ascending distinct factors
+    std::vector<unsigned int> m_uiScopedZero;  // all-zero count row
+    std::vector<T> m_uiScopedShadow;
+    bool prepare_scoped_exchange(ot::Mesh* pMesh);
+    void scoped_check_compare(ot::Mesh* pMesh, const T* real, const T* shadow,
+                              unsigned int DOF, unsigned int pt, unsigned int rk);
+
     /**@brief: temp vector of the DG scheme*/
     DVec m_uiDGTmp0;
 
@@ -546,6 +576,11 @@ ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart) : ETS<T, Ctx>(ctx) {
 
 template <typename T, typename Ctx>
 ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
+    if (ts::EnutsProf::scopedCheck() && ts::EnutsProf::get().chk_cmp) {
+        std::cout << "[enuts-scoped-check r" << m_uiAppCtx->get_mesh()->getMPIRankGlobal()
+                  << "] compared_elems=" << ts::EnutsProf::get().chk_cmp
+                  << " mismatches=" << ts::EnutsProf::get().chk_bad << std::endl;
+    }
     if (ts::EnutsProf::on()) {
         // collective over MPI_COMM_WORLD: every rank destroys its ENUTS object
         ts::EnutsProf& P = ts::EnutsProf::get();
@@ -804,6 +839,8 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
                                ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
     m_uiCgOwnerMesh = nullptr;
     m_uiBlkDepEid.clear();
+    m_uiScopedMesh = nullptr;
+    m_uiScopedOk   = false;
     m_uiEvarDG.create_vector(m_uiAppCtx->get_mesh(),
                              ot::DVEC_TYPE::OCT_LOCAL_NODES, ot::DVEC_LOC::HOST,
                              m_uiEVar.get_dof(), true);
@@ -864,6 +901,8 @@ int ExplicitNUTS<T, Ctx>::deallocate_internal_vars() {
 
     m_uiBVec.clear();
     m_uiBlkDepEid.clear();
+    m_uiScopedMesh = nullptr;
+    m_uiScopedOk   = false;
 
     // deallocate m_uiStVec, which is based on the number of stages
     for (unsigned int i = 0; i < m_uiNumStages; i++) {
@@ -2147,6 +2186,114 @@ void ExplicitNUTS<T, Ctx>::update_ele_timestep() {
 }
 
 template <typename T, typename Ctx>
+bool ExplicitNUTS<T, Ctx>::prepare_scoped_exchange(ot::Mesh* pMesh) {
+    if (m_uiScopedMesh == pMesh) return m_uiScopedOk;
+    m_uiScopedMesh = pMesh;
+    m_uiScopedOk   = false;
+    m_uiScopedPlan = ot::EleDGScopedPlan();
+    m_uiScopedDTs.clear();
+    if (!pMesh->isActive()) return false;
+
+    // ascending distinct timestep factors; they must form a divisibility chain
+    // so the elements firing at pt (DT | pt) are a prefix of the sorted segment
+    for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
+        m_uiScopedDTs.push_back(
+            m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax));
+    std::sort(m_uiScopedDTs.begin(), m_uiScopedDTs.end());
+    m_uiScopedDTs.erase(
+        std::unique(m_uiScopedDTs.begin(), m_uiScopedDTs.end()),
+        m_uiScopedDTs.end());
+    bool ok = !m_uiScopedDTs.empty() && m_uiScopedDTs[0] >= 1;
+    for (size_t i = 1; ok && i < m_uiScopedDTs.size(); i++)
+        ok = (m_uiScopedDTs[i] % m_uiScopedDTs[i - 1] == 0);
+
+    // element -> DT by its own level; must be in range, and every local block
+    // must be single-level (activity is decided by the block's first element)
+    const std::vector<ot::TreeNode>& all = pMesh->getAllElements();
+    std::vector<unsigned int> dtOf(all.size(), 0);
+    for (size_t e = 0; ok && e < all.size(); e++) {
+        const unsigned int l = all[e].getLevel();
+        if (l < m_uiLevMin || l > m_uiLevMax) {
+            ok = false;
+            break;
+        }
+        dtOf[e] = m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax);
+    }
+    const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
+    for (unsigned int b = 0; ok && b < blkList.size(); b++) {
+        const unsigned int bl = all[blkList[b].firstElementID()].getLevel();
+        for (const unsigned int e : blkList[b])
+            if (all[e].getLevel() != bl) {
+                ok = false;
+                break;
+            }
+    }
+    // all ranks must agree (Begin/End are collective in effect)
+    int loc = ok ? 1 : 0, glob = 1;
+    MPI_Allreduce(&loc, &glob, 1, MPI_INT, MPI_MIN, pMesh->getMPICommunicator());
+    ok = glob == 1;
+    if (!ok) {
+        if (!pMesh->getMPIRankGlobal())
+            std::cout << "[enuts-scoped] preconditions failed (DT chain / level "
+                         "range / multi-level block): full exchange"
+                      << std::endl;
+        return false;
+    }
+    pMesh->buildEleDGScopedPlan(dtOf, m_uiScopedDTs, m_uiScopedPlan);
+    m_uiScopedZero.assign(std::max(1u, m_uiScopedPlan.npes), 0u);
+    m_uiScopedOk = true;
+    return true;
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::scoped_check_compare(ot::Mesh* pMesh, const T* real,
+                                                const T* shadow,
+                                                unsigned int DOF,
+                                                unsigned int pt,
+                                                unsigned int rk) {
+    if (m_uiBlkDepEid.size() != pMesh->getLocalBlockList().size()) {
+        m_uiBlkDepEid.assign(pMesh->getLocalBlockList().size(), {});
+        for (unsigned int b = 0; b < m_uiBlkDepEid.size(); b++)
+            computeBlockUnzipDepElements(pMesh, b, m_uiBlkDepEid[b]);
+    }
+    const unsigned int nPe  = pMesh->getNumNodesPerElement();
+    const size_t dgSz       = (size_t)pMesh->getAllElements().size() * nPe;
+    const unsigned int lb   = pMesh->getElementLocalBegin();
+    const unsigned int le   = pMesh->getElementLocalEnd();
+    std::set<unsigned int> seen;
+    unsigned long long bad = 0;
+    for (const unsigned int blk : m_uiActiveBlkIDs)
+        for (const unsigned int e : m_uiBlkDepEid[blk]) {
+            if (e >= lb && e < le) continue;
+            if (!seen.insert(e).second) continue;
+            ts::EnutsProf::get().chk_cmp++;
+            bool diff = false;
+            for (unsigned int v = 0; v < DOF; v++)
+                if (std::memcmp(real + v * dgSz + (size_t)e * nPe,
+                                shadow + v * dgSz + (size_t)e * nPe,
+                                sizeof(T) * nPe) != 0)
+                    diff = true;
+            if (diff) {
+                bad++;
+                if (bad <= 5)
+                    std::cout << "[enuts-scoped-check r"
+                              << pMesh->getMPIRankGlobal() << "] MISMATCH pt=" << pt
+                              << " rk=" << rk << " ghost elem " << e << " "
+                              << pMesh->getAllElements()[e] << " etime="
+                              << m_uiEleTime[e] << " edt=" << m_uiEleDT[e]
+                              << std::endl;
+            }
+        }
+    ts::EnutsProf::get().chk_bad += bad;
+    if (bad) {
+        std::cout << "[enuts-scoped-check r" << pMesh->getMPIRankGlobal()
+                  << "] " << bad << " mismatching dependent ghost elems at pt="
+                  << pt << " rk=" << rk << "; aborting" << std::endl;
+        MPI_Abort(pMesh->getMPICommunicator(), 9);
+    }
+}
+
+template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
 
@@ -2278,6 +2425,24 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         P.lev_sum += nl;
     }
 
+    // level-scoped element-DG exchange: the elements whose level fires at pt
+    // (DT | pt) are the plan's prefix; row d = largest distinct DT dividing pt
+    const bool scopedOn = ts::EnutsProf::scoped() && prepare_scoped_exchange(pMesh);
+    const bool scopedChk = scopedOn && ts::EnutsProf::scopedCheck();
+    const unsigned int* scSend = nullptr;
+    const unsigned int* scRecv = nullptr;
+    if (scopedOn) {
+        int d = -1;
+        for (size_t i = 0; i < m_uiScopedDTs.size(); i++)
+            if (pt % m_uiScopedDTs[i] == 0) d = (int)i;
+        if (d < 0) {
+            scSend = scRecv = m_uiScopedZero.data();
+        } else {
+            scSend = m_uiScopedPlan.sendCnt.data() + (size_t)d * m_uiScopedPlan.npes;
+            scRecv = m_uiScopedPlan.recvCnt.data() + (size_t)d * m_uiScopedPlan.npes;
+        }
+    }
+
     for (unsigned int rk = 1; rk <= m_uiNumStages; rk++) {
         const unsigned int BLK_S = rk;
         ENUTS_TIC();
@@ -2341,6 +2506,27 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
         ENUTS_TOC(RHS);
         ENUTS_TIC();
+        if (scopedOn) {
+            T* stv = m_uiStVec[BLK_S - 1].get_vec_ptr();
+            if (scopedChk) {
+                // shadow: what the full exchange would leave in every ghost slot
+                const size_t n = (size_t)DOF * pMesh->getAllElements().size() *
+                                 pMesh->getNumNodesPerElement();
+                m_uiScopedShadow.assign(stv, stv + n);
+                pMesh->readFromGhostBeginEleDGVec(m_uiScopedShadow.data(), DOF);
+                pMesh->readFromGhostEndEleDGVec(m_uiScopedShadow.data(), DOF);
+            }
+            pMesh->readFromGhostBeginEleDGVecScoped(stv, DOF, m_uiScopedPlan,
+                                                    scSend, scRecv);
+            ENUTS_TOC(EDG_BEGIN);
+            ENUTS_TIC();
+            pMesh->readFromGhostEndEleDGVecScoped(stv, DOF, m_uiScopedPlan,
+                                                  scRecv);
+            ENUTS_TOC(EDG_END);
+            if (scopedChk)
+                scoped_check_compare(pMesh, stv, m_uiScopedShadow.data(), DOF,
+                                     pt, rk);
+        } else {
         pMesh->readFromGhostBeginEleDGVec(m_uiStVec[BLK_S - 1].get_vec_ptr(),
                                           DOF);
         ENUTS_TOC(EDG_BEGIN);
@@ -2348,6 +2534,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         pMesh->readFromGhostEndEleDGVec(m_uiStVec[BLK_S - 1].get_vec_ptr(),
                                         DOF);
         ENUTS_TOC(EDG_END);
+        }
         ENUTS_TIC();
 
         for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {

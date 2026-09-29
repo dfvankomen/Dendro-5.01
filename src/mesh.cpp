@@ -23062,3 +23062,57 @@ void Mesh::ghostPosCheck(const char* tag) {
     inCheck = false;
 }
 }  // namespace ot
+
+namespace ot {
+
+void Mesh::buildEleDGScopedPlan(const std::vector<unsigned int>& dtOfElem,
+                                const std::vector<unsigned int>& distinctDT,
+                                EleDGScopedPlan& plan) const {
+    plan = EleDGScopedPlan();
+    if (!m_uiIsActive || m_uiActiveNpes == 0) return;
+    const unsigned int P  = m_uiActiveNpes;
+    const unsigned int nd = distinctDT.size();
+    plan.npes             = P;
+    plan.nd               = nd;
+    const unsigned int sTot = m_uiSendEleOffset[P - 1] + m_uiSendEleCount[P - 1];
+    const unsigned int rTot = m_uiRecvEleOffset[P - 1] + m_uiRecvEleCount[P - 1];
+    plan.sendPerm.resize(sTot);
+    plan.recvPerm.resize(rTot);
+    plan.sendCnt.assign((size_t)nd * P, 0);
+    plan.recvCnt.assign((size_t)nd * P, 0);
+
+    auto build = [&](const std::vector<unsigned int>& off,
+                     const std::vector<unsigned int>& cnt,
+                     const std::vector<unsigned int>& elemOfK,
+                     std::vector<unsigned int>& perm,
+                     std::vector<unsigned int>& outCnt) {
+        for (unsigned int p = 0; p < P; p++) {
+            const unsigned int b = off[p], c = cnt[p];
+            for (unsigned int i = 0; i < c; i++) perm[b + i] = b + i;
+            std::stable_sort(perm.begin() + b, perm.begin() + b + c,
+                             [&](unsigned int x, unsigned int y) {
+                                 return dtOfElem[elemOfK[x]] <
+                                        dtOfElem[elemOfK[y]];
+                             });
+            for (unsigned int d = 0; d < nd; d++) {
+                unsigned int n = 0;
+                for (unsigned int i = 0; i < c; i++)
+                    if (dtOfElem[elemOfK[perm[b + i]]] <= distinctDT[d]) n++;
+                outCnt[(size_t)d * P + p] = n;
+            }
+        }
+    };
+
+    std::vector<unsigned int> sendElem(sTot), recvElem(rTot);
+    for (unsigned int k = 0; k < sTot; k++)
+        sendElem[k] = m_uiElementLocalBegin + m_uiScatterMapElementRound1[k];
+    for (unsigned int k = 0; k < rTot; k++)
+        recvElem[k] = m_uiGhostElementRound1Index[k];
+
+    build(m_uiSendEleOffset, m_uiSendEleCount, sendElem, plan.sendPerm,
+          plan.sendCnt);
+    build(m_uiRecvEleOffset, m_uiRecvEleCount, recvElem, plan.recvPerm,
+          plan.recvCnt);
+}
+
+}  // namespace ot

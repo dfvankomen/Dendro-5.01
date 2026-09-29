@@ -2616,6 +2616,145 @@ void Mesh::readFromGhostEndEleDGVec(T* vec, unsigned int dof) {
 }
 
 template <typename T>
+void Mesh::readFromGhostBeginEleDGVecScoped(T* vec, unsigned int dof,
+                                            const EleDGScopedPlan& plan,
+                                            const unsigned int* sendCnt,
+                                            const unsigned int* recvCnt) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
+    if (!this->isActive()) return;
+
+    const unsigned int activeNpes = m_uiActiveNpes;
+    unsigned int sendTot = 0, recvTot = 0;
+    for (unsigned int p = 0; p < activeNpes; p++) {
+        sendTot += sendCnt[p];
+        recvTot += recvCnt[p];
+    }
+    if (this->commStatsOn()) {
+        s_uiCommStatEleDGBytesAll +=
+            (DendroIntL)sendTot * m_uiNpE * dof * sizeof(T);
+        s_uiCommStatEleDGCallsAll++;
+    }
+
+    AsyncExchangeContex ctx(vec);
+    MPI_Comm commActive = this->getMPICommunicator();
+
+    if (recvTot) {
+        ctx.allocateRecvBuffer(sizeof(T) * recvTot * m_uiNpE * dof);
+        T* recvB       = (T*)ctx.getRecvBuffer();
+        size_t roff    = 0;
+        for (unsigned int recv_p = 0; recv_p < m_uiElementRecvProcList.size();
+             recv_p++) {
+            const unsigned int proc_id = m_uiElementRecvProcList[recv_p];
+            const unsigned int c       = recvCnt[proc_id];
+            if (!c) continue;
+            MPI_Request* req = new MPI_Request();
+            par::Mpi_Irecv(recvB + dof * m_uiNpE * roff, dof * m_uiNpE * c,
+                           proc_id, m_uiCommTag, commActive, req);
+            ctx.getRequestList().push_back(req);
+            roff += c;
+        }
+    }
+
+    if (sendTot) {
+        ctx.allocateSendBuffer(sizeof(T) * dof * sendTot * m_uiNpE);
+        T* sendB    = (T*)ctx.getSendBuffer();
+        size_t soff = 0;
+        for (unsigned int send_p = 0; send_p < m_uiElementSendProcList.size();
+             send_p++) {
+            const unsigned int proc_id = m_uiElementSendProcList[send_p];
+            const unsigned int c       = sendCnt[proc_id];
+            if (!c) continue;
+            const unsigned int base = m_uiSendEleOffset[proc_id];
+            T* seg                  = sendB + dof * m_uiNpE * soff;
+            for (unsigned int var = 0; var < dof; var++)
+                for (unsigned int i = 0; i < c; i++) {
+                    const unsigned int k = plan.sendPerm[base + i];
+                    const T* src =
+                        vec + (size_t)var * m_uiNumTotalElements * m_uiNpE +
+                        (size_t)(m_uiElementLocalBegin +
+                                 m_uiScatterMapElementRound1[k]) *
+                            m_uiNpE;
+                    T* dst = seg + (size_t)var * m_uiNpE * c + (size_t)i * m_uiNpE;
+                    for (unsigned int node = 0; node < m_uiNpE; node++)
+                        dst[node] = src[node];
+                }
+            MPI_Request* req = new MPI_Request();
+            par::Mpi_Isend(seg, dof * m_uiNpE * c, proc_id, m_uiCommTag,
+                           commActive, req);
+            ctx.getRequestList().push_back(req);
+            soff += c;
+        }
+    }
+
+    m_uiCommTag++;
+    m_uiMPIContexts.push_back(ctx);
+}
+
+template <typename T>
+void Mesh::readFromGhostEndEleDGVecScoped(T* vec, unsigned int dof,
+                                          const EleDGScopedPlan& plan,
+                                          const unsigned int* recvCnt) {
+    if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
+    if (!this->isActive()) return;
+
+    const unsigned int activeNpes = m_uiActiveNpes;
+    unsigned int recvTot          = 0;
+    for (unsigned int p = 0; p < activeNpes; p++) recvTot += recvCnt[p];
+
+    int ctxIndex = -1;
+    for (unsigned int i = 0; i < m_uiMPIContexts.size(); i++) {
+        if (m_uiMPIContexts[i].getBuffer() == vec) {
+            ctxIndex = i;
+            break;
+        }
+    }
+    if (ctxIndex == -1) {
+        std::cout << "rank: " << m_uiActiveRank
+                  << " async ctx not found for vec in scoped ele-DG end: "
+                  << __LINE__ << std::endl;
+        MPI_Abort(m_uiCommActive, 0);
+    }
+
+    MPI_Status status;
+    for (unsigned int i = 0; i < m_uiMPIContexts[ctxIndex].getRequestList().size();
+         i++)
+        MPI_Wait(m_uiMPIContexts[ctxIndex].getRequestList()[i], &status);
+
+    if (recvTot) {
+        const T* recvB = (const T*)m_uiMPIContexts[ctxIndex].getRecvBuffer();
+        size_t roff    = 0;
+        for (unsigned int recv_p = 0; recv_p < m_uiElementRecvProcList.size();
+             recv_p++) {
+            const unsigned int proc_id = m_uiElementRecvProcList[recv_p];
+            const unsigned int c       = recvCnt[proc_id];
+            if (!c) continue;
+            const unsigned int base = m_uiRecvEleOffset[proc_id];
+            const T* seg            = recvB + dof * m_uiNpE * roff;
+            for (unsigned int var = 0; var < dof; var++)
+                for (unsigned int i = 0; i < c; i++) {
+                    const unsigned int k = plan.recvPerm[base + i];
+                    T* dst = vec +
+                             (size_t)var * m_uiNumTotalElements * m_uiNpE +
+                             (size_t)m_uiGhostElementRound1Index[k] * m_uiNpE;
+                    const T* src =
+                        seg + (size_t)var * m_uiNpE * c + (size_t)i * m_uiNpE;
+                    for (unsigned int node = 0; node < m_uiNpE; node++)
+                        dst[node] = src[node];
+                }
+            roff += c;
+        }
+    }
+
+    m_uiMPIContexts[ctxIndex].deAllocateSendBuffer();
+    m_uiMPIContexts[ctxIndex].deAllocateRecvBuffer();
+    for (unsigned int i = 0; i < m_uiMPIContexts[ctxIndex].getRequestList().size();
+         i++)
+        delete m_uiMPIContexts[ctxIndex].getRequestList()[i];
+    m_uiMPIContexts[ctxIndex].getRequestList().clear();
+    m_uiMPIContexts.erase(m_uiMPIContexts.begin() + ctxIndex);
+}
+
+template <typename T>
 void Mesh::writeFromGhostBegin(T* vec, unsigned int dof) {
     if (this->getMPICommSizeGlobal() == 1 || (!m_uiIsActive)) return;
 
