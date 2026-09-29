@@ -296,6 +296,41 @@ T vecMax(const ot::Mesh* pMesh, const T* v1, ot::VEC_TYPE vtype,
 }
 
 /**
+ * @brief L2 norm (sqrt of the sum of squares, not normalised) of a ghosted
+ * CG vector over the local node range, counting each grid point once: on a
+ * labelled mesh the local range also holds non-primary duplicate slots
+ * (Mesh::getLocalNonPrimaryNodes), which a plain local-range sum counts
+ * twice. On an SFC mesh this is normL2(v + nodeLocalBegin, nLocal, comm)
+ * (rank 0 holds the result, as there).
+ * Optionally returns the global count of unique nodes.
+ */
+template <typename T>
+T normL2Unique(const ot::Mesh* pMesh, const T* v, DendroIntL* nUnique = nullptr) {
+    if (!(pMesh->isActive())) return NAN;
+    const std::vector<unsigned int>& dup = pMesh->getLocalNonPrimaryNodes();
+    const unsigned int nb = pMesh->getNodeLocalBegin();
+    const unsigned int ne = pMesh->getNodeLocalEnd();
+    // same arithmetic as normL2(ptr, n, comm) so an SFC mesh stays bit-identical
+    T sum = 0;
+    size_t d = 0;
+    for (unsigned int i = nb; i < ne; i++) {
+        if (d < dup.size() && dup[d] == i) { d++; continue; }
+        if (std::isnan(v[i])) { sum = NAN; break; }
+        sum += pow(v[i], 2);
+    }
+    T l2 = sqrt(sum);
+    l2   = l2 * l2;
+    T gsum = 0;
+    par::Mpi_Reduce(&l2, &gsum, 1, MPI_SUM, 0, pMesh->getMPICommunicator());
+    if (nUnique) {
+        DendroIntL nl = (DendroIntL)(ne - nb) - (DendroIntL)dup.size(), ng = 0;
+        par::Mpi_Allreduce(&nl, &ng, 1, MPI_SUM, pMesh->getMPICommunicator());
+        *nUnique = ng;
+    }
+    return sqrt(gsum);
+}
+
+/**
  * @brief compute the L2 (discreate) over the mesh vector.
  *
  * @tparam T data type.

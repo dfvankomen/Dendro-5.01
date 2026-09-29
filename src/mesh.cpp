@@ -8380,6 +8380,21 @@ void Mesh::pruneZipSync() {
 }
 
 void Mesh::buildZipPlan() {
+    buildZipPlanCore();
+    m_uiLocalNonPrimaryCg.clear();
+    for (unsigned int cg : m_uiZipSyncRecvCg)
+        if (cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd)
+            m_uiLocalNonPrimaryCg.push_back(cg);
+    for (unsigned int cg : m_uiZipLocalDupDst)
+        if (cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd)
+            m_uiLocalNonPrimaryCg.push_back(cg);
+    std::sort(m_uiLocalNonPrimaryCg.begin(), m_uiLocalNonPrimaryCg.end());
+    m_uiLocalNonPrimaryCg.erase(
+        std::unique(m_uiLocalNonPrimaryCg.begin(), m_uiLocalNonPrimaryCg.end()),
+        m_uiLocalNonPrimaryCg.end());
+}
+
+void Mesh::buildZipPlanCore() {
     m_uiZipPlanCg.clear();
     m_uiZipPlanUnzipIdx.clear();
     // a rebuilt plan carries fresh sync lists; the in-place labelled rebuild

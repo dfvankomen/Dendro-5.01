@@ -715,6 +715,11 @@ class Mesh {
     std::vector<unsigned int> m_uiZipLocalDupSrc;
     std::vector<unsigned int> m_uiZipLocalDupDst;
 
+    /** sorted local cgs that are not their position's primary (cross-rank
+     *  sync recv targets + intra-rank dup destinations), captured before
+     *  pruneZipSync compacts the recv list. empty on SFC meshes. */
+    std::vector<unsigned int> m_uiLocalNonPrimaryCg;
+
     /** Enables broadcastCgValuesByPhysPos (the consensus pos-bcast).
      *  Set by full-machinery solvers (NLSM/BSSN buildGraphTwin); EM4's
      *  validated minimal config leaves it off. DENDRO_FORCE_POS_BCAST=1/0
@@ -1374,6 +1379,7 @@ class Mesh {
      * cascade and E2BlkMap must be finalized). Rebuilt on every
      * mesh change. */
     void buildZipPlan();
+    void buildZipPlanCore();
     /**@brief Drop zip-sync entries the nodal ghost exchange already delivers
      * (ghost slots in the recv scatter map that are not read as a send
      * source). Non-primary local slots are always kept. One keep-mask
@@ -2161,6 +2167,12 @@ class Mesh {
      * ensureZipPlanBuilt). For callers that need the plan's side-channel
      * products (zip-sync maps etc.) before any unzip/zip runs. */
     inline void ensureZipPlanBuiltPublic() { this->ensureZipPlanBuilt(); }
+    /** local cg slots duplicating another slot's position (labelled meshes).
+     *  a reduction over the local node range that must count each grid point
+     *  once (norms, node counts) skips these. valid once the zip plan is built. */
+    inline const std::vector<unsigned int>& getLocalNonPrimaryNodes() const {
+        return m_uiLocalNonPrimaryCg;
+    }
     /** zip-plan entries whose unzip index lies inside block `blk`: (planIdx, n) */
     void ensureBlockZipPlan();
     inline void blockZipPlan(unsigned int blk, const unsigned int*& planIdx,
