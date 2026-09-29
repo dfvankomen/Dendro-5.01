@@ -71,6 +71,45 @@ struct PhysKey3 {
 };
 // set of cg slots with the unordered_set calls the scatter-map code uses;
 // slots are dense indices below the node count, so a flag per slot
+// min-cost assignment on an n x n matrix (Hungarian, O(n^3)); col of each row
+std::vector<int> minCostAssignment(const std::vector<std::vector<double>>& a) {
+    const int n = (int)a.size();
+    const double INF = 1e300;
+    std::vector<double> u(n + 1, 0), v(n + 1, 0);
+    std::vector<int> p(n + 1, 0), way(n + 1, 0);
+    for (int i = 1; i <= n; ++i) {
+        p[0] = i;
+        int j0 = 0;
+        std::vector<double> minv(n + 1, INF);
+        std::vector<char> used(n + 1, 0);
+        do {
+            used[j0] = 1;
+            const int i0 = p[j0];
+            double delta = INF;
+            int j1 = 0;
+            for (int j = 1; j <= n; ++j)
+                if (!used[j]) {
+                    const double cur = a[i0 - 1][j - 1] - u[i0] - v[j];
+                    if (cur < minv[j]) { minv[j] = cur; way[j] = j0; }
+                    if (minv[j] < delta) { delta = minv[j]; j1 = j; }
+                }
+            for (int j = 0; j <= n; ++j)
+                if (used[j]) { u[p[j]] += delta; v[j] -= delta; }
+                else minv[j] -= delta;
+            j0 = j1;
+        } while (p[j0] != 0);
+        do {
+            const int j1 = way[j0];
+            p[j0] = p[j1];
+            j0 = j1;
+        } while (j0);
+    }
+    std::vector<int> col(n, -1);
+    for (int j = 1; j <= n; ++j)
+        if (p[j]) col[p[j] - 1] = j - 1;
+    return col;
+}
+
 struct SlotFlags {
     std::vector<char> f;
     explicit SlotFlags(size_t n) : f(n, 0) {}
@@ -20073,6 +20112,123 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             unsigned int p = (unsigned int)((off[l]++ * (unsigned long long)npes) / tot[l]);
             lab[i] = (p >= (unsigned int)npes) ? npes - 1 : p;
         }
+        // DENDRO_LEVELWISE_MATCH=1: the chunks above fix per-level balance; which
+        // rank gets which chunk is free. pick it per level (largest level first,
+        // identity) to maximise 26-adjacency with what each rank holds on the
+        // levels already assigned, so a rank's per-level pieces touch
+        static const bool match = [] {
+            const char* e = std::getenv("DENDRO_LEVELWISE_MATCH");
+            return e && e[0] == '1';
+        }();
+        if (!match || npes <= 1) return lab;
+        const D_INT_L myBeg = ele_offsets[rank], myEnd = ele_offsets[rank + 1];
+        const unsigned int NC = nlev * (unsigned int)npes;
+        auto codeOf = [&](size_t i) {
+            return (oct_connectivity_map[i].level - lmin) * (unsigned int)npes + lab[i];
+        };
+        // neighbour codes: local directly, remote from the owner in one round
+        std::vector<std::vector<D_INT_L>> ask(npes);
+        auto forNbrs = [&](const auto& oct, auto&& f) {
+            for (const auto g : oct.e2e) f(g);
+            for (const auto g : oct.edgeNeighbors) f(g);
+            for (const auto g : oct.vertexNeighbors) f(g);
+        };
+        const D_INT_L nGlobal = ele_offsets[npes];
+        auto ownerOf = [&](D_INT_L g) {
+            return (int)(std::upper_bound(ele_offsets.begin(), ele_offsets.end(), g) -
+                         ele_offsets.begin()) - 1;
+        };
+        for (size_t i = 0; i < localSz; ++i)
+            forNbrs(oct_connectivity_map[i], [&](D_INT_L g) {
+                if (g >= nGlobal || (g >= myBeg && g < myEnd)) return;
+                ask[ownerOf(g)].push_back(g);
+            });
+        for (auto& a : ask) {
+            std::sort(a.begin(), a.end());
+            a.erase(std::unique(a.begin(), a.end()), a.end());
+        }
+        std::vector<int> sc(npes), so(npes, 0), rc(npes), ro(npes, 0);
+        for (int p = 0; p < npes; ++p) sc[p] = (int)ask[p].size();
+        repartRound();
+        MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, commActive);
+        for (int p = 1; p < npes; ++p) {
+            so[p] = so[p - 1] + sc[p - 1];
+            ro[p] = ro[p - 1] + rc[p - 1];
+        }
+        std::vector<D_INT_L> askFlat, got(ro[npes - 1] + rc[npes - 1]);
+        for (const auto& a : ask) askFlat.insert(askFlat.end(), a.begin(), a.end());
+        const MPI_Datatype gidT = par::Mpi_datatype<D_INT_L>::value();
+        repartRound();
+        MPI_Alltoallv(askFlat.data(), sc.data(), so.data(), gidT, got.data(), rc.data(),
+                      ro.data(), gidT, commActive);
+        std::vector<unsigned int> ans(got.size()), back(askFlat.size());
+        for (size_t k = 0; k < got.size(); ++k) ans[k] = codeOf((size_t)(got[k] - myBeg));
+        repartRound();
+        MPI_Alltoallv(ans.data(), rc.data(), ro.data(), MPI_UNSIGNED, back.data(), sc.data(),
+                      so.data(), MPI_UNSIGNED, commActive);
+        std::unordered_map<D_INT_L, unsigned int> remoteCode;
+        remoteCode.reserve(askFlat.size());
+        for (size_t k = 0; k < askFlat.size(); ++k) remoteCode[askFlat[k]] = back[k];
+        // cross-level edge counts between (level, chunk) codes
+        std::unordered_map<unsigned long long, unsigned long long> pair;
+        for (size_t i = 0; i < localSz; ++i) {
+            const unsigned int a = codeOf(i);
+            forNbrs(oct_connectivity_map[i], [&](D_INT_L g) {
+                if (g >= nGlobal) return;
+                const unsigned int b = (g >= myBeg && g < myEnd)
+                                           ? codeOf((size_t)(g - myBeg))
+                                           : remoteCode[g];
+                if (b / (unsigned int)npes == a / (unsigned int)npes) return;
+                pair[(unsigned long long)a * NC + b]++;
+            });
+        }
+        std::vector<unsigned long long> flat;
+        for (const auto& kv : pair) { flat.push_back(kv.first); flat.push_back(kv.second); }
+        int nf = (int)flat.size();
+        std::vector<int> fc(npes), fo(npes, 0);
+        repartRound();
+        MPI_Gather(&nf, 1, MPI_INT, fc.data(), 1, MPI_INT, 0, commActive);
+        std::vector<unsigned long long> all;
+        if (!rank) {
+            for (int p = 1; p < npes; ++p) fo[p] = fo[p - 1] + fc[p - 1];
+            all.resize(fo[npes - 1] + fc[npes - 1]);
+        }
+        repartRound();
+        MPI_Gatherv(flat.data(), nf, MPI_UNSIGNED_LONG_LONG, all.data(), fc.data(), fo.data(),
+                    MPI_UNSIGNED_LONG_LONG, 0, commActive);
+        std::vector<int> perm(NC, -1);  // (level, chunk) -> rank
+        if (!rank) {
+            std::unordered_map<unsigned long long, double> A;
+            for (size_t k = 0; k + 1 < all.size(); k += 2) A[all[k]] += (double)all[k + 1];
+            std::vector<unsigned int> order;
+            for (unsigned int l = 0; l < nlev; ++l)
+                if (tot[l]) order.push_back(l);
+            std::sort(order.begin(), order.end(),
+                      [&](unsigned int x, unsigned int y) { return tot[x] > tot[y]; });
+            // rows grouped by level for the cost build
+            std::vector<std::vector<std::pair<unsigned int, double>>> row(NC);
+            for (const auto& kv : A)
+                row[(unsigned int)(kv.first / NC)].emplace_back(
+                    (unsigned int)(kv.first % NC), kv.second);
+            for (size_t oi = 0; oi < order.size(); ++oi) {
+                const unsigned int L = order[oi];
+                if (oi == 0) {
+                    for (int c = 0; c < npes; ++c) perm[L * npes + c] = c;
+                    continue;
+                }
+                std::vector<std::vector<double>> cost(npes, std::vector<double>(npes, 0.0));
+                for (int c = 0; c < npes; ++c)
+                    for (const auto& [b, w] : row[L * npes + c])
+                        if (perm[b] >= 0) cost[c][perm[b]] -= w;
+                const std::vector<int> col = minCostAssignment(cost);
+                for (int c = 0; c < npes; ++c) perm[L * npes + c] = col[c];
+            }
+            for (unsigned int k = 0; k < NC; ++k)
+                if (perm[k] < 0) perm[k] = (int)(k % npes);
+        }
+        repartRound();
+        MPI_Bcast(perm.data(), (int)NC, MPI_INT, 0, commActive);
+        for (size_t i = 0; i < localSz; ++i) lab[i] = (unsigned int)perm[codeOf(i)];
         return lab;
     };
 
