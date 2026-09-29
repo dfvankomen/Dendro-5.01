@@ -100,3 +100,9 @@ no-op remesh skip, coarse-level merge, minimax refine, offline async critical-pa
 - lw3 d11 np16 part-stats off | on: lvl lts_substep_eff 0.973 | 0.990, work_imb 1.028 | 1.010, padded_vol_imb 1.050 | 1.039, total padded vol 41.22M | 42.00M (+1.9 %), ghost send nodes 9.33M | 9.41M, LD Bal max 88255 | 86743. lw eff 0.937 | 0.952, work_imb 1.063 | 1.049, padded_vol_imb 1.073 | 1.063, ghost send 7.16M | 7.35M, LD Bal max 91234 | 90036. np16 barely binds the cap (n_L/128 < 64 only on L<=6 and L9).
 - Model (angleB, pm10 560k elems, `lw_blkad` = this rule with s_max 4, script `run2.py`; capped at 8 GB, wall time minutes): eff at np96/192/1024: lw 0.999/0.998/0.989, 64-atomic 0.940/0.898/0.614, adaptive 0.967/0.983/0.915; ghosts vs SFC 2.73/2.72/2.74x (lw), 2.64/2.57/2.19x (atomic), 2.66/2.70/2.65x (adaptive); scoped T(beta=.05) 0.875/0.849/0.710 (lw), 0.881/0.807/0.539 (atomic), 0.882/0.850/0.707 (adaptive). So the rule recovers nearly all of the atomic-block loss in eff at a 3-21 % ghost cost vs atomic.
 - Verdict: correct and gated for global RK; opt-in because ENUTS numerics shift with subdivided blocks. Needs the Kingspeak np192 run to see whether eff 0.58 -> ~0.95 shows up in wall.
+
+### Kingspeak K/K2 (2026-09-29) S0-S2 at scale, NLSM L case (d11), dendrolib snapshot 614493cb
+- Jobs: K 28494836 (np48, 1 round), K2 28494838 (np96, 2 rounds), K2 28494842 (np192, 2 rounds). Min/max digits bit-identical within each labelling (lw = lw_sc = lw_initold; sfc = sfc_sc).
+- Wall s (np48 / np96 / np192): sfc 140.2 / 88.8 / 63.9; sfc_sc 128.1 / 81.5 / 59.4; lvl_sc 125.2 / 79.7 / 54.0; lw_sc 129.2 / 81.3 / 55.5. np48 also: lw 153.8, lw_initold 164.7 (S1 = -11 s, S2 on lw = -25 s).
+- lvl_sc / sfc = 0.89 / 0.90 / 0.85; lvl_sc / sfc_sc = 0.98 / 0.98 / 0.91 (was lvl/sfc 1.14 / 1.20 / 1.18 in run M). partial_total lvl_sc / sfc_sc = 0.93 / 0.92 / 0.82.
+- np192 lts_substep_eff lvl 0.58 (block cap) -> S4 target.
