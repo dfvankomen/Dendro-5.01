@@ -4362,7 +4362,7 @@ class Mesh {
                           << numMissingGlobal << std::endl;
             static const bool connSparse = [] {
                 const char* v = std::getenv("DENDRO_CONNMAP_SPARSE");
-                return v && v[0] == '1';
+                return !(v && v[0] == '0');
             }();
             if (numMissingGlobal > 0 && connSparse) {
                 // sparse path: hash rendezvous on (x,y,z,level). every rank

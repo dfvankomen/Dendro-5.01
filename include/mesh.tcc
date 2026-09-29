@@ -7287,7 +7287,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     }
     if (oTotal == 0) { rpReport(); prof.mark(4); return; }  // no orphans anywhere, done
 
-    // DENDRO_REDIST_ORPHAN_P2P=1: no global gather of the orphans. every rank
+    // DENDRO_REDIST_ORPHAN_P2P (default on, =0 reverts): no global gather of the orphans. every rank
     // publishes a 32^3 occupancy bitmap of its src-local cg positions (O(P)
     // words, a conservative superset filter); each orphan query goes only to
     // the ranks whose bitmap covers its cell, and is answered from a hash of
@@ -7298,7 +7298,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         const char* v = std::getenv("DENDRO_REDIST_ORPHAN_P2P");
         const char* g = std::getenv("DENDRO_ORPHAN_FILL_GEOM_KEY");
         if (g && g[0] == '1') return false;  // legacy geometric keying: old path
-        return v && v[0] == '1';
+        return !(v && v[0] == '0');
     }();
     if (orphanP2P) {
         constexpr int GB = 32, GW = GB * GB * GB / 64;
