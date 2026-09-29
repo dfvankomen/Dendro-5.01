@@ -163,3 +163,12 @@ is an unordered_map (sm decode 66 → 26 ms, gated after Z2).
   plain levelwise (method 4) is 18-digit identical to SFC. Kingspeak: lw fine at np48/96, blown up at
   np192 (both lw and lw_old) → the np192 wall ratios compare against a broken run. Investigation →
   `docs/investigation_2026-09-28_fastpart_lts_blowup.md` (subagent).
+- **Fixed 2026-09-29 (subagent, jj vvvslrvl, `DENDRO_ZIPPLAN_INV_DG=0` reverts):** buildZipPlan's inverse
+  scatter used raw DG-tagged send codes as cg indices → ZNP mirror paired non-primary local cgs with
+  unrelated ghosts and overwrote them every exchange (global RK too). Full gate green; np=16 LTS sfc/lvl/
+  lw/fp agree on min/max to 15–18 digits (lw/fp l2 still 1e-5 relative off — open). **References moved
+  (all improvements):** EM4 graph np4 a75a069e→2603beb3, np8 32eb202e→32d48b0b; BSSN graph constraints
+  c1508613→a83112e3 and GW l2_m2 ed1127e4→b50bc05f (= the SFC md5: this bug was the long-open l2_m2
+  mismatch); tp_base np4_m3/np4_ragged/np8_m3 (TEST 8bw bufMism 1026–6817 → 0, TEST 8bi now passes).
+  Latent: legacy `ghostExchangeStart` (mesh.tcc) packs `vec[send]` without the DG decode — only used by
+  the old non-ctx RK classes (rk4nlsm, rkBSSN, EM4 rkSolver).
