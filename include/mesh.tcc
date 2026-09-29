@@ -2298,6 +2298,10 @@ void Mesh::readFromGhostBeginElementVec(T* vec, unsigned int dof) {
                                      m_uiSendEleCount[activeNpes - 1];
         const unsigned int recvBSz = m_uiRecvEleOffset[activeNpes - 1] +
                                      m_uiRecvEleCount[activeNpes - 1];
+        if (this->commStatsOn()) {
+            s_uiCommStatEleVecBytesAll += (DendroIntL)sendBSz * dof * sizeof(T);
+            s_uiCommStatEleVecCallsAll++;
+        }
         unsigned int proc_id;
 
         AsyncExchangeContex ctx(vec);
@@ -2454,6 +2458,10 @@ void Mesh::readFromGhostBeginEleDGVec(T* vec, unsigned int dof) {
         const unsigned int recvBSz = (m_uiRecvEleOffset[activeNpes - 1] +
                                       m_uiRecvEleCount[activeNpes - 1]) *
                                      m_uiNpE;
+        if (this->commStatsOn()) {
+            s_uiCommStatEleDGBytesAll += (DendroIntL)sendBSz * dof * sizeof(T);
+            s_uiCommStatEleDGCallsAll++;
+        }
         unsigned int proc_id;
 
         AsyncExchangeContex ctx(vec);

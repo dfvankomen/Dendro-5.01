@@ -32,6 +32,30 @@
 #define __LTS_BLK_SYNC_TIME_COMP_TOL__ 1e-6
 
 namespace ts {
+/**@brief DENDRO_ENUTS_PROF=1 wall-clock accumulators for partial_evolve (per
+ * rank, process-wide). env read once; off = zero cost, zero collectives. */
+struct EnutsProf {
+    enum { RHS = 0, EDG_BEGIN, EDG_END, SYNC_BLK, AXPY_ELETS, EVEC_XCH, WAIT, TOTAL, NT };
+    double t[NT]     = {0, 0, 0, 0, 0, 0, 0, 0};
+    double partial   = 0;      // partial steps taken (this rank was active)
+    double lev_sum   = 0;      // sum over partial steps of globally active levels
+    double blk_sum   = 0;      // sum over partial steps of locally active blocks
+    double blk_tot   = 0;      // sum over partial steps of local blocks
+    static bool on() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_PROF");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    static EnutsProf& get() {
+        static EnutsProf p;
+        return p;
+    }
+};
+}  // namespace ts
+
+namespace ts {
 /**@brief: Meta-data structure to compute the correct weight for the LTS wpart.
  */
 struct WeightedPartitionData {
@@ -522,6 +546,48 @@ ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart) : ETS<T, Ctx>(ctx) {
 
 template <typename T, typename Ctx>
 ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
+    if (ts::EnutsProf::on()) {
+        // collective over MPI_COMM_WORLD: every rank destroys its ENUTS object
+        ts::EnutsProf& P = ts::EnutsProf::get();
+        double loc[ts::EnutsProf::NT + 4];
+        for (int i = 0; i < ts::EnutsProf::NT; i++) loc[i] = P.t[i];
+        loc[ts::EnutsProf::NT + 0] = P.partial;
+        loc[ts::EnutsProf::NT + 1] = P.lev_sum;
+        loc[ts::EnutsProf::NT + 2] = P.blk_sum;
+        loc[ts::EnutsProf::NT + 3] = P.blk_tot;
+        double mn[ts::EnutsProf::NT + 4], mx[ts::EnutsProf::NT + 4],
+            sm[ts::EnutsProf::NT + 4];
+        MPI_Allreduce(loc, mn, ts::EnutsProf::NT + 4, MPI_DOUBLE, MPI_MIN,
+                      MPI_COMM_WORLD);
+        MPI_Allreduce(loc, mx, ts::EnutsProf::NT + 4, MPI_DOUBLE, MPI_MAX,
+                      MPI_COMM_WORLD);
+        MPI_Allreduce(loc, sm, ts::EnutsProf::NT + 4, MPI_DOUBLE, MPI_SUM,
+                      MPI_COMM_WORLD);
+        int rk = 0, np = 1;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+        MPI_Comm_size(MPI_COMM_WORLD, &np);
+        if (rk == 0 && mx[ts::EnutsProf::NT] > 0) {
+            static const char* nm[ts::EnutsProf::NT] = {
+                "rhs+zipDG",  "eledg_begin", "eledg_end", "sync_blk_ts+post",
+                "axpy+ele_ts", "elevec_xch",  "waitActive", "partial_total"};
+            std::cout << "[enuts-prof] npes=" << np
+                      << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
+                      << " mean_active_levels/step="
+                      << mx[ts::EnutsProf::NT + 1] /
+                             std::max(1.0, mx[ts::EnutsProf::NT])
+                      << " mean_active_blk_frac(local,rank-avg)="
+                      << sm[ts::EnutsProf::NT + 2] /
+                             std::max(1.0, sm[ts::EnutsProf::NT + 3])
+                      << std::endl;
+            std::cout << "[enuts-prof] phase min mean max (s over ranks)"
+                      << std::endl;
+            for (int i = 0; i < ts::EnutsProf::NT; i++)
+                std::cout << "[enuts-prof] " << nm[i] << " " << mn[i] << " "
+                          << sm[i] / np << " " << mx[i] << std::endl;
+        }
+        for (int i = 0; i < ts::EnutsProf::NT; i++) P.t[i] = 0;
+        P.partial = P.lev_sum = P.blk_sum = P.blk_tot = 0;
+    }
     this->deallocate_internal_vars();
     this->free_data_structures();
 }
@@ -2085,6 +2151,11 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
 
     if (!(pMesh->isActive())) return;
+    const bool prof = ts::EnutsProf::on();
+    double tp0 = 0, tp1 = 0, tpT = 0;
+    if (prof) tpT = MPI_Wtime();
+#define ENUTS_TIC() do { if (prof) tp0 = MPI_Wtime(); } while (0)
+#define ENUTS_TOC(k) do { if (prof) { tp1 = MPI_Wtime(); ts::EnutsProf::get().t[ts::EnutsProf::k] += tp1 - tp0; } } while (0)
 
     const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
     const ot::TreeNode* pNodes            = pMesh->getAllElements().data();
@@ -2196,8 +2267,20 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
     // }
 
+    if (prof) {
+        ts::EnutsProf& P = ts::EnutsProf::get();
+        P.partial += 1;
+        P.blk_sum += (double)m_uiActiveBlkIDs.size();
+        P.blk_tot += (double)blkList.size();
+        unsigned int nl = 0;
+        for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
+            if (pt % m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax) == 0) nl++;
+        P.lev_sum += nl;
+    }
+
     for (unsigned int rk = 1; rk <= m_uiNumStages; rk++) {
         const unsigned int BLK_S = rk;
+        ENUTS_TIC();
         for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {
             const unsigned int blk   = m_uiActiveBlkIDs[bb];
             const unsigned int BLK_T = m_uiBVec[blk]._time;
@@ -2256,10 +2339,16 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 #endif
         }
 
+        ENUTS_TOC(RHS);
+        ENUTS_TIC();
         pMesh->readFromGhostBeginEleDGVec(m_uiStVec[BLK_S - 1].get_vec_ptr(),
                                           DOF);
+        ENUTS_TOC(EDG_BEGIN);
+        ENUTS_TIC();
         pMesh->readFromGhostEndEleDGVec(m_uiStVec[BLK_S - 1].get_vec_ptr(),
                                         DOF);
+        ENUTS_TOC(EDG_END);
+        ENUTS_TIC();
 
         for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {
             const unsigned int blk   = m_uiActiveBlkIDs[bb];
@@ -2280,6 +2369,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             // step size: "<<BLK_DT<<" is synced:
             // "<<m_uiBVec[blk]._vec[BLK_S].isSynced()<<std::endl;
         }
+        ENUTS_TOC(SYNC_BLK);
 
         // 02/12/2021 : The overlapped ghost exchange has a bug. - look at line
         // 1768 when uncommenting
@@ -2329,6 +2419,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         */
     }
 
+    ENUTS_TIC();
     // compute the time step vector and increment time.
     for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {
         const unsigned int blk   = m_uiActiveBlkIDs[bb];
@@ -2362,14 +2453,22 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     }
 
     update_ele_timestep();
+    ENUTS_TOC(AXPY_ELETS);
+    ENUTS_TIC();
 
     pMesh->readFromGhostBeginElementVec(m_uiEleTime.data(), 1);
     pMesh->readFromGhostEndElementVec(m_uiEleTime.data(), 1);
 
     pMesh->readFromGhostBeginElementVec(m_uiEleDT.data(), 1);
     pMesh->readFromGhostEndElementVec(m_uiEleDT.data(), 1);
+    ENUTS_TOC(EVEC_XCH);
+    ENUTS_TIC();
 
     pMesh->waitActive();
+    ENUTS_TOC(WAIT);
+    if (prof) ts::EnutsProf::get().t[ts::EnutsProf::TOTAL] += MPI_Wtime() - tpT;
+#undef ENUTS_TIC
+#undef ENUTS_TOC
 }
 
 template <typename T, typename Ctx>

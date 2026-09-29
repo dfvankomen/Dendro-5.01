@@ -727,6 +727,10 @@ DendroIntL Mesh::s_uiCommStatSyncBytesAll = 0;
 DendroIntL Mesh::s_uiCommStatSyncCallsAll = 0;
 DendroIntL Mesh::s_uiCommStatBcastBytesAll = 0;
 DendroIntL Mesh::s_uiCommStatBcastCallsAll = 0;
+DendroIntL Mesh::s_uiCommStatEleDGBytesAll = 0;
+DendroIntL Mesh::s_uiCommStatEleDGCallsAll = 0;
+DendroIntL Mesh::s_uiCommStatEleVecBytesAll = 0;
+DendroIntL Mesh::s_uiCommStatEleVecCallsAll = 0;
 double Mesh::s_dProfGhostBegin = 0.0;
 double Mesh::s_dProfGhostEnd   = 0.0;
 double Mesh::s_dProfUnzip      = 0.0;
@@ -737,15 +741,18 @@ void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
     // [0]=bytesSent [1]=bytesRecv [2]=nodesSent [3]=nodesRecv [4]=exchanges
     // [5]=zip-sync bytes sent [6]=zip-sync collective calls
     // [7]=pos-bcast bytes sent [8]=pos-bcast calls
-    DendroIntL local[9] = {s_uiCommStatBytesSentAll, s_uiCommStatBytesRecvAll,
+    // [9,10]=element-DG exchange bytes/calls [11,12]=element-vec bytes/calls
+    DendroIntL local[13] = {s_uiCommStatBytesSentAll, s_uiCommStatBytesRecvAll,
                            s_uiCommStatNodesSentAll, s_uiCommStatNodesRecvAll,
                            s_uiCommStatExchangesAll,  s_uiCommStatSyncBytesAll,
                            s_uiCommStatSyncCallsAll,  s_uiCommStatBcastBytesAll,
-                           s_uiCommStatBcastCallsAll};
-    DendroIntL sum[9]   = {0, 0, 0, 0, 0, 0, 0, 0, 0};
-    DendroIntL maxv[9]  = {0, 0, 0, 0, 0, 0, 0, 0, 0};
-    par::Mpi_Reduce(local, sum, 9, MPI_SUM, 0, m_uiCommActive);
-    par::Mpi_Reduce(local, maxv, 9, MPI_MAX, 0, m_uiCommActive);
+                           s_uiCommStatBcastCallsAll,
+                            s_uiCommStatEleDGBytesAll, s_uiCommStatEleDGCallsAll,
+                            s_uiCommStatEleVecBytesAll, s_uiCommStatEleVecCallsAll};
+    DendroIntL sum[13]  = {0};
+    DendroIntL maxv[13] = {0};
+    par::Mpi_Reduce(local, sum, 13, MPI_SUM, 0, m_uiCommActive);
+    par::Mpi_Reduce(local, maxv, 13, MPI_MAX, 0, m_uiCommActive);
 
     if (m_uiActiveRank == 0) {
         const double meanBytesSent =
@@ -762,6 +769,8 @@ void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
             << " bytes_sent_imbalance=" << imbal
             << " sync_bytes_sent=" << sum[5] << " sync_calls=" << maxv[6]
             << " bcast_bytes_sent=" << sum[7] << " bcast_calls=" << maxv[8]
+            << " eledg_bytes_sent=" << sum[9] << " eledg_calls=" << maxv[10]
+            << " elevec_bytes_sent=" << sum[11] << " elevec_calls=" << maxv[12]
             << std::endl;
     }
     if (meshProfOn()) {

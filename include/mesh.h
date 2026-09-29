@@ -1010,6 +1010,11 @@ class Mesh {
     // consensus pos-bcast (broadcastCgValuesByPhysPos) tally, same gate
     static DendroIntL s_uiCommStatBcastBytesAll;
     static DendroIntL s_uiCommStatBcastCallsAll;
+    // element-vector / element-DG ghost exchange tallies (bytes sent, calls)
+    static DendroIntL s_uiCommStatEleDGBytesAll;
+    static DendroIntL s_uiCommStatEleDGCallsAll;
+    static DendroIntL s_uiCommStatEleVecBytesAll;
+    static DendroIntL s_uiCommStatEleVecCallsAll;
 
     /**@brief : number of elements that needed to be sent to each processor*/
     std::vector<unsigned int> m_uiSendEleCount;
