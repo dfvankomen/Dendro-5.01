@@ -6717,6 +6717,10 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                       << stats[0] << " duplicate TreeNodes across dst ranks"
                       << " (directory first-wins; routing is unreliable)"
                       << std::endl;
+        if (rprof && !rank)
+            std::cout << "[redist-dir-tally] path=rendezvous elems=" << stats[1]
+                      << " (allgatherv path would gather every dst TreeNode)"
+                      << std::endl;
         static bool announced = false;
         if (!rank && !announced) {
             announced = true;
@@ -6749,6 +6753,9 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                        counts.data(), offs.data(),
                        par::Mpi_datatype<ot::TreeNode>::value(), comm);
 
+        if (rprof && !rank)
+            std::cout << "[redist-dir-tally] path=allgatherv elems=" << total
+                      << std::endl;
         std::unordered_map<ot::TreeNode, int, TNHash> tnToRank;
         tnToRank.reserve((size_t)total);
         size_t tnRankDup = 0;
@@ -7280,6 +7287,202 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     }
     if (oTotal == 0) { rpReport(); prof.mark(4); return; }  // no orphans anywhere, done
 
+    // DENDRO_REDIST_ORPHAN_P2P=1: no global gather of the orphans. every rank
+    // publishes a 32^3 occupancy bitmap of its src-local cg positions (O(P)
+    // words, a conservative superset filter); each orphan query goes only to
+    // the ranks whose bitmap covers its cell, and is answered from a hash of
+    // just the queried positions filled in one pass over the local cgs.
+    // Same answers, same write order (own rank first, then ascending source
+    // rank), so bit-identical to the gather path.
+    static const bool orphanP2P = [] {
+        const char* v = std::getenv("DENDRO_REDIST_ORPHAN_P2P");
+        const char* g = std::getenv("DENDRO_ORPHAN_FILL_GEOM_KEY");
+        if (g && g[0] == '1') return false;  // legacy geometric keying: old path
+        return v && v[0] == '1';
+    }();
+    if (orphanP2P) {
+        constexpr int GB = 32, GW = GB * GB * GB / 64;
+        const uint64_t domD = ((uint64_t)1 << m_uiMaxDepth) * dstEOrd;
+        auto cellOf = [&](uint64_t x, uint64_t y, uint64_t z) {
+            auto c1 = [&](uint64_t v) {
+                uint64_t c = v * GB / domD;
+                return (int)(c >= (uint64_t)GB ? GB - 1 : c);
+            };
+            return (c1(x) * GB + c1(y)) * GB + c1(z);
+        };
+        // canonical phys of every src-local cg (same as the map below)
+        auto srcPos = [&](unsigned int cg, uint64_t& x, uint64_t& y,
+                          uint64_t& z) {
+            if (cg >= m_uiCG2DG.size()) return false;
+            const unsigned int dg = m_uiCG2DG[cg];
+            if (dg == LOOK_UP_TABLE_DEFAULT) return false;
+            const unsigned int oe = dg / npe, on = dg % npe;
+            if (oe >= m_uiAllElements.size()) return false;
+            const auto& t          = m_uiAllElements[oe];
+            const unsigned int sEO = m_uiElementOrder;
+            const uint64_t len = (uint64_t)1 << (m_uiMaxDepth - t.getLevel());
+            x = (uint64_t)t.getX() * sEO + (uint64_t)(on % (sEO + 1)) * len;
+            y = (uint64_t)t.getY() * sEO +
+                (uint64_t)((on / (sEO + 1)) % (sEO + 1)) * len;
+            z = (uint64_t)t.getZ() * sEO +
+                (uint64_t)(on / ((sEO + 1) * (sEO + 1))) * len;
+            return true;
+        };
+        std::vector<uint64_t> myBits(GW, 0), allBits((size_t)GW * npes);
+        if (m_uiIsActive)
+            for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd;
+                 cg++) {
+                uint64_t x, y, z;
+                if (!srcPos(cg, x, y, z)) continue;
+                const int c = cellOf(x, y, z);
+                myBits[c >> 6] |= (uint64_t)1 << (c & 63);
+            }
+        MPI_Allgather(myBits.data(), GW, MPI_UINT64_T, allBits.data(), GW,
+                      MPI_UINT64_T, comm);
+        // queries: [x y z cg] per orphan per candidate rank
+        std::vector<std::vector<uint64_t>> qB(npes);
+        unsigned long long tl[3] = {(unsigned long long)myOrphCount, 0, 0};
+        for (int k = 0; k < myOrphCount; k++) {
+            const auto& o = myOrphans[k];
+            const int c   = cellOf(o.x, o.y, o.z);
+            for (int p = 0; p < npes; p++) {
+                if (p == rank) continue;
+                if (!((allBits[(size_t)p * GW + (c >> 6)] >> (c & 63)) & 1))
+                    continue;
+                qB[p].push_back(o.x);
+                qB[p].push_back(o.y);
+                qB[p].push_back(o.z);
+                qB[p].push_back(o.cg);
+                tl[1]++;
+            }
+        }
+        std::vector<int> sC(npes), sO(npes, 0), rC(npes), rO(npes, 0);
+        for (int p = 0; p < npes; p++) sC[p] = (int)qB[p].size();
+        MPI_Alltoall(sC.data(), 1, MPI_INT, rC.data(), 1, MPI_INT, comm);
+        for (int p = 1; p < npes; p++) {
+            sO[p] = sO[p - 1] + sC[p - 1];
+            rO[p] = rO[p - 1] + rC[p - 1];
+        }
+        std::vector<uint64_t> qFlat;
+        qFlat.reserve((size_t)sO[npes - 1] + sC[npes - 1]);
+        for (int p = 0; p < npes; p++)
+            qFlat.insert(qFlat.end(), qB[p].begin(), qB[p].end());
+        qB.clear();
+        std::vector<uint64_t> qRecv((size_t)rO[npes - 1] + rC[npes - 1]);
+        MPI_Alltoallv(qFlat.data(), sC.data(), sO.data(), MPI_UINT64_T,
+                      qRecv.data(), rC.data(), rO.data(), MPI_UINT64_T, comm);
+        qFlat.clear();
+
+        // hash of just the queried positions (own + received) -> src cg
+        struct PosH {
+            size_t operator()(const std::tuple<uint64_t, uint64_t, uint64_t>& k)
+                const noexcept {
+                uint64_t h = std::get<0>(k);
+                h = (h << 21) ^ std::get<1>(k);
+                h = (h << 21) ^ std::get<2>(k);
+                h ^= h >> 33;
+                h *= 0xff51afd7ed558ccdULL;
+                h ^= h >> 33;
+                return (size_t)h;
+            }
+        };
+        std::unordered_map<std::tuple<uint64_t, uint64_t, uint64_t>,
+                           unsigned int, PosH>
+            qPos;
+        qPos.reserve((size_t)myOrphCount + qRecv.size() / 4);
+        for (int k = 0; k < myOrphCount; k++)
+            qPos.emplace(std::make_tuple(myOrphans[k].x, myOrphans[k].y,
+                                         myOrphans[k].z),
+                         LOOK_UP_TABLE_DEFAULT);
+        for (size_t i = 0; i + 3 < qRecv.size(); i += 4)
+            qPos.emplace(std::make_tuple(qRecv[i], qRecv[i + 1], qRecv[i + 2]),
+                         LOOK_UP_TABLE_DEFAULT);
+        if (m_uiIsActive)
+            for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd;
+                 cg++) {
+                uint64_t x, y, z;
+                if (!srcPos(cg, x, y, z)) continue;
+                auto it = qPos.find(std::make_tuple(x, y, z));
+                // ascending cg, first wins (= lowest cg, as the std::map path)
+                if (it != qPos.end() && it->second == LOOK_UP_TABLE_DEFAULT)
+                    it->second = cg;
+            }
+        // own-rank orphans first
+        for (int k = 0; k < myOrphCount; k++) {
+            auto it = qPos.find(std::make_tuple(myOrphans[k].x, myOrphans[k].y,
+                                                myOrphans[k].z));
+            if (it->second == LOOK_UP_TABLE_DEFAULT) continue;
+            for (unsigned int v = 0; v < dof; v++)
+                vecOut[v * dstCgSz + myOrphans[k].cg] =
+                    vecIn[v * srcCgSz + it->second];
+            if (rprobe) rpPath[myOrphans[k].cg] = 3;
+            markWritten(myOrphans[k].cg);
+        }
+        // answer the remote queries: (dst cg, dof values) back per asker
+        std::vector<std::vector<T>>            sendVal(npes);
+        std::vector<std::vector<unsigned int>> sendCG(npes);
+        for (int p = 0; p < npes; p++)
+            for (int i = rO[p]; i < rO[p] + rC[p]; i += 4) {
+                auto it = qPos.find(std::make_tuple(qRecv[i], qRecv[i + 1],
+                                                    qRecv[i + 2]));
+                if (it->second == LOOK_UP_TABLE_DEFAULT) continue;
+                sendCG[p].push_back((unsigned int)qRecv[i + 3]);
+                for (unsigned int v = 0; v < dof; v++)
+                    sendVal[p].push_back(vecIn[v * srcCgSz + it->second]);
+                tl[2]++;
+            }
+        std::vector<int> sCG(npes), rCG(npes), sVal(npes), rVal(npes);
+        std::vector<int> sCGo(npes, 0), rCGo(npes, 0), sVo(npes, 0),
+            rVo(npes, 0);
+        for (int p = 0; p < npes; p++) {
+            sCG[p]  = (int)sendCG[p].size();
+            sVal[p] = (int)sendVal[p].size();
+        }
+        MPI_Alltoall(sCG.data(), 1, MPI_INT, rCG.data(), 1, MPI_INT, comm);
+        MPI_Alltoall(sVal.data(), 1, MPI_INT, rVal.data(), 1, MPI_INT, comm);
+        int tsC = 0, trC = 0, tsV = 0, trV = 0;
+        for (int p = 0; p < npes; p++) {
+            sCGo[p] = tsC; tsC += sCG[p];
+            rCGo[p] = trC; trC += rCG[p];
+            sVo[p]  = tsV; tsV += sVal[p];
+            rVo[p]  = trV; trV += rVal[p];
+        }
+        std::vector<T> fV;
+        std::vector<unsigned int> fC;
+        fV.reserve(tsV);
+        fC.reserve(tsC);
+        for (int p = 0; p < npes; p++) {
+            fV.insert(fV.end(), sendVal[p].begin(), sendVal[p].end());
+            fC.insert(fC.end(), sendCG[p].begin(), sendCG[p].end());
+        }
+        std::vector<T> rV(trV);
+        std::vector<unsigned int> rC2(trC);
+        MPI_Alltoallv(fV.data(), sVal.data(), sVo.data(),
+                      par::Mpi_datatype<T>::value(), rV.data(), rVal.data(),
+                      rVo.data(), par::Mpi_datatype<T>::value(), comm);
+        MPI_Alltoallv(fC.data(), sCG.data(), sCGo.data(), MPI_UNSIGNED,
+                      rC2.data(), rCG.data(), rCGo.data(), MPI_UNSIGNED, comm);
+        for (int i = 0; i < trC; i++) {
+            for (unsigned int v = 0; v < dof; v++)
+                vecOut[v * dstCgSz + rC2[i]] = rV[(size_t)i * dof + v];
+            if (rprobe) rpPath[rC2[i]] = 3;
+            markWritten(rC2[i]);
+        }
+        if (rprof) {
+            MPI_Allreduce(MPI_IN_PLACE, tl, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
+                          comm);
+            if (!rank)
+                std::cout << "[redist-orphan] path=p2p orphans=" << tl[0]
+                          << " queries_sent=" << tl[1] << " (gather path: "
+                          << tl[0] * (unsigned long long)(npes - 1)
+                          << ") answered=" << tl[2] << std::endl;
+        }
+    } else {
+    if (rprof) {
+        if (!rank)
+            std::cout << "[redist-orphan] path=allgatherv orphans=" << oTotal
+                      << " (each rank scans " << oTotal << ")" << std::endl;
+    }
     std::vector<int>          oAllRank(oTotal);
     std::vector<unsigned int> oAllCG(oTotal);
     std::vector<uint64_t>     oAllX(oTotal), oAllY(oTotal), oAllZ(oTotal);
@@ -7479,6 +7682,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         if (rprobe) rpPath[recvCGO[i]] = 3;
         markWritten(recvCGO[i]);
     }
+    }  // orphan gather path
 
     // Deterministic residual fill: any dst-LOCAL cg that NO write path
     // covered (element delivery, orphan fill same-rank or cross-rank)

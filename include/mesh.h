@@ -4360,7 +4360,126 @@ class Mesh {
             if (rank == 0)
                 std::cout << "[conn-map] referenced-missing ids (global): "
                           << numMissingGlobal << std::endl;
-            if (numMissingGlobal > 0) {
+            static const bool connSparse = [] {
+                const char* v = std::getenv("DENDRO_CONNMAP_SPARSE");
+                return v && v[0] == '1';
+            }();
+            if (numMissingGlobal > 0 && connSparse) {
+                // sparse path: hash rendezvous on (x,y,z,level). every rank
+                // ships its local (key,gid) to the key's directory rank, then
+                // asks the directory for the ids it lacks. O(local) memory,
+                // no global gather.
+                auto dirOf = [&](unsigned int x, unsigned int y, unsigned int z,
+                                 unsigned int l) {
+                    uint64_t h = x;
+                    h          = (h << 21) ^ y;
+                    h          = (h << 21) ^ z;
+                    h          = (h << 6) ^ l;
+                    h ^= h >> 33;
+                    h *= 0xff51afd7ed558ccdULL;
+                    h ^= h >> 33;
+                    h *= 0xc4ceb9fe1a85ec53ULL;
+                    h ^= h >> 33;
+                    return (int)(h % (uint64_t)npes);
+                };
+                // ships buckets[p] (flat uint vectors) and returns the
+                // received flat array with per-source counts/offsets
+                auto xchg = [&](std::vector<std::vector<unsigned int>>& bk,
+                                std::vector<unsigned int>& recv,
+                                std::vector<int>& rC, std::vector<int>& rO) {
+                    std::vector<int> sC(npes), sO(npes, 0);
+                    for (int p = 0; p < npes; p++) sC[p] = (int)bk[p].size();
+                    for (int p = 1; p < npes; p++) sO[p] = sO[p - 1] + sC[p - 1];
+                    rC.assign(npes, 0);
+                    rO.assign(npes, 0);
+                    MPI_Alltoall(sC.data(), 1, MPI_INT, rC.data(), 1, MPI_INT,
+                                 commActive);
+                    for (int p = 1; p < npes; p++) rO[p] = rO[p - 1] + rC[p - 1];
+                    std::vector<unsigned int> flat;
+                    flat.reserve((size_t)sO[npes - 1] + sC[npes - 1]);
+                    for (int p = 0; p < npes; p++)
+                        flat.insert(flat.end(), bk[p].begin(), bk[p].end());
+                    recv.resize((size_t)rO[npes - 1] + rC[npes - 1]);
+                    MPI_Alltoallv(flat.data(), sC.data(), sO.data(), MPI_UNSIGNED,
+                                  recv.data(), rC.data(), rO.data(), MPI_UNSIGNED,
+                                  commActive);
+                };
+                std::vector<std::vector<unsigned int>> dBk(npes);
+                for (unsigned int e = lb; e < le; e++) {
+                    auto& b = dBk[dirOf(pNodes[e].getX(), pNodes[e].getY(),
+                                        pNodes[e].getZ(), pNodes[e].getLevel())];
+                    b.push_back(pNodes[e].getX());
+                    b.push_back(pNodes[e].getY());
+                    b.push_back(pNodes[e].getZ());
+                    b.push_back(pNodes[e].getLevel());
+                    b.push_back(eid_vec[e]);
+                }
+                std::vector<unsigned int> dRecv;
+                std::vector<int> dC, dO;
+                repartRound();
+                xchg(dBk, dRecv, dC, dO);
+                dBk.clear();
+                dBk.shrink_to_fit();
+                std::map<std::tuple<unsigned int, unsigned int, unsigned int,
+                                    unsigned int>,
+                         T>
+                    dir;
+                for (size_t i = 0; i + 4 < dRecv.size(); i += 5)
+                    dir[std::make_tuple(dRecv[i], dRecv[i + 1], dRecv[i + 2],
+                                        dRecv[i + 3])] = dRecv[i + 4];
+                dRecv.clear();
+                dRecv.shrink_to_fit();
+                // queries: every unresolved element slot
+                std::vector<std::vector<unsigned int>> qBk(npes);
+                std::vector<std::vector<unsigned int>> qEl(npes);
+                for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+                    if (eid_vec[ele] != LOOK_UP_TABLE_DEFAULT) continue;
+                    const int d = dirOf(pNodes[ele].getX(), pNodes[ele].getY(),
+                                        pNodes[ele].getZ(), pNodes[ele].getLevel());
+                    auto& b     = qBk[d];
+                    b.push_back(pNodes[ele].getX());
+                    b.push_back(pNodes[ele].getY());
+                    b.push_back(pNodes[ele].getZ());
+                    b.push_back(pNodes[ele].getLevel());
+                    qEl[d].push_back(ele);
+                }
+                std::vector<unsigned int> qRecv;
+                std::vector<int> qC, qO;
+                xchg(qBk, qRecv, qC, qO);
+                // answer in place: one uint per 4-uint query
+                std::vector<std::vector<unsigned int>> aBk(npes);
+                for (int p = 0; p < npes; p++) {
+                    const size_t nq = (size_t)qC[p] / 4;
+                    aBk[p].reserve(nq);
+                    for (size_t i = 0; i < nq; i++) {
+                        const unsigned int* q = &qRecv[qO[p] + 4 * i];
+                        auto it = dir.find(std::make_tuple(q[0], q[1], q[2], q[3]));
+                        aBk[p].push_back(it == dir.end() ? (unsigned int)LOOK_UP_TABLE_DEFAULT
+                                                         : (unsigned int)it->second);
+                    }
+                }
+                std::vector<unsigned int> aRecv;
+                std::vector<int> aC, aO;
+                xchg(aBk, aRecv, aC, aO);
+                unsigned long long tally[2] = {0, 0};
+                for (int p = 0; p < npes; p++)
+                    for (size_t i = 0; i < qEl[p].size(); i++) {
+                        const unsigned int v = aRecv[aO[p] + i];
+                        tally[0]++;
+                        if (v != (unsigned int)LOOK_UP_TABLE_DEFAULT) {
+                            eid_vec[qEl[p][i]] = v;
+                            tally[1]++;
+                        }
+                    }
+                MPI_Allreduce(MPI_IN_PLACE, tally, 2, MPI_UNSIGNED_LONG_LONG,
+                              MPI_SUM, commActive);
+                if (rank == 0)
+                    std::cout << "[connmap-tally] path=sparse rendezvous queries="
+                              << tally[0] << " resolved=" << tally[1] << std::endl;
+            } else if (numMissingGlobal > 0) {
+                if (rank == 0)
+                    std::cout << "[connmap-tally] path=allgatherv (global gather of "
+                              << num_ele_global << " elements)" << std::endl;
                 // gather all local element descriptors globally
                 // each entry: (x, y, z, level, global_id) packed as
                 // 5 unsigned ints
