@@ -2998,6 +2998,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
 
     m_uiIsNodalMapValid.clear();
     m_uiIsNodalMapValid.resize(m_uiAllElements.size(), true);
+    m_uiNodalMapIsRing = false;
 
     for (unsigned int e = m_uiElementPreGhostBegin; e < m_uiElementPreGhostEnd;
          e++) {
@@ -3283,6 +3284,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in) {
 
     m_uiIsNodalMapValid.clear();
     m_uiIsNodalMapValid.resize(m_uiAllElements.size(), true);
+    m_uiNodalMapIsRing = false;
 
 #ifdef DEBUG_MESH_GENERATION
     /*  std::vector<ot::TreeNode> missedKeys;
@@ -9069,8 +9071,13 @@ void Mesh::buildZipPlan() {
                 const LocalClaim* w = findMyMinDg(oe, on);
                 if (w) bndG[w - myMin.data()] = 1;
             };
+            // another rank's local slot here is a node of an element touching
+            // one of mine: ring 1. rings 2/3 cannot reach a local position
+            const bool ringKnown = m_uiNodalMapIsRing &&
+                                   m_uiIsNodalMapValid.size() >= m_uiNumTotalElements;
             for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
                 if (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd) continue;
+                if (ringKnown && !m_uiIsNodalMapValid[e]) continue;
                 for (unsigned int k = 0; k < npe; k++)
                     markCg(m_uiE2NMapping_CG[(size_t)e * npe + k]);
             }
@@ -20806,6 +20813,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         if (new_oct_connectivity_map[e].isGhostTwo)
             m_uiIsNodalMapValid[e] = false;
     }
+    m_uiNodalMapIsRing = true;
 
     // Build order-2 E2N from E2E (handles hanging nodes correctly)
     {
@@ -22276,8 +22284,11 @@ void Mesh::buildBcastPlanDist(int claimLevel,
             PhysKey3 k;
             if (cgPos(c, k)) exPos.push_back(k);
         };
+        const bool ringKnown = m_uiNodalMapIsRing &&
+                               m_uiIsNodalMapValid.size() >= m_uiNumTotalElements;
         for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
             if (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd) continue;
+            if (ringKnown && !m_uiIsNodalMapValid[e]) continue;  // rings 2/3
             for (unsigned int q = 0; q < npe; q++) {
                 const unsigned int ni = q % (eOrd + 1);
                 const unsigned int nj = (q / (eOrd + 1)) % (eOrd + 1);

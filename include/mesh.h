@@ -1167,6 +1167,9 @@ class Mesh {
 
     /**bool vector for elementy ID, of size m_uiAllElements*/
     std::vector<bool> m_uiIsNodalMapValid;
+    // true only on a labelled rebuild, where m_uiIsNodalMapValid[e] is false
+    // exactly for ghost rings 2 and 3 (elements touching no local element)
+    bool m_uiNodalMapIsRing = false;
 
     // --
     // Note : These are special data stored to search the 3rd point in Dendro-GR
