@@ -146,3 +146,20 @@ shell. Every remaining rebuild phase (audit walk, zip marking, E2N expansion, sm
 per-step exchange scale with that shell. Next lever: labellings whose per-level pieces sit next to each
 other (fewer ghost shells), or a cheaper per-ghost path; after this batch the global-to-local element map
 is an unordered_map (sm decode 66 → 26 ms, gated after Z2).
+
+## 2026-09-28 late — ghost shell, ring-1 marking, matched levelwise, and a correctness bug
+- Ghost shell (subagent, `docs/investigation_2026-09-28_ghost_shell.md`): ~1.8× from the labelled rebuild's
+  third ghost ring, ~1.3–1.5× levelwise geometry. `DENDRO_REPART_GHOST_RINGS=2` breaks results (tp 7b 100
+  errors > 0.5, EM4 md5 moves): R2 canonical ownership needs R3. Kept as A/B knob only (jj pkwymqxy).
+- Ring-1-only marking in both elections on labelled meshes (jj wyyynoky, gated): Kingspeak Z3 lw/sfc
+  1.17× (np48), 1.21× (np96), 1.32× (np192 — but see below).
+- Offline (`edgeCutCompare --oct` on the dumped d11 mesh, `DENDRO_DUMP_OCT`): levelwise ghosts/rank
+  1.43–1.69× SFC; matched assignment (`levelwise_matched`) cuts ghosts ~8 %, comm volume ~15 %, lts_eff
+  unchanged. Wired as `DENDRO_LEVELWISE_MATCH=1` (opt-in).
+- np=48 split: lw spends ~10 s in its 10 rebuilds, ~13–17 s more than SFC in stepping (LD Bal 1.28 after
+  block vote; 1.8× ghost volume per sub-step).
+- **Correctness bug (pre-existing, bin/def reproduces it):** NLSM d11 LTS at np=16 on fastpart-produced
+  labellings (method 3, refine 0 or 2) blows up after the first coarse step (U_PHI ±20 vs ±1.2);
+  plain levelwise (method 4) is 18-digit identical to SFC. Kingspeak: lw fine at np48/96, blown up at
+  np192 (both lw and lw_old) → the np192 wall ratios compare against a broken run. Investigation →
+  `docs/investigation_2026-09-28_fastpart_lts_blowup.md` (subagent).
