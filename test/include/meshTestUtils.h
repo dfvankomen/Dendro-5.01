@@ -2751,7 +2751,7 @@ bool ot::test::isSubScatterMapValid(ot::Mesh* const pMesh,
 }
 
 template <typename T>
-bool isDGGhostValid(ot::Mesh* pMesh, T* vec,
+bool ot::test::isDGGhostValid(ot::Mesh* pMesh, T* vec,
                     std::function<void(T, T, T, T*)> fn, T tol) {
     bool valid = true;
     if (pMesh->getMPICommSizeGlobal() > 1 && pMesh->isActive()) {

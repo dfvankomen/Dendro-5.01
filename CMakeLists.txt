@@ -525,6 +525,14 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(benchUnzipGather test/src/benchUnzipGather.cpp)
   dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
   dendro_add_example(testUnzipExact test/src/testUnzipExact.cpp)
+  dendro_add_example(testMeshInvariants test/src/testMeshInvariants.cpp)
+  add_test(NAME testMeshInvariants COMMAND testMeshInvariants 6 1e-3)
+  add_test(NAME testMeshInvariants_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3)
+  set_tests_properties(testMeshInvariants testMeshInvariants_2rank
+                       PROPERTIES TIMEOUT 600)
   add_test(NAME testUnzipExact COMMAND testUnzipExact 6 1e-3)
   set_tests_properties(testUnzipExact PROPERTIES TIMEOUT 600)
   add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
