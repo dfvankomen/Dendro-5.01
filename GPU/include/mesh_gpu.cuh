@@ -851,7 +851,7 @@ GLOBAL_FUNC __launch_bounds__(64) void __block_internal_unzip_dg__2(
 }
 
 template <typename T, DEVICE_UINT p, DEVICE_UINT PW>
-GLOBAL_FUNC __launch_bounds__(64) void __unzip_dg__2(
+GLOBAL_FUNC __launch_bounds__(128) void __unzip_dg__2(
     const MeshGPU* const dptr_mesh, const T* const dptr_in, T* const dptr_out) {
     const DEVICE_UINT ele    = GPUDevice::block_id_x();
     const DEVICE_UINT blk_id = GPUDevice::block_id_y();
@@ -2123,7 +2123,7 @@ GLOBAL_FUNC __launch_bounds__(64) void __zip_dg_enforce_c0__(
 }
 
 template <typename T, DEVICE_UINT p, DEVICE_UINT PW>
-GLOBAL_FUNC __launch_bounds__(64) void __zip_dg__(
+GLOBAL_FUNC __launch_bounds__(128) void __zip_dg__(
     const MeshGPU* const dptr_mesh, const T* const dptr_in, T* const dptr_out) {
     const DEVICE_UINT ele_id        = GPUDevice::block_id_x();
     const DEVICE_UINT blk           = GPUDevice::block_id_y();
@@ -2174,7 +2174,7 @@ GLOBAL_FUNC __launch_bounds__(64) void __zip_dg__(
 }
 
 template <typename T, DEVICE_UINT p, DEVICE_UINT PW>
-GLOBAL_FUNC __launch_bounds__(64) void __zip_cg__(
+GLOBAL_FUNC __launch_bounds__(128) void __zip_cg__(
     const MeshGPU* const dptr_mesh, const T* const dptr_in, T* const dptr_out) {
     const DEVICE_UINT ele_id        = GPUDevice::block_id_x();
     const DEVICE_UINT blk           = GPUDevice::block_id_y();
@@ -2438,9 +2438,9 @@ void MeshGPU::destroyVec(T* vec_ptr) {
 // the zip/unzip kernels are templated on <element order p, pad width PW>, and
 // ot::Block always sets PW = p/2. dispatch on the mesh's real element order --
 // these launches used to hard-code <T,6,3>, which faulted on any other order.
-// order 8 would want (p+1)^2 = 81 threads, past the __launch_bounds__(64) these
-// kernels carry, so it is deliberately not here and the default aborts rather
-// than leaving the unzip buffer untouched.
+// the launch tile is (p+1)^2, so these kernels carry __launch_bounds__(128) to
+// admit order 8's 81 threads. Anything not listed aborts rather than leaving the
+// unzip buffer untouched.
 #define DENDRO_GPU_ZIP_DISPATCH(porder, KERNEL, gb, tb, s, ...)          \
     do {                                                                 \
         switch (porder) {                                                \
@@ -2452,6 +2452,9 @@ void MeshGPU::destroyVec(T* vec_ptr) {
                 break;                                                   \
             case 6:                                                      \
                 KERNEL<T, 6, 3><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
+                break;                                                   \
+            case 8:                                                      \
+                KERNEL<T, 8, 4><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
                 break;                                                   \
             default:                                                     \
                 std::cerr << "[MeshGPU]: element order " << (porder)      \
@@ -2473,7 +2476,7 @@ void MeshGPU::unzip_dg(const ot::Mesh* const pMesh,
            pMesh->getLocalBlockList().size());
     dim3 gb  = dim3(m_unzip_grid[0], m_unzip_grid[1], dof);
     dim3 gb1 = dim3(m_num_local_elements, 1, dof);
-    dim3 tb  = dim3(8, 8, 1);
+    dim3 tb  = dim3(m_ele_order + 1, m_ele_order + 1, 1);
 
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
@@ -2510,7 +2513,7 @@ void MeshGPU::zip_dg(const ot::Mesh* const pMesh,
                      const MeshGPU* const dptr_mesh, const T* const dptr_in,
                      T* const dptr_out, unsigned int dof, stream s) {
     dim3 gb = dim3(m_zip_grid[0], m_zip_grid[1], dof);
-    dim3 tb = dim3(8, 8, 1);
+    dim3 tb = dim3(m_ele_order + 1, m_ele_order + 1, 1);
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
     DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __zip_dg__, gb, tb, s, dptr_mesh,
@@ -2526,7 +2529,7 @@ void MeshGPU::zip_cg(const ot::Mesh* const pMesh,
                      const MeshGPU* const dptr_mesh, const T* const dptr_in,
                      T* const dptr_out, unsigned int dof, stream s) {
     dim3 gb = dim3(m_zip_grid[0], m_zip_grid[1], dof);
-    dim3 tb = dim3(8, 8, 1);
+    dim3 tb = dim3(m_ele_order + 1, m_ele_order + 1, 1);
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
     DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __zip_cg__, gb, tb, s, dptr_mesh,
