@@ -22967,3 +22967,74 @@ void ot::Mesh::ensureBlockZipPlan() {
         if (bOf[i] >= 0) m_uiBlkZipPlanIdx[fill[bOf[i]]++] = (unsigned int)i;
     m_uiBlkZipPlanBuilt = true;
 }
+
+namespace ot {
+void Mesh::ghostPosCheck(const char* tag) {
+    static const bool on = std::getenv("DENDRO_GHOST_POS_CHECK") != nullptr;
+    if (!on || !m_uiIsActive) return;
+    static bool inCheck = false;
+    if (inCheck || m_bGhostPosChecked) return;
+    m_bGhostPosChecked = true;
+    inCheck = true;
+    const unsigned int nAct = m_uiNumActualNodes, eO = m_uiElementOrder;
+    // integer node coords in units of the finest node spacing
+    const double scale = (double)eO;
+    std::vector<double> ref(nAct, -1.0);
+    std::vector<unsigned int> refE(nAct, 0);
+    const size_t dgMax = (size_t)m_uiAllElements.size() * m_uiNpE;
+    for (unsigned int cg = 0; cg < nAct; cg++) {
+        if (cg >= m_uiCG2DG.size() || m_uiCG2DG[cg] >= dgMax) continue;
+        const unsigned int dg = m_uiCG2DG[cg], e = dg / m_uiNpE, s = dg % m_uiNpE;
+        const unsigned int i = s % (eO + 1), j = (s / (eO + 1)) % (eO + 1), k = s / ((eO + 1) * (eO + 1));
+        const double len = (double)(1u << (m_uiMaxDepth - m_uiAllElements[e].getLevel()));
+        const double X = std::round((m_uiAllElements[e].getX() + i * len / eO) * scale);
+        const double Y = std::round((m_uiAllElements[e].getY() + j * len / eO) * scale);
+        const double Z = std::round((m_uiAllElements[e].getZ() + k * len / eO) * scale);
+        ref[cg] = X + 16384.0 * Y + 16384.0 * 16384.0 * Z;
+        refE[cg] = e;
+    }
+    std::unordered_set<unsigned int> deliv(m_uiScatterMapActualNodeRecv.begin(), m_uiScatterMapActualNodeRecv.end());
+    std::unordered_set<unsigned int> synced(m_uiZipSyncRecvCg.begin(), m_uiZipSyncRecvCg.end());
+    auto decode = [&](double f, char* b, size_t n) {
+        if (f < 0) { std::snprintf(b, n, "(unset)"); return; }
+        const double Z = std::floor(f / (16384.0 * 16384.0));
+        const double Y = std::floor((f - Z * 16384.0 * 16384.0) / 16384.0);
+        const double X = f - Z * 16384.0 * 16384.0 - Y * 16384.0;
+        std::snprintf(b, n, "(%.3f,%.3f,%.3f)", X / scale, Y / scale, Z / scale);
+    };
+    auto report = [&](const std::vector<double>& t, const char* phase) {
+        size_t badL = 0, badG = 0, inDeliv = 0, inSync = 0, inZnp = 0, inPassD = 0;
+        std::vector<std::string> samples;
+        for (unsigned int cg = 0; cg < nAct; cg++) {
+            if (ref[cg] < 0 || t[cg] == ref[cg]) continue;
+            const bool loc = cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd;
+            (loc ? badL : badG)++;
+            const int d = deliv.count(cg), sy = synced.count(cg), z = m_uiZipNonPrimaryToGhostCg.count(cg), pd = m_uiPassDDemotedToGhostCg.count(cg);
+            inDeliv += d; inSync += sy; inZnp += z; inPassD += pd;
+            if (samples.size() < 8) {
+                char a[96], b[96], line[512];
+                decode(ref[cg], a, sizeof(a)); decode(t[cg], b, sizeof(b));
+                const ot::TreeNode& E = m_uiAllElements[refE[cg]];
+                std::snprintf(line, sizeof(line), "cg=%u %s pos=%s got=%s deliv=%d sync=%d znp=%d passd=%d owner=(%u,%u,%u,%u)%s",
+                              cg, loc ? "LOCAL" : "ghost", a, b, d, sy, z, pd, E.getX(), E.getY(), E.getZ(), E.getLevel(),
+                              (refE[cg] >= m_uiElementLocalBegin && refE[cg] < m_uiElementLocalEnd) ? "L" : "G");
+                samples.emplace_back(line);
+            }
+        }
+        std::cout << "[ghost-pos r" << m_uiActiveRank << " " << tag << "/" << phase << "] labelled=" << (int)m_uiIsLabelledRebuild
+                  << " bad_local=" << badL << " bad_ghost=" << badG << " inDeliv=" << inDeliv << " inSync=" << inSync
+                  << " znpDst=" << inZnp << " passdDst=" << inPassD << std::endl;
+        for (const auto& l : samples) std::cout << "[ghost-pos r" << m_uiActiveRank << "]   " << l << std::endl;
+    };
+    std::vector<double> t(ref);
+    for (auto& v : t) if (v < 0) v = 0;
+    this->syncZipNonPrimary(t.data(), 1);
+    report(t, "sync");
+    t = ref;
+    for (auto& v : t) if (v < 0) v = 0;
+    this->readFromGhostBegin(t.data(), 1);
+    this->readFromGhostEnd(t.data(), 1);
+    report(t, "exchange");
+    inCheck = false;
+}
+}  // namespace ot

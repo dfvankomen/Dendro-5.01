@@ -1612,6 +1612,7 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
     // exchange so updated non-primary local cgs are captured by the
     // send-buffer pack and propagated to ghost cgs transitively.
     ghostReadCheck(vec, dof, "pre");
+    ghostPosCheck("plain");
     syncZipNonPrimary(vec, dof);
 
     // send recv buffers.
@@ -1872,6 +1873,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
     // Side-channel non-primary sync runs before the standard ghost
     // exchange (see performGhostExchange comment for rationale).
     ghostReadCheck(vec, dof, "pre");
+    ghostPosCheck("ctx");
     syncZipNonPrimary(vec, dof);
 
     // send recv buffers.

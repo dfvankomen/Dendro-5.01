@@ -2114,6 +2114,13 @@ class Mesh {
     template <typename T>
     void ghostReadCheck(const T* vec, unsigned int dof, const char* tag);
 
+    /** DENDRO_GHOST_POS_CHECK=1 probe: fill a test vector with a function of
+     *  each cg slot's cg2dg position, run the side-channel sync and the plain
+     *  ghost exchange on it, and report slots whose value no longer matches
+     *  their own position (misrouted writes). Runs once per mesh. */
+    void ghostPosCheck(const char* tag);
+    bool m_bGhostPosChecked = false;
+
     /**@brief Public wrapper for broadcastCgValuesByPhysPos. */
     template <typename T>
     inline void broadcastCgValuesByPhysPosPublic(T* vec, unsigned int dof) {
