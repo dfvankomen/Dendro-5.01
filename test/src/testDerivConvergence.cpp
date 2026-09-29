@@ -533,6 +533,49 @@ static void print_mixed_row(const MixedResult &r) {
               << "\n";
 }
 
+// Baseline interior orders, measured on this harness (eleorder 6, pw 3) rather
+// than taken from the scheme names. The name digit corroborates all of these,
+// except that pw 3 cannot resolve an 8th-order stencil -- E8Matrix and BYUP8 are
+// therefore left out -- and the parameterized BYU_A6/BYU_C6/KIM4xx families need
+// coefficients supplied via coeffs_for() and are garbage here.
+struct OrderBaseline {
+    const char *name;
+    int deriv;
+    double floor;
+};
+
+static const OrderBaseline kBaseline[] = {
+    {"E4", 1, 3.5},        {"E4Matrix", 1, 3.5},  {"E4Simd", 1, 3.5},
+    {"JTT4", 1, 3.5},      {"BYUT4", 1, 3.5},     {"BorisO4", 1, 3.5},
+    {"KIM4", 1, 3.5},      {"E6", 1, 5.5},        {"E6Matrix", 1, 5.5},
+    {"E6Simd", 1, 5.5},    {"JTT6", 1, 5.5},      {"JTP6", 1, 5.5},
+    {"BL6", 1, 5.5},       {"BYUT6", 1, 5.5},     {"BorisO6", 1, 5.5},
+    {"BYUP6", 1, 5.5},     {"CCFD6", 1, 5.5},
+    {"E4", 2, 3.5},        {"E4Matrix", 2, 3.5},  {"E4Simd", 2, 3.5},
+    {"JTT4", 2, 3.5},      {"BYUT4", 2, 3.5},     {"E6", 2, 5.5},
+    {"E6Matrix", 2, 5.5},  {"E6Simd", 2, 5.5},    {"JTT6", 2, 5.5},
+    {"JTP6", 2, 5.5},      {"CCFD6", 2, 5.5},     {"BYUP6", 2, 5.0},
+    {"BYUT6", 2, 4.5},
+};
+
+static bool g_gate = false;
+static unsigned int g_gate_checked = 0, g_gate_failed = 0;
+
+static void gate_order(const SchemeResult &r, double p_int) {
+    if (!g_gate) return;
+    for (const OrderBaseline &b : kBaseline) {
+        if (r.name != b.name || (int)r.deriv_order != b.deriv) continue;
+        g_gate_checked++;
+        if (!(p_int >= b.floor)) {
+            g_gate_failed++;
+            std::cout << "  GATE FAIL " << b.name << " "
+                      << (b.deriv == 1 ? "1st" : "2nd") << " interior order "
+                      << p_int << " below floor " << b.floor << "\n";
+        }
+        return;
+    }
+}
+
 static void print_summary_row(const SchemeResult &r) {
     // observed order via least-squares fit on the four finest h
     const unsigned int n_fit = std::min<unsigned int>(4, N_SWEEP.size());
@@ -553,11 +596,14 @@ static void print_summary_row(const SchemeResult &r) {
               << std::setw(10) << p_all
               << (r.any_failure ? "  (had failures)" : "")
               << "\n";
+    gate_order(r, p_int);
 }
 
 int main(int argc, char **argv) {
     const std::string csv_path =
         (argc > 1) ? argv[1] : "convergence_results.csv";
+    for (int i = 1; i < argc; i++)
+        if (std::string(argv[i]) == "--gate") g_gate = true;
     std::ofstream csv(csv_path);
     if (!csv) {
         std::cerr << "Could not open " << csv_path << " for writing\n";
@@ -707,5 +753,13 @@ int main(int argc, char **argv) {
 
     csv.close();
     std::cout << "\nCSV written to " << csv_path << "\n";
+    if (g_gate) {
+        std::cout << "order gate: " << g_gate_checked << " checked, "
+                  << g_gate_failed << " failed -> "
+                  << ((g_gate_failed == 0 && g_gate_checked > 0) ? "PASS"
+                                                                : "FAIL")
+                  << "\n";
+        return (g_gate_failed == 0 && g_gate_checked > 0) ? 0 : 1;
+    }
     return 0;
 }
