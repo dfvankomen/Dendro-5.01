@@ -9543,8 +9543,23 @@ void Mesh::buildZipPlan() {
         const size_t recvN = m_uiScatterMapActualNodeRecv.size();
         std::vector<unsigned int> sendBuf(sendN);
         std::vector<unsigned int> recvBuf(recvN);
-        for (size_t k = 0; k < sendN; k++)
-            sendBuf[k] = m_uiScatterMapActualNodeSend[k];
+        // DG-tagged send entries hold (localEle-localBegin)*NpE + sub, not a
+        // cg index; the value shipped is the cg that element sub maps to.
+        // matching the raw DG code against a primary's cg index paired
+        // non-primary local cgs with unrelated ghost cgs (the ZNP mirror
+        // then overwrote them every ghost exchange). DENDRO_ZIPPLAN_INV_DG=0
+        // restores the raw codes (A/B only)
+        static const bool invDG = [] {
+            const char* v = std::getenv("DENDRO_ZIPPLAN_INV_DG");
+            return !(v && v[0] == '0');
+        }();
+        const bool sendDG = invDG && m_uiScatterMapSendIsDG.size() == sendN;
+        for (size_t k = 0; k < sendN; k++) {
+            unsigned int idx = m_uiScatterMapActualNodeSend[k];
+            if (sendDG && m_uiScatterMapSendIsDG[k])
+                idx = m_uiE2NMapping_CG[(idx / m_uiNpE + m_uiElementLocalBegin) * m_uiNpE + idx % m_uiNpE];
+            sendBuf[k] = idx;
+        }
         std::vector<int> sCounts(m_uiActiveNpes, 0), rCounts(m_uiActiveNpes, 0),
             sOffs(m_uiActiveNpes, 0), rOffs(m_uiActiveNpes, 0);
         for (int p = 0; p < m_uiActiveNpes; p++) {
