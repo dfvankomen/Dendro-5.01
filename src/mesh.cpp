@@ -20146,10 +20146,98 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 tot[l] += perRank[(size_t)p * nlev + l];
             }
         std::vector<unsigned int> lab(localSz);
-        for (size_t i = 0; i < localSz; ++i) {
-            const unsigned int l = oct_connectivity_map[i].level - lmin;
-            unsigned int p = (unsigned int)((off[l]++ * (unsigned long long)npes) / tot[l]);
-            lab[i] = (p >= (unsigned int)npes) ? npes - 1 : p;
+        // DENDRO_LEVELWISE_VOTE_ADAPT=1: cut each level on whole groups (sub-cubes of
+        // the source blocks, edge s_L = largest power of two with s^3 <= n_L/(8P),
+        // at least 2) at the group's per-level prefix midpoint. the group anchor is
+        // written back into the element's block info so the labelled mesh builds
+        // blocks of the same size and the vote below has nothing left to move
+        // (=2 / =3 are test modes: every group a single element / an octet, whatever n_L)
+        static const int adapt = [] {
+            const char* e = std::getenv("DENDRO_LEVELWISE_VOTE_ADAPT");
+            return e ? (e[0] == '1' ? 1 : e[0] == '2' ? 2 : e[0] == '3' ? 3 : 0) : 0;
+        }();
+        if (adapt) {
+            const unsigned int floorLog = adapt == 2 ? 0u : 1u;
+            std::vector<unsigned int> logS(nlev, floorLog);
+            for (unsigned int l = 0; l < nlev; ++l) {
+                const unsigned long long q = tot[l] / (8ull * (unsigned long long)npes);
+                unsigned long long s = 1ull << floorLog;
+                while (adapt == 1 && (2 * s) * (2 * s) * (2 * s) <= q) { s *= 2; logS[l]++; }
+            }
+            std::vector<unsigned long long> nsub(nlev, 0), nk(8, 0);
+            for (size_t i = 0; i < localSz; ++i) {
+                auto& oct = oct_connectivity_map[i];
+                if ((oct.blkMeta & (1u << 31)) == 0u || oct.level < oct.blkAnchorLevel) continue;
+                const unsigned int k = oct.level - oct.blkAnchorLevel;
+                nk[std::min(k, 7u)]++;
+                const unsigned int j = std::min(logS[oct.level - lmin], k);
+                if (j >= k) continue;
+                const unsigned int newLev = oct.level - j;
+                const unsigned int psz = 1u << (m_uiMaxDepth - oct.level - 1);
+                const uint32_t mask = ~((1u << (m_uiMaxDepth - newLev)) - 1u);
+                const uint32_t ax = (uint32_t)(oct.coord[0] - psz) & mask;
+                const uint32_t ay = (uint32_t)(oct.coord[1] - psz) & mask;
+                const uint32_t az = (uint32_t)(oct.coord[2] - psz) & mask;
+                const uint32_t bs = 1u << (m_uiMaxDepth - oct.blkAnchorLevel);
+                if (ax < oct.blkAnchorX || ax >= oct.blkAnchorX + bs || ay < oct.blkAnchorY ||
+                    ay >= oct.blkAnchorY + bs || az < oct.blkAnchorZ || az >= oct.blkAnchorZ + bs)
+                    continue;
+                oct.blkAnchorX = ax;
+                oct.blkAnchorY = ay;
+                oct.blkAnchorZ = az;
+                oct.blkAnchorLevel = newLev;
+                nsub[oct.level - lmin]++;
+            }
+            struct Grp { unsigned long long start = 0, cnt = 0; };
+            std::map<AnchorKey, Grp> grp;
+            std::vector<unsigned long long> run = off;
+            for (size_t i = 0; i < localSz; ++i) {
+                const auto& oct = oct_connectivity_map[i];
+                const unsigned int l = oct.level - lmin;
+                if ((oct.blkMeta & (1u << 31)) == 0u) { run[l]++; continue; }
+                AnchorKey k{oct.blkAnchorX, oct.blkAnchorY, oct.blkAnchorZ, oct.blkAnchorLevel};
+                auto it = grp.find(k);
+                if (it == grp.end()) it = grp.emplace(k, Grp{run[l], 0}).first;
+                it->second.cnt++;
+                run[l]++;
+            }
+            std::fill(run.begin(), run.end(), 0ull);
+            for (size_t i = 0; i < localSz; ++i) {
+                const auto& oct = oct_connectivity_map[i];
+                const unsigned int l = oct.level - lmin;
+                unsigned long long start = off[l] + run[l]++, cnt = 1;
+                if ((oct.blkMeta & (1u << 31)) != 0u) {
+                    const auto& g = grp[AnchorKey{oct.blkAnchorX, oct.blkAnchorY,
+                                                  oct.blkAnchorZ, oct.blkAnchorLevel}];
+                    start = g.start;
+                    cnt   = g.cnt;
+                }
+                const unsigned int p =
+                    (unsigned int)(((2 * start + cnt) * (unsigned long long)npes) / (2 * tot[l]));
+                lab[i] = (p >= (unsigned int)npes) ? npes - 1 : p;
+            }
+            std::vector<unsigned long long> nsubTot(nlev, 0), nkTot(8, 0);
+            repartRound();
+            MPI_Reduce(nsub.data(), nsubTot.data(), (int)nlev, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0,
+                       commActive);
+            MPI_Reduce(nk.data(), nkTot.data(), 8, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            if (rank == 0) {
+                std::cout << "[levelwise-adapt] source block edge log2 histogram (elements):";
+                for (unsigned int k = 0; k < 8; ++k) std::cout << " k" << k << "=" << nkTot[k];
+                std::cout << std::endl;
+                std::cout << "[levelwise-adapt]";
+                for (unsigned int l = 0; l < nlev; ++l)
+                    if (tot[l])
+                        std::cout << " L" << lmin + l << ":n=" << tot[l] << ",s=" << (1u << logS[l])
+                                  << ",sub=" << nsubTot[l];
+                std::cout << std::endl;
+            }
+        } else {
+            for (size_t i = 0; i < localSz; ++i) {
+                const unsigned int l = oct_connectivity_map[i].level - lmin;
+                unsigned int p = (unsigned int)((off[l]++ * (unsigned long long)npes) / tot[l]);
+                lab[i] = (p >= (unsigned int)npes) ? npes - 1 : p;
+            }
         }
         // DENDRO_LEVELWISE_MATCH=1: the chunks above fix per-level balance; which
         // rank gets which chunk is free. pick it per level (largest level first,
