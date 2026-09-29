@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <functional>
 #include <iostream>
+#include <unordered_map>
 
 #include "blkAsync.h"
 #include "block.h"
@@ -967,8 +968,67 @@ void ExplicitNUTS<T, Ctx>::build_cg_owner_map() {
                         cur = e * nPe + nd;
                 }
     }
-    // slots no element references (or only hanging ones): keep the mesh's own canonical
+    // DENDRO_ENUTS_OWNER_BYPOS (default on, =0 reverts): pick the owner per grid
+    // POSITION over every local and received-ghost element, not per cg slot. on a
+    // labelled mesh the sharers of one position are split across a primary slot,
+    // its duplicate slots and ghost slots, so the per-slot pick above can land on
+    // a finer sharer's copy than the SFC owner (and differ between a primary and
+    // its dups); after sub-cycling those copies differ well above rounding
+    static const bool byPos = [] {
+        const char* e = std::getenv("DENDRO_ENUTS_OWNER_BYPOS");
+        return !(e && e[0] == '0');
+    }();
     const std::vector<unsigned int>& cg2dg = pMesh->getCG2DGMap();
+    if (byPos) {
+        const unsigned int md = m_uiMaxDepth;
+        struct KeyHash {
+            size_t operator()(const unsigned __int128& k) const {
+                const uint64_t a = (uint64_t)k, b = (uint64_t)(k >> 64);
+                return std::hash<uint64_t>()(a ^ (b * 0x9E3779B97F4A7C15ull));
+            }
+        };
+        auto key = [&](unsigned int e, unsigned int i, unsigned int j, unsigned int k) {
+            const unsigned long long len = 1ull << (md - all[e].getLevel());
+            const unsigned long long x = (unsigned long long)all[e].getX() * eo + i * len;
+            const unsigned long long y = (unsigned long long)all[e].getY() * eo + j * len;
+            const unsigned long long z = (unsigned long long)all[e].getZ() * eo + k * len;
+            return ((unsigned __int128)x << 84) | ((unsigned __int128)y << 42) | (unsigned __int128)z;
+        };
+        std::unordered_map<unsigned __int128, unsigned int, KeyHash> best;
+        best.reserve(pMesh->getNodeLocalEnd() - pMesh->getNodeLocalBegin());
+        for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd(); cg++) {
+            if (cg >= cg2dg.size() || cg2dg[cg] == LOOK_UP_TABLE_DEFAULT) continue;
+            unsigned int e, i, j, k;
+            pMesh->dg2eijk(cg2dg[cg], e, i, j, k);
+            best.emplace(key(e, i, j, k), LOOK_UP_TABLE_DEFAULT);
+        }
+        auto visit = [&](unsigned int e) {
+            for (unsigned int k = 0; k <= eo; k++)
+                for (unsigned int j = 0; j <= eo; j++)
+                    for (unsigned int i = 0; i <= eo; i++) {
+                        if (pMesh->isNodeHanging(e, i, j, k)) continue;
+                        auto it = best.find(key(e, i, j, k));
+                        if (it == best.end()) continue;
+                        const unsigned int dg = e * nPe + k * (eo + 1) * (eo + 1) + j * (eo + 1) + i;
+                        unsigned int& cur = it->second;
+                        if (cur == LOOK_UP_TABLE_DEFAULT) { cur = dg; continue; }
+                        const unsigned int ce = cur / nPe;
+                        if (all[e].getLevel() < all[ce].getLevel() ||
+                            (all[e].getLevel() == all[ce].getLevel() && all[e] < all[ce]))
+                            cur = dg;
+                    }
+        };
+        for (unsigned int e = pMesh->getElementLocalBegin(); e < pMesh->getElementLocalEnd(); e++) visit(e);
+        for (unsigned int e : pMesh->getRecvElementSM()) visit(e);  // ghosts the DG exchange fills
+        for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd(); cg++) {
+            if (cg >= cg2dg.size() || cg2dg[cg] == LOOK_UP_TABLE_DEFAULT) continue;
+            unsigned int e, i, j, k;
+            pMesh->dg2eijk(cg2dg[cg], e, i, j, k);
+            const unsigned int w = best[key(e, i, j, k)];
+            if (w != LOOK_UP_TABLE_DEFAULT) m_uiCgOwnerDG[cg] = w;
+        }
+    }
+    // slots no element references (or only hanging ones): keep the mesh's own canonical
     for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd(); cg++)
         if (m_uiCgOwnerDG[cg] == LOOK_UP_TABLE_DEFAULT && cg < cg2dg.size()) m_uiCgOwnerDG[cg] = cg2dg[cg];
     if (std::getenv("DENDRO_ENUTS_NANCHK")) {
