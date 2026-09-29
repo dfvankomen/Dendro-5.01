@@ -52,12 +52,13 @@ struct EnutsProf {
         static EnutsProf p;
         return p;
     }
-    /** DENDRO_ENUTS_SCOPED_EXCH=1: level-scoped element-DG ghost exchange;
-     *  =CHECK-style verification via DENDRO_ENUTS_SCOPED_EXCH_CHECK=1 */
+    /** level-scoped element-DG ghost exchange, default on (bit-identical
+     *  off/on); DENDRO_ENUTS_SCOPED_EXCH=0 reverts to the full exchange;
+     *  verification via DENDRO_ENUTS_SCOPED_EXCH_CHECK=1 */
     static bool scoped() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_SCOPED_EXCH");
-            return (e && e[0] == '1') ? 1 : 0;
+            return (e && e[0] == '0') ? 0 : 1;
         }();
         return v == 1;
     }
@@ -577,7 +578,10 @@ ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart) : ETS<T, Ctx>(ctx) {
 template <typename T, typename Ctx>
 ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
     if (ts::EnutsProf::scopedCheck() && ts::EnutsProf::get().chk_cmp) {
-        std::cout << "[enuts-scoped-check r" << m_uiAppCtx->get_mesh()->getMPIRankGlobal()
+        // drivers may delete the app ctx before the ENUTS object: no ctx access here
+        int chk_rk = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &chk_rk);
+        std::cout << "[enuts-scoped-check r" << chk_rk
                   << "] compared_elems=" << ts::EnutsProf::get().chk_cmp
                   << " mismatches=" << ts::EnutsProf::get().chk_bad << std::endl;
     }
