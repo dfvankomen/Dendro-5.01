@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <cstring>
+#include <numeric>
 #include <string>
 #include <vector>
 
@@ -102,17 +103,15 @@ void write_array_attr(hid_t loc, const char *name, hid_t fileType,
     H5Sclose(space);
 }
 
-}  // namespace
-
-void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
-                     unsigned int numFieldData, const char **fieldDataNames,
-                     const double *fieldData, unsigned int numPointData,
-                     const char **pointDataNames, const double **pointData,
-                     unsigned int nCellData, const char **cellDNames,
-                     const double **cellData, bool isDGPData,
-                     unsigned int compressLevel) {
-    if (!(pMesh->isActive())) return;
-
+/**@brief writes the given local elements, see mesh2vtkhdfFine. */
+void write_elements(const ot::Mesh *pMesh,
+                    const std::vector<unsigned int> &eles, const char *fPrefix,
+                    unsigned int numFieldData, const char **fieldDataNames,
+                    const double *fieldData, unsigned int numPointData,
+                    const char **pointDataNames, const double **pointData,
+                    unsigned int nCellData, const char **cellDNames,
+                    const double **cellData, bool isDGPData,
+                    unsigned int compressLevel) {
     MPI_Comm comm           = pMesh->getMPICommunicator();
     unsigned int rank       = pMesh->getMPIRank();
     unsigned int npes       = pMesh->getMPICommSize();
@@ -142,19 +141,17 @@ void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
     const unsigned int nPe                     = pMesh->getNumNodesPerElement();
     const unsigned int eleOrder                = pMesh->getElementOrder();
     const unsigned int ePe                     = eleOrder * eleOrder * eleOrder;
-    const unsigned int eBegin                  = pMesh->getElementLocalBegin();
-    const unsigned int eEnd                    = pMesh->getElementLocalEnd();
-    const hsize_t num_elements = pMesh->getNumLocalMeshElements();
-    const hsize_t num_cells    = num_elements * ePe;
-    const hsize_t num_vertices = num_elements * nPe;
-    const hsize_t num_conn     = num_cells * NUM_CHILDREN;
+    const hsize_t num_elements                 = eles.size();
+    const hsize_t num_cells                    = num_elements * ePe;
+    const hsize_t num_vertices                 = num_elements * nPe;
+    const hsize_t num_conn                     = num_cells * NUM_CHILDREN;
 
-    const Slice sPart          = {rank, 1, npes};
-    const Slice sPts           = make_slice(comm, num_vertices);
-    const Slice sCells         = make_slice(comm, num_cells);
-    const Slice sConn          = make_slice(comm, num_conn);
-    const Slice sOffsets       = make_slice(comm, num_cells + 1);
-    const Slice sElements      = make_slice(comm, num_elements);
+    const Slice sPart                          = {rank, 1, npes};
+    const Slice sPts                           = make_slice(comm, num_vertices);
+    const Slice sCells                         = make_slice(comm, num_cells);
+    const Slice sConn                          = make_slice(comm, num_conn);
+    const Slice sOffsets  = make_slice(comm, num_cells + 1);
+    const Slice sElements = make_slice(comm, num_elements);
 
     hid_t root =
         H5Gcreate2(file, "VTKHDF", H5P_DEFAULT, H5P_DEFAULT, H5P_DEFAULT);
@@ -175,15 +172,16 @@ void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
 
     double sz;
     std::vector<DENDRO_NODE_COORD_DTYPE> coord_data(num_vertices * m_uiDim);
-    for (unsigned int ele = eBegin; ele < eEnd; ele++) {
+    for (hsize_t s = 0; s < num_elements; s++) {
+        const unsigned int ele = eles[s];
         sz = 1u << (m_uiMaxDepth - pElements[ele].getLevel());
         for (unsigned int k = 0; k < (eleOrder + 1); k++)
             for (unsigned int j = 0; j < (eleOrder + 1); j++)
                 for (unsigned int i = 0; i < (eleOrder + 1); i++) {
-                    const hsize_t p   = ((ele - eBegin) * nPe +
-                                         k * (eleOrder + 1) * (eleOrder + 1) +
-                                         j * (eleOrder + 1) + i) *
-                                        m_uiDim;
+                    const hsize_t p =
+                        (s * nPe + k * (eleOrder + 1) * (eleOrder + 1) +
+                         j * (eleOrder + 1) + i) *
+                        m_uiDim;
                     coord_data[p + 0] = VTU_OCT_X_GRID_X(pElements[ele].getX() +
                                                          i * (sz / eleOrder));
                     coord_data[p + 1] = VTU_OCT_Y_GRID_Y(pElements[ele].getY() +
@@ -237,9 +235,9 @@ void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
     write_rows(cellGroup, "mpi_rank", H5T_STD_U32LE, H5T_NATIVE_UINT, sCells, 1,
                cell_tmp.data(), dxpl, compressLevel);
 
-    for (unsigned int il = eBegin; il < eEnd; ++il)
+    for (hsize_t s = 0; s < num_elements; s++)
         for (unsigned int w = 0; w < ePe; w++)
-            cell_tmp[(il - eBegin) * ePe + w] = pElements[il].getLevel();
+            cell_tmp[s * ePe + w] = pElements[eles[s]].getLevel();
     write_rows(cellGroup, "cell_level", H5T_STD_U32LE, H5T_NATIVE_UINT, sCells,
                1, cell_tmp.data(), dxpl, compressLevel);
     std::vector<unsigned int>().swap(cell_tmp);
@@ -247,9 +245,9 @@ void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
     if (nCellData > 0 && cellData != NULL) {
         std::vector<double> cell_dtmp(num_cells);
         for (unsigned int v = 0; v < nCellData; v++) {
-            for (unsigned int il = eBegin; il < eEnd; ++il)
+            for (hsize_t s = 0; s < num_elements; s++)
                 for (unsigned int w = 0; w < ePe; w++)
-                    cell_dtmp[(il - eBegin) * ePe + w] = cellData[v][il];
+                    cell_dtmp[s * ePe + w] = cellData[v][eles[s]];
             write_rows(cellGroup, cellDNames[v], H5T_IEEE_F64LE,
                        H5T_NATIVE_DOUBLE, sCells, 1, cell_dtmp.data(), dxpl,
                        compressLevel);
@@ -263,11 +261,11 @@ void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
         std::vector<double> nodalVal(nPe);
         std::vector<double> nodalVal_all(num_vertices);
         for (unsigned int pdata = 0; pdata < numPointData; pdata++) {
-            for (unsigned int il = eBegin; il < eEnd; ++il) {
+            for (hsize_t s = 0; s < num_elements; s++) {
                 pMesh->getElementNodalValues(pointData[pdata], nodalVal.data(),
-                                             il, isDGPData);
+                                             eles[s], isDGPData);
                 std::copy(nodalVal.begin(), nodalVal.end(),
-                          nodalVal_all.begin() + (il - eBegin) * nPe);
+                          nodalVal_all.begin() + s * nPe);
             }
             write_rows(pointGroup, pointDataNames[pdata], H5T_IEEE_F64LE,
                        H5T_NATIVE_DOUBLE, sPts, 1, nodalVal_all.data(), dxpl,
@@ -303,12 +301,13 @@ void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
                      &eleOrder);
 
     std::vector<unsigned int> octants(num_elements * 4);
-    for (unsigned int ele = eBegin; ele < eEnd; ele++) {
-        unsigned int *o = &octants[(ele - eBegin) * 4];
-        o[0]            = pElements[ele].getX();
-        o[1]            = pElements[ele].getY();
-        o[2]            = pElements[ele].getZ();
-        o[3]            = pElements[ele].getLevel();
+    for (hsize_t s = 0; s < num_elements; s++) {
+        const unsigned int ele = eles[s];
+        unsigned int *o        = &octants[s * 4];
+        o[0]                   = pElements[ele].getX();
+        o[1]                   = pElements[ele].getY();
+        o[2]                   = pElements[ele].getZ();
+        o[3]                   = pElements[ele].getLevel();
     }
     write_rows(dendro, "Octants", H5T_STD_U32LE, H5T_NATIVE_UINT, sElements, 4,
                octants.data(), dxpl, compressLevel);
@@ -316,6 +315,51 @@ void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
 
     H5Pclose(dxpl);
     H5Fclose(file);
+}
+
+}  // namespace
+
+void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
+                     unsigned int numFieldData, const char **fieldDataNames,
+                     const double *fieldData, unsigned int numPointData,
+                     const char **pointDataNames, const double **pointData,
+                     unsigned int nCellData, const char **cellDNames,
+                     const double **cellData, bool isDGPData,
+                     unsigned int compressLevel) {
+    if (!(pMesh->isActive())) return;
+
+    std::vector<unsigned int> eles(pMesh->getNumLocalMeshElements());
+    std::iota(eles.begin(), eles.end(), pMesh->getElementLocalBegin());
+    write_elements(pMesh, eles, fPrefix, numFieldData, fieldDataNames,
+                   fieldData, numPointData, pointDataNames, pointData,
+                   nCellData, cellDNames, cellData, isDGPData, compressLevel);
+}
+
+void mesh2vtkhdf_slice(const ot::Mesh *pMesh, unsigned int s_val[3],
+                       const bool s_axes[3], const char *fPrefix,
+                       unsigned int numFieldData, const char **fieldDataNames,
+                       const double *fieldData, unsigned int numPointData,
+                       const char **pointDataNames, const double **pointData,
+                       unsigned int nCellData, const char **cellDNames,
+                       const double **cellData, bool isDGPData,
+                       unsigned int compressLevel) {
+    if (!(pMesh->isActive())) return;
+
+    std::vector<unsigned int> eles, sids;
+    for (unsigned int d = 0; d < 3; d++) {
+        if (!s_axes[d]) continue;
+        unsigned int s_normal[3] = {0, 0, 0};
+        s_normal[d]              = 1;
+        sids.clear();
+        ot::slice_mesh(pMesh, s_val, s_normal, sids);
+        eles.insert(eles.end(), sids.begin(), sids.end());
+    }
+    std::sort(eles.begin(), eles.end());
+    eles.erase(std::unique(eles.begin(), eles.end()), eles.end());
+
+    write_elements(pMesh, eles, fPrefix, numFieldData, fieldDataNames,
+                   fieldData, numPointData, pointDataNames, pointData,
+                   nCellData, cellDNames, cellData, isDGPData, compressLevel);
 }
 
 }  // namespace vtkhdf

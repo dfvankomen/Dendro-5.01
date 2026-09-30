@@ -8,7 +8,9 @@
  * equals a polynomial field evaluated at the node position rebuilt from
  * /Dendro/Octants, which is how a reader locates points. The field has degree
  * below the element order, so hanging-node interpolation reproduces it to
- * round-off. A deflate-compressed write must read back bit-identical.
+ * round-off. A deflate-compressed write must read back bit-identical, and an
+ * x+z slice must pass the same checks while holding exactly the elements on
+ * either plane.
  *
  * Usage: testVTKHDF [maxDepth] [waveletTol]
  */
@@ -16,6 +18,8 @@
 #include <hdf5.h>
 #include <mpi.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdio>
 #include <functional>
@@ -209,6 +213,36 @@ bool same_dataset(hid_t a, hid_t b, const char* path, hid_t memType,
     return ok;
 }
 
+/**@brief checks an x+z slice holds exactly the elements whose lower corner
+ * lies on x = c or z = c, each once. */
+int check_slice(const char* fname, unsigned int c,
+                unsigned long long expected) {
+    hid_t file = H5Fopen(fname, H5F_ACC_RDONLY, H5P_DEFAULT);
+    if (file < 0) return check("open slice file", false);
+    auto oct = read_all<unsigned int>(file, "Dendro/Octants", H5T_NATIVE_UINT);
+    H5Fclose(file);
+
+    std::vector<std::array<unsigned int, 4>> o(oct.size() / 4);
+    unsigned long long onX = 0, onZ = 0, off = 0;
+    for (size_t e = 0; e < o.size(); e++) {
+        o[e] = {oct[4 * e], oct[4 * e + 1], oct[4 * e + 2], oct[4 * e + 3]};
+        onX += o[e][0] == c;
+        onZ += o[e][2] == c;
+        off += o[e][0] != c && o[e][2] != c;
+    }
+    std::sort(o.begin(), o.end());
+    const bool unique = std::adjacent_find(o.begin(), o.end()) == o.end();
+
+    int failures      = 0;
+    failures += check("slice holds only plane elements", off == 0);
+    failures += check("slice holds both planes", onX > 0 && onZ > 0);
+    failures += check("slice elements unique", unique);
+    failures += check("slice element count", o.size() == expected);
+    if (o.size() != expected)
+        std::printf("      %zu elements, expected %llu\n", o.size(), expected);
+    return failures;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -259,9 +293,26 @@ int main(int argc, char** argv) {
         const std::string base = "testVTKHDF_eO" + std::to_string(eOrder);
         io::vtkhdf::mesh2vtkhdfFine(mesh, base.c_str(), 2, fNames, fData, 1,
                                     pNames, pData);
-        io::vtkhdf::mesh2vtkhdfFine(mesh, (base + "_z").c_str(), 2, fNames,
-                                    fData, 1, pNames, pData, 0, NULL, NULL,
-                                    false, 4);
+        io::vtkhdf::mesh2vtkhdfFine(mesh, (base + "_deflate").c_str(), 2,
+                                    fNames, fData, 1, pNames, pData, 0, NULL,
+                                    NULL, false, 4);
+
+        const unsigned int c  = 1u << (m_uiMaxDepth - 1);
+        unsigned int s_val[3] = {c, c, c};
+        const bool s_axes[3]  = {true, false, true};
+        io::vtkhdf::mesh2vtkhdf_slice(mesh, s_val, s_axes,
+                                      (base + "_slice").c_str(), 2, fNames,
+                                      fData, 1, pNames, pData);
+
+        unsigned long long onPlanes = 0;
+        if (mesh->isActive()) {
+            const ot::TreeNode* pNodes = mesh->getAllElements().data();
+            for (unsigned int e = mesh->getElementLocalBegin();
+                 e < mesh->getElementLocalEnd(); e++)
+                onPlanes += pNodes[e].minX() == c || pNodes[e].minZ() == c;
+        }
+        MPI_Allreduce(MPI_IN_PLACE, &onPlanes, 1, MPI_UNSIGNED_LONG_LONG,
+                      MPI_SUM, MPI_COMM_WORLD);
 
         unsigned int activeNpes = mesh->isActive() ? mesh->getMPICommSize() : 0;
         MPI_Allreduce(MPI_IN_PLACE, &activeNpes, 1, MPI_UNSIGNED, MPI_MAX,
@@ -274,8 +325,8 @@ int main(int argc, char** argv) {
 
             hid_t a   = H5Fopen((base + ".vtkhdf").c_str(), H5F_ACC_RDONLY,
                                 H5P_DEFAULT);
-            hid_t b   = H5Fopen((base + "_z.vtkhdf").c_str(), H5F_ACC_RDONLY,
-                                H5P_DEFAULT);
+            hid_t b   = H5Fopen((base + "_deflate.vtkhdf").c_str(),
+                                H5F_ACC_RDONLY, H5P_DEFAULT);
             bool same = a >= 0 && b >= 0;
             same = same && same_dataset(a, b, "VTKHDF/Points", H5T_NATIVE_FLOAT,
                                         sizeof(float));
@@ -288,6 +339,12 @@ int main(int argc, char** argv) {
             if (a >= 0) H5Fclose(a);
             if (b >= 0) H5Fclose(b);
             failures += check("compressed write identical", same);
+
+            std::printf("  x+z slice, %llu elements\n", onPlanes);
+            failures += verify((base + "_slice.vtkhdf").c_str(), activeNpes,
+                               eOrder, time);
+            failures +=
+                check_slice((base + "_slice.vtkhdf").c_str(), c, onPlanes);
         }
 
         delete[] u;

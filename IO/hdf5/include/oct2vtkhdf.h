@@ -48,6 +48,31 @@ void mesh2vtkhdfFine(const ot::Mesh *pMesh, const char *fPrefix,
                      const double **cellData = NULL, bool isDGPData = false,
                      unsigned int compressLevel = 0);
 
+/**
+ * @brief Writes only the elements lying on the selected axis-aligned planes
+ * through s_val to <fPrefix>.vtkhdf, in the same layout as mesh2vtkhdfFine.
+ * An element is on the plane normal to axis d if its lower corner lies on it
+ * (see ot::slice_mesh). Selecting several axes writes the union of the planes
+ * into one file.
+ *
+ * Collective over the mesh's active communicator.
+ *
+ * @param [in] pMesh: input mesh
+ * @param [in] s_val: point on every plane, in octree coordinates
+ * @param [in] s_axes: s_axes[d] selects the plane normal to axis d
+ * @param [in] fPrefix: output file prefix
+ * The remaining parameters are those of mesh2vtkhdfFine.
+ */
+void mesh2vtkhdf_slice(const ot::Mesh *pMesh, unsigned int s_val[3],
+                       const bool s_axes[3], const char *fPrefix,
+                       unsigned int numFieldData, const char **fieldDataNames,
+                       const double *fieldData, unsigned int numPointData,
+                       const char **pointDataNames, const double **pointData,
+                       unsigned int nCellData  = 0,
+                       const char **cellDNames = NULL,
+                       const double **cellData = NULL, bool isDGPData = false,
+                       unsigned int compressLevel = 0);
+
 }  // namespace vtkhdf
 }  // namespace io
 
