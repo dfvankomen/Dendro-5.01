@@ -161,6 +161,16 @@ find_package(MPI REQUIRED)
 # GSL
 find_package(GSL REQUIRED)
 
+# HDF5 -- required by the CCE worldtube writer (dendrolib/IO/src/cceH5Dat.cpp)
+# to write SpECTRE-PreprocessCceWorldtube-compatible HDF5 files. Not
+# previously a Dendro-GR/dendrolib dependency; mirrors the generic
+# find_package(HDF5 REQUIRED COMPONENTS C) pattern used by the sibling
+# spectre repo's own cmake/SetupHdf5.cmake (this project does not link
+# against SpECTRE's own C++ HDF5 wrappers, just the plain HDF5 C library).
+# NOT YET VERIFIED to successfully configure in this environment -- see
+# Dendro_CCE_v2.0.md Appendix for the build-verification step this needs.
+find_package(HDF5 REQUIRED COMPONENTS C)
+
 # spdlog allows for logging!
 FetchContent_Declare(
     spdlog
@@ -265,7 +275,7 @@ set(ODE_SRC
     ODE/src/rk.cpp ODE/src/subSM.cpp ODE/src/rkMaxwell.cpp
     ODE/src/rkTransport.cpp ODE/src/enutsOp.cpp)
 
-set(IO_SRC IO/vtk/src/oct2vtk.cpp IO/vtk/src/checkPoint.cpp)
+set(IO_SRC IO/vtk/src/oct2vtk.cpp IO/vtk/src/checkPoint.cpp IO/src/cceH5Dat.cpp)
 
 set(ZLIB_SRC
     IO/zlib/src/adler32.c IO/zlib/src/compress.c IO/zlib/src/crc32.c
@@ -397,7 +407,8 @@ target_include_directories(dendro_config INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc
 )
 
-target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m)
+target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m ${HDF5_C_LIBRARIES})
+target_include_directories(dendro5 PUBLIC ${HDF5_INCLUDE_DIRS})
 
 if(WITH_BLAS_LAPACK)
   target_compile_definitions(dendro5 PUBLIC WITH_BLAS_LAPACK)
