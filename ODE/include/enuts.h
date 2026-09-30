@@ -37,7 +37,8 @@ namespace ts {
  * rank, process-wide). env read once; off = zero cost, zero collectives. */
 struct EnutsProf {
     enum { RHS = 0, EDG_BEGIN, EDG_END, SYNC_BLK, AXPY_ELETS, EVEC_XCH, WAIT, TOTAL,
-           SY_SAME, SY_CORR, SY_CORR_FC, SY_UNZIP, SY_OWN, SY_POST, NT };
+           SY_SAME, SY_CORR, SY_CORR_FC, SY_UNZIP, SY_OWN, SY_POST, SY_P2C,
+           CN_CALLS, CN_EID, CN_ENT, CN_PAIRS, CN_P2C, CN_CORR, CN_HIT, CN_P2C_HIT, NT };
     double t[NT]     = {};
     double partial   = 0;      // partial steps taken (this rank was active)
     double lev_sum   = 0;      // sum over partial steps of globally active levels
@@ -383,7 +384,20 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         unsigned int rk         = 0;
         unsigned char fut       = 0;
         T dt_c = 0, dt_f = 0, dt = 0;
+        bool operator==(const SyncTag& o) const {
+            return pass == o.pass && rk == o.rk && fut == o.fut &&
+                   dt_c == o.dt_c && dt_f == o.dt_f && dt == o.dt;
+        }
     };
+    /** direct-mapped cache of parent-to-child interpolations of the padding
+     *  fill, valid within one stage pass (source identified by its SyncTag) */
+    struct P2cSlot {
+        unsigned int ele  = ~0u;
+        unsigned int cnum = 0;
+        SyncTag tag;
+    };
+    std::vector<P2cSlot> m_uiP2cMeta;
+    std::vector<T> m_uiP2cData;
     std::vector<SyncTag> m_uiSyncTag;
     unsigned long long m_uiSyncPass = 0;
     bool m_uiSyncPassOpen           = false;
@@ -665,7 +679,9 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                 "rhs+zipDG",  "eledg_begin", "eledg_end", "sync_blk_ts+post",
                 "axpy+ele_ts", "elevec_xch",  "waitActive", "partial_total",
                 "  sync:same_copy", "  sync:corr_coarse_fut", "  sync:corr_fine_past", "  sync:unzip_pad", "  sync:own_interior",
-                "  sync:post_stage_blk"};
+                "  sync:post_stage_blk", "  sync:  of unzip: p2c interp",
+                "  count: sync calls", "  count: dep elems", "  count: copy entries", "  count: copy pairs",
+                "  count: p2c children", "  count: corrections", "  count: corr cache hits", "  count: p2c cache hits"};
             std::cout << "[enuts-prof] npes=" << np
                       << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
                       << " mean_active_levels/step="
@@ -1570,6 +1586,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     const bool sprof = ts::EnutsProf::on();
     double tcorrCf = 0, tcorrFc = 0, tsy0 = 0;
     if (sprof) tsy0 = ts::EnutsProf::now();
+    if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_CALLS] += 1;
 
     const ot::TreeNode* pNodes  = pMesh->getAllElements().data();
     const ot::Block* blkList    = pMesh->getLocalBlockList().data();
@@ -1643,6 +1660,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
             computeBlockUnzipDepElements(pMesh, b, m_uiBlkDepEid[b]);
     }
     const std::vector<unsigned int>& eid = m_uiBlkDepEid[blk];
+    if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_EID] += eid.size();
 
     if (rk_s == 0) {  // Sync operation for U(t,.)
 
@@ -1898,6 +1916,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                         m_uiSyncTag[elem].dt == dt) {
                         // another block of this stage pass already left the
                         // same correction in dgWVec
+                        if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_HIT] += 1;
                     } else {
                         for (unsigned int v = 0; v < dof; v++)
                             for (unsigned int s = 1; s <= rk_s; s++) {
@@ -1907,6 +1926,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                                     cVec.data() + v * rk_s * nPe + (s - 1) * nPe;
                             }
 
+                        if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_CORR] += 1;
                         {
                             const double tc0_ = sprof ? ts::EnutsProf::now() : 0.0;
                             if (eleFut)
@@ -1999,21 +2019,67 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         SyncPlan& pl = m_uiSyncPlan[blk];
         if (!pl.built) build_sync_plan(blk, eid, pl);
         const size_t lxyz = (size_t)lx * ly * lz;
+        if (sprof) {
+            ts::EnutsProf::get().t[ts::EnutsProf::CN_ENT] += pl.ents.size();
+            ts::EnutsProf::get().t[ts::EnutsProf::CN_PAIRS] += pl.src.size();
+            unsigned int nc = 0;
+            for (const typename SyncPlan::Ent& en : pl.ents) nc += (en.cnum >= 0);
+            ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C] += nc;
+        }
+        const size_t p2cStride = (size_t)dof * nPe;
+        const bool useP2cCache = m_uiSyncPassOpen && !isIGTSync && p2cStride > 0;
+        if (useP2cCache && m_uiP2cMeta.empty()) {
+            size_t slots = std::max<size_t>(64, std::min<size_t>(4096, (64u << 20) / (p2cStride * sizeof(T))));
+            m_uiP2cMeta.assign(slots, P2cSlot());
+            m_uiP2cData.resize(slots * p2cStride);
+        }
         for (const typename SyncPlan::Ent& en : pl.ents) {
             const T* srcBase = dgWVec;
-            if (!isIGTSync && etVec[en.ele] == bTime)
+            const bool sameTime = !isIGTSync && etVec[en.ele] == bTime;
+            if (sameTime)
                 srcBase = (rk_s == 0) ? (const T*)dgEVar : (const T*)dgStages[rk_s - 1];
             const unsigned int* sp = pl.src.data();
             const unsigned int* dp = pl.dst.data();
-            for (unsigned int v = 0; v < dof; v++) {
-                T* dv        = m_uiVec + v * lxyz;
-                const T* sv  = srcBase + (size_t)v * dgSz + (size_t)en.ele * nPe;
-                if (en.cnum < 0) {
+            if (en.cnum < 0) {
+                for (unsigned int v = 0; v < dof; v++) {
+                    T* dv       = m_uiVec + v * lxyz;
+                    const T* sv = srcBase + (size_t)v * dgSz + (size_t)en.ele * nPe;
                     for (unsigned int q = en.b; q < en.e; q++) dv[dp[q]] = sv[sp[q]];
-                } else {
-                    pMesh->parent2ChildInterpolation(sv, p2cI.data(), en.cnum, m_uiDim);
-                    for (unsigned int q = en.b; q < en.e; q++) dv[dp[q]] = p2cI[sp[q]];
                 }
+                continue;
+            }
+            T* slotData = nullptr;
+            bool hit    = false;
+            if (useP2cCache) {
+                SyncTag key;
+                if (sameTime) {
+                    key.pass = m_uiSyncPass;
+                    key.rk   = rk_s;
+                    key.fut  = 2;
+                } else {
+                    key = m_uiSyncTag[en.ele];
+                }
+                const size_t slot = ((size_t)en.ele * 8 + en.cnum) % m_uiP2cMeta.size();
+                P2cSlot& ps       = m_uiP2cMeta[slot];
+                slotData          = m_uiP2cData.data() + slot * p2cStride;
+                hit = (ps.ele == en.ele && ps.cnum == (unsigned int)en.cnum && ps.tag == key);
+                if (!hit) {
+                    ps.ele  = en.ele;
+                    ps.cnum = en.cnum;
+                    ps.tag  = key;
+                }
+            }
+            if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_HIT] += hit;
+            for (unsigned int v = 0; v < dof; v++) {
+                T* dv       = m_uiVec + v * lxyz;
+                const T* sv = srcBase + (size_t)v * dgSz + (size_t)en.ele * nPe;
+                T* pv       = useP2cCache ? slotData + (size_t)v * nPe : p2cI.data();
+                if (!hit) {
+                    const double tp2 = sprof ? ts::EnutsProf::now() : 0.0;
+                    pMesh->parent2ChildInterpolation(sv, pv, en.cnum, m_uiDim);
+                    if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_P2C] += ts::EnutsProf::now() - tp2;
+                }
+                for (unsigned int q = en.b; q < en.e; q++) dv[dp[q]] = pv[sp[q]];
             }
         }
     } else
