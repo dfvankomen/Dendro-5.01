@@ -119,3 +119,6 @@ no-op remesh skip, coarse-level merge, minimax refine, offline async critical-pa
 - NLSM: nuts2 on = CHECK = default = ref digits (CHECK 317k-373k elems/rank, 0 mismatches); lw3 np16 lvl on = lw3_s3on/lvl digits (U_CHI -1.49655671350051605e-13 / 1.10899864922085034e+00, U_PHI -2.36385011495455943e+00 / 2.50214029822932194e+00).
 - After the flip, no knobs: nuts2 = ref, gate.sh NP=4 all four arms IDENTICAL to base.
 - Fix: the CHECK summary in `~ExplicitNUTS` touched the app ctx after drivers delete it (segfault at teardown in bssnSolverNUTS); it now uses MPI_COMM_WORLD rank.
+
+### Correction (2026-09-29, checked from run logs)
+- lw3 d11 np16 default: sfc, lvl, lw, fp all end at U_PHI (min, max) = (-2.36385011495455943, 2.50214029822932194), identical min/max to 18 digits across partitionings. With DENDRO_LEVELWISE_VOTE_ADAPT=1 (work/lw3_s4on/lvl): (-2.36383893241567700, 2.50146546299599537). So S4 moves the digits away from the SFC value (the S4 report quoted the direction reversed).
