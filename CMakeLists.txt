@@ -167,9 +167,34 @@ find_package(GSL REQUIRED)
 # find_package(HDF5 REQUIRED COMPONENTS C) pattern used by the sibling
 # spectre repo's own cmake/SetupHdf5.cmake (this project does not link
 # against SpECTRE's own C++ HDF5 wrappers, just the plain HDF5 C library).
-# NOT YET VERIFIED to successfully configure in this environment -- see
-# Dendro_CCE_v2.0.md Appendix for the build-verification step this needs.
+#
+# On clusters using environment modules (e.g. BYU Marylou), do NOT `module
+# load` an hdf5 module directly -- on Marylou specifically this was found to
+# force-swap the loaded MPI module via Lmod's dependency resolution (the
+# hdf5 module there depends on a specific openmpi build, not the group's
+# custom one), which broke the rest of the environment (cmake disappeared
+# from PATH entirely). Instead, set the HDF5_ROOT environment variable to
+# point directly at a parallel HDF5 install before running cmake -- this
+# bypasses the module system's dependency graph entirely. Confirmed working
+# on Marylou with:
+#   export HDF5_ROOT=/apps/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/hdf5-1.14.3-bm4v3i5etjrhiz6nkugaamp2bjytgoxt
+#
+# The guard below exists because, per the same investigation, find_package
+# silently falls back to a serial HDF5 1.12 with NO error if HDF5_ROOT isn't
+# set -- i.e. the danger isn't "the build fails," it's "the build silently
+# succeeds against an unintended HDF5." The CCE worldtube writer itself only
+# does rank-0, non-collective I/O and would actually be fine with a serial
+# HDF5 -- this guard is stricter than that one consumer strictly needs, but
+# is the right call for this shared, library-wide find_package call, both
+# to guarantee a deliberately-chosen HDF5 rather than a silent default, and
+# because other/future HDF5-based I/O in this codebase (e.g. a distributed
+# mesh/VTU-via-HDF5 exporter) would need real collective parallel I/O.
 find_package(HDF5 REQUIRED COMPONENTS C)
+if(NOT HDF5_IS_PARALLEL)
+  message(FATAL_ERROR "Found HDF5 is not parallel-enabled. Set HDF5_ROOT to "
+                       "point at a parallel HDF5 install before configuring "
+                       "(see the comment above this check).")
+endif()
 
 # spdlog allows for logging!
 FetchContent_Declare(
