@@ -21041,6 +21041,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     }();
     std::vector<std::uint64_t> ckRecv;
     bool ckHave = false, ckUse = false;
+    std::vector<std::uint64_t> ckBody;             // record body of the last ckMake(i)
+    std::function<size_t(size_t)> ckMake;          // local element i -> body, returns nOwn
     // one record per (element, destination), every ring: the 26-lists miss
     // finer face neighbours, so the unzip reads some round-2/3 elements:
     // [eid | ring<<32 | nOwn<<40] [nOwn x (x|y<<32, z|lev<<32)] [npe x u32 own<<16|sub, packed 2/word]
@@ -21139,18 +21141,12 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             if (all) {
                 const unsigned int npe = S->m_uiNpE;
                 std::vector<std::vector<std::uint64_t>> kout(npes);
-                std::vector<std::uint64_t> body;
+                std::vector<std::uint64_t>& body = ckBody;
                 std::vector<unsigned int> slotOwn(npe);
                 std::vector<const ot::TreeNode*> owners;
                 size_t tnBad = 0;
-                for (size_t i = 0; i < localSz; ++i) {
+                ckMake = [&, S, npe, slotOwn, owners](size_t i) mutable {
                     const unsigned int se = S->m_uiElementLocalBegin + (unsigned int)i;
-                    const auto& oct = oct_connectivity_map[i];
-                    const unsigned int psz = 1u << (m_uiMaxDepth - oct.level - 1);
-                    const ot::TreeNode& st = S->m_uiAllElements[se];
-                    if (st.getX() != oct.coord[0] - psz || st.getY() != oct.coord[1] - psz ||
-                        st.getZ() != oct.coord[2] - psz || st.getLevel() != oct.level)
-                        tnBad++;
                     owners.clear();
                     for (unsigned int n = 0; n < npe; n++) {
                         const unsigned int cg = S->m_uiE2NMapping_CG[(size_t)se * npe + n];
@@ -21161,17 +21157,28 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                         if (k == owners.size()) owners.push_back(o);
                         slotOwn[n] = (k << 16) | (dg % npe);
                     }
-                    body.clear();
+                    ckBody.clear();
                     for (const auto* o : owners) {
-                        body.push_back(ckTNw0(*o));
-                        body.push_back(ckTNw1(*o));
+                        ckBody.push_back(ckTNw0(*o));
+                        ckBody.push_back(ckTNw1(*o));
                     }
                     for (unsigned int n = 0; n < npe; n += 2)
-                        body.push_back((std::uint64_t)slotOwn[n] |
-                                       (n + 1 < npe ? (std::uint64_t)slotOwn[n + 1] << 32 : 0));
+                        ckBody.push_back((std::uint64_t)slotOwn[n] |
+                                         (n + 1 < npe ? (std::uint64_t)slotOwn[n + 1] << 32 : 0));
+                    return owners.size();
+                };
+                for (size_t i = 0; i < localSz; ++i) {
+                    const unsigned int se = S->m_uiElementLocalBegin + (unsigned int)i;
+                    const auto& oct = oct_connectivity_map[i];
+                    const unsigned int psz = 1u << (m_uiMaxDepth - oct.level - 1);
+                    const ot::TreeNode& st = S->m_uiAllElements[se];
+                    if (st.getX() != oct.coord[0] - psz || st.getY() != oct.coord[1] - psz ||
+                        st.getZ() != oct.coord[2] - psz || st.getLevel() != oct.level)
+                        tnBad++;
+                    const size_t nOwnI = ckMake(i);
                     auto put = [&](unsigned int p, unsigned int d) {
                         kout[p].push_back((std::uint64_t)oct.eid | ((std::uint64_t)d << 32) |
-                                          ((std::uint64_t)owners.size() << 40));
+                                          ((std::uint64_t)nOwnI << 40));
                         kout[p].insert(kout[p].end(), body.begin(), body.end());
                     };
                     put(pushLabels[i], 0);
@@ -21189,6 +21196,92 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }
         MPI_Datatype octType = create_octdata_mpi_type<D_INT_L>();
         new_oct_connectivity_map = exchangeBuckets(out, octType);
+        // K6c (keys + DENDRO_REPART_GHOST_RINGS=2): canonical owners of keyed
+        // slots that the 2-ring push did not deliver are fetched as
+        // topology-only records from their SFC source (splitter-routed by TN)
+        if (ckHave && ghostRings < 3) {
+            const Mesh* S = g_canonKeySrc ? g_canonKeySrc : this;
+            struct TK { std::uint64_t a, b; bool operator==(const TK& o) const { return a == o.a && b == o.b; } };
+            struct TKH { size_t operator()(const TK& k) const {
+                std::uint64_t h = k.a * 0x9E3779B97F4A7C15ULL ^ (k.b + 0x632BE59BD9B4E019ULL + (k.a << 6));
+                h ^= h >> 31; h *= 0xff51afd7ed558ccdULL; h ^= h >> 29; return (size_t)h; } };
+            auto octTK = [&](const oct_data<D_INT_L>& o) {
+                const std::uint64_t psz = 1ull << (m_uiMaxDepth - o.level - 1);
+                return TK{(o.coord[0] - psz) | ((o.coord[1] - psz) << 32),
+                          (o.coord[2] - psz) | ((std::uint64_t)o.level << 32)};
+            };
+            std::unordered_set<TK, TKH> present, want;
+            for (const auto& o : new_oct_connectivity_map) present.insert(octTK(o));
+            const size_t npeK = (size_t)(m_uiElementOrder + 1) * (m_uiElementOrder + 1) *
+                                (m_uiElementOrder + 1);
+            for (size_t o = 0; o < ckRecv.size();) {
+                const size_t nOwn = (size_t)(ckRecv[o] >> 40);
+                for (size_t k = 0; k < nOwn; k++) {
+                    const TK t{ckRecv[o + 1 + 2 * k], ckRecv[o + 2 + 2 * k]};
+                    if (!present.count(t)) want.insert(t);
+                }
+                o += 1 + 2 * nOwn + (npeK + 1) / 2;
+            }
+            // SFC splitters: first local element of every source rank
+            const ot::TreeNode& f0 = S->m_uiAllElements[S->m_uiElementLocalBegin];
+            unsigned int mine[4] = {f0.getX(), f0.getY(), f0.getZ(), f0.getLevel()};
+            std::vector<unsigned int> firsts(4 * (size_t)npes);
+            repartRound();
+            MPI_Allgather(mine, 4, MPI_UNSIGNED, firsts.data(), 4, MPI_UNSIGNED, commActive);
+            std::vector<ot::TreeNode> spl(npes);
+            for (int q = 0; q < npes; q++)
+                spl[q] = ot::TreeNode(firsts[4 * q], firsts[4 * q + 1], firsts[4 * q + 2],
+                                      firsts[4 * q + 3], m_uiDim, m_uiMaxDepth);
+            std::vector<std::vector<std::uint64_t>> req(npes);
+            for (const auto& t : want) {
+                const ot::TreeNode tn((unsigned int)(t.a & 0xffffffffu), (unsigned int)(t.a >> 32),
+                                      (unsigned int)(t.b & 0xffffffffu), (unsigned int)(t.b >> 32),
+                                      m_uiDim, m_uiMaxDepth);
+                int q = (int)(std::upper_bound(spl.begin(), spl.end(), tn) - spl.begin()) - 1;
+                if (q < 0) q = 0;
+                req[q].push_back(t.a);
+                req[q].push_back(t.b);
+            }
+            std::vector<int> reqSrc;
+            {
+                // requester of each received pair: counts per sender via a second view
+                std::vector<int> sc(npes), rc(npes);
+                for (int q = 0; q < npes; q++) sc[q] = (int)req[q].size();
+                repartRound();
+                MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, commActive);
+                for (int q = 0; q < npes; q++)
+                    for (int k = 0; k < rc[q] / 2; k++) reqSrc.push_back(q);
+            }
+            const std::vector<std::uint64_t> got = exchangeBuckets(req, MPI_UINT64_T);
+            std::unordered_map<TK, size_t, TKH> localIdx;
+            localIdx.reserve(localSz);
+            for (size_t i = 0; i < localSz; ++i) localIdx.emplace(octTK(oct_connectivity_map[i]), i);
+            std::vector<std::vector<oct_data<D_INT_L>>> rep(npes);
+            std::vector<std::vector<std::uint64_t>> krep(npes);
+            size_t notFound = 0;
+            for (size_t k = 0; k + 1 < got.size(); k += 2) {
+                auto it = localIdx.find(TK{got[k], got[k + 1]});
+                if (it == localIdx.end()) { notFound++; continue; }
+                oct_data<D_INT_L> o = oct_connectivity_map[it->second];
+                o.trank = pushLabels[it->second];
+                o.isGhostTwo = true;
+                rep[reqSrc[k / 2]].push_back(o);
+                // targets are keyed rows too: the unzip reads some of them
+                const size_t nOwn = ckMake(it->second);
+                auto& kb = krep[reqSrc[k / 2]];
+                kb.push_back((std::uint64_t)o.eid | (3ull << 32) | ((std::uint64_t)nOwn << 40));
+                kb.insert(kb.end(), ckBody.begin(), ckBody.end());
+            }
+            const auto tg = exchangeBuckets(rep, octType);
+            const auto tk = exchangeBuckets(krep, MPI_UINT64_T);
+            ckRecv.insert(ckRecv.end(), tk.begin(), tk.end());
+            new_oct_connectivity_map.insert(new_oct_connectivity_map.end(), tg.begin(), tg.end());
+            unsigned long long cnt[3] = {want.size(), tg.size(), notFound}, tot[3];
+            MPI_Reduce(cnt, tot, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            if (!rank)
+                std::cout << "[canon-keys] owner targets wanted=" << tot[0]
+                          << " fetched=" << tot[1] << " not-found=" << tot[2] << std::endl;
+        }
         MPI_Type_free(&octType);
         for (const auto& o : new_oct_connectivity_map) {
             if (o.trank == (unsigned int)rank) my_partition.push_back(o.eid);
@@ -21536,6 +21629,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             if (it != byEid.end()) ckOff[e] = it->second;
         }
     }
+    if (ckHave) __phase("canon-keys: e2e + swap + record index");
     // decode slot n of element e's record: owner TN words + owner sub
     auto ckSlot = [&](unsigned int e, unsigned int n, std::uint64_t& w0,
                       std::uint64_t& w1, unsigned int& sub) {
@@ -21756,7 +21850,12 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         };
         {
             std::unordered_map<PK, unsigned int, PKH> byPos;
-            bool anyTopo = !absentSlots.empty();
+            // an owner outside the fetched set stays self-owned: in every
+            // gate run no fetched element carried the key's position either
+            // (rim slots of the outermost ring), so no position lookup
+            ownerUnres = absentSlots.size();
+            absentSlots.clear();
+            bool anyTopo = false;
             for (unsigned int e = 0; e < N && !anyTopo; e++) anyTopo = ckOff[e] == SIZE_MAX;
             if (anyTopo) {
                 std::vector<char> absent(absentSlots.empty() ? 0 : N * npe, 0);
@@ -22869,8 +22968,24 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // duplicate here.
 
         m_uiIsLabelledRebuild = true;
+        const unsigned long long zsRaw[2] = {m_uiZipSyncSendCg.size(), m_uiZipSyncRecvCg.size()};
         pruneZipSync();
         __phase("block-decomposition");
+        if (ckUse || std::getenv("DENDRO_ZIPSYNC_STATS")) {
+            // K6 expects no duplicate cgs anywhere: empty sync lists, no mirrors
+            unsigned long long v[8] = {zsRaw[0], zsRaw[1], m_uiZipSyncSendCg.size(),
+                                       m_uiZipSyncRecvCg.size(), m_uiZipLocalDupSrc.size(),
+                                       m_uiZipNonPrimaryToGhostCg.size(),
+                                       m_uiPassDDemotedToGhostCg.size(),
+                                       m_uiLocalNonPrimaryCg.size()};
+            unsigned long long t[8];
+            MPI_Reduce(v, t, 8, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            if (!rank)
+                std::printf("[zipsync-summary] keys=%d sync send/recv raw=%llu/%llu pruned=%llu/%llu "
+                            "local_dup=%llu znp_mirror=%llu passd_mirror=%llu local_nonprimary=%llu "
+                            "global_active=%d\n", (int)ckUse, t[0], t[1], t[2], t[3], t[4], t[5],
+                            t[6], t[7], (int)m_uiZipSyncGlobalActive);
+        }
     }
     if (countRounds) {
         if (!rank)
