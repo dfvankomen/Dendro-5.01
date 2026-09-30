@@ -6581,6 +6581,20 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         const char* v = std::getenv("DENDRO_REDIST_HINT_CHECK");
         return v && v[0] == '1';
     }();
+    // DENDRO_REDIST_LEAN=1 (opt-in): fewer synchronising rounds, same bits. The hint agreement rides
+    // on the count exchange (no Allreduce), the three per-field count Alltoalls and three Alltoallvs
+    // collapse to one of each, and orphan queries route by the source's SFC splitters (no bitmap
+    // Allgather) when every rank's source is an SFC mesh; replies are positional (no count exchange).
+    // DENDRO_REDIST_LEAN_CHECK=1 also runs the bitmap orphan path and aborts on any differing slot.
+    static const bool redistLean = [] {
+        const char* v = std::getenv("DENDRO_REDIST_LEAN");
+        return v && v[0] == '1';
+    }();
+    static const bool leanCheck = [] {
+        const char* v = std::getenv("DENDRO_REDIST_LEAN_CHECK");
+        return v && v[0] == '1';
+    }();
+    const bool leanOpt = redistLean && redistHint && !hintCheck;
     int hintMode = 0;
     std::vector<int> hintTarget;
     if (redistHint) {
@@ -6629,14 +6643,21 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                 }
             }
         }
-        int mm[2] = {code, -code};
-        MPI_Allreduce(MPI_IN_PLACE, mm, 2, MPI_INT, MPI_MIN, comm);
-        if (mm[0] == -mm[1] && mm[0] > 0) hintMode = mm[0];
+        if (leanOpt) {
+            static const bool forceMiss = std::getenv("DENDRO_REDIST_LEAN_FORCEMISS") != nullptr;
+            if (forceMiss && rank == 0) code = 0;
+            hintMode = code;
+        } else {
+            int mm[2] = {code, -code};
+            MPI_Allreduce(MPI_IN_PLACE, mm, 2, MPI_INT, MPI_MIN, comm);
+            if (mm[0] == -mm[1] && mm[0] > 0) hintMode = mm[0];
+        }
     }
     prof.mode = hintMode;
-    const bool needDir = (hintMode == 0 || hintCheck);
+    const bool needDir = leanOpt ? false : (hintMode == 0 || hintCheck);
 
-    if (needDir && routeDir) {
+    auto runDirectory = [&]() {
+    if (routeDir) {
         const MPI_Datatype tnType = par::Mpi_datatype<ot::TreeNode>::value();
         TNHash tnHash;
         auto dirOf = [&](const ot::TreeNode& t) {
@@ -6727,7 +6748,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             std::cout << "[redist-route] directory path: " << stats[1]
                       << " elements routed by TN-hash rendezvous" << std::endl;
         }
-    } else if (needDir) {
+    } else {
         // ---- Step 1: Allgatherv each rank's local TreeNodes on dstMesh, build
         //              a global TreeNode -> rank map (hashed for speed).
         std::vector<ot::TreeNode> myLocal;
@@ -6779,6 +6800,8 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             }
         }
     }
+    };
+    if (needDir) runDirectory();
 
     if (hintMode) {
         if (hintCheck) {
@@ -6793,7 +6816,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         }
         srcTarget.swap(hintTarget);
     }
-    if (redistHint && !rank)
+    if (redistHint && !rank && !leanOpt)
         std::cout << "[redist-hint] mode="
                   << (hintMode == 1 ? "labels" : hintMode == 2 ? "origins" : "directory")
                   << std::endl;
@@ -6840,6 +6863,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     if (rprobe && m_uiIsActive)
         rpDelivered.insert(m_uiScatterMapActualNodeRecv.begin(),
                            m_uiScatterMapActualNodeRecv.end());
+    auto packSend = [&]() {
     if (m_uiIsActive) {
         const auto* pNO = m_uiAllElements.data();
         const auto& e2nO = m_uiE2NMapping_CG;
@@ -6895,9 +6919,121 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             }
         }
     }
+    };
+    packSend();
 
     prof.mark(1);
 
+    std::vector<ot::TreeNode> recvTN;
+    std::vector<T> recvDG;
+    std::vector<unsigned char> recvFlag;
+    bool leanSfcAll = false;
+    if (redistLean) {
+        // one header Alltoall {tn count, hint code, src-is-sfc} + one byte-packed Alltoallv; per peer the
+        // chunk is [TNs][DG][flags], each region padded to 8 bytes, counted in 8-byte words
+        const size_t nSrcL = srcLocalEnd - srcLocalBegin;
+        auto srcIsSfc = [&]() {
+            if (!m_uiIsActive || m_uiIsLabelledRebuild) return 0;
+            if (m_uiLocalSplitterElements.size() != 2 * (size_t)npes) return 0;
+            if (nSrcL == 0) return 0;
+            return (repartTNKeySame(m_uiAllElements[srcLocalBegin],
+                                    m_uiLocalSplitterElements[2 * rank]) &&
+                    repartTNKeySame(m_uiAllElements[srcLocalEnd - 1],
+                                    m_uiLocalSplitterElements[2 * rank + 1]))
+                       ? 1 : 0;
+        };
+        auto pad8 = [](size_t b) { return (b + 7) & ~(size_t)7; };
+        std::vector<int> hs(3 * npes), hr(3 * npes);
+        auto headerExchange = [&](int code) {
+            const int sf = srcIsSfc();
+            for (int p = 0; p < npes; p++) {
+                hs[3 * p]     = (int)sendTN[p].size();
+                hs[3 * p + 1] = code;
+                hs[3 * p + 2] = sf;
+            }
+            MPI_Alltoall(hs.data(), 3, MPI_INT, hr.data(), 3, MPI_INT, comm);
+        };
+        int sendCode = leanOpt ? hintMode : 1;
+        headerExchange(sendCode);
+        if (leanOpt) {
+            bool allHit = hr[1] > 0;
+            for (int p = 1; p < npes && allHit; p++)
+                allHit = hr[3 * p + 1] == hr[1];
+            if (allHit) {
+                hintMode = hr[1];
+            } else {
+                // hint missed somewhere: everyone falls back to the directory (all ranks see the same
+                // codes), then repacks and repeats the header exchange
+                hintMode = 0;
+                srcTarget.assign(srcTarget.size(), -1);
+                runDirectory();
+                for (int p = 0; p < npes; p++) {
+                    sendTN[p].clear(); sendDG[p].clear(); sendLocalFlag[p].clear();
+                }
+                packSend();
+                headerExchange(1);
+            }
+            if (!rank)
+                std::cout << "[redist-hint] mode="
+                          << (hintMode == 1 ? "labels" : hintMode == 2 ? "origins" : "directory")
+                          << std::endl;
+        }
+        leanSfcAll = true;
+        for (int p = 0; p < npes; p++) leanSfcAll = leanSfcAll && hr[3 * p + 2];
+
+        const size_t tnSz = sizeof(ot::TreeNode), dgSz = sizeof(T);
+        std::vector<int> sC(npes), rC(npes), sO(npes, 0), rO(npes, 0);
+        std::vector<int> rN(npes);
+        long long totS = 0, totR = 0;
+        size_t totRTN = 0;
+        for (int p = 0; p < npes; p++) {
+            const size_t ns = (size_t)hs[3 * p], nr = (size_t)hr[3 * p];
+            rN[p] = (int)nr;
+            totRTN += nr;
+            sC[p] = (int)((pad8(ns * tnSz) + pad8(ns * npe * dof * dgSz) + pad8(ns * npe)) / 8);
+            rC[p] = (int)((pad8(nr * tnSz) + pad8(nr * npe * dof * dgSz) + pad8(nr * npe)) / 8);
+            sO[p] = (int)totS; rO[p] = (int)totR;
+            totS += sC[p]; totR += rC[p];
+        }
+        if (totS > INT_MAX || totR > INT_MAX) {
+            std::cerr << "[redistributeVec r" << rank << "] lean buffer exceeds 2^31 words" << std::endl;
+            MPI_Abort(comm, 79);
+        }
+        std::unique_ptr<uint64_t[]> sBuf(new uint64_t[(size_t)totS + 1]), rBuf(new uint64_t[(size_t)totR + 1]);
+        for (int p = 0; p < npes; p++) {
+            const size_t ns = sendTN[p].size();
+            if (!ns) continue;
+            unsigned char* c = reinterpret_cast<unsigned char*>(sBuf.get() + sO[p]);
+            std::memcpy(c, sendTN[p].data(), ns * tnSz);
+            c += pad8(ns * tnSz);
+            std::memcpy(c, sendDG[p].data(), ns * npe * dof * dgSz);
+            c += pad8(ns * npe * dof * dgSz);
+            std::memcpy(c, sendLocalFlag[p].data(), ns * npe);
+        }
+        for (int p = 0; p < npes; p++) {
+            std::vector<ot::TreeNode>().swap(sendTN[p]);
+            std::vector<T>().swap(sendDG[p]);
+            std::vector<unsigned char>().swap(sendLocalFlag[p]);
+        }
+        MPI_Alltoallv(sBuf.get(), sC.data(), sO.data(), MPI_UINT64_T, rBuf.get(),
+                      rC.data(), rO.data(), MPI_UINT64_T, comm);
+        sBuf.reset();
+        recvTN.resize(totRTN);
+        recvDG.resize(totRTN * npe * dof);
+        recvFlag.resize(totRTN * npe);
+        size_t oT = 0;
+        for (int p = 0; p < npes; p++) {
+            const size_t nr = (size_t)rN[p];
+            if (!nr) continue;
+            const unsigned char* c = reinterpret_cast<const unsigned char*>(rBuf.get() + rO[p]);
+            std::memcpy(recvTN.data() + oT, c, nr * tnSz);
+            c += pad8(nr * tnSz);
+            std::memcpy(recvDG.data() + oT * npe * dof, c, nr * npe * dof * dgSz);
+            c += pad8(nr * npe * dof * dgSz);
+            std::memcpy(recvFlag.data() + oT * npe, c, nr * npe);
+            oT += nr;
+        }
+    } else {
     // ---- Step 3: alltoallv TreeNodes (per elem) + flags (per node) +
     //              DG values (per node * dof). TN/flag counts are dof-
     //              independent; only DG counts scale with dof.
@@ -6947,9 +7083,9 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                         sendLocalFlag[p].end());
     }
 
-    std::vector<ot::TreeNode> recvTN(totRecvTN);
-    std::vector<T> recvDG(totRecvDG);
-    std::vector<unsigned char> recvFlag(totRecvFlag);
+    recvTN.resize(totRecvTN);
+    recvDG.resize(totRecvDG);
+    recvFlag.resize(totRecvFlag);
     MPI_Alltoallv(flatTN.data(), sendCntTN.data(), sendOffTN.data(),
                   par::Mpi_datatype<ot::TreeNode>::value(), recvTN.data(),
                   recvCntTN.data(), recvOffTN.data(),
@@ -6961,6 +7097,8 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     MPI_Alltoallv(flatFlag.data(), sendCntFlag.data(), sendOffFlag.data(),
                   MPI_UNSIGNED_CHAR, recvFlag.data(), recvCntFlag.data(),
                   recvOffFlag.data(), MPI_UNSIGNED_CHAR, comm);
+
+    }
 
     prof.mark(2);
 
@@ -7214,13 +7352,23 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     }
 
     int myOrphCount = (int)myOrphans.size();
-    std::vector<int> oCounts(npes), oOffs(npes, 0);
-    MPI_Allgather(&myOrphCount, 1, MPI_INT, oCounts.data(), 1, MPI_INT,
-                  comm);
+    static const bool orphanP2P = [] {
+        const char* v = std::getenv("DENDRO_REDIST_ORPHAN_P2P");
+        const char* g = std::getenv("DENDRO_ORPHAN_FILL_GEOM_KEY");
+        if (g && g[0] == '1') return false;  // legacy geometric keying: old path
+        return !(v && v[0] == '0');
+    }();
+    const bool leanOrph = redistLean && orphanP2P;
+    const bool needOrphCount = !leanOrph || leanCheck;
+    std::vector<int> oCounts(npes, 0), oOffs(npes, 0);
     int oTotal = 0;
-    for (int p = 0; p < npes; p++) {
-        oOffs[p] = oTotal;
-        oTotal += oCounts[p];
+    if (needOrphCount) {
+        MPI_Allgather(&myOrphCount, 1, MPI_INT, oCounts.data(), 1, MPI_INT,
+                      comm);
+        for (int p = 0; p < npes; p++) {
+            oOffs[p] = oTotal;
+            oTotal += oCounts[p];
+        }
     }
     auto rpReport = [&]() {
         if (!rprobe) return;
@@ -7285,7 +7433,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                       << " total_keys=" << oTotal << std::endl;
         }
     }
-    if (oTotal == 0) { rpReport(); prof.mark(4); return; }  // no orphans anywhere, done
+    if (needOrphCount && oTotal == 0) { rpReport(); prof.mark(4); return; }  // no orphans anywhere, done
 
     // DENDRO_REDIST_ORPHAN_P2P (default on, =0 reverts): no global gather of the orphans. every rank
     // publishes a 32^3 occupancy bitmap of its src-local cg positions (O(P)
@@ -7294,12 +7442,254 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // just the queried positions filled in one pass over the local cgs.
     // Same answers, same write order (own rank first, then ascending source
     // rank), so bit-identical to the gather path.
-    static const bool orphanP2P = [] {
-        const char* v = std::getenv("DENDRO_REDIST_ORPHAN_P2P");
-        const char* g = std::getenv("DENDRO_ORPHAN_FILL_GEOM_KEY");
-        if (g && g[0] == '1') return false;  // legacy geometric keying: old path
-        return !(v && v[0] == '0');
-    }();
+    std::vector<T> leanSnap;
+    if (leanOrph) {
+        {
+        constexpr int GB = 32, GW = GB * GB * GB / 64;
+        const uint64_t domD = ((uint64_t)1 << m_uiMaxDepth) * dstEOrd;
+        auto cellOf = [&](uint64_t x, uint64_t y, uint64_t z) {
+            auto c1 = [&](uint64_t v) {
+                uint64_t c = v * GB / domD;
+                return (int)(c >= (uint64_t)GB ? GB - 1 : c);
+            };
+            return (c1(x) * GB + c1(y)) * GB + c1(z);
+        };
+        auto srcPos = [&](unsigned int cg, uint64_t& x, uint64_t& y,
+                          uint64_t& z) {
+            if (cg >= m_uiCG2DG.size()) return false;
+            const unsigned int dg = m_uiCG2DG[cg];
+            if (dg == LOOK_UP_TABLE_DEFAULT) return false;
+            const unsigned int oe = dg / npe, on = dg % npe;
+            if (oe >= m_uiAllElements.size()) return false;
+            const auto& t          = m_uiAllElements[oe];
+            const unsigned int sEO = m_uiElementOrder;
+            const uint64_t len = (uint64_t)1 << (m_uiMaxDepth - t.getLevel());
+            x = (uint64_t)t.getX() * sEO + (uint64_t)(on % (sEO + 1)) * len;
+            y = (uint64_t)t.getY() * sEO +
+                (uint64_t)((on / (sEO + 1)) % (sEO + 1)) * len;
+            z = (uint64_t)t.getZ() * sEO +
+                (uint64_t)(on / ((sEO + 1) * (sEO + 1))) * len;
+            return true;
+        };
+        unsigned long long tl[3] = {(unsigned long long)myOrphCount, 0, 0};
+        std::vector<std::vector<uint64_t>> qB(npes);
+        std::vector<std::vector<unsigned int>> qCg(npes);
+        if (leanSfcAll) {
+            // every rank's source is an SFC mesh: the ranks that can hold a local cg at a position are
+            // the owners of the (up to 8) finest cells touching it, found by the splitters
+            std::vector<ot::TreeNode> firsts(npes);
+            for (int p = 0; p < npes; p++) firsts[p] = m_uiLocalSplitterElements[2 * p];
+            const uint64_t N = (uint64_t)1 << m_uiMaxDepth;
+            for (int k = 0; k < myOrphCount; k++) {
+                const auto& o = myOrphans[k];
+                uint64_t cc[3][2];
+                int nc[3];
+                const uint64_t P3[3] = {o.x, o.y, o.z};
+                for (int d = 0; d < 3; d++) {
+                    const uint64_t lo = P3[d] / dstEOrd;
+                    nc[d] = 0;
+                    if (P3[d] % dstEOrd == 0) {
+                        if (lo > 0) cc[d][nc[d]++] = lo - 1;
+                        if (lo < N) cc[d][nc[d]++] = lo;
+                    } else {
+                        cc[d][nc[d]++] = lo;
+                    }
+                }
+                int cand[8], ncand = 0;
+                for (int a = 0; a < nc[0]; a++)
+                    for (int b = 0; b < nc[1]; b++)
+                        for (int c = 0; c < nc[2]; c++) {
+                            const ot::TreeNode cell((unsigned int)cc[0][a], (unsigned int)cc[1][b],
+                                                    (unsigned int)cc[2][c], m_uiMaxDepth, m_uiDim,
+                                                    m_uiMaxDepth);
+                            int r = (int)(std::upper_bound(firsts.begin(), firsts.end(), cell) -
+                                          firsts.begin()) - 1;
+                            if (r < 0) r = 0;
+                            bool dup = false;
+                            for (int i = 0; i < ncand; i++) dup = dup || cand[i] == r;
+                            if (!dup) cand[ncand++] = r;
+                        }
+                std::sort(cand, cand + ncand);
+                for (int i = 0; i < ncand; i++) {
+                    const int p = cand[i];
+                    if (p == rank) continue;
+                    qB[p].push_back(o.x);
+                    qB[p].push_back(o.y);
+                    qB[p].push_back(o.z);
+                    qCg[p].push_back(o.cg);
+                    tl[1]++;
+                }
+            }
+        } else {
+            // labelled sources: orphan count and occupancy bitmap in one Allgather
+            std::vector<uint64_t> myBits(GW + 1, 0), allBits((size_t)(GW + 1) * npes);
+            myBits[0] = (uint64_t)myOrphCount;
+            if (m_uiIsActive)
+                for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd; cg++) {
+                    uint64_t x, y, z;
+                    if (!srcPos(cg, x, y, z)) continue;
+                    const int c = cellOf(x, y, z);
+                    myBits[1 + (c >> 6)] |= (uint64_t)1 << (c & 63);
+                }
+            MPI_Allgather(myBits.data(), GW + 1, MPI_UINT64_T, allBits.data(), GW + 1,
+                          MPI_UINT64_T, comm);
+            unsigned long long tot = 0;
+            for (int p = 0; p < npes; p++) tot += allBits[(size_t)p * (GW + 1)];
+            if (tot == 0) { rpReport(); prof.mark(4); return; }
+            for (int k = 0; k < myOrphCount; k++) {
+                const auto& o = myOrphans[k];
+                const int c   = cellOf(o.x, o.y, o.z);
+                for (int p = 0; p < npes; p++) {
+                    if (p == rank) continue;
+                    if (!((allBits[(size_t)p * (GW + 1) + 1 + (c >> 6)] >> (c & 63)) & 1)) continue;
+                    qB[p].push_back(o.x);
+                    qB[p].push_back(o.y);
+                    qB[p].push_back(o.z);
+                    qCg[p].push_back(o.cg);
+                    tl[1]++;
+                }
+            }
+        }
+        std::vector<int> sC(npes), sO(npes, 0), rC(npes), rO(npes, 0);
+        for (int p = 0; p < npes; p++) sC[p] = (int)qB[p].size();
+        MPI_Alltoall(sC.data(), 1, MPI_INT, rC.data(), 1, MPI_INT, comm);
+        for (int p = 1; p < npes; p++) {
+            sO[p] = sO[p - 1] + sC[p - 1];
+            rO[p] = rO[p - 1] + rC[p - 1];
+        }
+        std::vector<uint64_t> qFlat;
+        qFlat.reserve((size_t)sO[npes - 1] + sC[npes - 1]);
+        for (int p = 0; p < npes; p++)
+            qFlat.insert(qFlat.end(), qB[p].begin(), qB[p].end());
+        qB.clear();
+        std::vector<uint64_t> qRecv((size_t)rO[npes - 1] + rC[npes - 1]);
+        // sparse point-to-point: only the pairs with queries talk, so a hop without orphans costs
+        // just the count Alltoall
+        constexpr int TAG_Q = 40711, TAG_R = 40712;
+        std::vector<MPI_Request> reqs;
+        for (int p = 0; p < npes; p++) {
+            if (rC[p] > 0) {
+                reqs.emplace_back();
+                MPI_Irecv(qRecv.data() + rO[p], rC[p], MPI_UINT64_T, p, TAG_Q, comm, &reqs.back());
+            }
+        }
+        for (int p = 0; p < npes; p++) {
+            if (sC[p] > 0) {
+                reqs.emplace_back();
+                MPI_Isend(qFlat.data() + sO[p], sC[p], MPI_UINT64_T, p, TAG_Q, comm, &reqs.back());
+            }
+        }
+        MPI_Waitall((int)reqs.size(), reqs.data(), MPI_STATUSES_IGNORE);
+        reqs.clear();
+        qFlat.clear();
+
+        struct PosH {
+            size_t operator()(const std::tuple<uint64_t, uint64_t, uint64_t>& k)
+                const noexcept {
+                uint64_t h = std::get<0>(k);
+                h = (h << 21) ^ std::get<1>(k);
+                h = (h << 21) ^ std::get<2>(k);
+                h ^= h >> 33;
+                h *= 0xff51afd7ed558ccdULL;
+                h ^= h >> 33;
+                return (size_t)h;
+            }
+        };
+        std::unordered_map<std::tuple<uint64_t, uint64_t, uint64_t>, unsigned int, PosH> qPos;
+        qPos.reserve((size_t)myOrphCount + qRecv.size() / 3);
+        for (int k = 0; k < myOrphCount; k++)
+            qPos.emplace(std::make_tuple(myOrphans[k].x, myOrphans[k].y, myOrphans[k].z),
+                         LOOK_UP_TABLE_DEFAULT);
+        for (size_t i = 0; i + 2 < qRecv.size(); i += 3)
+            qPos.emplace(std::make_tuple(qRecv[i], qRecv[i + 1], qRecv[i + 2]),
+                         LOOK_UP_TABLE_DEFAULT);
+        if (m_uiIsActive)
+            for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd; cg++) {
+                uint64_t x, y, z;
+                if (!srcPos(cg, x, y, z)) continue;
+                auto it = qPos.find(std::make_tuple(x, y, z));
+                if (it != qPos.end() && it->second == LOOK_UP_TABLE_DEFAULT)
+                    it->second = cg;
+            }
+        for (int k = 0; k < myOrphCount; k++) {
+            auto it = qPos.find(std::make_tuple(myOrphans[k].x, myOrphans[k].y,
+                                                myOrphans[k].z));
+            if (it->second == LOOK_UP_TABLE_DEFAULT) continue;
+            for (unsigned int v = 0; v < dof; v++)
+                vecOut[v * dstCgSz + myOrphans[k].cg] = vecIn[v * srcCgSz + it->second];
+            if (rprobe) rpPath[myOrphans[k].cg] = 3;
+            markWritten(myOrphans[k].cg);
+        }
+        // positional replies: one flag byte + dof values per query, in query order, no count exchange
+        auto pad8 = [](size_t b) { return (b + 7) & ~(size_t)7; };
+        std::vector<int> sR(npes), rR(npes), sRo(npes, 0), rRo(npes, 0);
+        long long tsR = 0, trR = 0;
+        for (int p = 0; p < npes; p++) {
+            const size_t ns = (size_t)rC[p] / 3, nr = qCg[p].size();
+            sR[p] = (int)((pad8(ns) + pad8(ns * dof * sizeof(T))) / 8);
+            rR[p] = (int)((pad8(nr) + pad8(nr * dof * sizeof(T))) / 8);
+            sRo[p] = (int)tsR; rRo[p] = (int)trR;
+            tsR += sR[p]; trR += rR[p];
+        }
+        std::vector<uint64_t> sRep((size_t)tsR, 0);
+        std::unique_ptr<uint64_t[]> rRep(new uint64_t[(size_t)trR + 1]);
+        for (int p = 0; p < npes; p++) {
+            const size_t ns = (size_t)rC[p] / 3;
+            if (!ns) continue;
+            unsigned char* fl = reinterpret_cast<unsigned char*>(sRep.data() + sRo[p]);
+            T* vals = reinterpret_cast<T*>(fl + pad8(ns));
+            for (size_t i = 0; i < ns; i++) {
+                const size_t q = (size_t)rO[p] + 3 * i;
+                auto it = qPos.find(std::make_tuple(qRecv[q], qRecv[q + 1], qRecv[q + 2]));
+                if (it->second == LOOK_UP_TABLE_DEFAULT) continue;
+                fl[i] = 1;
+                for (unsigned int v = 0; v < dof; v++)
+                    vals[i * dof + v] = vecIn[v * srcCgSz + it->second];
+                tl[2]++;
+            }
+        }
+        for (int p = 0; p < npes; p++) {
+            if (qCg[p].size() > 0) {
+                reqs.emplace_back();
+                MPI_Irecv(rRep.get() + rRo[p], rR[p], MPI_UINT64_T, p, TAG_R, comm, &reqs.back());
+            }
+        }
+        for (int p = 0; p < npes; p++) {
+            if (rC[p] > 0) {
+                reqs.emplace_back();
+                MPI_Isend(sRep.data() + sRo[p], sR[p], MPI_UINT64_T, p, TAG_R, comm, &reqs.back());
+            }
+        }
+        MPI_Waitall((int)reqs.size(), reqs.data(), MPI_STATUSES_IGNORE);
+        for (int p = 0; p < npes; p++) {
+            const size_t nr = qCg[p].size();
+            if (!nr) continue;
+            const unsigned char* fl = reinterpret_cast<const unsigned char*>(rRep.get() + rRo[p]);
+            const T* vals = reinterpret_cast<const T*>(fl + pad8(nr));
+            for (size_t i = 0; i < nr; i++) {
+                if (!fl[i]) continue;
+                const unsigned int cg = qCg[p][i];
+                for (unsigned int v = 0; v < dof; v++)
+                    vecOut[v * dstCgSz + cg] = vals[i * dof + v];
+                if (rprobe) rpPath[cg] = 3;
+                markWritten(cg);
+            }
+        }
+        if (rprof) {
+            MPI_Allreduce(MPI_IN_PLACE, tl, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+            if (!rank)
+                std::cout << "[redist-orphan] path=lean-" << (leanSfcAll ? "splitter" : "bitmap")
+                          << " orphans=" << tl[0] << " queries_sent=" << tl[1]
+                          << " answered=" << tl[2] << std::endl;
+        }
+        }
+        if (leanCheck) {
+            for (const auto& o : myOrphans)
+                for (unsigned int v = 0; v < dof; v++)
+                    leanSnap.push_back(vecOut[v * dstCgSz + o.cg]);
+        }
+    }
+    if (!leanOrph || leanCheck) {
     if (orphanP2P) {
         constexpr int GB = 32, GW = GB * GB * GB / 64;
         const uint64_t domD = ((uint64_t)1 << m_uiMaxDepth) * dstEOrd;
@@ -7683,6 +8073,21 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         markWritten(recvCGO[i]);
     }
     }  // orphan gather path
+    }  // legacy orphan paths
+    if (leanOrph && leanCheck) {
+        unsigned long long mis[2] = {0, 0};
+        size_t i = 0;
+        for (const auto& o : myOrphans)
+            for (unsigned int v = 0; v < dof; v++, i++) {
+                mis[1]++;
+                if (std::memcmp(&leanSnap[i], &vecOut[v * dstCgSz + o.cg], sizeof(T)) != 0) mis[0]++;
+            }
+        MPI_Allreduce(MPI_IN_PLACE, mis, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+        if (!rank)
+            std::cout << "[redist-lean-check] orphan slots=" << mis[1] << " mismatches=" << mis[0]
+                      << std::endl;
+        if (mis[0]) MPI_Abort(comm, 78);
+    }
 
     // Deterministic residual fill: any dst-LOCAL cg that NO write path
     // covered (element delivery, orphan fill same-rank or cross-rank)
