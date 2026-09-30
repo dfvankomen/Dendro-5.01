@@ -827,6 +827,7 @@ void ETS<T, Ctx>::evolve() {
     } \
 } while (0)
     _EV_TRACE("00_enter");
+    dendro::stepprof::EvolveScope spEvolve;
 
     dendro::logger::debug(dendro::logger::Scope{"ETS"},
                           "Beginning ETS evolve (overall time step: {})",
@@ -847,7 +848,10 @@ void ETS<T, Ctx>::evolve() {
     ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                  "00_evolveEnter", (int)m_uiTimeInfo._m_uiStep, -1);
     _EV_TRACE("01_pre_timestep_start");
-    m_uiAppCtx->pre_timestep(m_uiEVar);
+    {
+        dendro::stepprof::Scope sp(dendro::stepprof::EV_PRE_TS);
+        m_uiAppCtx->pre_timestep(m_uiEVar);
+    }
     _EV_TRACE("02_pre_timestep_done");
     ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                  "05_postPreTimestep", (int)m_uiTimeInfo._m_uiStep, -1);
@@ -945,12 +949,18 @@ void ETS<T, Ctx>::evolve() {
                 std::fflush(stderr);
             }
 
-            m_uiEVecTmp[0].copy_data(m_uiEVar);
+            {
+                dendro::stepprof::Scope sp(dendro::stepprof::EV_COPY);
+                m_uiEVecTmp[0].copy_data(m_uiEVar);
+            }
 
-            for (int p = 0; p < stage; p++)
-                DVec::axpy(m_uiAppCtx->get_mesh(),
-                           m_uiAij[(stage)*m_uiNumStages + p] * dt,
-                           m_uiStVec[p], m_uiEVecTmp[0]);
+            {
+                dendro::stepprof::Scope sp(dendro::stepprof::EV_AXPY_STAGE);
+                for (int p = 0; p < stage; p++)
+                    DVec::axpy(m_uiAppCtx->get_mesh(),
+                               m_uiAij[(stage)*m_uiNumStages + p] * dt,
+                               m_uiStVec[p], m_uiEVecTmp[0]);
+            }
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
                 std::fprintf(stderr,
@@ -958,7 +968,10 @@ void ETS<T, Ctx>::evolve() {
                     (unsigned long)m_uiTimeInfo._m_uiStep, stage);
                 std::fflush(stderr);
             }
-            m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
+            {
+                dendro::stepprof::Scope sp(dendro::stepprof::EV_POST_TS_STAGE);
+                m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
+            }
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
                 std::fprintf(stderr,
@@ -985,7 +998,10 @@ void ETS<T, Ctx>::evolve() {
                     (unsigned long)m_uiTimeInfo._m_uiStep, stage);
                 std::fflush(stderr);
             }
-            m_uiAppCtx->pre_stage(m_uiStVec[stage]);
+            {
+                dendro::stepprof::Scope sp(dendro::stepprof::EV_PRE_STAGE);
+                m_uiAppCtx->pre_stage(m_uiStVec[stage]);
+            }
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
                 std::fprintf(stderr,
@@ -993,8 +1009,11 @@ void ETS<T, Ctx>::evolve() {
                     (unsigned long)m_uiTimeInfo._m_uiStep, stage);
                 std::fflush(stderr);
             }
-            m_uiAppCtx->rhs(&m_uiEVecTmp[0], &m_uiStVec[stage], 1,
-                            current_t_adv);
+            {
+                dendro::stepprof::Scope sp(dendro::stepprof::EV_RHS);
+                m_uiAppCtx->rhs(&m_uiEVecTmp[0], &m_uiStVec[stage], 1,
+                                current_t_adv);
+            }
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
                 std::fprintf(stderr,
@@ -1002,7 +1021,10 @@ void ETS<T, Ctx>::evolve() {
                     (unsigned long)m_uiTimeInfo._m_uiStep, stage);
                 std::fflush(stderr);
             }
-            m_uiAppCtx->post_stage(m_uiStVec[stage]);
+            {
+                dendro::stepprof::Scope sp(dendro::stepprof::EV_POST_STAGE);
+                m_uiAppCtx->post_stage(m_uiStVec[stage]);
+            }
             em4_cg_trace(pMesh, m_uiStVec[stage].get_vec_ptr(),
                          m_uiStVec[stage].get_dof(), "20_postRHS",
                          trace_step, stage);
@@ -1022,9 +1044,12 @@ void ETS<T, Ctx>::evolve() {
         dendro::logger::debug(dendro::logger::Scope{"ETS"},
                               "Calculating next step after stages");
         _EV_TRACE("20_pre_final_axpy");
-        for (unsigned int k = 0; k < m_uiNumStages; k++)
-            DVec::axpy(m_uiAppCtx->get_mesh(), m_uiBi[k] * dt, m_uiStVec[k],
-                       m_uiEVar);
+        {
+            dendro::stepprof::Scope sp(dendro::stepprof::EV_FINAL_AXPY);
+            for (unsigned int k = 0; k < m_uiNumStages; k++)
+                DVec::axpy(m_uiAppCtx->get_mesh(), m_uiBi[k] * dt, m_uiStVec[k],
+                           m_uiEVar);
+        }
         _EV_TRACE("21_post_final_axpy");
         em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                      "30_postFinalAxpy", trace_step, -1);
@@ -1051,7 +1076,10 @@ void ETS<T, Ctx>::evolve() {
             T* dvec_ptr = m_uiEVar.get_vec_ptr();
             const unsigned int DOFV = m_uiEVar.get_dof();
             ot::Mesh* pMeshMut = const_cast<ot::Mesh*>(pMesh);
-            pMeshMut->syncZipNonPrimaryPublic(dvec_ptr, DOFV);
+            {
+                dendro::stepprof::Scope sp(dendro::stepprof::EV_SYNC_POSTAXPY);
+                pMeshMut->syncZipNonPrimaryPublic(dvec_ptr, DOFV);
+            }
             em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                          "40_postSync", trace_step, -1);
             ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
@@ -1061,7 +1089,10 @@ void ETS<T, Ctx>::evolve() {
             // phys_pos into bit-identity across ranks, plus zeros out
             // cgs at phys positions with no canonical writer anywhere
             // (matches SFC's far-field hanging-position IC).
-            pMeshMut->broadcastCgValuesByPhysPosStep(dvec_ptr, DOFV);
+            {
+                dendro::stepprof::Scope sp(dendro::stepprof::EV_BCAST_STEP);
+                pMeshMut->broadcastCgValuesByPhysPosStep(dvec_ptr, DOFV);
+            }
             em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                          "50_postBcast", trace_step, -1);
             ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
@@ -1070,7 +1101,10 @@ void ETS<T, Ctx>::evolve() {
     }
 
     _EV_TRACE("30_pre_final_post_timestep");
-    m_uiAppCtx->post_timestep(m_uiEVar);
+    {
+        dendro::stepprof::Scope sp(dendro::stepprof::EV_POST_TS_FINAL);
+        m_uiAppCtx->post_timestep(m_uiEVar);
+    }
     _EV_TRACE("31_post_final_post_timestep");
     ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                  "60_postTimestep", trace_step, -1);
@@ -1078,7 +1112,10 @@ void ETS<T, Ctx>::evolve() {
     m_uiAppCtx->increment_ts_info();
     m_uiTimeInfo = m_uiAppCtx->get_ts_info();
     _EV_TRACE("32_pre_waitAll");
-    pMesh->waitAll();
+    {
+        dendro::stepprof::Scope sp(dendro::stepprof::EV_WAITALL);
+        pMesh->waitAll();
+    }
     _EV_TRACE("33_post_waitAll");
 
     // probe: dump cg values at specific step boundaries to bisect the

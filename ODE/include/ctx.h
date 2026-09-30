@@ -526,6 +526,7 @@ template <typename DerivedCtx, typename T, typename I>
 void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                                   unsigned int async_k) {
     if (!m_uiMesh->isActive()) return;
+    dendro::stepprof::Scope spUzTotal(dendro::stepprof::CTX_UNZIP_TOTAL);
 
 #ifdef __PROFILE_CTX__
     m_uiCtxpt[CTXPROFILE::UNZIP_WCOMM].start();
@@ -548,13 +549,16 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
         // unzip on the host.
         const bool prof = ot::Mesh::meshProfOn();
         double t0 = prof ? MPI_Wtime() : 0.0;
-        for (unsigned int i = 0; i < async_k; i++) {
-            const unsigned int v_begin  = ((i * dof) / async_k);
-            const unsigned int v_end    = (((i + 1) * dof) / async_k);
-            const unsigned int batch_sz = (v_end - v_begin);
+        {
+            dendro::stepprof::Scope spGb(dendro::stepprof::UZ_GHOST_BEGIN);
+            for (unsigned int i = 0; i < async_k; i++) {
+                const unsigned int v_begin  = ((i * dof) / async_k);
+                const unsigned int v_end    = (((i + 1) * dof) / async_k);
+                const unsigned int batch_sz = (v_end - v_begin);
 
-            m_uiMesh->readFromGhostBegin(
-                m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+                m_uiMesh->readFromGhostBegin(
+                    m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+            }
         }
         if (prof) { const double t1 = MPI_Wtime(); ot::Mesh::s_dProfGhostBegin += t1 - t0; t0 = t1; }
 
@@ -563,16 +567,22 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
             const unsigned int v_end    = (((i + 1) * dof) / async_k);
             const unsigned int batch_sz = (v_end - v_begin);
 
-            m_uiMesh->readFromGhostEnd(
-                m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+            {
+                dendro::stepprof::Scope spGe(dendro::stepprof::UZ_GHOST_END);
+                m_uiMesh->readFromGhostEnd(
+                    m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+            }
             if (prof) { const double t1 = MPI_Wtime(); ot::Mesh::s_dProfGhostEnd += t1 - t0; t0 = t1; }
 
 #ifdef __PROFILE_CTX__
             m_uiCtxpt[CTXPROFILE::UNZIP].start();
 #endif
 
-            m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
-                            out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
+            {
+                dendro::stepprof::Scope spUz(dendro::stepprof::UZ_UNZIP_COMPUTE);
+                m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
+                                out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
+            }
             if (prof) { const double t1 = MPI_Wtime(); ot::Mesh::s_dProfUnzip += t1 - t0; t0 = t1; }
 
 #ifdef __PROFILE_CTX__
@@ -693,6 +703,7 @@ j*sz_per_dof_zip,1);
 template <typename DerivedCtx, typename T, typename I>
 void Ctx<DerivedCtx, T, I>::zip(ot::DVector<T, I>& in, ot::DVector<T, I>& out) {
     if (!m_uiMesh->isActive()) return;
+    dendro::stepprof::Scope spZipTotal(dendro::stepprof::CTX_ZIP_TOTAL);
 
     // assert( (in.IsUnzip() == true) && (in.get_dof()== out.get_dof()) &&
     // (out.IsUnzip()==false) && (out.IsGhosted()==true));

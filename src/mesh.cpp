@@ -952,6 +952,7 @@ double Mesh::s_dProfGhostEnd   = 0.0;
 double Mesh::s_dProfUnzip      = 0.0;
 
 void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
+    if (dendro::stepprof::enabled()) dumpStepProf(out, tag);
     if (m_uiCommStatsOn != 1 || !m_uiIsActive) return;
 
     // [0]=bytesSent [1]=bytesRecv [2]=nodesSent [3]=nodesRecv [4]=exchanges
@@ -999,6 +1000,90 @@ void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
                 << mx[0] << " ghost_end=" << mn[1] << "/" << mx[1]
                 << " unzip=" << mn[2] << "/" << mx[2] << " s (min/max over ranks)"
                 << std::endl;
+    }
+}
+
+void Mesh::dumpStepProf(std::ostream &out, const char *tag) {
+    namespace sp = dendro::stepprof;
+    if (!sp::enabled() || !m_uiIsActive) return;
+
+    const int N = sp::NUM_IDS;
+    // derived rows: evolve time not inside any timed top-level part, and rhs
+    // time not inside ctx unzip / zip
+    const int NR = N + 2;
+    const double *a = sp::acc();
+    std::vector<double> row(NR, 0.0);
+    for (int i = 0; i < N; i++) row[i] = a[i];
+    double top = 0.0;
+    for (int i = sp::EV_PRE_TS; i <= sp::EV_WAITALL; i++)
+        if (i != sp::EV_RHS) top += a[i];
+    top += a[sp::EV_RHS];
+    row[N]     = a[sp::EV_TOTAL] - top;
+    row[N + 1] = a[sp::EV_RHS] - a[sp::CTX_UNZIP_TOTAL] - a[sp::CTX_ZIP_TOTAL];
+    // unzip_total minus its parts (the ctx driver's own glue)
+    std::vector<double> mn(NR), mx(NR), sm(NR);
+    MPI_Allreduce(row.data(), mn.data(), NR, MPI_DOUBLE, MPI_MIN, m_uiCommActive);
+    MPI_Allreduce(row.data(), mx.data(), NR, MPI_DOUBLE, MPI_MAX, m_uiCommActive);
+    MPI_Allreduce(row.data(), sm.data(), NR, MPI_DOUBLE, MPI_SUM, m_uiCommActive);
+
+    // per-rank counts
+    const char *cname[13] = {"local_elems",  "ghost_elems",  "local_nodes",
+                           "ghost_nodes",  "dup_cgs",      "mirror_pairs",
+                           "zipsync_send", "zipsync_recv", "ghost_send_nodes",
+                           "ghost_recv_nodes", "local_blocks", "unzip_size",
+                           "zip_plan_n"};
+    const int NC = 13;
+    double cv[13] = {
+        (double)m_uiNumLocalElements,
+        (double)(m_uiNumPreGhostElements + m_uiNumPostGhostElements),
+        (double)(m_uiNodeLocalEnd - m_uiNodeLocalBegin),
+        (double)(m_uiNumActualNodes - (m_uiNodeLocalEnd - m_uiNodeLocalBegin)),
+        (double)m_uiZipLocalDupSrc.size(),
+        (double)(m_uiZipNonPrimaryToGhostCg.size() +
+                 m_uiPassDDemotedToGhostCg.size()),
+        (double)m_uiZipSyncSendCg.size(),
+        (double)m_uiZipSyncRecvCg.size(),
+        (double)m_uiScatterMapActualNodeSend.size(),
+        (double)m_uiScatterMapActualNodeRecv.size(),
+        (double)m_uiLocalBlockList.size(),
+        (double)m_uiUnZippedVecSz,
+        (double)m_uiZipPlanCg.size()};
+    double cmn[13], cmx[13], csm[13];
+    MPI_Allreduce(cv, cmn, NC, MPI_DOUBLE, MPI_MIN, m_uiCommActive);
+    MPI_Allreduce(cv, cmx, NC, MPI_DOUBLE, MPI_MAX, m_uiCommActive);
+    MPI_Allreduce(cv, csm, NC, MPI_DOUBLE, MPI_SUM, m_uiCommActive);
+    long long cmax[sp::NUM_IDS];
+    long long cloc[sp::NUM_IDS];
+    for (int i = 0; i < N; i++) cloc[i] = sp::cnt()[i];
+    MPI_Allreduce(cloc, cmax, N, MPI_LONG_LONG, MPI_MAX, m_uiCommActive);
+
+    if (m_uiActiveRank != 0) return;
+    const double np  = (double)m_uiActiveNpes;
+    const double evm = sm[sp::EV_TOTAL] / np;
+    char b[256];
+    out << "[step-prof] " << tag << " npes=" << m_uiActiveNpes
+        << " labelled=" << (int)m_uiIsLabelledRebuild
+        << " seconds over evolve() calls, min/mean/max over ranks (final mesh counts)"
+        << std::endl;
+    std::snprintf(b, sizeof(b), "[step-prof] %-18s %10s %10s %10s %7s %9s", "phase",
+                  "min", "mean", "max", "%evolve", "calls");
+    out << b << std::endl;
+    auto pr = [&](const char *nm, int i, long long calls) {
+        std::snprintf(b, sizeof(b),
+                      "[step-prof] %-18s %10.4f %10.4f %10.4f %6.1f%% %9lld", nm,
+                      mn[i], sm[i] / np, mx[i],
+                      evm > 0 ? 100.0 * (sm[i] / np) / evm : 0.0, calls);
+        out << b << std::endl;
+    };
+    for (int i = 0; i < N; i++) pr(sp::name(i), i, cmax[i]);
+    pr("evolve_untimed", N, 0);
+    pr("rhs_compute_other", N + 1, 0);
+    for (int i = 0; i < NC; i++) {
+        std::snprintf(b, sizeof(b),
+                      "[step-prof-count] %-18s min=%.0f mean=%.1f max=%.0f max/mean=%.3f",
+                      cname[i], cmn[i], csm[i] / np, cmx[i],
+                      csm[i] > 0 ? cmx[i] / (csm[i] / np) : 0.0);
+        out << b << std::endl;
     }
 }
 

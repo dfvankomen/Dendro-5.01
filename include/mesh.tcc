@@ -813,6 +813,7 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
     // local writers). cross-rank Alltoallv below skips intra-rank
     // pairs; this loop fills that gap. runs unconditionally (no MPI).
     if (!m_uiZipLocalDupSrc.empty()) {
+        dendro::stepprof::Scope spDup(dendro::stepprof::SYNC_LOCALDUP);
         const size_t Nd = m_uiZipLocalDupSrc.size();
         for (unsigned int v = 0; v < dof; v++) {
             T* vp = vec + v * m_uiNumActualNodes;
@@ -829,6 +830,7 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
 
     const size_t sendN = m_uiZipSyncSendCg.size();
     const size_t recvN = m_uiZipSyncRecvCg.size();
+    dendro::stepprof::Scope spPack(dendro::stepprof::SYNC_PACK);
     std::vector<T> sendBuf(sendN * dof);
     std::vector<T> recvBuf(recvN * dof);
 
@@ -852,6 +854,8 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
         rCnt[p] = (int)(m_uiZipSyncRecvCounts[p] * dof);
         rOff[p] = (int)(m_uiZipSyncRecvOffsets[p] * dof);
     }
+    spPack.stop();
+    dendro::stepprof::Scope spComm(dendro::stepprof::SYNC_COMM);
     if (m_uiZipSyncPruned) {
         // after the prune only a few partners remain: point-to-point instead
         // of an O(P) collective
@@ -876,6 +880,7 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
                            recvBuf.data(), rCnt.data(), rOff.data(),
                            m_uiCommActive);
     }
+    spComm.stop();
     if (this->commStatsOn()) {
         s_uiCommStatSyncBytesAll += (DendroIntL)(sendN * dof * sizeof(T));
         s_uiCommStatSyncCallsAll++;
@@ -912,6 +917,7 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
                       << std::endl;
         calls++;
     }
+    dendro::stepprof::Scope spUnpack(dendro::stepprof::SYNC_UNPACK);
     for (size_t k = 0; k < recvN; k++) {
         const unsigned int cg = m_uiZipSyncRecvCg[k];
         const T* src = recvBuf.data() + k * dof;
@@ -1874,7 +1880,11 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
     // exchange (see performGhostExchange comment for rationale).
     ghostReadCheck(vec, dof, "pre");
     ghostPosCheck("ctx");
-    syncZipNonPrimary(vec, dof);
+    {
+        dendro::stepprof::Scope spSyncPre(dendro::stepprof::GB_SYNC_PRE);
+        syncZipNonPrimary(vec, dof);
+    }
+    dendro::stepprof::Scope spPackSend(dendro::stepprof::GB_PACK_SEND);
 
     // send recv buffers.
     T* sendB = NULL;
@@ -2022,10 +2032,13 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
 
         MPI_Status status;
         // need to wait for the commns to finish ...
+        dendro::stepprof::Scope spWait(dendro::stepprof::GE_WAIT);
         MPI_Waitall(sendProcList.size(), ctx.m_send_req.data(),
                     MPI_STATUSES_IGNORE);
         MPI_Waitall(recvProcList.size(), ctx.m_recv_req.data(),
                     MPI_STATUSES_IGNORE);
+        spWait.stop();
+        dendro::stepprof::Scope spScatter(dendro::stepprof::GE_SCATTER_RECV);
 
         if (recvBSz) {
             // copy the recv data to the vec
@@ -2210,6 +2223,8 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
             }
         }
 
+        spScatter.stop();
+        dendro::stepprof::Scope spMirror(dendro::stepprof::GE_MIRROR);
         // Sync non-primary local cgs from ghost (Stage 3 + legacy
         // Pass D path). See performGhostExchange for rationale.
         //
@@ -2262,7 +2277,9 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
             std::getenv("DENDRO_DISABLE_POST_SYNC");
         static const bool skip_post_sync =
             nopost_env && nopost_env[0] == '1' && nopost_env[1] == '\0';
+        spMirror.stop();
         if (!skip_post_sync) {
+            dendro::stepprof::Scope spSyncPost(dendro::stepprof::GE_SYNC_POST);
             this->syncZipNonPrimary(vec, dof);
         }
 

@@ -60,6 +60,7 @@
 #include "sfcSort.h"
 #include "skey.h"
 #include "stencil.h"
+#include "stepProf.h"
 #include "testUtils.h"
 #include "treenode2vtk.h"
 #include "wavelet.h"
@@ -3118,6 +3119,12 @@ class Mesh {
      * this is the whole-run total. reduces over THIS mesh's active comm, so
      * call it on the final mesh; ranks inactive there won't contribute. */
     void dumpCommStatsCumulative(std::ostream& out, const char* tag);
+
+    /**@brief DENDRO_STEP_PROF=1: reduce the per-rank step timers and mesh
+     * counts over the active comm and print a min/mean/max table on rank 0.
+     * No-op (no collectives) when the knob is off. Collective on the active
+     * comm; call once on the final mesh. */
+    void dumpStepProf(std::ostream& out, const char* tag);
     // DENDRO_MESH_PROF=1: seconds in the ctx unzip driver, split by phase
     static double s_dProfGhostBegin;
     static double s_dProfGhostEnd;
