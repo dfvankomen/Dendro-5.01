@@ -432,7 +432,22 @@ target_include_directories(dendro_config INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc
 )
 
-target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m ${HDF5_C_LIBRARIES})
+target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m)
+# HDF5 is deliberately PRIVATE here, not PUBLIC like the other deps above --
+# it should NOT propagate to every executable that links dendro5. Only
+# dendro5's own compilation (IO/src/cceH5Dat.cpp) needs it directly; only
+# BSSN_GR's bssnSolver target (which actually uses cce_io::H5DatFile) needs
+# it further downstream, and links it explicitly itself -- see the
+# find_package(HDF5...)/target_link_libraries(bssnSolver ...) block in
+# BSSN_GR/CMakeLists.txt for why, and the real Marylou crash that motivated
+# this split (tpid, which never touches HDF5, was dynamically loading it
+# anyway and taking a SIGILL at startup when this was PUBLIC).
+target_link_libraries(dendro5 PRIVATE ${HDF5_C_LIBRARIES})
+# Include dirs DO still need to be PUBLIC: BSSN_GR/src/bssnCtx.cpp includes
+# cceH5Dat.h (a dendro5 header) directly, which itself #includes <hdf5.h>,
+# so any consumer compiling that header needs the HDF5 include path too --
+# this is a compile-time header-visibility need, not a link-time one, so
+# it's unrelated to the PUBLIC-link-propagation problem above.
 target_include_directories(dendro5 PUBLIC ${HDF5_INCLUDE_DIRS})
 
 if(WITH_BLAS_LAPACK)
