@@ -254,6 +254,59 @@ static void em4_cg_trace(const ot::Mesh* pMesh, const T* vec,
 //
 // gate: EM4_HANG_DUMP_DIR + EM4_HANG_DUMP_STEP=N. dumps once per step
 // matching N. file: <dir>/hang_step<N>_r<R>.txt.
+// position dump of the evolved state for pointwise cross-partition checks.
+// gate: DENDRO_POS_DUMP_DIR=<dir> + DENDRO_POS_DUMP_STEPS="N1,N2,..." (or "all").
+// file <dir>/pos_step<N>_r<R>.bin: u32 dof, then per LOCAL cg: u64 x,y,z of
+// its canonical position (CG2DG owner node, scaled by eOrd) + dof doubles.
+static inline void dendro_pos_dump(const ot::Mesh* pMesh, const double* v,
+                                   unsigned int dof, int step) {
+    static const char* dir = std::getenv("DENDRO_POS_DUMP_DIR");
+    if (!dir || !pMesh || !pMesh->isActive() || !v) return;
+    static const std::string steps = [] {
+        const char* e = std::getenv("DENDRO_POS_DUMP_STEPS");
+        return std::string(e ? e : "all");
+    }();
+    if (steps != "all") {
+        bool hit = false;
+        size_t b = 0;
+        while (b <= steps.size()) {
+            size_t c = steps.find(',', b);
+            if (c == std::string::npos) c = steps.size();
+            if (c > b && std::atoi(steps.substr(b, c - b).c_str()) == step) hit = true;
+            b = c + 1;
+        }
+        if (!hit) return;
+    }
+    const unsigned int npe  = pMesh->getNumNodesPerElement();
+    const unsigned int eOrd = pMesh->getElementOrder();
+    const auto& cg2dg       = pMesh->getCG2DGMap();
+    const auto& allEle      = pMesh->getAllElements();
+    const unsigned int nLB  = pMesh->getNodeLocalBegin();
+    const unsigned int nLE  = pMesh->getNodeLocalEnd();
+    const size_t szPDof     = pMesh->getDegOfFreedom();
+    char fn[1024];
+    std::snprintf(fn, sizeof(fn), "%s/pos_step%d_r%d.bin", dir, step,
+                  (int)pMesh->getMPIRank());
+    FILE* fp = std::fopen(fn, "wb");
+    if (!fp) return;
+    std::fwrite(&dof, sizeof(dof), 1, fp);
+    std::vector<double> vals(dof);
+    for (unsigned int cg = nLB; cg < nLE; cg++) {
+        const unsigned int dg = cg2dg[cg];
+        const ot::TreeNode& t = allEle[dg / npe];
+        const unsigned int n  = dg % npe;
+        const unsigned long long len = 1ull << (m_uiMaxDepth - t.getLevel());
+        unsigned long long k[3] = {
+            (unsigned long long)t.getX() * eOrd + (n % (eOrd + 1)) * len,
+            (unsigned long long)t.getY() * eOrd + ((n / (eOrd + 1)) % (eOrd + 1)) * len,
+            (unsigned long long)t.getZ() * eOrd + (n / ((eOrd + 1) * (eOrd + 1))) * len};
+        for (unsigned int d = 0; d < dof; d++) vals[d] = v[d * szPDof + cg];
+        std::fwrite(k, sizeof(k), 1, fp);
+        std::fwrite(vals.data(), sizeof(double), dof, fp);
+    }
+    std::fclose(fp);
+}
+
 static inline void em4_hang_dump(const ot::Mesh* pMesh, int step) {
     static const char* dir   = DENDRO_PROBE_GETENV("EM4_HANG_DUMP_DIR");
     static const char* s_env = DENDRO_PROBE_GETENV("EM4_HANG_DUMP_STEP");
@@ -863,6 +916,7 @@ void ETS<T, Ctx>::evolve() {
     em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                  "00_step_start", trace_step, -1);
     em4_hang_dump(pMesh, trace_step);
+    dendro_pos_dump(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(), trace_step);
 
     // env-gated element-set dump at start of step. used to detect AMR
     // refinement decision drift between graph and skip partitioning.
