@@ -115,3 +115,8 @@ Sample: ~/research/repart_gate/pmpi/sample_sites_graph_np4.txt. Bundle copy: ~/r
 - Not done: begin/end split (DG send overlapping ReMesh). The DG values are the source vector at the sandwich, ReMesh+IGT runs between g2s and s2g on the SFC twin, so an overlap needs the send posted before ReMesh and the dst mesh not yet built (recv side needs dst E2N); it is a driver-level restructure, not cheap. Not attempted.
 - Risks: candidate-rank set assumes a rank holding a local cg at P owns a local element touching P (CHECK catches misses); a mixed hint/no-hint run pays one extra header exchange + directory; 8-byte word padding leaves uninitialised pad bytes on the wire.
 - Recommendation: flip default after one Kingspeak np192 A/B (wall + shim collective counts); `=0` reverts.
+
+### K3 Kingspeak EM4 np192 (job 28495719, dendrolib 8dd336df, 3 rounds) + default flip
+- Wall: sfc 51.2/52.0/50.3; graph+K1+K2 68.4(outlier, IGT 623 ms mean)/57.4/57.9; +K3 57.9/57.1/57.6 (~1.13x SFC). md5 68191978 all graph arms.
+- Per-remesh mean total (r2/r3): K1+K2 517/531 ms, +K3 512/504 ms; s2g 305/309 -> 308/297; g2s 37-39 -> 35-36. Wall-neutral at np192 (within noise); keeps the win for P scaling (no 4 KB x P bitmap Allgather, ~11 fewer collectives/hop).
+- Flipped DENDRO_REDIST_LEAN default on (=0 reverts). Knob-less gates: EM4 np4/np8 sfc+graph d7bbee89/2603beb3/d7bbee89/32d48b0b; tp NP=4 4 arms IDENTICAL; nuts2 == ref.
