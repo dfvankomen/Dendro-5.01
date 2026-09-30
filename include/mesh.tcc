@@ -6581,14 +6581,14 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         const char* v = std::getenv("DENDRO_REDIST_HINT_CHECK");
         return v && v[0] == '1';
     }();
-    // DENDRO_REDIST_LEAN=1 (opt-in): fewer synchronising rounds, same bits. The hint agreement rides
+    // DENDRO_REDIST_LEAN (default on, =0 reverts): fewer synchronising rounds, same bits. The hint agreement rides
     // on the count exchange (no Allreduce), the three per-field count Alltoalls and three Alltoallvs
     // collapse to one of each, and orphan queries route by the source's SFC splitters (no bitmap
     // Allgather) when every rank's source is an SFC mesh; replies are positional (no count exchange).
     // DENDRO_REDIST_LEAN_CHECK=1 also runs the bitmap orphan path and aborts on any differing slot.
     static const bool redistLean = [] {
         const char* v = std::getenv("DENDRO_REDIST_LEAN");
-        return v && v[0] == '1';
+        return !(v && v[0] == '0');
     }();
     static const bool leanCheck = [] {
         const char* v = std::getenv("DENDRO_REDIST_LEAN_CHECK");
