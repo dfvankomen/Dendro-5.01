@@ -161,40 +161,26 @@ find_package(MPI REQUIRED)
 # GSL
 find_package(GSL REQUIRED)
 
-# HDF5 -- required by the CCE worldtube writer (dendrolib/IO/src/cceH5Dat.cpp)
-# to write SpECTRE-PreprocessCceWorldtube-compatible HDF5 files. Not
-# previously a Dendro-GR/dendrolib dependency; mirrors the generic
-# find_package(HDF5 REQUIRED COMPONENTS C) pattern used by the sibling
-# spectre repo's own cmake/SetupHdf5.cmake (this project does not link
-# against SpECTRE's own C++ HDF5 wrappers, just the plain HDF5 C library).
+# NOTE: HDF5 is intentionally NOT a dendro5 dependency. It was briefly added
+# here (find_package + linked into dendro5) to support the CCE worldtube
+# writer's cceH5Dat.cpp, but that caused every executable that links dendro5
+# -- including ones with zero HDF5 usage, like tpid -- to dynamically load
+# HDF5 at process startup. For a STATIC library (dendro5 has no SHARED
+# keyword), CMake must put even PRIVATE link dependencies on the link line
+# of any DIRECT consumer (so the archive's own object files can resolve
+# their symbols if the linker pulls them in) -- PRIVATE only suppresses
+# propagation to a SECOND hop, not the first, so marking it PRIVATE here did
+# NOT stop tpid (a direct dendro5 consumer) from linking it. This caused a
+# real SIGILL crash in tpid on BYU's Marylou cluster (HDF5's static
+# initializers apparently ran CPU-incompatible code at load time on some
+# nodes), even though tpid never calls a single HDF5 function.
 #
-# On clusters using environment modules (e.g. BYU Marylou), do NOT `module
-# load` an hdf5 module directly -- on Marylou specifically this was found to
-# force-swap the loaded MPI module via Lmod's dependency resolution (the
-# hdf5 module there depends on a specific openmpi build, not the group's
-# custom one), which broke the rest of the environment (cmake disappeared
-# from PATH entirely). Instead, set the HDF5_ROOT environment variable to
-# point directly at a parallel HDF5 install before running cmake -- this
-# bypasses the module system's dependency graph entirely. Confirmed working
-# on Marylou with:
-#   export HDF5_ROOT=/apps/spack/root/opt/spack/linux-rhel9-haswell/gcc-13.2.0/hdf5-1.14.3-bm4v3i5etjrhiz6nkugaamp2bjytgoxt
-#
-# The guard below exists because, per the same investigation, find_package
-# silently falls back to a serial HDF5 1.12 with NO error if HDF5_ROOT isn't
-# set -- i.e. the danger isn't "the build fails," it's "the build silently
-# succeeds against an unintended HDF5." The CCE worldtube writer itself only
-# does rank-0, non-collective I/O and would actually be fine with a serial
-# HDF5 -- this guard is stricter than that one consumer strictly needs, but
-# is the right call for this shared, library-wide find_package call, both
-# to guarantee a deliberately-chosen HDF5 rather than a silent default, and
-# because other/future HDF5-based I/O in this codebase (e.g. a distributed
-# mesh/VTU-via-HDF5 exporter) would need real collective parallel I/O.
-find_package(HDF5 REQUIRED COMPONENTS C)
-if(NOT HDF5_IS_PARALLEL)
-  message(FATAL_ERROR "Found HDF5 is not parallel-enabled. Set HDF5_ROOT to "
-                       "point at a parallel HDF5 install before configuring "
-                       "(see the comment above this check).")
-endif()
+# The actual fix: cceH5Dat.cpp is compiled directly into the ONE executable
+# that uses it (BSSN_GR's bssnSolver target, see BSSN_GR/CMakeLists.txt)
+# instead of into this shared library, so dendro5 -- and everything else
+# that links it -- never needs HDF5 at all. See cceH5Dat.h's own doc
+# comment and BSSN_GR/CMakeLists.txt for the HDF5 find_package/link/guard
+# logic, now scoped entirely to that one target.
 
 # spdlog allows for logging!
 FetchContent_Declare(
@@ -300,7 +286,10 @@ set(ODE_SRC
     ODE/src/rk.cpp ODE/src/subSM.cpp ODE/src/rkMaxwell.cpp
     ODE/src/rkTransport.cpp ODE/src/enutsOp.cpp)
 
-set(IO_SRC IO/vtk/src/oct2vtk.cpp IO/vtk/src/checkPoint.cpp IO/src/cceH5Dat.cpp)
+set(IO_SRC IO/vtk/src/oct2vtk.cpp IO/vtk/src/checkPoint.cpp)
+# IO/src/cceH5Dat.cpp is deliberately NOT built as part of dendro5 -- see the
+# HDF5 note near the top of this file. It's compiled directly into
+# BSSN_GR's bssnSolver target instead.
 
 set(ZLIB_SRC
     IO/zlib/src/adler32.c IO/zlib/src/compress.c IO/zlib/src/crc32.c
@@ -433,22 +422,10 @@ target_include_directories(dendro_config INTERFACE
 )
 
 target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m)
-# HDF5 is deliberately PRIVATE here, not PUBLIC like the other deps above --
-# it should NOT propagate to every executable that links dendro5. Only
-# dendro5's own compilation (IO/src/cceH5Dat.cpp) needs it directly; only
-# BSSN_GR's bssnSolver target (which actually uses cce_io::H5DatFile) needs
-# it further downstream, and links it explicitly itself -- see the
-# find_package(HDF5...)/target_link_libraries(bssnSolver ...) block in
-# BSSN_GR/CMakeLists.txt for why, and the real Marylou crash that motivated
-# this split (tpid, which never touches HDF5, was dynamically loading it
-# anyway and taking a SIGILL at startup when this was PUBLIC).
-target_link_libraries(dendro5 PRIVATE ${HDF5_C_LIBRARIES})
-# Include dirs DO still need to be PUBLIC: BSSN_GR/src/bssnCtx.cpp includes
-# cceH5Dat.h (a dendro5 header) directly, which itself #includes <hdf5.h>,
-# so any consumer compiling that header needs the HDF5 include path too --
-# this is a compile-time header-visibility need, not a link-time one, so
-# it's unrelated to the PUBLIC-link-propagation problem above.
-target_include_directories(dendro5 PUBLIC ${HDF5_INCLUDE_DIRS})
+# No HDF5 here at all -- see the HDF5 note near the top of this file.
+# cceH5Dat.h's own directory (IO/include) is already covered by
+# dendro_config's generic INTERFACE include dirs above, so the header is
+# still visible to consumers without dendro5 needing to know about HDF5.
 
 if(WITH_BLAS_LAPACK)
   target_compile_definitions(dendro5 PUBLIC WITH_BLAS_LAPACK)
