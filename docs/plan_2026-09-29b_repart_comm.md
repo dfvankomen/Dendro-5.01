@@ -120,3 +120,42 @@ Sample: ~/research/repart_gate/pmpi/sample_sites_graph_np4.txt. Bundle copy: ~/r
 - Wall: sfc 51.2/52.0/50.3; graph+K1+K2 68.4(outlier, IGT 623 ms mean)/57.4/57.9; +K3 57.9/57.1/57.6 (~1.13x SFC). md5 68191978 all graph arms.
 - Per-remesh mean total (r2/r3): K1+K2 517/531 ms, +K3 512/504 ms; s2g 305/309 -> 308/297; g2s 37-39 -> 35-36. Wall-neutral at np192 (within noise); keeps the win for P scaling (no 4 KB x P bitmap Allgather, ~11 fewer collectives/hop).
 - Flipped DENDRO_REDIST_LEAN default on (=0 reverts). Knob-less gates: EM4 np4/np8 sfc+graph d7bbee89/2603beb3/d7bbee89/32d48b0b; tp NP=4 4 arms IDENTICAL; nuts2 == ref.
+
+### K6 (2026-09-30): DENDRO_REPART_CANON_KEYS=1, labelled E2N by SFC owner-key join (workspace dendrolib_dfvk_ws_k6, on 8dd336d)
+- Design probe (read-only first): for every labelled slot the cascade+audit canonical position equals the SFC source's (0 misses in
+  local/R1/R2 over all tp arms and EM4 np4), but the owner element differs at 0.1-1 % of slots on real labellings, all at positions
+  where the labelled cascade made duplicate cgs (22-307 positions/rebuild) or picked another owner; the SFC keys are globally
+  consistent (0 positions with >1 owner). R3 existed only to keep R2 rows' cascade (and their SM / mirror entries) right.
+- Change: at push time every element carries per node the SFC owner (owner TN + sub, from CG2DG[E2N_CG] of the SFC source:
+  `repartitionFrom`'s src, an in-place FDM mesh, or an E2E_ONLY twin whose SFC E2N is built on the spot). Labelled E2N =
+  key join (owner dg -> sorted unique numbering, node ranges from element ranges); no buildE2NMap, no expansion/orphan passes,
+  no audit. Records for all rings: the 26-lists miss finer face neighbours, so the unzip reads some round-2/3 elements
+  (first try keyed only local+R1 -> COVERAGE starved). Owners outside the fetched set (outer rim) stay self-owned (counted).
+  SM: CG path only (no R2/R3 DG path). Collective fallback to the cascade when no SFC source exists.
+- `_CHECK=1`: also runs cascade+audit, prints per-ring slot diffs vs keys, aborts 77 on a canonical-phys miss in local/R1 or a
+  keyed-E2N != key. Result everywhere (tp np4/np8 x4 arms, EM4 np4/np8/np16 ragged, NLSM nuts2): keyed-vs-keys 0/0/0,
+  cascade-vs-keys phys 0, owner misses e.g. tp m3 np4 2874/904k local, 1611/202k R1; ragged 604/71k, 617/62k.
+  Round-2/3 rows (R2 class): up to ~4k/rebuild slots keep a self-owned fallback where the owner lies outside the fetch (outer
+  rim, reported as R2 phys misses, non-fatal); COVERAGE shows none of them is read.
+- Correctness (new refs expected; user rule 2026-09-30: correct final solutions, not bit-identity to old labelled output):
+  - EM4 AMR (t_end 10): graph md5 np4 2603beb3 -> d7bbee89, np8 32d48b0b -> d7bbee89, np16 ragged (m3 REFINE=0) 0faf9dbb ->
+    d7bbee89 = the SFC md5 in every arm (levelwise m4 REFINE=2 was already d7bbee89, unchanged); also with S2G_DIRECT and
+    with _CHECK. CSV max rel diff vs SFC: before 2.1e-4 / 2.7e-4 / 5.0e-4 (MAE columns), after 0.
+  - EM4 fixed mesh (no AMR, np4): graph md5 4d24ebe8 (CSV max rel 7.2e-5 vs SFC) -> a5551721 = SFC.
+  - Pointwise (new DENDRO_POS_DUMP_DIR, local cgs by canonical position, steps 10/40/70): local state was already bit-identical
+    to SFC before K6 (AMR np4/8/16, no-AMR np4); the old CSV gap was duplicate local cgs counted twice in the norms.
+  - tp np4+np8 x4 arms: 0 FAIL, COVERAGE 0, 7b/8/9/10/11 = base; 8bb/8bc/8bd zip roundtrip mismatches (m3 238/343/238, ragged
+    np8 4/30/25) -> PASS; 8br dupPhysPos and 8bt disagreeing -> 0; 8bv 596 -> 413 (np4 m3; the test keys by the slot's own
+    position, SFC ragged also shows 32).
+  - BSSN q1 np4 graph constraints max rel diff vs SFC 7.8e-5 -> 1.0e-13 (md5 Constraints a83112e3 -> bf867af6; BH/GW md5 unchanged).
+  - NLSM nuts2 (ENUTS d9) min/max = ref, unchanged; lw3 np16 sfc/lvl/lw/fp min/max = SFC, l2 moves in the 16th digit.
+- Zip-sync (EM4 np8): dup_cgs 2.1 -> 0, mirror pairs 6.8 -> 0, pruned sync lists 13.6 -> 0 per rank (1 pair left on 2 of 8
+  rebuilds, global_active stays 1 there), znp/passd mirror 0, local dup 0. STEP_PROF (1f1f107e on top, 2 rounds): sync:comm
+  1.60 -> 0.07 s, gb:sync_pre 1.17 -> 0.045 s, post-axpy 0.33 -> 0.013 s, but ge:wait 1.0 -> 2.1 s; evolve 16.45/16.53 ->
+  16.50/16.55 s (no local wall change: the sync was absorbing imbalance, the wait moved into the ghost exchange).
+- Rebuild (EM4 np8 REPART_PHASE_PROF, 8 rebuilds): TOTAL mean 94 -> 55 ms; audit 264 + expand 70 + e2nmap 49 ms -> join 46 +
+  index 2 ms; fetch 8 -> 35 ms (key payload, ~1.9 KB/element at p=6, transient). Ghost set unchanged (R1-R3 still fetched).
+- K6c (GHOST_RINGS=2 + owner targets, experimental, not passing): owner targets splitter-routed to the SFC source and keyed;
+  owners all resolved and COVERAGE clean, but tp m3 7b/8 get 22/20 large errors: the unzip padding needs elements that only the
+  3rd ring delivered (26-lists incomplete across level jumps). Needs a geometrically complete neighbour fetch first.
+- Knobs: DENDRO_REPART_CANON_KEYS (default 0), _CHECK; DENDRO_POS_DUMP_DIR/_STEPS (ets.h). Default path untouched.
