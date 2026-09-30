@@ -36,6 +36,7 @@
 #include <ostream>
 #include <random>
 #include <set>
+#include <string>
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
@@ -2261,6 +2262,37 @@ class Mesh {
          unsigned int sf_k    = DENDRO_DEFAULT_SF_K,
          unsigned int (*getWeight)(const ot::TreeNode *) = NULL,
          unsigned int *blk_tags = NULL, unsigned int blk_tags_sz = 0);
+
+    /** tag for the E2E-level clone constructor below */
+    struct E2ETwinTag {};
+
+    /**@brief E2E-level clone of `src`: the state an SM_TYPE::E2E_ONLY mesh
+     * built from src's local octants carries (elements, E2E, element ghost
+     * exchange maps), copied from src's already-built arrays with one
+     * Comm_dup and no sorts / exchanges. Used by repartitionFrom
+     * (DENDRO_S2G_DIRECT). src must be active on every rank of its global
+     * communicator with more than one rank (else use the E2E_ONLY path). */
+    Mesh(const Mesh &src, E2ETwinTag);
+
+    /**@brief true when cloneable by the E2ETwinTag constructor (collective) */
+    bool canCloneE2ETwin() const;
+
+    /**@brief the labelled mesh a graph twin built from src's local octants
+     * and repartitionMeshGlobal() would give, built without the intermediate
+     * E2E_ONLY twin: clone src's E2E-level state, inject src's owner masks
+     * and canonical block info (local part), repartition in place. Returns
+     * nullptr (nothing done, collective agreement) when src is not
+     * cloneable. Caller owns the mesh; pos-bcast opt-out stays the
+     * caller's. */
+    static Mesh *repartitionFrom(const Mesh &src, PartitioningOptions method,
+                                 const Point &dmin, const Point &dmax);
+
+    /**@brief DENDRO_S2G_DIRECT_CHECK: first difference between this mesh's
+     * key arrays and o's ("" when equal). e2eOnly compares just the E2E-level
+     * state (pre-repartition twins), else the labelled mesh (element lists,
+     * E2E, E2N_CG, nodal/element scatter maps, block list, zip plan). Local
+     * (not collective). */
+    std::string diffKeyArrays(const Mesh &o, bool e2eOnly) const;
 
     /**@brief destructor for mesh (releases the allocated variables in the
      * class. )*/

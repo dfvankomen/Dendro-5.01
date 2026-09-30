@@ -681,6 +681,222 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                          "Finished building the mesh!");
 }
 
+bool Mesh::canCloneE2ETwin() const {
+    int ok = (m_uiIsActive && m_uiActiveNpes > 1 &&
+              m_uiActiveNpes == m_uiGlobalNpes && m_uiNumLocalElements > 1)
+                 ? 1
+                 : 0;
+    MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, m_uiCommGlobal);
+    return ok == 1;
+}
+
+// mirrors the prologue of the createMesh ctor plus what buildE2EMap leaves
+// behind on an E2E_ONLY mesh; every field below is copied (or recomputed
+// exactly as buildE2EMap does) from src's finished arrays. src's own
+// E2E-level arrays are untouched by its later E2N / block setup (only
+// buildE2EMap writes m_uiAllElements ghosts, the R1 index and the element
+// scatter maps), which diffKeyArrays(e2eOnly) verifies under _CHECK.
+Mesh::Mesh(const Mesh &s, E2ETwinTag) {
+    m_uiCommGlobal     = s.m_uiCommGlobal;
+    m_uiIsBlockSetup   = true;  // createMesh default; E2E_ONLY never builds it
+    m_uiScatterMapType = SM_TYPE::E2E_ONLY;
+    m_uiIsF2ESetup     = false;
+    m_uiGlobalRank     = s.m_uiGlobalRank;
+    m_uiGlobalNpes     = s.m_uiGlobalNpes;
+    m_uiIsActive       = true;
+    MPI_Comm_dup(s.m_uiCommGlobal, &m_uiCommActive);
+    m_uiActiveRank     = s.m_uiActiveRank;
+    m_uiActiveNpes     = s.m_uiActiveNpes;
+
+    m_uiMeshDomain_min = 0;
+    m_uiMeshDomain_max = (1u << (m_uiMaxDepth));
+    m_uiStensilSz      = s.m_uiStensilSz;
+    m_uiElementOrder   = s.m_uiElementOrder;
+    m_uiEL_i           = 0;
+    m_uiNpE            = s.m_uiNpE;
+    m_uiNumDirections  = s.m_uiNumDirections;
+    m_uiRefEl          = s.m_uiRefEl;
+
+    m_uiAllElements           = s.m_uiAllElements;
+    m_uiE2EMapping            = s.m_uiE2EMapping;
+    m_uiElementPreGhostBegin  = s.m_uiElementPreGhostBegin;
+    m_uiElementPreGhostEnd    = s.m_uiElementPreGhostEnd;
+    m_uiElementLocalBegin     = s.m_uiElementLocalBegin;
+    m_uiElementLocalEnd       = s.m_uiElementLocalEnd;
+    m_uiElementPostGhostBegin = s.m_uiElementPostGhostBegin;
+    m_uiElementPostGhostEnd   = s.m_uiElementPostGhostEnd;
+    m_uiNumPreGhostElements   = s.m_uiNumPreGhostElements;
+    m_uiNumLocalElements      = s.m_uiNumLocalElements;
+    m_uiNumPostGhostElements  = s.m_uiNumPostGhostElements;
+    m_uiNumTotalElements      = s.m_uiNumTotalElements;
+    m_uiLocalSplitterElements = s.m_uiLocalSplitterElements;
+    // m_uiEmbeddedOctree stays empty: buildE2EMap swaps it out again
+
+    m_uiGhostElementRound1Index = s.m_uiGhostElementRound1Index;
+    m_uiScatterMapElementRound1 = s.m_uiScatterMapElementRound1;
+    m_uiSendEleCount            = s.m_uiSendEleCount;
+    m_uiRecvEleCount            = s.m_uiRecvEleCount;
+    m_uiSendEleOffset           = s.m_uiSendEleOffset;
+    m_uiRecvEleOffset           = s.m_uiRecvEleOffset;
+    m_uiSendBufferElement       = s.m_uiSendBufferElement;
+    m_uiElementSendProcList     = s.m_uiElementSendProcList;
+    m_uiElementRecvProcList     = s.m_uiElementRecvProcList;
+
+    // as buildE2EMap: a ghost is "valid" only when it is an R1 ghost
+    m_uiIsNodalMapValid.assign(m_uiAllElements.size(), true);
+    m_uiNodalMapIsRing = false;
+    {
+        std::vector<char> r1(m_uiAllElements.size(), 0);
+        for (unsigned int e : m_uiGhostElementRound1Index) r1[e] = 1;
+        for (unsigned int e = m_uiElementPreGhostBegin; e < m_uiElementPreGhostEnd; e++)
+            if (!r1[e]) m_uiIsNodalMapValid[e] = false;
+        for (unsigned int e = m_uiElementPostGhostBegin; e < m_uiElementPostGhostEnd; e++)
+            if (!r1[e]) m_uiIsNodalMapValid[e] = false;
+    }
+}
+
+Mesh *Mesh::repartitionFrom(const Mesh &src, PartitioningOptions method,
+                            const Point &dmin, const Point &dmax) {
+    if (!src.canCloneE2ETwin()) return nullptr;
+    Mesh *g = new Mesh(src, E2ETwinTag{});
+    g->setDomainBounds(dmin, dmax);
+    g->setPartitioningMethod(method);
+    g->setScatterMapType(SM_TYPE::FDM);
+
+    // masks / canonical block info: src's local slice into g's local slots
+    // (the clone has src's element layout, so the slots coincide); ghosts 0
+    const unsigned int lb = src.m_uiElementLocalBegin;
+    const unsigned int le = src.m_uiElementLocalEnd;
+    const size_t total    = g->m_uiAllElements.size();
+    std::vector<uint32_t> dstMask(total, 0u);
+    if (src.m_uiOwnerMask.size() >= le)
+        for (unsigned int i = lb; i < le && i < total; i++)
+            dstMask[i] = src.m_uiOwnerMask[i];
+    g->setOwnerMask(std::move(dstMask));
+    std::vector<CanonicalBlockInfo> dstBlk(total);
+    if (src.m_uiBlockInfo.size() >= le)
+        for (unsigned int i = lb; i < le && i < total; i++)
+            dstBlk[i] = src.m_uiBlockInfo[i];
+    g->setBlockInfo(std::move(dstBlk));
+
+    g->repartitionMeshGlobal();
+    return g;
+}
+
+std::string Mesh::diffKeyArrays(const Mesh &o, bool e2eOnly) const {
+    std::string out;
+    auto note = [&](const char *n) {
+        if (!out.empty()) out += ",";
+        out += n;
+    };
+    auto tnEq = [](const ot::TreeNode &a, const ot::TreeNode &b) {
+        return a == b && a.getFlag() == b.getFlag();
+    };
+    auto cmpTN = [&](const std::vector<ot::TreeNode> &a,
+                     const std::vector<ot::TreeNode> &b, const char *n) {
+        bool eq = a.size() == b.size();
+        for (size_t i = 0; eq && i < a.size(); i++) eq = tnEq(a[i], b[i]);
+        if (!eq) note(n);
+    };
+    auto cmpV = [&](const auto &a, const auto &b, const char *n) {
+        if (!(a == b)) note(n);
+    };
+#define K2CMP(m) cmpV(m_ui##m, o.m_ui##m, #m)
+    cmpTN(m_uiAllElements, o.m_uiAllElements, "AllElements");
+    K2CMP(E2EMapping);
+    K2CMP(ElementPreGhostBegin);
+    K2CMP(ElementPreGhostEnd);
+    K2CMP(ElementLocalBegin);
+    K2CMP(ElementLocalEnd);
+    K2CMP(ElementPostGhostBegin);
+    K2CMP(ElementPostGhostEnd);
+    K2CMP(NumTotalElements);
+    K2CMP(GhostElementRound1Index);
+    K2CMP(ScatterMapElementRound1);
+    K2CMP(SendEleCount);
+    K2CMP(RecvEleCount);
+    K2CMP(SendEleOffset);
+    K2CMP(RecvEleOffset);
+    K2CMP(ElementSendProcList);
+    K2CMP(ElementRecvProcList);
+    K2CMP(IsNodalMapValid);
+    cmpTN(m_uiLocalSplitterElements, o.m_uiLocalSplitterElements, "LocalSplitterElements");
+    cmpTN(m_uiSendBufferElement, o.m_uiSendBufferElement, "SendBufferElement");
+    cmpTN(m_uiEmbeddedOctree, o.m_uiEmbeddedOctree, "EmbeddedOctree");
+    if (e2eOnly) return out;
+
+    K2CMP(E2NMapping_CG);
+    K2CMP(E2NMapping_DG);
+    K2CMP(CG2DG);
+    K2CMP(NumActualNodes);
+    K2CMP(NodeLocalBegin);
+    K2CMP(NodeLocalEnd);
+    K2CMP(NodePreGhostBegin);
+    K2CMP(NodePostGhostEnd);
+    K2CMP(ScatterMapActualNodeSend);
+    K2CMP(ScatterMapActualNodeRecv);
+    K2CMP(SendNodeCount);
+    K2CMP(RecvNodeCount);
+    K2CMP(SendNodeOffset);
+    K2CMP(RecvNodeOffset);
+    K2CMP(SendProcList);
+    K2CMP(RecvProcList);
+    K2CMP(ZipPlanCg);
+    K2CMP(ZipPlanUnzipIdx);
+    K2CMP(ZipSyncSendCg);
+    K2CMP(ZipSyncRecvCg);
+    K2CMP(ZipLocalDupSrc);
+    K2CMP(ZipLocalDupDst);
+    K2CMP(UnzipCanonWriter);
+    K2CMP(E2BlkMap);
+    K2CMP(OwnerMask);
+    K2CMP(RepartPreLabel);
+    cmpTN(m_uiRepartPreTN, o.m_uiRepartPreTN, "RepartPreTN");
+    if (m_uiRepartOrigin.size() != o.m_uiRepartOrigin.size()) note("RepartOrigin.size");
+    else
+        for (size_t i = 0; i < m_uiRepartOrigin.size(); i++)
+            if (!tnEq(m_uiRepartOrigin[i].first, o.m_uiRepartOrigin[i].first) ||
+                m_uiRepartOrigin[i].second != o.m_uiRepartOrigin[i].second) {
+                note("RepartOrigin");
+                break;
+            }
+    if (m_uiBlockInfo.size() != o.m_uiBlockInfo.size()) note("BlockInfo.size");
+    else
+        for (size_t i = 0; i < m_uiBlockInfo.size(); i++) {
+            const auto &a = m_uiBlockInfo[i];
+            const auto &b = o.m_uiBlockInfo[i];
+            if (a.anchorX != b.anchorX || a.anchorY != b.anchorY ||
+                a.anchorZ != b.anchorZ || a.anchorLevel != b.anchorLevel ||
+                a.meta != b.meta) {
+                note("BlockInfo");
+                break;
+            }
+        }
+    if (m_uiLocalBlockList.size() != o.m_uiLocalBlockList.size()) note("LocalBlockList.size");
+    else
+        for (size_t i = 0; i < m_uiLocalBlockList.size(); i++) {
+            const auto &a = m_uiLocalBlockList[i];
+            const auto &b = o.m_uiLocalBlockList[i];
+            if (!tnEq(a.getBlockNode(), b.getBlockNode()) ||
+                a.getRegularGridLev() != b.getRegularGridLev() ||
+                a.getRotationID() != b.getRotationID() ||
+                a.getLocalElementBegin() != b.getLocalElementBegin() ||
+                a.getLocalElementEnd() != b.getLocalElementEnd() ||
+                a.getOffset() != b.getOffset() ||
+                a.get1DPadWidth() != b.get1DPadWidth() ||
+                a.getAllocationSzX() != b.getAllocationSzX() ||
+                a.getAllocationSzY() != b.getAllocationSzY() ||
+                a.getAllocationSzZ() != b.getAllocationSzZ() ||
+                a.getBlockType() != b.getBlockType() ||
+                a.getLocalElementIndices() != b.getLocalElementIndices()) {
+                note("LocalBlockList");
+                break;
+            }
+        }
+#undef K2CMP
+    return out;
+}
+
 Mesh::~Mesh() {
     m_uiPreGhostOctants.clear();
     m_uiPostGhostOctants.clear();
