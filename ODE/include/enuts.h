@@ -10,6 +10,7 @@
 #pragma once
 #include <assert.h>
 
+#include <time.h>
 #include <bitset>
 #include <fstream>
 #include <iomanip>
@@ -35,8 +36,9 @@ namespace ts {
 /**@brief DENDRO_ENUTS_PROF=1 wall-clock accumulators for partial_evolve (per
  * rank, process-wide). env read once; off = zero cost, zero collectives. */
 struct EnutsProf {
-    enum { RHS = 0, EDG_BEGIN, EDG_END, SYNC_BLK, AXPY_ELETS, EVEC_XCH, WAIT, TOTAL, NT };
-    double t[NT]     = {0, 0, 0, 0, 0, 0, 0, 0};
+    enum { RHS = 0, EDG_BEGIN, EDG_END, SYNC_BLK, AXPY_ELETS, EVEC_XCH, WAIT, TOTAL,
+           SY_SAME, SY_CORR, SY_CORR_FC, SY_UNZIP, SY_OWN, SY_POST, NT };
+    double t[NT]     = {};
     double partial   = 0;      // partial steps taken (this rank was active)
     double lev_sum   = 0;      // sum over partial steps of globally active levels
     double blk_sum   = 0;      // sum over partial steps of locally active blocks
@@ -51,6 +53,19 @@ struct EnutsProf {
     static EnutsProf& get() {
         static EnutsProf p;
         return p;
+    }
+    /** wall clock, or thread CPU time with DENDRO_ENUTS_PROF_CPU=1 (for timing on an oversubscribed box) */
+    static double now() {
+        static const int cpu = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_PROF_CPU");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        if (cpu) {
+            struct timespec ts_;
+            clock_gettime(CLOCK_THREAD_CPUTIME_ID, &ts_);
+            return ts_.tv_sec + 1e-9 * ts_.tv_nsec;
+        }
+        return MPI_Wtime();
     }
     /** level-scoped element-DG ghost exchange, default on (bit-identical
      *  off/on); DENDRO_ENUTS_SCOPED_EXCH=0 reverts to the full exchange;
@@ -70,6 +85,16 @@ struct EnutsProf {
         return v == 1;
     }
     unsigned long long chk_cmp = 0, chk_bad = 0;
+    /** DENDRO_ENUTS_SYNC_FAST=1: bit-identical sync_blk_timestep shortcuts
+     *  (no same-time DG copy, per-stage correction reuse across blocks,
+     *  persistent scratch) */
+    static bool syncFast() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_SYNC_FAST");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
 };
 }  // namespace ts
 
@@ -352,6 +377,36 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief: temp vector of the DG scheme*/
     DVec m_uiDGTmp0;
 
+    /** per-element tag of the correction currently held in m_uiDGTmp0 */
+    struct SyncTag {
+        unsigned long long pass = 0;
+        unsigned int rk         = 0;
+        unsigned char fut       = 0;
+        T dt_c = 0, dt_f = 0, dt = 0;
+    };
+    std::vector<SyncTag> m_uiSyncTag;
+    unsigned long long m_uiSyncPass = 0;
+    bool m_uiSyncPassOpen           = false;
+    std::vector<T> m_uiSyncCVec;
+
+    /** per local block, the padding-fill copy plan (DENDRO_ENUTS_SYNC_FAST):
+     *  per dependent element, (src node, dst block index) pairs in the exact
+     *  write order of the coordinate loops; cnum >= 0 = coarse parent, p2c
+     *  interpolate child cnum first */
+    struct SyncPlan {
+        struct Ent {
+            unsigned int ele;
+            int cnum;
+            unsigned int b, e;
+        };
+        bool built = false;
+        std::vector<Ent> ents;
+        std::vector<unsigned int> src, dst;
+    };
+    std::vector<SyncPlan> m_uiSyncPlan;
+    void build_sync_plan(unsigned int blk, const std::vector<unsigned int>& eid,
+                         SyncPlan& pl);
+
     /**@brief: List of block async vector. */
     std::vector<ts::BlockTimeStep<T>> m_uiBVec;
 
@@ -608,7 +663,9 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
         if (rk == 0 && mx[ts::EnutsProf::NT] > 0) {
             static const char* nm[ts::EnutsProf::NT] = {
                 "rhs+zipDG",  "eledg_begin", "eledg_end", "sync_blk_ts+post",
-                "axpy+ele_ts", "elevec_xch",  "waitActive", "partial_total"};
+                "axpy+ele_ts", "elevec_xch",  "waitActive", "partial_total",
+                "  sync:same_copy", "  sync:corr_coarse_fut", "  sync:corr_fine_past", "  sync:unzip_pad", "  sync:own_interior",
+                "  sync:post_stage_blk"};
             std::cout << "[enuts-prof] npes=" << np
                       << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
                       << " mean_active_levels/step="
@@ -843,6 +900,7 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
                                ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
     m_uiCgOwnerMesh = nullptr;
     m_uiBlkDepEid.clear();
+    m_uiSyncPlan.clear();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
     m_uiEvarDG.create_vector(m_uiAppCtx->get_mesh(),
@@ -905,6 +963,7 @@ int ExplicitNUTS<T, Ctx>::deallocate_internal_vars() {
 
     m_uiBVec.clear();
     m_uiBlkDepEid.clear();
+    m_uiSyncPlan.clear();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
 
@@ -1396,6 +1455,109 @@ void ExplicitNUTS<T, Ctx>::debug_nan_check(const char* tag, unsigned int blk,
 }
 
 template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::build_sync_plan(unsigned int blk,
+                                           const std::vector<unsigned int>& eid,
+                                           SyncPlan& pl) {
+    ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    const ot::TreeNode* pNodes = pMesh->getAllElements().data();
+    const ot::Block* blkList   = pMesh->getLocalBlockList().data();
+    const ot::TreeNode blkNode = blkList[blk].getBlockNode();
+    const unsigned int PW      = blkList[blk].get1DPadWidth();
+    const unsigned int eOrder  = pMesh->getElementOrder();
+    const unsigned int lx      = blkList[blk].getAllocationSzX();
+    const unsigned int ly      = blkList[blk].getAllocationSzY();
+    const unsigned int lz      = blkList[blk].getAllocationSzZ();
+    const unsigned int bLev = pNodes[blkList[blk].firstElementID()].getLevel();
+
+    const double hx   = (1u << (m_uiMaxDepth - bLev)) / (double)eOrder;
+    const double xmin = blkNode.minX() - PW * hx;
+    const double xmax = blkNode.maxX() + PW * hx;
+    const double ymin = blkNode.minY() - PW * hx;
+    const double ymax = blkNode.maxY() + PW * hx;
+    const double zmin = blkNode.minZ() - PW * hx;
+    const double zmax = blkNode.maxZ() + PW * hx;
+    const double d_compar_tol = 1e-6;
+    const unsigned int n1     = eOrder + 1;
+
+    pl.ents.clear();
+    pl.src.clear();
+    pl.dst.clear();
+
+    // one node's target index in the block, or false when it lies outside
+    auto clampIdx = [&](double c, double cmin, double cmax, double invhh,
+                        unsigned int& idx) -> bool {
+        if (fabs(c - cmin) < d_compar_tol) c = cmin;
+        if (fabs(c - cmax) < d_compar_tol) c = cmax;
+        if (c < cmin || c > cmax) return false;
+        idx = std::round((c - cmin) * invhh);
+        return true;
+    };
+
+    std::vector<ot::TreeNode> childOct;
+    childOct.reserve(NUM_CHILDREN);
+
+    for (unsigned int m = 0; m < eid.size(); m++) {
+        const unsigned int ele = eid[m];
+        const unsigned int lev = pNodes[ele].getLevel();
+
+        if (lev == bLev || lev > bLev) {
+            const bool fine = lev > bLev;
+            const double hh = (1u << (m_uiMaxDepth - lev)) / (double)eOrder;
+            const double invhh = fine ? 1.0 / (2 * hh) : 1.0 / hh;
+            const unsigned int cb   = fine ? ((eOrder % 2 == 0) ? 0 : 1) : 0;
+            const unsigned int step = fine ? 2 : 1;
+            const unsigned int b0   = pl.src.size();
+            for (unsigned int k = cb; k < n1; k += step) {
+                unsigned int kkz;
+                if (!clampIdx(pNodes[ele].minZ() + k * hh, zmin, zmax, invhh, kkz)) continue;
+                for (unsigned int j = cb; j < n1; j += step) {
+                    unsigned int jjy;
+                    if (!clampIdx(pNodes[ele].minY() + j * hh, ymin, ymax, invhh, jjy)) continue;
+                    for (unsigned int i = cb; i < n1; i += step) {
+                        unsigned int iix;
+                        if (!clampIdx(pNodes[ele].minX() + i * hh, xmin, xmax, invhh, iix)) continue;
+                        pl.src.push_back(k * n1 * n1 + j * n1 + i);
+                        pl.dst.push_back(kkz * lx * ly + jjy * lx + iix);
+                    }
+                }
+            }
+            if (pl.src.size() > b0)
+                pl.ents.push_back({ele, -1, b0, (unsigned int)pl.src.size()});
+        } else {
+            childOct.clear();
+            pNodes[ele].addChildren(childOct);
+            for (unsigned int child = 0; child < NUM_CHILDREN; child++) {
+                if ((childOct[child].maxX() < xmin || childOct[child].minX() >= xmax) ||
+                    (childOct[child].maxY() < ymin || childOct[child].minY() >= ymax) ||
+                    (childOct[child].maxZ() < zmin || childOct[child].minZ() >= zmax))
+                    continue;
+                const double hh = (1u << (m_uiMaxDepth - childOct[child].getLevel())) / (double)eOrder;
+                const double invhh = 1.0 / hh;
+                const unsigned int b0 = pl.src.size();
+                for (unsigned int k = 0; k < n1; k++) {
+                    unsigned int kkz;
+                    if (!clampIdx(childOct[child].minZ() + k * hh, zmin, zmax, invhh, kkz)) continue;
+                    for (unsigned int j = 0; j < n1; j++) {
+                        unsigned int jjy;
+                        if (!clampIdx(childOct[child].minY() + j * hh, ymin, ymax, invhh, jjy)) continue;
+                        for (unsigned int i = 0; i < n1; i++) {
+                            unsigned int iix;
+                            if (!clampIdx(childOct[child].minX() + i * hh, xmin, xmax, invhh, iix)) continue;
+                            pl.src.push_back(k * n1 * n1 + j * n1 + i);
+                            pl.dst.push_back(kkz * lx * ly + jjy * lx + iix);
+                        }
+                    }
+                }
+                if (pl.src.size() > b0)
+                    pl.ents.push_back({ele, (int)childOct[child].getMortonIndex(), b0,
+                                       (unsigned int)pl.src.size()});
+            }
+        }
+    }
+    pl.built = true;
+}
+
+template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                                              unsigned int rk_s,
                                              bool isIGTSync) {
@@ -1405,6 +1567,9 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
     ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
     if ((!(pMesh->isActive())) || m_uiBVec[blk]._vec[rk_s].isSynced()) return;
+    const bool sprof = ts::EnutsProf::on();
+    double tcorrCf = 0, tcorrFc = 0, tsy0 = 0;
+    if (sprof) tsy0 = ts::EnutsProf::now();
 
     const ot::TreeNode* pNodes  = pMesh->getAllElements().data();
     const ot::Block* blkList    = pMesh->getLocalBlockList().data();
@@ -1449,8 +1614,13 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     unsigned int echild[2];
 
     const unsigned int dof = m_uiEVar.get_dof();
-    std::vector<T> cVec;
-    cVec.resize(dof * nPe * (m_uiNumStages + 1));
+    const bool syncFast = ts::EnutsProf::syncFast();
+    std::vector<T> cVecLocal;
+    std::vector<T>& cVec = syncFast ? m_uiSyncCVec : cVecLocal;
+    if (cVec.size() < (size_t)dof * nPe * (m_uiNumStages + 1))
+        cVec.resize(dof * nPe * (m_uiNumStages + 1));
+    if (syncFast && m_uiSyncTag.size() != pMesh->getAllElements().size())
+        m_uiSyncTag.assign(pMesh->getAllElements().size(), SyncTag());
 
     T* cVin[(m_uiNumStages + 1) * dof];   // correction vec. pointer in,
     T* cVout[(m_uiNumStages + 1) * dof];  // correction vec. pointer out,
@@ -1491,11 +1661,13 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
             if (tl == bTime) {
                 // both elements are in the same time.
                 dt = 0;
+                if (!syncFast) {
 #pragma unroll
-                for (unsigned int v = 0; v < dof; v++)
-                    std::memcpy(dgWVec + v * dgSz + elem * nPe,
-                                dgEVar + v * dgSz + elem * nPe,
-                                sizeof(T) * nPe);
+                    for (unsigned int v = 0; v < dof; v++)
+                        std::memcpy(dgWVec + v * dgSz + elem * nPe,
+                                    dgEVar + v * dgSz + elem * nPe,
+                                    sizeof(T) * nPe);
+                }
 
             } else if (tl > bTime) {
                 assert(dtl >= bDT);
@@ -1524,8 +1696,10 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                 m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].start();
 #endif
 
-                m_uiECOp->coarser_finer_ut_correction(cVout, (const T**)cVin,
+                { const double tc0_ = sprof ? ts::EnutsProf::now() : 0.0;
+ m_uiECOp->coarser_finer_ut_correction(cVout, (const T**)cVin,
                                                       cSz, dt_c, dt_f, dt, dof);
+ if (sprof) tcorrCf += ts::EnutsProf::now() - tc0_; }
 
 #ifdef __PROFILE_ENUTS__
                 m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].stop();
@@ -1567,8 +1741,10 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                 m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].start();
 #endif
 
-                m_uiECOp->finer_coarser_ut_correction(cVout, (const T**)cVin,
+                { const double tc0_ = sprof ? ts::EnutsProf::now() : 0.0;
+ m_uiECOp->finer_coarser_ut_correction(cVout, (const T**)cVin,
                                                       cSz, dt_c, dt_f, dt, dof);
+ if (sprof) tcorrFc += ts::EnutsProf::now() - tc0_; }
 
 #ifdef __PROFILE_ENUTS__
                 m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].stop();
@@ -1640,8 +1816,10 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                     m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].start();
 #endif
 
-                    m_uiECOp->Ccf(cVout, (const T**)cVin, cSz, rk_s, dt_c, dt_f,
+                    { const double tc0_ = sprof ? ts::EnutsProf::now() : 0.0;
+ m_uiECOp->Ccf(cVout, (const T**)cVin, cSz, rk_s, dt_c, dt_f,
                                   dt, dof);
+ if (sprof) tcorrCf += ts::EnutsProf::now() - tc0_; }
 
 #ifdef __PROFILE_ENUTS__
                     m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].stop();
@@ -1673,8 +1851,10 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                     m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].start();
 #endif
 
-                    m_uiECOp->Cfc(cVout, (const T**)cVin, cSz, rk_s, dt_c, dt_f,
+                    { const double tc0_ = sprof ? ts::EnutsProf::now() : 0.0;
+ m_uiECOp->Cfc(cVout, (const T**)cVin, cSz, rk_s, dt_c, dt_f,
                                   dt, dof);
+ if (sprof) tcorrFc += ts::EnutsProf::now() - tc0_; }
 
 #ifdef __PROFILE_ENUTS__
                     m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].stop();
@@ -1689,80 +1869,65 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
             } else {
                 if (bTime == tl) {
-// no interpolation is needed.
+                    // fast: the padding fill below reads the stage vector directly
+                    if (!syncFast) {
 #pragma unroll
-                    for (unsigned int v = 0; v < dof; v++)
-                        std::memcpy(dgWVec + v * dgSz + elem * nPe,
-                                    dgStages[rk_s - 1] + v * dgSz + elem * nPe,
-                                    sizeof(T) * nPe);
+                        for (unsigned int v = 0; v < dof; v++)
+                            std::memcpy(dgWVec + v * dgSz + elem * nPe,
+                                        dgStages[rk_s - 1] + v * dgSz + elem * nPe,
+                                        sizeof(T) * nPe);
+                    }
 
-                } else if (tl > bTime) {
-                    // elem is in future.
-                    T dt_c = dtl * (m_uiTimeInfo._m_uiTh);
-                    T dt_f = bDT * (m_uiTimeInfo._m_uiTh);
-
-                    if (dt_c < dt_f) std::swap(dt_c, dt_f);
-
-                    dt = (t_ele - t_blk);
-
-                    for (unsigned int v = 0; v < dof; v++)
-                        for (unsigned int s = 1; s <= rk_s; s++) {
-                            cVin[v * rk_s + (s - 1)] =
-                                dgStages[s - 1] + v * dgSz + elem * nPe;
-                            cVout[v * rk_s + (s - 1)] =
-                                cVec.data() + v * rk_s * nPe + (s - 1) * nPe;
-                        }
-
-#ifdef __PROFILE_ENUTS__
-                    m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].start();
-#endif
-
-                    m_uiECOp->Ccf(cVout, (const T**)cVin, cSz, rk_s, dt_c, dt_f,
-                                  dt, dof);
-
-#ifdef __PROFILE_ENUTS__
-                    m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].stop();
-#endif
-
-#pragma unroll
-                    for (unsigned int v = 0; v < dof; v++)
-                        std::memcpy(dgWVec + v * dgSz + elem * nPe,
-                                    cVout[v * rk_s + (rk_s - 1)],
-                                    sizeof(T) * nPe);
                 } else {
-                    assert(tl < bTime);
-                    // blk is in future
-                    T dt_c = (bDT) * (m_uiTimeInfo._m_uiTh);
-                    T dt_f = (dtl) * (m_uiTimeInfo._m_uiTh);
+                    // tl > bTime: elem is in the future (Ccf), else blk is (Cfc)
+                    const bool eleFut = tl > bTime;
+                    assert(eleFut || tl < bTime);
+                    T dt_c = (eleFut ? dtl : bDT) * (m_uiTimeInfo._m_uiTh);
+                    T dt_f = (eleFut ? bDT : dtl) * (m_uiTimeInfo._m_uiTh);
 
                     if (dt_c < dt_f) std::swap(dt_c, dt_f);
 
-                    dt = (t_blk - t_ele);
+                    dt = eleFut ? (t_ele - t_blk) : (t_blk - t_ele);
 
-                    for (unsigned int v = 0; v < dof; v++)
-                        for (unsigned int s = 1; s <= rk_s; s++) {
-                            cVin[v * rk_s + (s - 1)] =
-                                dgStages[s - 1] + v * dgSz + elem * nPe;
-                            cVout[v * rk_s + (s - 1)] =
-                                cVec.data() + v * rk_s * nPe + (s - 1) * nPe;
+                    if (syncFast && m_uiSyncPassOpen &&
+                        m_uiSyncTag[elem].pass == m_uiSyncPass &&
+                        m_uiSyncTag[elem].rk == rk_s &&
+                        m_uiSyncTag[elem].fut == (unsigned char)eleFut &&
+                        m_uiSyncTag[elem].dt_c == dt_c &&
+                        m_uiSyncTag[elem].dt_f == dt_f &&
+                        m_uiSyncTag[elem].dt == dt) {
+                        // another block of this stage pass already left the
+                        // same correction in dgWVec
+                    } else {
+                        for (unsigned int v = 0; v < dof; v++)
+                            for (unsigned int s = 1; s <= rk_s; s++) {
+                                cVin[v * rk_s + (s - 1)] =
+                                    dgStages[s - 1] + v * dgSz + elem * nPe;
+                                cVout[v * rk_s + (s - 1)] =
+                                    cVec.data() + v * rk_s * nPe + (s - 1) * nPe;
+                            }
+
+                        {
+                            const double tc0_ = sprof ? ts::EnutsProf::now() : 0.0;
+                            if (eleFut)
+                                m_uiECOp->Ccf(cVout, (const T**)cVin, cSz, rk_s,
+                                              dt_c, dt_f, dt, dof);
+                            else
+                                m_uiECOp->Cfc(cVout, (const T**)cVin, cSz, rk_s,
+                                              dt_c, dt_f, dt, dof);
+                            if (sprof) (eleFut ? tcorrCf : tcorrFc) += ts::EnutsProf::now() - tc0_;
                         }
 
-#ifdef __PROFILE_ENUTS__
-                    m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].start();
-#endif
-
-                    m_uiECOp->Cfc(cVout, (const T**)cVin, cSz, rk_s, dt_c, dt_f,
-                                  dt, dof);
-
-#ifdef __PROFILE_ENUTS__
-                    m_uiPt[ENUTSPROFILE::NUTS_CORRECTION].stop();
-#endif
-
 #pragma unroll
-                    for (unsigned int v = 0; v < dof; v++)
-                        std::memcpy(dgWVec + v * dgSz + elem * nPe,
-                                    cVout[v * rk_s + (rk_s - 1)],
-                                    sizeof(T) * nPe);
+                        for (unsigned int v = 0; v < dof; v++)
+                            std::memcpy(dgWVec + v * dgSz + elem * nPe,
+                                        cVout[v * rk_s + (rk_s - 1)],
+                                        sizeof(T) * nPe);
+                        if (syncFast && m_uiSyncPassOpen)
+                            m_uiSyncTag[elem] = {m_uiSyncPass, rk_s,
+                                                 (unsigned char)eleFut, dt_c,
+                                                 dt_f, dt};
+                    }
                 }
             }
         }
@@ -1803,6 +1968,13 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         // return;
     }
 
+    double tun0 = 0;
+    if (sprof) {
+        tun0 = ts::EnutsProf::now();
+        ts::EnutsProf::get().t[ts::EnutsProf::SY_CORR] += tcorrCf;
+        ts::EnutsProf::get().t[ts::EnutsProf::SY_CORR_FC] += tcorrFc;
+        ts::EnutsProf::get().t[ts::EnutsProf::SY_SAME] += (tun0 - tsy0) - tcorrCf - tcorrFc;
+    }
     // now need to copy to the block unzip/ block asyncVector
     const double hx   = (1u << (m_uiMaxDepth - bLev)) / (double)eOrder;
 
@@ -1821,8 +1993,35 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
     const double d_compar_tol = 1e-6;
 
+    if (syncFast) {
+        if (m_uiSyncPlan.size() != pMesh->getLocalBlockList().size())
+            m_uiSyncPlan.assign(pMesh->getLocalBlockList().size(), SyncPlan());
+        SyncPlan& pl = m_uiSyncPlan[blk];
+        if (!pl.built) build_sync_plan(blk, eid, pl);
+        const size_t lxyz = (size_t)lx * ly * lz;
+        for (const typename SyncPlan::Ent& en : pl.ents) {
+            const T* srcBase = dgWVec;
+            if (!isIGTSync && etVec[en.ele] == bTime)
+                srcBase = (rk_s == 0) ? (const T*)dgEVar : (const T*)dgStages[rk_s - 1];
+            const unsigned int* sp = pl.src.data();
+            const unsigned int* dp = pl.dst.data();
+            for (unsigned int v = 0; v < dof; v++) {
+                T* dv        = m_uiVec + v * lxyz;
+                const T* sv  = srcBase + (size_t)v * dgSz + (size_t)en.ele * nPe;
+                if (en.cnum < 0) {
+                    for (unsigned int q = en.b; q < en.e; q++) dv[dp[q]] = sv[sp[q]];
+                } else {
+                    pMesh->parent2ChildInterpolation(sv, p2cI.data(), en.cnum, m_uiDim);
+                    for (unsigned int q = en.b; q < en.e; q++) dv[dp[q]] = p2cI[sp[q]];
+                }
+            }
+        }
+    } else
     for (unsigned int m = 0; m < eid.size(); m++) {
         const unsigned int ele = eid[m];
+        const T* srcv          = dgWVec;
+        if (syncFast && !isIGTSync && etVec[ele] == bTime)
+            srcv = (rk_s == 0) ? (const T*)dgEVar : (const T*)dgStages[rk_s - 1];
 
         // no interpolation needed just copy.
         if (pNodes[ele].getLevel() == bLev) {
@@ -1889,7 +2088,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
                         for (unsigned int v = 0; v < dof; v++) {
                             // double v1 = m_uiVec[(v*lx*ly*lz) + kkz*lx*ly +
-                            // jjy*lx + iix]; double v2 = dgWVec[v*dgSz +
+                            // jjy*lx + iix]; double v2 = srcv[v*dgSz +
                             // ele*nPe + k*(eOrder+1)*(eOrder+1)+ j*(eOrder+1) +
                             // i]; if(rk_s==0 && fabs(v2-v1)>1e-3)
                             // {
@@ -1899,7 +2098,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                             // }
                             m_uiVec[(v * lx * ly * lz) + kkz * lx * ly +
                                     jjy * lx + iix] =
-                                dgWVec[v * dgSz + ele * nPe +
+                                srcv[v * dgSz + ele * nPe +
                                        k * (eOrder + 1) * (eOrder + 1) +
                                        j * (eOrder + 1) + i];
                         }
@@ -1975,7 +2174,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                         // "<<hh<<" hhx : "<<hx<<std::endl;
                         for (unsigned int v = 0; v < dof; v++) {
                             // double v1 = m_uiVec[(v*lx*ly*lz) + kkz*lx*ly +
-                            // jjy*lx + iix]; double v2 = dgWVec[v*dgSz +
+                            // jjy*lx + iix]; double v2 = srcv[v*dgSz +
                             // ele*nPe + k*(eOrder+1)*(eOrder+1)+ j*(eOrder+1) +
                             // i]; if(rk_s==0 && fabs(v2-v1)>1e-3)
                             // {
@@ -1985,7 +2184,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                             // }
                             m_uiVec[(v * lx * ly * lz) + kkz * lx * ly +
                                     jjy * lx + iix] =
-                                dgWVec[v * dgSz + ele * nPe +
+                                srcv[v * dgSz + ele * nPe +
                                        k * (eOrder + 1) * (eOrder + 1) +
                                        j * (eOrder + 1) + i];
                         }
@@ -2020,7 +2219,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                 for (unsigned int v = 0; v < dof; v++) {
                     const unsigned int cnum = childOct[child].getMortonIndex();
                     pMesh->parent2ChildInterpolation(
-                        &dgWVec[v * dgSz + ele * nPe], p2cI.data(), cnum,
+                        &srcv[v * dgSz + ele * nPe], p2cI.data(), cnum,
                         m_uiDim);
 
                     for (unsigned int k = 0; k < eOrder + 1; k++) {
@@ -2084,7 +2283,34 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     }
 
     // block internal copy.
-    if (rk_s == 0) {
+    double town0 = 0;
+    if (sprof) {
+        town0 = ts::EnutsProf::now();
+        ts::EnutsProf::get().t[ts::EnutsProf::SY_UNZIP] += town0 - tun0;
+    }
+    if (syncFast) {
+        const T* ownSrc = (rk_s == 0) ? (const T*)dgEVar : (const T*)dgStages[rk_s - 1];
+        const unsigned int n1 = eOrder + 1;
+        for (const unsigned int elem : blkList[blk]) {
+            const unsigned int ei = (pNodes[elem].getX() - blkNode.getX()) >>
+                                    (m_uiMaxDepth - regLevel);
+            const unsigned int ej = (pNodes[elem].getY() - blkNode.getY()) >>
+                                    (m_uiMaxDepth - regLevel);
+            const unsigned int ek = (pNodes[elem].getZ() - blkNode.getZ()) >>
+                                    (m_uiMaxDepth - regLevel);
+            assert(etVec[elem] == bTime);
+            for (unsigned int v = 0; v < dof; v++) {
+                const T* sv = ownSrc + (size_t)v * dgSz + (size_t)elem * nPe;
+                T* dv       = m_uiVec + (size_t)v * lx * ly * lz;
+                for (unsigned int k = 0; k < n1; k++)
+                    for (unsigned int j = 0; j < n1; j++)
+                        std::memcpy(dv + (size_t)(ek * eOrder + k + PW) * (ly * lx) +
+                                        (size_t)(ej * eOrder + j + PW) * lx +
+                                        (ei * eOrder + PW),
+                                    sv + k * n1 * n1 + j * n1, sizeof(T) * n1);
+            }
+        }
+    } else if (rk_s == 0) {
         for (const unsigned int elem : blkList[blk]) {
             const unsigned int ei = (pNodes[elem].getX() - blkNode.getX()) >>
                                     (m_uiMaxDepth - regLevel);
@@ -2163,6 +2389,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         }
     }
 
+    if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_OWN] += ts::EnutsProf::now() - town0;
 #ifdef __PROFILE_ENUTS__
     m_uiPt[ENUTSPROFILE::BLK_SYNC].stop();
 #endif
@@ -2304,9 +2531,9 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     if (!(pMesh->isActive())) return;
     const bool prof = ts::EnutsProf::on();
     double tp0 = 0, tp1 = 0, tpT = 0;
-    if (prof) tpT = MPI_Wtime();
-#define ENUTS_TIC() do { if (prof) tp0 = MPI_Wtime(); } while (0)
-#define ENUTS_TOC(k) do { if (prof) { tp1 = MPI_Wtime(); ts::EnutsProf::get().t[ts::EnutsProf::k] += tp1 - tp0; } } while (0)
+    if (prof) tpT = ts::EnutsProf::now();
+#define ENUTS_TIC() do { if (prof) tp0 = ts::EnutsProf::now(); } while (0)
+#define ENUTS_TOC(k) do { if (prof) { tp1 = ts::EnutsProf::now(); ts::EnutsProf::get().t[ts::EnutsProf::k] += tp1 - tp0; } } while (0)
 
     const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
     const ot::TreeNode* pNodes            = pMesh->getAllElements().data();
@@ -2540,6 +2767,8 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         ENUTS_TOC(EDG_END);
         }
         ENUTS_TIC();
+        m_uiSyncPass++;
+        m_uiSyncPassOpen = true;
 
         for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {
             const unsigned int blk   = m_uiActiveBlkIDs[bb];
@@ -2553,13 +2782,16 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             sync_blk_timestep(blk, BLK_S);
             debug_nan_check("post-sync", blk, BLK_S, pt, rk);
             debug_blk_hash("post-sync", blk, BLK_S, pt, rk);
+            const double tps0 = prof ? ts::EnutsProf::now() : 0.0;
             m_uiAppCtx->post_stage_blk((T*)m_uiBVec[blk]._vec[BLK_S].data(),
                                        DOF, blk, current_t + dt_finest * BLK_T);
+            if (prof) ts::EnutsProf::get().t[ts::EnutsProf::SY_POST] += ts::EnutsProf::now() - tps0;
             m_uiBVec[blk]._vec[BLK_S].mark_synced();
             // std::cout<<"[NUTS]: pt :  "<<pt<<" blk : "<<blk<<" rk : "<<rk<<"
             // step size: "<<BLK_DT<<" is synced:
             // "<<m_uiBVec[blk]._vec[BLK_S].isSynced()<<std::endl;
         }
+        m_uiSyncPassOpen = false;
         ENUTS_TOC(SYNC_BLK);
 
         // 02/12/2021 : The overlapped ghost exchange has a bug. - look at line
@@ -2657,7 +2889,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
     pMesh->waitActive();
     ENUTS_TOC(WAIT);
-    if (prof) ts::EnutsProf::get().t[ts::EnutsProf::TOTAL] += MPI_Wtime() - tpT;
+    if (prof) ts::EnutsProf::get().t[ts::EnutsProf::TOTAL] += ts::EnutsProf::now() - tpT;
 #undef ENUTS_TIC
 #undef ENUTS_TOC
 }
