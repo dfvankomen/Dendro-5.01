@@ -24511,7 +24511,7 @@ namespace ot {
 bool Mesh::xprofOn() {
     static const bool on = [] {
         const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF");
-        return e && e[0] == '1';
+        return e && std::atoi(e) >= 1;
     }();
     return on;
 }
@@ -24538,6 +24538,70 @@ bool Mesh::xprofBegin() {
     return true;
 }
 
+void Mesh::xprofProbe(unsigned int dof, size_t tsize) {
+    for (double& t : m_xpP) t = 0.0;
+    static const int level = [] {
+        const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF");
+        return e ? std::atoi(e) : 0;
+    }();
+    if (!m_xpActive || level < 2) return;
+    const int tag = 0x7e11;
+    const auto& sP = m_uiSendProcList;
+    const auto& rP = m_uiRecvProcList;
+    std::vector<MPI_Request> req;
+    auto handshake = [&](MPI_Comm c) {
+        char sb = 0;
+        std::vector<char> rb(rP.size());
+        req.clear();
+        for (size_t i = 0; i < rP.size(); i++) {
+            req.emplace_back();
+            MPI_Irecv(&rb[i], 1, MPI_CHAR, (int)rP[i], tag, c, &req.back());
+        }
+        for (size_t i = 0; i < sP.size(); i++) {
+            req.emplace_back();
+            MPI_Isend(&sb, 1, MPI_CHAR, (int)sP[i], tag, c, &req.back());
+        }
+        MPI_Waitall((int)req.size(), req.data(), MPI_STATUSES_IGNORE);
+    };
+    static std::vector<char> sbuf, rbuf;
+    auto exchange = [&]() {
+        const size_t sN = (size_t)dof * tsize *
+                          (m_uiSendNodeOffset[m_uiActiveNpes - 1] +
+                           m_uiSendNodeCount[m_uiActiveNpes - 1]);
+        const size_t rN = (size_t)dof * tsize *
+                          (m_uiRecvNodeOffset[m_uiActiveNpes - 1] +
+                           m_uiRecvNodeCount[m_uiActiveNpes - 1]);
+        if (sbuf.size() < sN) sbuf.assign(sN + sN / 4, 0);
+        if (rbuf.size() < rN) rbuf.assign(rN + rN / 4, 0);
+        req.clear();
+        for (const unsigned int p : rP) {
+            req.emplace_back();
+            MPI_Irecv(rbuf.data() + (size_t)dof * tsize * m_uiRecvNodeOffset[p],
+                      (int)((size_t)dof * tsize * m_uiRecvNodeCount[p]), MPI_BYTE,
+                      (int)p, tag + 1, m_uiCommActive, &req.back());
+        }
+        for (const unsigned int p : sP) {
+            req.emplace_back();
+            MPI_Isend(sbuf.data() + (size_t)dof * tsize * m_uiSendNodeOffset[p],
+                      (int)((size_t)dof * tsize * m_uiSendNodeCount[p]), MPI_BYTE,
+                      (int)p, tag + 1, m_uiCommActive, &req.back());
+        }
+        MPI_Waitall((int)req.size(), req.data(), MPI_STATUSES_IGNORE);
+    };
+    auto timed = [&](int i, auto&& f) {
+        MPI_Barrier(m_uiCommActive);
+        const double t0 = MPI_Wtime();
+        f();
+        m_xpP[i] = (MPI_Wtime() - t0) * 1e3;
+    };
+    if (m_uiActiveNpes == m_uiGlobalNpes) timed(0, [&] { handshake(m_uiCommGlobal); });
+    timed(1, [&] { handshake(m_uiCommActive); });
+    timed(2, exchange);
+    timed(3, exchange);
+    MPI_Barrier(m_uiCommActive);
+    m_xpLast = MPI_Wtime();
+}
+
 void Mesh::xprofReport(const char* variant, unsigned int dof, size_t sendN,
                        size_t recvN) {
     if (!m_xpActive) return;
@@ -24559,6 +24623,12 @@ void Mesh::xprofReport(const char* variant, unsigned int dof, size_t sendN,
     MPI_Reduce(loc, sm, 14, MPI_DOUBLE, MPI_SUM, 0, m_uiCommActive);
     unsigned long long n[2] = {sendN * dof, recvN * dof}, nm[2];
     MPI_Reduce(n, nm, 2, MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, m_uiCommActive);
+    double pm[4];
+    MPI_Reduce(m_xpP, pm, 4, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
+    if (m_uiActiveRank == 0 && pm[1] > 0.0)
+        std::printf("[first-xchg] mesh=%d call=%d probe hs_world=%.2f hs_comm=%.2f "
+                    "warm_xchg=%.2f warm_xchg2=%.2f ms (max)\n",
+                    m_xpId, m_xpCalls, pm[0], pm[1], pm[2], pm[3]);
     if (m_uiActiveRank == 0)
         std::printf(
             "[first-xchg] mesh=%d call=%d %s dof=%u labelled=%d "

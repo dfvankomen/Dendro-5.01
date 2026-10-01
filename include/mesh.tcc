@@ -1617,7 +1617,10 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
     // Side-channel non-primary sync runs before the standard ghost
     // exchange so updated non-primary local cgs are captured by the
     // send-buffer pack and propagated to ghost cgs transitively.
-    if (!m_xpActive && m_uiMPIContexts.empty() && xprofBegin()) m_xpVec = vec;
+    if (!m_xpActive && m_uiMPIContexts.empty() && xprofBegin()) {
+        m_xpVec = vec;
+        xprofProbe(dof, sizeof(T));
+    }
     const bool xpb = m_xpActive && m_xpVec == (const void*)vec;
     ghostReadCheck(vec, dof, "pre");
     ghostPosCheck("plain");
@@ -1895,7 +1898,10 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 
     // Side-channel non-primary sync runs before the standard ghost
     // exchange (see performGhostExchange comment for rationale).
-    if (!m_xpActive && xprofBegin()) m_xpVec = vec;
+    if (!m_xpActive && xprofBegin()) {
+        m_xpVec = vec;
+        xprofProbe(dof, sizeof(T));
+    }
     const bool xpb = m_xpActive && m_xpVec == (const void*)vec;
     ghostReadCheck(vec, dof, "pre");
     ghostPosCheck("ctx");

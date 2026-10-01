@@ -2175,6 +2175,12 @@ class Mesh {
     }
     void xprofReport(const char* variant, unsigned int dof, size_t sendN,
                      size_t recvN);
+    /** DENDRO_FIRST_XCHG_PROF=2: before the profiled exchange, time a zero-byte
+     *  handshake with every exchange peer on the world comm, then on this
+     *  mesh's comm, then two exchanges of the real sizes through persistent
+     *  probe-only buffers (separate tag; vectors untouched). */
+    void xprofProbe(unsigned int dof, size_t tsize);
+    double m_xpP[4]    = {0, 0, 0, 0};
     bool m_xpActive    = false;
     const void* m_xpVec = nullptr;
     int m_xpCalls      = 0;
