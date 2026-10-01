@@ -270,7 +270,7 @@ static inline void dendro_pos_dump(const ot::Mesh* pMesh, const double* v,
         bool hit = false;
         size_t b = 0;
         while (b <= steps.size()) {
-            size_t c = steps.find(',', b);
+            size_t c = steps.find_first_of(",/", b);  // '/' survives comma-split env lists
             if (c == std::string::npos) c = steps.size();
             if (c > b && std::atoi(steps.substr(b, c - b).c_str()) == step) hit = true;
             b = c + 1;
