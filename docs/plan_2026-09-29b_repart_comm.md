@@ -250,3 +250,23 @@ Gates: `_CHECK=1` runs the sandwich alongside and aborts (76) on any differing l
 ghost slots); EM4 np4/np8 graph, np16 ragged (m3 REFINE=0) and levelwise (m4 REFINE=2) md5 = SFC
 d7bbee89; tp np4/np8 4 arms 0 FAIL, COVERAGE 0, TEST 10 maxErr unchanged, new TEST 10o (onehop vs
 sandwich bitwise per cycle) 0 mismatches.
+
+### K7 prototype (2026-09-30): `DENDRO_REMESH_ONEHOP=1` (opt-in), dendrolib jj vlpzvtmv + uqsprzll, EM4 hunk work/onehop/em4_onehop.patch
+- dendrolib: `Mesh::oneHopTransfer` (mesh.tcc), `setLocalElementFlags`, flags-only `redistributeVec(dof=0, &flags)`,
+  `m_uiCanonKeysBuilt` (set by the K6 rebuild), `_PROF=1` phase line, `_GHOST=0` skips the final ghost exchange.
+  testPartitioning TEST 10o: per cycle, final flags back to the labelled mesh + onehop, bitwise vs the sandwich.
+- EM4 (`SOLVERCtx::remesh_onehop`): flags g2s -> ReMesh -> final flags back -> `buildGraphTwin` (K2) -> onehop;
+  `_CHECK=1` runs the sandwich on a copy and aborts 76 on any differing local value. Needs K6 keys on (else fallback).
+- Gates (K6 on): EM4 AMR md5 d7bbee89 (= SFC) at np4, np8, np16 ragged (m3 REFINE=0), np16 levelwise (m4 REFINE=2),
+  7/7 remeshes onehop ok, 0 fallbacks; CHECK np4/np8/np16 ragged/np16 lw: 7/7 remeshes 0 local mismatches
+  (2.1M-5.1M values per remesh at np4) and 0 ghost mismatches on every two-hop-written ghost slot; SFC arm untouched.
+  tp np4 + np8 x4 arms: test lines identical to the knob-off base (0 FAIL, COVERAGE 0, TEST 10 maxErr 5.3e-15 /
+  ragged 1.1e-14 unchanged), TEST 10o 4/4 cycles ok, 0 mismatches.
+- Timing, EM4 np4/np8 local (throttled box, median of 7 remeshes, ms, g2s / remesh+IGT / s2g / total):
+  np4 off 21.9/56.5/88.4/164 -> on 0.7/33.6/101.9/136 (-17 %); np8 off 23.8/48.4/93.2/167 and 23.4/48.8/88.6/160 ->
+  on 1.0/30.9/92.6/124 and 0.6/33.4/91.7/124 (-22..-26 %). On: g2s = flags only; remesh+IGT = ReMesh + flags back;
+  s2g = rebuild + onehop (xfer 24-81 ms at np4: m2p 5-17, query 2-10, xchg 4-11, write 8-31, ghost 3-8). np16 is
+  oversubscribed (ReMesh ~1.5 s) and shows no signal.
+- Risks: needs K6 + repart hints + co-local COARSE siblings (each checked, collective fallback); the final ghost
+  exchange is one extra ghost-layer move (two-hop filled those slots through its transport); not ported to BSSN
+  (pos-bcast, phantom fill) or NLSM (wavelet on the twin). Kingspeak np192 not measured.
