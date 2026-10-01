@@ -380,3 +380,21 @@ Refs changed: ref/tp_base/np{4,8}_{m3,m3ref1,m4,ragged}.txt (TEST 2 node counts,
   elements/rank 1013 -> 326; np16 levelwise rounds 37 -> 26-28, TOTAL 873 -> 354 ms, ghosts 936 -> 293;
   per-step ghost send nodes identical.
 - Kingspeak case `EG)` in kp/bundle/ab_guest.sbatch (np384 em4big, FL step-45 restore, sfc_rs/graph_rs/graph_ex).
+
+## RING_FINER_NBRS default flip (2026-10-01)
+
+`DENDRO_RING_FINER_NBRS` now default on (`=0` reverts; `_CHECK=1` unchanged). Correctness fix: without it a finer corner/edge
+neighbour can be missing from the labelled ghost rings and np384 diverges from SFC. Build `rfdef`.
+
+| gate | result |
+|---|---|
+| EM4 np4/np8 sfc + graph | all d7bbee89 |
+| EM4 np16 ragged (m3, REFINE=0) / levelwise (m4, REFINE=2) | d7bbee89 / d7bbee89 |
+| testPartitioning np4 + np8 (m3, m3ref1, m4, ragged) | 0 FAIL; only TEST 2 ghost-node counts and 8bj pair counts differed, refs regenerated, rerun IDENTICAL |
+| nuts2 | == ref digits |
+| lw3 np16 sfc/lvl/lw/fp | min/max identical to sfc in every arm |
+| bssn np4 q1 | graph bf867af6, sfc 2ffba783 (= refs; C_HAM L2 9.20684e-06 both) |
+| EM4 np8 graph `RING_FINER_NBRS=0` | d7bbee89 (revert works) |
+| EM4 np8 graph `WAVE_COVER_CHECK=1` | 0 unwritten slots (332 report lines, none nonzero) |
+
+Refs changed: ref/tp_base/np{4,8}_{m3,m3ref1,m4,ragged}.txt; old copies kept as `.pre_rf`.
