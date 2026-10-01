@@ -21044,6 +21044,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     }();
     std::vector<std::uint64_t> ckRecv;
     bool ckHave = false, ckUse = false;
+    std::vector<size_t> ckAbsent;  // keyed slots whose owner element was not fetched
     m_uiCanonKeysBuilt = false;
     std::vector<std::uint64_t> ckBody;             // record body of the last ckMake(i)
     std::function<size_t(size_t)> ckMake;          // local element i -> body, returns nOwn
@@ -21274,7 +21275,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 // targets are keyed rows too: the unzip reads some of them
                 const size_t nOwn = ckMake(it->second);
                 auto& kb = krep[reqSrc[k / 2]];
-                kb.push_back((std::uint64_t)o.eid | (3ull << 32) | ((std::uint64_t)nOwn << 40));
+                kb.push_back((std::uint64_t)o.eid | (4ull << 32) | ((std::uint64_t)nOwn << 40));
                 kb.insert(kb.end(), ckBody.begin(), ckBody.end());
             }
             const auto tg = exchangeBuckets(rep, octType);
@@ -21859,6 +21860,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             // gate run no fetched element carried the key's position either
             // (rim slots of the outermost ring), so no position lookup
             ownerUnres = absentSlots.size();
+            ckAbsent = absentSlots;
             absentSlots.clear();
             bool anyTopo = false;
             for (unsigned int e = 0; e < N && !anyTopo; e++) anyTopo = ckOff[e] == SIZE_MAX;
@@ -21929,10 +21931,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         m_uiRecvNodeOffset.assign(m_uiActiveNpes, 0);
         m_uiScatterMapActualNodeSend.clear();
         m_uiScatterMapActualNodeRecv.clear();
-        if (ownerUnres)
-            std::cout << "[canon-keys r" << rank << "] owner element absent for "
-                      << ownerAbsent << " keyed slots, " << ownerUnres
-                      << " without a fetched cg at the position (self-owned)" << std::endl;
         __phase("canon-keys join");
         if (canonCheck) {
             const unsigned long long pm = ckCompare("keyed-vs-keys");
@@ -22983,13 +22981,39 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                                        m_uiZipNonPrimaryToGhostCg.size(),
                                        m_uiPassDDemotedToGhostCg.size(),
                                        m_uiLocalNonPrimaryCg.size()};
-            unsigned long long t[8];
+            unsigned long long t[8], mx[8];
             MPI_Reduce(v, t, 8, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            MPI_Reduce(v, mx, 8, MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, commActive);
             if (!rank)
                 std::printf("[zipsync-summary] keys=%d sync send/recv raw=%llu/%llu pruned=%llu/%llu "
                             "local_dup=%llu znp_mirror=%llu passd_mirror=%llu local_nonprimary=%llu "
-                            "global_active=%d\n", (int)ckUse, t[0], t[1], t[2], t[3], t[4], t[5],
-                            t[6], t[7], (int)m_uiZipSyncGlobalActive);
+                            "global_active=%d | max/rank pruned=%llu/%llu local_dup=%llu znp=%llu "
+                            "local_nonprimary=%llu\n", (int)ckUse, t[0], t[1], t[2], t[3], t[4], t[5],
+                            t[6], t[7], (int)m_uiZipSyncGlobalActive, mx[2], mx[3], mx[4], mx[5], mx[7]);
+        }
+        if (ckUse) {
+            // absent-owner slots by ring of their element (local, R1, R2, R3,
+            // owner target) and whether the unzip reads that element
+            unsigned long long a[10] = {};
+            const unsigned int npeA = m_uiNpE;
+            for (const size_t sl : ckAbsent) {
+                const unsigned int e = (unsigned int)(sl / npeA);
+                unsigned int r = (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd)
+                                     ? 0u : (unsigned int)((ckRecv[ckOff[e]] >> 32) & 0xffu);
+                if (r > 4) r = 4;
+                a[r]++;
+                if (e < m_e2b_unzip_counts.size() && m_e2b_unzip_counts[e] > 0) a[5 + r]++;
+            }
+            unsigned long long ta[10], ma[10];
+            MPI_Reduce(a, ta, 10, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            MPI_Reduce(a, ma, 10, MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, commActive);
+            if (!rank)
+                std::printf("[canon-keys-absent] by ring local/R1/R2/R3/tgt sum=%llu/%llu/%llu/%llu/%llu "
+                            "unzip-read=%llu/%llu/%llu/%llu/%llu | max/rank=%llu/%llu/%llu/%llu/%llu "
+                            "read=%llu/%llu/%llu/%llu/%llu\n",
+                            ta[0], ta[1], ta[2], ta[3], ta[4], ta[5], ta[6], ta[7], ta[8], ta[9],
+                            ma[0], ma[1], ma[2], ma[3], ma[4], ma[5], ma[6], ma[7], ma[8], ma[9]);
+            std::fflush(stdout);
         }
     }
     if (countRounds) {
