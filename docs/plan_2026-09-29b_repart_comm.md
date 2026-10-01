@@ -276,3 +276,25 @@ sandwich bitwise per cycle) 0 mismatches.
 - Wall sfc 195.8, K6+targets 217.1, targets=0 210.5. rkstep 161.6 / 171.1 / 166.3; remesh total 5.9 / 19.9 / 18.2 s; s2g 722 (targets add ~100 ms) vs 623.
 - STEP_PROF gap K6+targets vs SFC (+9.5 s): evec_copy 5.0 -> 10.2 (+5.2, full-vector copies incl. the ~11x unread ghost layer), ge:wait +1.8, rhs_compute_other +1.2, mesh_waitAll +0.8, unzip_compute +0.4; zip-sync 0. Total bytes 1.50 TB vs SFC 1.52 TB.
 - Next: DENDRO_EVEC_LOCAL_COPY (copy only local + delivered ghost slots), then stop allocating unread ghost cg slots; K7 one-hop at scale.
+
+### K6 at scale (2026-10-01): absent owners in read rows, owner-target fix
+- Kingspeak em4big np192/np384: K6 did not reproduce SFC (CSV 2.86e-4 unchanged), rkstep +2.5 %, every rank 34-40k
+  "owner element absent" slots per rebuild.
+- New counter `[canon-keys-absent]` (rank 0, every K6 rebuild): absent-owner slots by ring of their element
+  (local/R1/R2/R3/target), and how many sit in elements the unzip reads (m_e2b_unzip_counts > 0); sum and max/rank.
+  `[zipsync-summary]` now also prints max/rank of the pruned sync lists, local dups, ZNP mirrors, local non-primary.
+- Local repro (main + counters, targets off): EM4 em4big np16 (50 GB RSS, stopped after 2 rebuilds): absent R2 723 /
+  R3 1.81M slots, 125 R3 slots unzip-read. EM4 (maxdepth 7) np32: R2 316-726, R3 0.20-0.35M, read R2 0-27, R3 1-101,
+  R1 6 in one rebuild; zip-sync stays globally active (pruned 1-26 pairs). The 26-lists miss finer neighbours, so the
+  canonical owner of a read slot can sit outside the three fetched rings; the slot then falls back to a self-owned
+  private cg (alternate owner / duplicate position) -> zip-sync back on and the state no longer the SFC one.
+- Fix `DENDRO_REPART_CANON_TARGETS` (default 1, =0 reverts): the K6c owner-target fetch now also runs with three rings
+  (splitter-routed to the SFC source, keyed records tagged 4). np32: 4.8-8.1k targets per rebuild (~150-250/rank), all
+  absent slots left are on target rows (0 read in local/R1/R2/R3), zip-sync pruned 0 everywhere (global_active=0).
+- Gates (targets on): tp np4+np8 x4 arms 0 FAIL, COVERAGE 0, tables = pre-fix K6 (only TEST 2 ghost-node counts and the
+  informational 8bj slot count move: target rows add ghost cgs); EM4 md5 np4/np8/np16 ragged/np16 levelwise d7bbee89 =
+  SFC, np32 795f6554 = SFC; NLSM nuts2 = ref.
+- np48 oversubscribed EM4 hangs in the first graph repartition before buildOctantConnectivityMap with K6 on and off
+  (600 s timeouts), so it is not K6; not chased.
+- Kingspeak arm K6D in kp/bundle/ab_guest.sbatch (sfc / graph_k6 / graph_t0): DENDRO_STEP_PROF, COMM_STATS,
+  ZIPSYNC_STATS, POS_DUMP_DIR=vtu at steps 5/25/65 ('/' separator, comma-split env lists), compare with poscmp.py.
