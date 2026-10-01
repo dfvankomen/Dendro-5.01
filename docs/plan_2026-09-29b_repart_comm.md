@@ -193,3 +193,30 @@ Sample: ~/research/repart_gate/pmpi/sample_sites_graph_np4.txt. Bundle copy: ~/r
 | `=0` revert, EM4 np4 graph | 2603beb3 (old) |
 
 - Ref texts: scripts/em4.sh graph refs now d7bbee89 (old text in em4.sh.pre_k6); bssn.sh ref line for graph Constraints is now bf867af6 (was a83112e3).
+
+### K7 probe (2026-09-30): do the IGT write candidates agree bitwise? (`DENDRO_IGT_WRITER_PROBE=1`, jj tvzrqryx)
+In `interGridTransfer`'s write loop every (new local element, non-hanging node) is a candidate writer; the
+probe routes all candidates by position, counts (node, var) groups whose candidates differ bitwise, and
+compares the actual winner (last local non-hanging writer on the node's SFC owner rank) with
+partition-free rules. Sums over all IGT calls of a run (EM4 t_end 10: 16 calls; tp: 4):
+
+| run | groups | multi-cand | disagree | w != global-last | noW / multiW | max abs diff | big (>1e-12 rel) |
+|---|---|---|---|---|---|---|---|
+| EM4 sfc np4 | 44.4M | 16.1M | 265214 (80682 pos) | 75635 | 0 / 0 | 6.9e-18 | 0 |
+| EM4 sfc np8 | 44.4M | 16.1M | 265578 | 111884 | 0 / 0 | 6.9e-18 | 0 |
+| EM4 graph+K6 np4 / np8 | = sfc np4 / np8 | | | | | | |
+| EM4 graph+K6 np16 ragged | 44.4M | 16.1M | 265269 | 140667 | 0 / 0 | 6.9e-18 | 0 |
+| tp np4 m3 / m3ref1 / m4 | 4.70M | 2.50M | 213069 | 10263 | 0 / 0 | 3.1e-15 | 0 |
+| tp np4 ragged | 0.78M | 0.41M | 76250 | 9004 | 0 / 0 | 4.4e-15 | 0 |
+
+- Count is NONZERO: ~1.7 % of multi-candidate groups disagree, all at round-off (max 1 ULP-scale, no
+  group above 1e-12 relative). The writer choice shows in the bits, so an IGT on a labelled
+  distribution is not bit-identical by construction; it must reproduce the SFC writer.
+- The SFC writer is itself partition-dependent (w != global-last grows 75k -> 112k -> 141k with np): the
+  SFC IGT output differs at ULP level between np4 and np8 (CSV md5 hides it).
+- Every owned node has exactly one actual writer (noW = multiW = 0), and the winner is never a
+  partition-free rule (owner element / first / global-last all differ somewhere).
+- Cost of reproducing it: the rule is local to the new SFC mesh S' (for each owned node: the last local
+  non-hanging element on its S' owner rank, which owns the node's owner element too). It needs no data,
+  so S' can compute a per-element writer mask and hand it out with the routing answer: cheap. See K7
+  design below.
