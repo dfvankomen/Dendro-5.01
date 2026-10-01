@@ -37,6 +37,7 @@
 #include <random>
 #include <set>
 #include <string>
+#include <sstream>
 #include <tuple>
 #include <type_traits>
 #include <array>
@@ -765,6 +766,8 @@ class Mesh {
     std::vector<std::pair<ot::TreeNode, int>> m_uiRepartOrigin;
     /** true when the last rebuild took its E2N from canonical SFC keys (K6) */
     bool m_uiCanonKeysBuilt = false;
+    /** DENDRO_WAVE_PROBE_TN: writer log of the target element's wavelet slots, last unzip */
+    std::string m_uiWaveProbeLog;
     bool m_uiRemeshRawFlags = false;
 
     /** Cached pos-bcast plan (mesh-only; see buildBcastPlan). Invalidated
@@ -2855,6 +2858,16 @@ class Mesh {
      * @param out : output values. (allocated with corresponding padding width)
      * @param isPadded : true if the we need the elemental values with padding.
      */
+    /**
+     * @brief Wavelet-input probe (DENDRO_WAVE_PROBE_TN="x,y,z,lev"): finds the
+     * local element with that TreeNode, the block holding it and the dof-0
+     * unzip slots isReMeshUnzip reads for it, in getUnzipElementalNodalValues
+     * order.
+     * @return false when the probe is off or the element is not local here.
+     */
+    bool waveProbeTarget(unsigned int &ele, unsigned int &blk,
+                         std::vector<unsigned int> &slots) const;
+
     template <typename T>
     void getUnzipElementalNodalValues(const T *uzipVec, unsigned int blkID,
                                       unsigned int ele, T *out,

@@ -24337,4 +24337,46 @@ bool Mesh::filterRefineFlagsOnSFC(Mesh* sfcTwin, bool check) {
     return any;
 }
 
+bool Mesh::waveProbeTarget(unsigned int& ele, unsigned int& blk,
+                           std::vector<unsigned int>& slots) const {
+    static unsigned int tx = 0, ty = 0, tz = 0, tl = 0;
+    static const bool on = [] {
+        const char* e = std::getenv("DENDRO_WAVE_PROBE_TN");
+        if (!e) return false;
+        std::string v(e);
+        std::replace(v.begin(), v.end(), '/', ',');
+        return std::sscanf(v.c_str(), "%u,%u,%u,%u", &tx, &ty, &tz, &tl) == 4;
+    }();
+    if (!on || !m_uiIsActive) return false;
+    ele = LOOK_UP_TABLE_DEFAULT;
+    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
+        const ot::TreeNode& t = m_uiAllElements[e];
+        if (t.minX() == tx && t.minY() == ty && t.minZ() == tz && t.getLevel() == tl) {
+            ele = e;
+            break;
+        }
+    }
+    if (ele == LOOK_UP_TABLE_DEFAULT) return false;
+    blk = LOOK_UP_TABLE_DEFAULT;
+    for (unsigned int b = 0; b < m_uiLocalBlockList.size() && blk == LOOK_UP_TABLE_DEFAULT; b++)
+        for (unsigned int e : m_uiLocalBlockList[b])
+            if (e == ele) { blk = b; break; }
+    if (blk == LOOK_UP_TABLE_DEFAULT) return false;
+    const ot::Block& B   = m_uiLocalBlockList[blk];
+    const ot::TreeNode bn = B.getBlockNode();
+    const unsigned int rl = B.getRegularGridLev(), lx = B.getAllocationSzX(),
+                       ly = B.getAllocationSzY(), pw = B.get1DPadWidth();
+    const unsigned int ei = (m_uiAllElements[ele].getX() - bn.getX()) >> (m_uiMaxDepth - rl);
+    const unsigned int ej = (m_uiAllElements[ele].getY() - bn.getY()) >> (m_uiMaxDepth - rl);
+    const unsigned int ek = (m_uiAllElements[ele].getZ() - bn.getZ()) >> (m_uiMaxDepth - rl);
+    const unsigned int n  = m_uiElementOrder + 1 + 2 * pw;
+    slots.clear();
+    for (unsigned int k = 0; k < n; k++)
+        for (unsigned int j = 0; j < n; j++)
+            for (unsigned int i = 0; i < n; i++)
+                slots.push_back(B.getOffset() + (ek * m_uiElementOrder + k) * ly * lx +
+                                (ej * m_uiElementOrder + j) * lx + ei * m_uiElementOrder + i);
+    return true;
+}
+
 }  // namespace ot
