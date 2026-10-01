@@ -4704,11 +4704,11 @@ class Mesh {
             }
         }
 
-        // DENDRO_RING_FINER_NBRS (default on, =0 reverts): edge/vertex slots the
-        // e2e chain drops as finer take the element touching the corner / edge low end
+        // DENDRO_RING_FINER_NBRS=1: edge/vertex slots the e2e chain drops as
+        // finer take the element touching the corner / edge low end
         static const bool finerNbrs = [] {
             const char* e = std::getenv("DENDRO_RING_FINER_NBRS");
-            return !(e && e[0] == '0');
+            return e && e[0] == '1';
         }();
         struct TnKey {
             std::size_t operator()(const std::array<unsigned int, 4>& k) const {
