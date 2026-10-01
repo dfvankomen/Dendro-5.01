@@ -3937,6 +3937,37 @@ int main(int argc, char** argv) {
             sfcNext->redistributeVec(mNext, vSfc.data(), vNext.data());
             mNext->performGhostExchange(vNext);
 
+            // DENDRO_REMESH_ONEHOP=1: labelled -> labelled transfer, compared
+            // bitwise with the sandwich at every local cg
+            static const bool oneHop = [] {
+                const char* v = std::getenv("DENDRO_REMESH_ONEHOP");
+                return v && v[0] == '1';
+            }();
+            if (oneHop) {
+                std::vector<unsigned int> fl;
+                sfcCur->redistributeVec<double>(mCyc, nullptr, nullptr, 0,
+                                                nullptr, &fl);
+                if (mCyc->isActive()) mCyc->setLocalElementFlags(fl);
+                std::vector<double> vOne;
+                mNext->createVector(vOne, (double)0);
+                const bool ok = mCyc->oneHopTransfer(sfcNext, mNext,
+                                                     vCyc.data(), vOne.data(), 1);
+                unsigned long long mm[2] = {0, 0};
+                if (ok && mNext->isActive())
+                    for (unsigned int cg = mNext->getNodeLocalBegin();
+                         cg < mNext->getNodeLocalEnd(); cg++) {
+                        mm[0]++;
+                        mm[1] += std::memcmp(&vOne[cg], &vNext[cg],
+                                             sizeof(double)) != 0;
+                    }
+                MPI_Allreduce(MPI_IN_PLACE, mm, 2, MPI_UNSIGNED_LONG_LONG,
+                              MPI_SUM, comm);
+                if (!rank)
+                    std::cout << ((ok && !mm[1]) ? GRN : RED) << "TEST 10o cycle "
+                              << k << ": onehop ok=" << ok << " local=" << mm[0]
+                              << " mismatches=" << mm[1] << NRM << std::endl;
+            }
+
             // --- verify against the analytical field on the graph mesh ---
             int localFail = 0;
             int localChk  = 0;
