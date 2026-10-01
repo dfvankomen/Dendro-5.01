@@ -15494,6 +15494,19 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
         return false;
     };
 
+    // DENDRO_WAVE_COVER_CHECK=1: sentinel dof 0, then count the slots the
+    // per-element wavelet stencil (element + pw) reads that no writer filled
+    static const bool wcChk = [] {
+        const char* e = std::getenv("DENDRO_WAVE_COVER_CHECK");
+        return e && e[0] == '1';
+    }();
+    std::vector<T> wcSave;
+    const uint64_t wcBits = 0x7ff8deadbeef0003ULL;
+    if (wcChk && sizeof(T) == 8) {
+        wcSave.assign(out, out + unSz);
+        for (unsigned int i = 0; i < unSz; i++) std::memcpy(&out[i], &wcBits, 8);
+    }
+
     // DENDRO_WAVE_PROBE_TN: log every commit into the target's wavelet slots
     unsigned int wpEle = 0, wpBlk = 0;
     std::vector<unsigned int> wpSlots;
@@ -16076,6 +16089,53 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof) {
                 }
             }
         }
+    }
+    if (wcChk && sizeof(T) == 8) {
+        unsigned long long miss = 0, missEle = 0;
+        std::vector<unsigned char> seen(unSz, 0);
+        std::string sample;
+        for (unsigned int b = 0; b < m_uiLocalBlockList.size(); b++) {
+            const ot::Block& B   = blkList[b];
+            const ot::TreeNode bn = B.getBlockNode();
+            const unsigned int rl = B.getRegularGridLev(), lx = B.getAllocationSzX(),
+                               ly = B.getAllocationSzY(), n1 = eOrder + 1 + 2 * B.get1DPadWidth();
+            for (unsigned int e : B) {
+                const unsigned int ei = (pNodes[e].getX() - bn.getX()) >> (m_uiMaxDepth - rl);
+                const unsigned int ej = (pNodes[e].getY() - bn.getY()) >> (m_uiMaxDepth - rl);
+                const unsigned int ek = (pNodes[e].getZ() - bn.getZ()) >> (m_uiMaxDepth - rl);
+                unsigned long long m0 = miss;
+                for (unsigned int k = 0; k < n1; k++)
+                    for (unsigned int j = 0; j < n1; j++)
+                        for (unsigned int i = 0; i < n1; i++) {
+                            const unsigned int idx = B.getOffset() + (ek * eOrder + k) * ly * lx +
+                                                     (ej * eOrder + j) * lx + ei * eOrder + i;
+                            if (std::memcmp(&out[idx], &wcBits, 8) != 0 || seen[idx]) continue;
+                            const long long h = 1ll << (m_uiMaxDepth - rl),
+                                            D = (long long)eOrder << m_uiMaxDepth,
+                                            pw = (long long)B.get1DPadWidth();
+                            const long long X = (long long)bn.minX() * eOrder + ((long long)(ei * eOrder + i) - pw) * h,
+                                            Y = (long long)bn.minY() * eOrder + ((long long)(ej * eOrder + j) - pw) * h,
+                                            Z = (long long)bn.minZ() * eOrder + ((long long)(ek * eOrder + k) - pw) * h;
+                            if (X < 0 || Y < 0 || Z < 0 || X > D || Y > D || Z > D) continue;
+                            seen[idx] = 1;
+                            miss++;
+                        }
+                if (miss > m0 && missEle++ < 3) {
+                    char t[200];
+                    std::snprintf(t, sizeof(t), " ele(%u,%u,%u,L%u)blk(%u,%u,%u,L%u,n%u)miss=%llu",
+                                  pNodes[e].minX(), pNodes[e].minY(), pNodes[e].minZ(),
+                                  pNodes[e].getLevel(), bn.minX(), bn.minY(), bn.minZ(),
+                                  bn.getLevel(), B.getElemSz1D(), miss - m0);
+                    sample += t;
+                }
+            }
+        }
+        for (unsigned int i = 0; i < unSz; i++)
+            if (std::memcmp(&out[i], &wcBits, 8) == 0) out[i] = wcSave[i];
+        if (miss || !m_uiActiveRank)
+            std::cout << "[wave-cover-check r" << m_uiActiveRank << "] labelled="
+                      << (int)m_uiIsLabelledRebuild << " unwritten_stencil_slots=" << miss
+                      << " elements=" << missEle << sample << std::endl;
     }
     if (wpOn) {
         for (size_t s = 0; s < wpSlots.size(); s++)
