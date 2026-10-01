@@ -39,6 +39,7 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
+#include <array>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -762,6 +763,8 @@ class Mesh {
     std::vector<ot::TreeNode> m_uiRepartPreTN;
     std::vector<unsigned int> m_uiRepartPreLabel;
     std::vector<std::pair<ot::TreeNode, int>> m_uiRepartOrigin;
+    /** true when the last rebuild took its E2N from canonical SFC keys (K6) */
+    bool m_uiCanonKeysBuilt = false;
 
     /** Cached pos-bcast plan (mesh-only; see buildBcastPlan). Invalidated
      *  wherever CG2DG / all-elements / node ranges are rebuilt. */
@@ -4074,6 +4077,32 @@ class Mesh {
      *
      */
     bool setMeshRefinementFlags(const std::vector<unsigned int> &refine_flags);
+
+    /**
+     * @brief Sets the refinement flags of the local elements verbatim (no
+     * sibling checks), e.g. the final post-ReMesh flags of the SFC twin
+     * routed back to the labelled mesh.
+     * @param flags: OCT_SPLIT / OCT_COARSE / OCT_NO_CHANGE per local element.
+     */
+    void setLocalElementFlags(const std::vector<unsigned int> &flags);
+
+    /**
+     * @brief One-hop remesh transfer (DENDRO_REMESH_ONEHOP): moves a CG
+     * vector from this labelled source mesh (refinement flags = the final
+     * post-ReMesh flags) straight to the labelled successor lNew, built
+     * from the SFC successor sNew with canonical keys. The M2' blocks are
+     * computed on this mesh's local elements; each new element's writer
+     * nodes are those the SFC interGridTransfer write loop would let it win
+     * on sNew, routed to the labelled owner of the node. Collective.
+     * @return false (on every rank) if a precondition fails or a lNew local
+     * node is not written exactly once; vecOut is then undefined and the
+     * caller must run the two-hop path.
+     */
+    template <typename T>
+    bool oneHopTransfer(const ot::Mesh *sNew, ot::Mesh *lNew, const T *vecIn,
+                        T *vecOut, unsigned int dof,
+                        INTERGRID_TRANSFER_MODE mode =
+                            INTERGRID_TRANSFER_MODE::INJECTION);
 
     /**
      * @brief Perform linear transformation from octree coordinate to domain

@@ -5960,6 +5960,447 @@ void Mesh::interGridTransfer(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
 }
 
 template <typename T>
+bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
+                          T* vecOut, unsigned int dof,
+                          INTERGRID_TRANSFER_MODE mode) {
+    MPI_Comm comm = m_uiCommGlobal;
+    int rank, npes;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &npes);
+    static const bool oprof = [] {
+        const char* v = std::getenv("DENDRO_REMESH_ONEHOP_PROF");
+        return v && v[0] == '1';
+    }();
+    static const bool ghostFill = [] {
+        const char* v = std::getenv("DENDRO_REMESH_ONEHOP_GHOST");
+        return !(v && v[0] == '0');
+    }();
+    double tph[6] = {0, 0, 0, 0, 0, 0};
+    double tlast  = MPI_Wtime();
+    auto mark     = [&](int i) {
+        const double t = MPI_Wtime();
+        tph[i] += t - tlast;
+        tlast = t;
+    };
+
+    const unsigned int npe  = m_uiNpE;
+    const unsigned int eOrd = m_uiElementOrder;
+    const size_t srcSz      = m_uiNumActualNodes;
+
+    // preconditions (collective); bits name the reason
+    int why = 0;
+    if (sizeof(T) != sizeof(std::uint64_t) || dof == 0) why |= 1;
+    if (!m_uiIsActive || !sNew->isActive() || !lNew->isActive() ||
+        (int)getMPICommSize() != npes || (int)sNew->getMPICommSize() != npes ||
+        (int)lNew->getMPICommSize() != npes)
+        why |= 2;
+    if (!(why & 2)) {
+        const unsigned int sB = sNew->getElementLocalBegin();
+        const unsigned int sE = sNew->getElementLocalEnd();
+        if (!lNew->m_uiCanonKeysBuilt) why |= 4;
+        const auto& pre = lNew->m_uiRepartPreTN;
+        if (!lNew->m_uiRepartHint || pre.size() != sE - sB ||
+            lNew->m_uiRepartPreLabel.size() != sE - sB) {
+            why |= 8;
+        } else {
+            const auto* pS = sNew->getAllElements().data();
+            for (size_t i = 0; i < pre.size(); i++)
+                if (!repartTNKeySame(pS[sB + i], pre[i])) {
+                    why |= 8;
+                    break;
+                }
+        }
+        if (sNew->getSplitterElements().size() != 2 * (size_t)npes || sE == sB)
+            why |= 16;
+        if (lNew->getElementOrder() != eOrd || sNew->getElementOrder() != eOrd)
+            why |= 1;
+        for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd;
+             e++) {
+            if ((m_uiAllElements[e].getFlag() >> NUM_LEVEL_BITS) != OCT_COARSE)
+                continue;
+            bool good = e + NUM_CHILDREN <= m_uiElementLocalEnd;
+            const ot::TreeNode par = m_uiAllElements[e].getParent();
+            for (unsigned int c = 1; good && c < NUM_CHILDREN; c++)
+                good = (m_uiAllElements[e + c].getFlag() >> NUM_LEVEL_BITS) ==
+                           OCT_COARSE &&
+                       repartTNKeySame(m_uiAllElements[e + c].getParent(), par);
+            if (!good) {
+                why |= 32;
+                break;
+            }
+            e += NUM_CHILDREN - 1;
+        }
+    }
+    MPI_Allreduce(MPI_IN_PLACE, &why, 1, MPI_INT, MPI_BOR, comm);
+    if (why) {
+        if (!rank)
+            std::cout << "[onehop] fallback: precondition mask=" << why
+                      << std::endl;
+        return false;
+    }
+    mark(0);
+
+    // ---- 1. M2' blocks of this rank's local elements, as the SFC IGT
+    //         computes them (var-outer with one reused buffer, so slots a
+    //         coarse injection leaves unwritten carry the same leftovers)
+    std::vector<ot::TreeNode> xTN;
+    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
+        const unsigned int f = m_uiAllElements[e].getFlag() >> NUM_LEVEL_BITS;
+        if (f == OCT_SPLIT) {
+            m_uiAllElements[e].addChildren(xTN);
+        } else if (f == OCT_COARSE) {
+            xTN.push_back(m_uiAllElements[e].getParent());
+            e += NUM_CHILDREN - 1;
+        } else {
+            xTN.push_back(m_uiAllElements[e]);
+        }
+    }
+    const size_t nx = xTN.size();
+    std::vector<T> xVal(nx * dof * npe);
+    {
+        std::vector<T> wv(nx * npe);
+        std::vector<T> nodal(npe);
+        const unsigned int p1  = eOrd + 1;
+        const unsigned int p1d = 2 * eOrd + 1;
+        std::vector<double> vall(p1d * p1d * p1d);
+        for (unsigned int v = 0; v < dof; v++) {
+            const T* vec = vecIn + v * srcSz;
+            size_t x     = 0;
+            for (unsigned int ele = m_uiElementLocalBegin;
+                 ele < m_uiElementLocalEnd; ele++) {
+                const unsigned int f =
+                    m_uiAllElements[ele].getFlag() >> NUM_LEVEL_BITS;
+                if (f == OCT_SPLIT) {
+                    this->getElementNodalValues(vec, nodal.data(), ele);
+                    for (unsigned int c = 0; c < NUM_CHILDREN; c++)
+                        this->parent2ChildInterpolation(
+                            nodal.data(), &wv[(x + c) * npe],
+                            xTN[x + c].getMortonIndex(), 3);
+                    x += NUM_CHILDREN;
+                } else if (f == OCT_COARSE) {
+                    T* w = &wv[x * npe];
+                    if (mode == INTERGRID_TRANSFER_MODE::P2CT) {
+                        for (unsigned int child = 0; child < NUM_CHILDREN;
+                             child++) {
+                            this->getElementNodalValues(vec, nodal.data(),
+                                                        ele + child);
+                            const unsigned int cnum =
+                                m_uiAllElements[ele + child].getMortonIndex();
+                            for (unsigned int k = 0; k < p1; k++)
+                                for (unsigned int j = 0; j < p1; j++)
+                                    for (unsigned int i = 0; i < p1; i++) {
+                                        const unsigned int iix =
+                                            eOrd * (cnum & 1u) + i;
+                                        const unsigned int jjy =
+                                            eOrd * ((cnum & 2u) >> 1u) + j;
+                                        const unsigned int kkz =
+                                            eOrd * ((cnum & 4u) >> 2u) + k;
+                                        vall[kkz * p1d * p1d + jjy * p1d +
+                                             iix] = nodal[(k * p1 + j) * p1 + i];
+                                    }
+                        }
+                        m_uiRefEl.I3D_Children2Parent(vall.data(), w);
+                    } else {
+                        for (unsigned int child = 0; child < NUM_CHILDREN;
+                             child++) {
+                            const unsigned int ce = ele + child;
+                            const unsigned int cnum =
+                                m_uiAllElements[ce].getMortonIndex();
+                            for (unsigned int k = 0; k < p1; k++)
+                                for (unsigned int j = 0; j < p1; j++)
+                                    for (unsigned int i = 0; i < p1; i++) {
+                                        const unsigned int sub =
+                                            (k * p1 + j) * p1 + i;
+                                        if (this->isNodeHanging(ce, i, j, k)) {
+                                            w[sub] = vec[m_uiE2NMapping_CG
+                                                             [ce * npe + sub]];
+                                        } else {
+                                            const unsigned int iix =
+                                                eOrd * (cnum & 1u) + i;
+                                            const unsigned int jjy =
+                                                eOrd * ((cnum & 2u) >> 1u) + j;
+                                            const unsigned int kkz =
+                                                eOrd * ((cnum & 4u) >> 2u) + k;
+                                            if ((iix % 2 == 0) &&
+                                                (jjy % 2 == 0) &&
+                                                (kkz % 2 == 0))
+                                                w[((kkz >> 1u) * p1 +
+                                                   (jjy >> 1u)) *
+                                                      p1 +
+                                                  (iix >> 1u)] =
+                                                    vec[m_uiE2NMapping_CG
+                                                            [ce * npe + sub]];
+                                        }
+                                    }
+                        }
+                    }
+                    ele += NUM_CHILDREN - 1;
+                    x += 1;
+                } else {
+                    this->getElementNodalValues(vec, &wv[x * npe], ele);
+                    x += 1;
+                }
+            }
+            for (size_t y = 0; y < nx; y++)
+                std::memcpy(&xVal[(y * dof + v) * npe], &wv[y * npe],
+                            npe * sizeof(T));
+        }
+    }
+    mark(1);
+
+    // ---- 2. ask each new element's SFC owner which of its nodes it writes
+    //         (last local writer on the node's SFC owner rank, the IGT rule)
+    //         and the labelled owner of each such node (K6: label of the
+    //         node's SFC owner element)
+    const auto& spl = sNew->getSplitterElements();
+    auto sfcOwner   = [&](const ot::TreeNode& t) {
+        int lo = 0, hi = npes - 1;
+        while (lo < hi) {
+            const int mid = (lo + hi + 1) / 2;
+            if (t < spl[2 * mid])
+                hi = mid - 1;
+            else
+                lo = mid;
+        }
+        return lo;
+    };
+    std::vector<int> qCnt(npes, 0), qOff(npes, 0), rqCnt(npes, 0),
+        rqOff(npes, 0);
+    std::vector<int> xOwner(nx);
+    for (size_t y = 0; y < nx; y++) qCnt[xOwner[y] = sfcOwner(xTN[y])]++;
+    for (int p = 1; p < npes; p++) qOff[p] = qOff[p - 1] + qCnt[p - 1];
+    std::vector<size_t> xSlot(nx);  // position in the query buffer
+    std::vector<unsigned int> qBuf(4 * nx);
+    {
+        std::vector<int> c = qOff;
+        for (size_t y = 0; y < nx; y++) {
+            const size_t s = (size_t)c[xOwner[y]]++;
+            xSlot[y]       = s;
+            qBuf[4 * s]     = xTN[y].getX();
+            qBuf[4 * s + 1] = xTN[y].getY();
+            qBuf[4 * s + 2] = xTN[y].getZ();
+            qBuf[4 * s + 3] = xTN[y].getLevel();
+        }
+    }
+    MPI_Alltoall(qCnt.data(), 1, MPI_INT, rqCnt.data(), 1, MPI_INT, comm);
+    for (int p = 1; p < npes; p++) rqOff[p] = rqOff[p - 1] + rqCnt[p - 1];
+    const size_t nq = (size_t)rqOff[npes - 1] + rqCnt[npes - 1];
+    std::vector<unsigned int> rqBuf(4 * nq);
+    {
+        std::vector<int> sc(npes), so(npes), rc(npes), ro(npes);
+        for (int p = 0; p < npes; p++) {
+            sc[p] = 4 * qCnt[p];
+            so[p] = 4 * qOff[p];
+            rc[p] = 4 * rqCnt[p];
+            ro[p] = 4 * rqOff[p];
+        }
+        MPI_Alltoallv(qBuf.data(), sc.data(), so.data(), MPI_UNSIGNED,
+                      rqBuf.data(), rc.data(), ro.data(), MPI_UNSIGNED, comm);
+    }
+    struct Key4Hash {
+        size_t operator()(const std::array<unsigned int, 4>& k) const noexcept {
+            uint64_t h = ((uint64_t)k[0] << 32) ^ ((uint64_t)k[1] << 16) ^
+                         ((uint64_t)k[2]) ^ ((uint64_t)k[3] << 58);
+            h ^= h >> 33;
+            h *= 0xff51afd7ed558ccdULL;
+            h ^= h >> 33;
+            return (size_t)h;
+        }
+    };
+    int err = 0;
+    std::vector<int> ans(nq * npe, -1);
+    {
+        const unsigned int sB   = sNew->getElementLocalBegin();
+        const unsigned int sE   = sNew->getElementLocalEnd();
+        const unsigned int snB  = sNew->getNodeLocalBegin();
+        const unsigned int snE  = sNew->getNodeLocalEnd();
+        const unsigned int* se2n = sNew->getE2NMapping().data();
+        const auto& scg2dg       = sNew->getCG2DGMap();
+        const auto* pS           = sNew->getAllElements().data();
+        const auto& lab          = lNew->m_uiRepartPreLabel;
+        std::unordered_map<std::array<unsigned int, 4>, unsigned int, Key4Hash>
+            idx;
+        idx.reserve(sE - sB);
+        for (unsigned int e = sB; e < sE; e++)
+            idx.emplace(std::array<unsigned int, 4>{pS[e].getX(), pS[e].getY(),
+                                                    pS[e].getZ(),
+                                                    pS[e].getLevel()},
+                        e);
+        std::vector<unsigned int> lastW(snE - snB, UINT_MAX);
+        std::vector<unsigned char> nh((size_t)(sE - sB) * npe, 0);
+        for (unsigned int e = sB; e < sE; e++)
+            for (unsigned int k = 0; k <= eOrd; k++)
+                for (unsigned int j = 0; j <= eOrd; j++)
+                    for (unsigned int i = 0; i <= eOrd; i++) {
+                        if (sNew->isNodeHanging(e, i, j, k)) continue;
+                        const unsigned int sub =
+                            (k * (eOrd + 1) + j) * (eOrd + 1) + i;
+                        nh[(size_t)(e - sB) * npe + sub] = 1;
+                        const unsigned int cg = se2n[e * npe + sub];
+                        if (cg >= snB && cg < snE) lastW[cg - snB] = e;
+                    }
+        for (size_t q = 0; q < nq; q++) {
+            auto it = idx.find({rqBuf[4 * q], rqBuf[4 * q + 1],
+                                rqBuf[4 * q + 2], rqBuf[4 * q + 3]});
+            if (it == idx.end()) {
+                err |= 1;
+                continue;
+            }
+            const unsigned int e = it->second;
+            for (unsigned int sub = 0; sub < npe; sub++) {
+                if (!nh[(size_t)(e - sB) * npe + sub]) continue;
+                const unsigned int cg = se2n[e * npe + sub];
+                if (cg < snB || cg >= snE || lastW[cg - snB] != e) continue;
+                const unsigned int oe = scg2dg[cg] / npe;
+                if (oe < sB || oe >= sE) {
+                    err |= 2;
+                    continue;
+                }
+                ans[q * npe + sub] = (int)lab[oe - sB];
+            }
+        }
+    }
+    std::vector<int> myAns(nx * npe);
+    {
+        std::vector<int> sc(npes), so(npes), rc(npes), ro(npes);
+        for (int p = 0; p < npes; p++) {
+            sc[p] = npe * rqCnt[p];
+            so[p] = npe * rqOff[p];
+            rc[p] = npe * qCnt[p];
+            ro[p] = npe * qOff[p];
+        }
+        MPI_Alltoallv(ans.data(), sc.data(), so.data(), MPI_INT, myAns.data(),
+                      rc.data(), ro.data(), MPI_INT, comm);
+    }
+    mark(2);
+
+    // ---- 3. send each written node's values straight to its labelled owner
+    const unsigned int rw = 3 + dof;  // words per record: x, y, z, dof values
+    std::vector<int> dCnt(npes, 0), dOff(npes, 0), rdCnt(npes, 0),
+        rdOff(npes, 0);
+    for (size_t y = 0; y < nx; y++)
+        for (unsigned int sub = 0; sub < npe; sub++) {
+            const int d = myAns[xSlot[y] * npe + sub];
+            if (d >= 0) dCnt[d] += rw;
+        }
+    for (int p = 1; p < npes; p++) dOff[p] = dOff[p - 1] + dCnt[p - 1];
+    std::vector<std::uint64_t> dBuf((size_t)dOff[npes - 1] + dCnt[npes - 1]);
+    {
+        std::vector<int> c = dOff;
+        for (size_t y = 0; y < nx; y++) {
+            const ot::TreeNode& t = xTN[y];
+            const std::uint64_t len = 1ull << (m_uiMaxDepth - t.getLevel());
+            for (unsigned int sub = 0; sub < npe; sub++) {
+                const int d = myAns[xSlot[y] * npe + sub];
+                if (d < 0) continue;
+                const unsigned int i = sub % (eOrd + 1);
+                const unsigned int j = (sub / (eOrd + 1)) % (eOrd + 1);
+                const unsigned int k = sub / ((eOrd + 1) * (eOrd + 1));
+                std::uint64_t* r = &dBuf[(size_t)c[d]];
+                c[d] += rw;
+                r[0] = (std::uint64_t)t.getX() * eOrd + i * len;
+                r[1] = (std::uint64_t)t.getY() * eOrd + j * len;
+                r[2] = (std::uint64_t)t.getZ() * eOrd + k * len;
+                for (unsigned int v = 0; v < dof; v++)
+                    std::memcpy(&r[3 + v], &xVal[(y * dof + v) * npe + sub], 8);
+            }
+        }
+    }
+    std::vector<T>().swap(xVal);
+    MPI_Alltoall(dCnt.data(), 1, MPI_INT, rdCnt.data(), 1, MPI_INT, comm);
+    for (int p = 1; p < npes; p++) rdOff[p] = rdOff[p - 1] + rdCnt[p - 1];
+    std::vector<std::uint64_t> rdBuf((size_t)rdOff[npes - 1] + rdCnt[npes - 1]);
+    MPI_Alltoallv(dBuf.data(), dCnt.data(), dOff.data(), MPI_UINT64_T,
+                  rdBuf.data(), rdCnt.data(), rdOff.data(), MPI_UINT64_T, comm);
+    std::vector<std::uint64_t>().swap(dBuf);
+    mark(3);
+
+    // ---- 4. write into lNew's local cgs by canonical position
+    const size_t dstSz        = lNew->getDegOfFreedom();
+    const unsigned int lnB    = lNew->getNodeLocalBegin();
+    const unsigned int lnE    = lNew->getNodeLocalEnd();
+    const auto& lcg2dg        = lNew->getCG2DGMap();
+    const auto* pL            = lNew->getAllElements().data();
+    struct Pos3Hash {
+        size_t operator()(const std::array<std::uint64_t, 3>& k) const noexcept {
+            uint64_t h = k[0] * 0x9E3779B97F4A7C15ull ^
+                         k[1] * 0xC2B2AE3D27D4EB4Full ^
+                         k[2] * 0x165667B19E3779F9ull;
+            h ^= h >> 29;
+            return (size_t)h;
+        }
+    };
+    std::unordered_multimap<std::array<std::uint64_t, 3>, unsigned int, Pos3Hash>
+        posCg;
+    posCg.reserve(lnE - lnB);
+    for (unsigned int cg = lnB; cg < lnE; cg++) {
+        const unsigned int dg = lcg2dg[cg];
+        const unsigned int e = dg / npe, sub = dg % npe;
+        const unsigned int i = sub % (eOrd + 1);
+        const unsigned int j = (sub / (eOrd + 1)) % (eOrd + 1);
+        const unsigned int k = sub / ((eOrd + 1) * (eOrd + 1));
+        const std::uint64_t len = 1ull << (m_uiMaxDepth - pL[e].getLevel());
+        posCg.emplace(
+            std::array<std::uint64_t, 3>{
+                (std::uint64_t)pL[e].getX() * eOrd + i * len,
+                (std::uint64_t)pL[e].getY() * eOrd + j * len,
+                (std::uint64_t)pL[e].getZ() * eOrd + k * len},
+            cg);
+    }
+    for (unsigned int v = 0; v < dof; v++) {
+        T* o = vecOut + v * dstSz;
+        std::fill(o, o + lnB, (T)0);
+        std::fill(o + lnE, o + dstSz, (T)0);
+    }
+    std::vector<unsigned char> nW(lnE - lnB, 0);
+    unsigned long long miss = 0;
+    for (size_t r = 0; r < rdBuf.size(); r += rw) {
+        auto rng = posCg.equal_range({rdBuf[r], rdBuf[r + 1], rdBuf[r + 2]});
+        if (rng.first == rng.second) {
+            miss++;
+            continue;
+        }
+        for (auto it = rng.first; it != rng.second; ++it) {
+            const unsigned int cg = it->second;
+            for (unsigned int v = 0; v < dof; v++)
+                std::memcpy(&vecOut[v * dstSz + cg], &rdBuf[r + 3 + v], 8);
+            if (nW[cg - lnB] < 255) nW[cg - lnB]++;
+        }
+    }
+    unsigned long long st[5] = {miss, 0, 0, (unsigned long long)(err != 0),
+                                (unsigned long long)(rdBuf.size() / rw)};
+    for (auto c : nW) {
+        if (c == 0) st[1]++;
+        if (c > 1) st[2]++;
+    }
+    MPI_Allreduce(MPI_IN_PLACE, st, 5, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+    mark(4);
+    if (st[0] || st[1] || st[2] || st[3]) {
+        if (!rank)
+            std::cout << "[onehop] fallback: miss=" << st[0]
+                      << " unwritten=" << st[1] << " multi=" << st[2]
+                      << " owner_err_ranks=" << st[3] << std::endl;
+        return false;
+    }
+    if (ghostFill) {
+        lNew->readFromGhostBegin(vecOut, dof);
+        lNew->readFromGhostEnd(vecOut, dof);
+    }
+    mark(5);
+    if (oprof) {
+        double mx[6];
+        for (int i = 0; i < 6; i++) tph[i] *= 1e3;
+        MPI_Reduce(tph, mx, 6, MPI_DOUBLE, MPI_MAX, 0, comm);
+        if (!rank)
+            std::cout << "[onehop-prof] pre=" << mx[0] << " m2p=" << mx[1]
+                      << " query=" << mx[2] << " xchg=" << mx[3]
+                      << " write=" << mx[4] << " ghost=" << mx[5]
+                      << " ms (max over ranks) recs=" << st[4] << std::endl;
+    }
+    return true;
+}
+
+template <typename T>
 void Mesh::interGridTransfer_DG(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
                                 unsigned int dof) {
     // Note that this is the intergrid transfer for the DG representation of the
@@ -6541,7 +6982,8 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // the orphan-fill phys-pos mapping) is purely topological and built
     // ONCE; only the packed values scale with dof. This batches what used to
     // be one global Allgatherv + hash + Alltoallv set PER variable.
-    if (dof == 0) return;
+    // dof == 0 with dstFlags routes the refinement flags only.
+    if (dof == 0 && !dstFlags) return;
 
     MPI_Comm comm = m_uiCommGlobal;
     int rank, npes;
@@ -7239,6 +7681,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                       << std::endl;
         }
     }
+    if (dof == 0) return;
 
     // fused authoritative-write + localDG refresh (was two separate
     // O(recvTN * npe) passes).

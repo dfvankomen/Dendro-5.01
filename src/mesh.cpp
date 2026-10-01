@@ -21044,6 +21044,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     }();
     std::vector<std::uint64_t> ckRecv;
     bool ckHave = false, ckUse = false;
+    m_uiCanonKeysBuilt = false;
     std::vector<std::uint64_t> ckBody;             // record body of the last ckMake(i)
     std::function<size_t(size_t)> ckMake;          // local element i -> body, returns nOwn
     // one record per (element, destination), every ring: the 26-lists miss
@@ -21193,6 +21194,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 ckRecv = exchangeBuckets(kout, MPI_UINT64_T);
                 ckHave = true;
                 ckUse  = canonKeysEnv;
+                m_uiCanonKeysBuilt = ckUse;
             } else if (!rank) {
                 std::cout << "[canon-keys] no SFC E2N source, cascade path" << std::endl;
             }
@@ -24159,6 +24161,21 @@ void Mesh::igtWriterProbeReport(std::vector<IgtWriterRec>& recs,
                   << " maxabs=" << gAbs << " maxval=" << gVal
                   << " big_grps=" << gBig << std::endl;
     callId++;
+}
+
+void Mesh::setLocalElementFlags(const std::vector<unsigned int>& flags) {
+    if (!m_uiIsActive) return;
+    const unsigned int n = m_uiElementLocalEnd - m_uiElementLocalBegin;
+    if (flags.size() != n) {
+        std::cerr << "[setLocalElementFlags] size " << flags.size()
+                  << " != local " << n << std::endl;
+        MPI_Abort(m_uiCommGlobal, 1);
+    }
+    for (unsigned int i = 0; i < n; i++) {
+        ot::TreeNode& t = m_uiAllElements[m_uiElementLocalBegin + i];
+        t.setFlag((flags[i] << NUM_LEVEL_BITS) | t.getLevel());
+    }
+    m_uiIsIGTSetup = false;
 }
 
 }  // namespace ot
