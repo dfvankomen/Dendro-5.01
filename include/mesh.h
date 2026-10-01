@@ -1463,9 +1463,11 @@ class Mesh {
      * (repartitionMeshGlobal's direct builder calls also satisfy it). */
     inline void ensureZipPlanBuilt() {
         if (m_uiZipPlanBuilt) return;
+        const double t0 = MPI_Wtime();
         if (!m_uiUnzipCanonWriterBuilt) buildUnzipCanonicalWriterTable();
         buildZipPlan();
         pruneZipSync();
+        m_xpLazyMs += (MPI_Wtime() - t0) * 1e3;
     }
 
     /**@brief Derive the per-element 27-bit ownership mask
@@ -2154,6 +2156,33 @@ class Mesh {
      *  their own position (misrouted writes). Runs once per mesh. */
     void ghostPosCheck(const char* tag);
     bool m_bGhostPosChecked = false;
+
+    /** DENDRO_FIRST_XCHG_PROF=1 probe: phase split (entry barrier, side-channel
+     *  sync, buffer alloc, irecv post, pack, isend, wait, unpack, mirror +
+     *  post-sync, free), page faults and lazy builds of the first few ghost
+     *  exchanges on each mesh, max over ranks. Phase indices: 0 bar, 1 sync,
+     *  2 alloc, 3 post, 4 pack, 5 isend, 6 wait, 7 unpack, 8 mirror, 9 free. */
+    static bool xprofOn();
+    bool xprofBegin();
+    inline void xprofMark(int i) {
+        if (!m_xpActive) return;
+        const double t = MPI_Wtime();
+        m_xpT[i] += t - m_xpLast;
+        m_xpLast = t;
+    }
+    inline void xprofResume() {
+        if (m_xpActive) m_xpLast = MPI_Wtime();
+    }
+    void xprofReport(const char* variant, unsigned int dof, size_t sendN,
+                     size_t recvN);
+    bool m_xpActive    = false;
+    const void* m_xpVec = nullptr;
+    int m_xpCalls      = 0;
+    int m_xpId         = -1;
+    double m_xpLast    = 0.0;
+    double m_xpLazyMs  = 0.0;
+    double m_xpT[10]   = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
+    long m_xpFlt[2]    = {0, 0};
 
     /**@brief Public wrapper for broadcastCgValuesByPhysPos. */
     template <typename T>

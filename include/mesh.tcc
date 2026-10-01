@@ -1617,9 +1617,12 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
     // Side-channel non-primary sync runs before the standard ghost
     // exchange so updated non-primary local cgs are captured by the
     // send-buffer pack and propagated to ghost cgs transitively.
+    if (!m_xpActive && m_uiMPIContexts.empty() && xprofBegin()) m_xpVec = vec;
+    const bool xpb = m_xpActive && m_xpVec == (const void*)vec;
     ghostReadCheck(vec, dof, "pre");
     ghostPosCheck("plain");
     syncZipNonPrimary(vec, dof);
+    if (xpb) xprofMark(1);
 
     // send recv buffers.
     T* sendB = NULL;
@@ -1656,6 +1659,7 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
         if (recvBSz) {
             ctx.allocateRecvBuffer((sizeof(T) * recvBSz * dof));
             recvB = (T*)ctx.getRecvBuffer();
+            if (xpb) xprofMark(2);
 
             // active recv procs
             for (unsigned int recv_p = 0; recv_p < recvProcList.size();
@@ -1672,9 +1676,11 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             }
         }
 
+        if (xpb) xprofMark(3);
         if (sendBSz) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
             sendB = (T*)ctx.getSendBuffer();
+            if (xpb) xprofMark(2);
 
             // Graph-partitioned meshes tag some R2-boundary send
             // entries as DG — sendNodeSM[k] then encodes
@@ -1711,6 +1717,7 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                 }
             }
 
+            if (xpb) xprofMark(4);
             // active send procs
             for (unsigned int send_p = 0; send_p < sendProcList.size();
                  send_p++) {
@@ -1736,6 +1743,7 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                                              : 0,
                                      sizeof(T));
 
+        if (xpb) xprofMark(5);
         m_uiCommTag++;
         m_uiMPIContexts.push_back(ctx);
     }
@@ -1791,12 +1799,15 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             MPI_Abort(m_uiCommActive, 0);
         }
 
+        const bool xp = m_xpActive && m_xpVec == (const void*)vec;
+        if (xp) xprofResume();
         MPI_Status status;
         // need to wait for the commns to finish ...
         for (unsigned int i = 0;
              i < m_uiMPIContexts[ctxIndex].getRequestList().size(); i++) {
             MPI_Wait(m_uiMPIContexts[ctxIndex].getRequestList()[i], &status);
         }
+        if (xp) xprofMark(6);
 
         if (recvBSz) {
             // copy the recv data to the vec
@@ -1819,6 +1830,7 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             }
         }
 
+        if (xp) xprofMark(7);
         // Sync non-primary local cgs from ghost (Stage 3 + legacy
         // Pass D path). See performGhostExchange for rationale.
         static const char* nopd_env_b =
@@ -1854,6 +1866,7 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             }
         }
 
+        if (xp) xprofMark(8);
         m_uiMPIContexts[ctxIndex].deAllocateSendBuffer();
         m_uiMPIContexts[ctxIndex].deAllocateRecvBuffer();
 
@@ -1865,6 +1878,10 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
 
         // remove the context ...
         m_uiMPIContexts.erase(m_uiMPIContexts.begin() + ctxIndex);
+        if (xp) {
+            xprofMark(9);
+            xprofReport("plain", dof, sendBSz, recvBSz);
+        }
     }
 
     return;
@@ -1878,12 +1895,15 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 
     // Side-channel non-primary sync runs before the standard ghost
     // exchange (see performGhostExchange comment for rationale).
+    if (!m_xpActive && xprofBegin()) m_xpVec = vec;
+    const bool xpb = m_xpActive && m_xpVec == (const void*)vec;
     ghostReadCheck(vec, dof, "pre");
     ghostPosCheck("ctx");
     {
         dendro::stepprof::Scope spSyncPre(dendro::stepprof::GB_SYNC_PRE);
         syncZipNonPrimary(vec, dof);
     }
+    if (xpb) xprofMark(1);
     dendro::stepprof::Scope spPackSend(dendro::stepprof::GB_PACK_SEND);
 
     // send recv buffers.
@@ -1930,6 +1950,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                                &ctx.m_recv_req[recv_p]);
             }
         }
+        if (xpb) xprofMark(3);
 
         if (sendBSz) {
             sendB = (T*)ctx.getSendBuffer();
@@ -1968,6 +1989,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                 }
             }
 
+            if (xpb) xprofMark(4);
             // active send procs
             for (unsigned int send_p = 0; send_p < sendProcList.size();
                  send_p++) {
@@ -1990,6 +2012,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                                              : 0,
                                      sizeof(T));
 
+        if (xpb) xprofMark(5);
         m_uiCommTag++;
     }
 
@@ -2030,6 +2053,8 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
             nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
         unsigned int proc_id;
 
+        const bool xp = m_xpActive && m_xpVec == (const void*)vec;
+        if (xp) xprofResume();
         MPI_Status status;
         // need to wait for the commns to finish ...
         dendro::stepprof::Scope spWait(dendro::stepprof::GE_WAIT);
@@ -2038,6 +2063,7 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
         MPI_Waitall(recvProcList.size(), ctx.m_recv_req.data(),
                     MPI_STATUSES_IGNORE);
         spWait.stop();
+        if (xp) xprofMark(6);
         dendro::stepprof::Scope spScatter(dendro::stepprof::GE_SCATTER_RECV);
 
         if (recvBSz) {
@@ -2224,6 +2250,7 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
         }
 
         spScatter.stop();
+        if (xp) xprofMark(7);
         dendro::stepprof::Scope spMirror(dendro::stepprof::GE_MIRROR);
         // Sync non-primary local cgs from ghost (Stage 3 + legacy
         // Pass D path). See performGhostExchange for rationale.
@@ -2295,6 +2322,11 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
                 }
             }
         }
+    }
+    if (m_xpActive && m_xpVec == (const void*)vec) {
+        xprofMark(8);
+        xprofReport("ctx", dof, m_uiScatterMapActualNodeSend.size(),
+                    m_uiScatterMapActualNodeRecv.size());
     }
     ghostReadCheck(vec, dof, "ctx");
 

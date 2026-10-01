@@ -24,6 +24,7 @@
 
 #include "mesh.h"
 #include <mutex>
+#include <sys/resource.h>
 #include <climits>
 #include <cmath>
 #include <cstring>
@@ -24507,6 +24508,70 @@ void ot::Mesh::ensureBlockZipPlan() {
 }
 
 namespace ot {
+bool Mesh::xprofOn() {
+    static const bool on = [] {
+        const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF");
+        return e && e[0] == '1';
+    }();
+    return on;
+}
+
+bool Mesh::xprofBegin() {
+    m_xpActive = false;
+    if (!xprofOn() || !m_uiIsActive) return false;
+    static const int ncalls = [] {
+        const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF_CALLS");
+        return e ? std::atoi(e) : 2;
+    }();
+    if (m_xpCalls >= ncalls) return false;
+    static int nextId = 0;
+    if (m_xpId < 0) m_xpId = nextId++;
+    for (double& t : m_xpT) t = 0.0;
+    struct rusage ru;
+    getrusage(RUSAGE_SELF, &ru);
+    m_xpFlt[0] = ru.ru_minflt;
+    m_xpFlt[1] = ru.ru_majflt;
+    m_xpActive = true;
+    m_xpLast   = MPI_Wtime();
+    MPI_Barrier(m_uiCommActive);
+    xprofMark(0);
+    return true;
+}
+
+void Mesh::xprofReport(const char* variant, unsigned int dof, size_t sendN,
+                       size_t recvN) {
+    if (!m_xpActive) return;
+    m_xpActive = false;
+    struct rusage ru;
+    getrusage(RUSAGE_SELF, &ru);
+    double loc[14], mx[14], sm[14];
+    double tot = 0.0;
+    for (int i = 0; i < 10; i++) {
+        loc[i] = m_xpT[i] * 1e3;
+        if (i) tot += loc[i];
+    }
+    loc[10] = tot;
+    loc[11] = (double)(ru.ru_minflt - m_xpFlt[0]);
+    loc[12] = (double)(ru.ru_majflt - m_xpFlt[1]);
+    loc[13] = m_xpLazyMs;
+    m_xpLazyMs = 0.0;
+    MPI_Reduce(loc, mx, 14, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
+    MPI_Reduce(loc, sm, 14, MPI_DOUBLE, MPI_SUM, 0, m_uiCommActive);
+    unsigned long long n[2] = {sendN * dof, recvN * dof}, nm[2];
+    MPI_Reduce(n, nm, 2, MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, m_uiCommActive);
+    if (m_uiActiveRank == 0)
+        std::printf(
+            "[first-xchg] mesh=%d call=%d %s dof=%u labelled=%d "
+            "bar=%.2f sync=%.2f alloc=%.2f post=%.2f pack=%.2f isend=%.2f "
+            "wait=%.2f unpack=%.2f mirror=%.2f free=%.2f total=%.2f ms (max) "
+            "lazy_since_last=%.2f ms minflt=%.0f/%.0f majflt=%.0f (max/sum) "
+            "maxsend=%llu maxrecv=%llu\n",
+            m_xpId, m_xpCalls, variant, dof, (int)m_uiIsLabelledRebuild, mx[0],
+            mx[1], mx[2], mx[3], mx[4], mx[5], mx[6], mx[7], mx[8], mx[9],
+            mx[10], mx[13], mx[11], sm[11], mx[12], nm[0], nm[1]);
+    m_xpCalls++;
+}
+
 void Mesh::ghostPosCheck(const char* tag) {
     static const bool on = std::getenv("DENDRO_GHOST_POS_CHECK") != nullptr;
     if (!on || !m_uiIsActive) return;
