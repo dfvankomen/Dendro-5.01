@@ -320,6 +320,26 @@ sandwich bitwise per cycle) 0 mismatches.
 - Kingspeak case FL (ab_guest.sbatch): sfc_cp writes the step-45 checkpoint, sfc_rs/graph_rs/graph_fx restore it; poscmp +
   kp/bundle/flagcmp.py (wave = raw decision + wMax per TN, flags = final flags at ReMesh) decide H1 vs H2.
 
+### WAVE (2026-10-01): FL flip root cause = absent finer corner ghost; DENDRO_RING_FINER_NBRS=1 (opt-in, workspace ws_wave)
+- Probe `DENDRO_WAVE_PROBE_TN=x/y/z/lev` (+`_DIR`): dumps the 13^3 x vars wavelet inputs of one element in isReMeshUnzip, every
+  unzip commit into those slots (writer TN, local/ghost, same/finer/coarser, nodal inputs) and the elements touching it;
+  compare with kp/bundle/wpcmp.py. Kingspeak WP (restore of FL step-45 cp, np384, job 28500241 / 28500387):
+  SFC and labelled hold the same 2x2x2 L6 block (anchor 1536,1408,1664 L5); the target is its +x+y+z element. The 27 slots of the
+  RIGHT_UP_FRONT corner padding are written in SFC by the finer ghost TN(1664,1536,1792,L7); on the labelled rank that element is
+  ABSENT from the ghost set (28 of 29 touching elements present), so findBlockNeighborsWithoutSFC leaves the block vertex slot
+  DEFAULT and the corner stays unwritten (stale zeros) -> wMax 7.7e-7 vs 1.4e-11. RK never reads 3D corner padding, so state stayed exact.
+- Cause: buildOctantConnectivityMap fills edgeNeighbors/vertexNeighbors from getElementalEdge/VertexNeighbors, which drop finer
+  neighbours (src/mesh.cpp level filter in both); the ring fetch only follows those lists, so a finer element touching only a corner
+  (or edge) of a local element is fetched only if some other ring path reaches it.
+- Fix `DENDRO_RING_FINER_NBRS=1`: a dropped edge/vertex slot takes the finer element touching the corner / edge low end (spatial
+  lookup on the source mesh). More keys in the existing ring messages, no new collective: DENDRO_REPART_ROUNDS 36/35/36 on and off
+  (np8), 36 per repartition at np384. `_CHECK=1` prints the filled slot counts (np384: ~23k edge, ~19k vertex, 0 without global id).
+  `DENDRO_WAVE_COVER_CHECK=1` counts in-domain slots of every local element's wavelet stencil that no unzip writer filled (all unzips,
+  incl. the remesh one): np384 restore 27 (one element) with the knob off, 0 with it on; np8/np16 ragged/np32 0 either way.
+- Gates (knob on): WP restore graph = SFC at step 50 (31662889 positions, 0 extra, 0 diffs; wave/flag flips 0); full em4big np384
+  graph (job 28500408) md5 34455595 = SFC; EM4 np4/np8 sfc+graph, np16 ragged, np16 levelwise d7bbee89; tp NP=4/8 0 FAIL (only TEST 2
+  ghost-node counts and the informational 8bj pair counts move: more ghosts); nuts2 == ref.
+
 ## EVEC_LOCAL_COPY default flip (2026-10-01)
 
 `DENDRO_EVEC_LOCAL_COPY` now default on (`=0` reverts; `_CHECK=1` still forces the checked path;
