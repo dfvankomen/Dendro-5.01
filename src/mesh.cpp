@@ -21023,7 +21023,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // isGhostTwo tags are the same as R1/R2/R3; trank = label as the fetch sets
     std::vector<oct_data<D_INT_L>> new_oct_connectivity_map;
     std::vector<D_INT_L> post_first_round_comms_ids;
-    // DENDRO_REPART_CANON_KEYS=1 (K6): every element pushed to its label or to
+    // DENDRO_REPART_CANON_KEYS (K6, default on, =0 reverts): every element pushed to its label or to
     // an R1 claimer carries, per node, the canonical owner (owner TN + sub) of
     // its SFC source's E2N (CG2DG[E2N_CG]). the labelled E2N of local + R1
     // rows is then a key join: no order-2 cascade, no expansion, no audit.
@@ -21033,7 +21033,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // (canonical phys per slot must match in local/R1 rows, else abort 77).
     static const bool canonKeysEnv = [] {
         const char* e = std::getenv("DENDRO_REPART_CANON_KEYS");
-        return e && e[0] == '1';
+        return !(e && e[0] == '0');   // default on (K6); =0 reverts
     }();
     static const bool canonCheck = [] {
         const char* e = std::getenv("DENDRO_REPART_CANON_KEYS_CHECK");
