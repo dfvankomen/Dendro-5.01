@@ -33,7 +33,7 @@ namespace ts {
 // (eOrder-scaled tree coords). bbox format: "xlo,xhi,ylo,yhi,zlo,zhi".
 // Optionally restrict to a specific step via EM4_CG_TRACE_STEP=N.
 // dumps to <dir>/<tag>_step<S>_sub<I>_r<R>.txt.
-// DENDRO_EVEC_LOCAL_COPY=1: the per-stage vector copy touches only the local
+// DENDRO_EVEC_LOCAL_COPY (default on, =0 reverts): the per-stage vector copy touches only the local
 // node range plus the ghost slots read before the next exchange (see
 // Mesh::getStageCopyGhostSlots); recv-delivered slots are overwritten by the
 // exchange first. _CHECK=1 additionally poisons every other slot, compares
@@ -41,6 +41,12 @@ namespace ts {
 static inline bool ets_env_on(const char* name) {
     const char* e = std::getenv(name);
     return e && e[0] == '1' && e[1] == '\0';
+}
+
+// default-on knobs: only an explicit "0" turns them off
+static inline bool ets_env_off(const char* name) {
+    const char* e = std::getenv(name);
+    return e && e[0] == '0' && e[1] == '\0';
 }
 
 static constexpr unsigned long long ETS_POISON_BITS = 0x7ff8dead0000beefULL;
@@ -1120,7 +1126,7 @@ void ETS<T, Ctx>::evolve() {
             {
                 dendro::stepprof::Scope sp(dendro::stepprof::EV_COPY);
                 static const bool lc_chk = ets_env_on("DENDRO_EVEC_LOCAL_COPY_CHECK");
-                static const bool lc_on  = lc_chk || ets_env_on("DENDRO_EVEC_LOCAL_COPY");
+                static const bool lc_on  = lc_chk || !ets_env_off("DENDRO_EVEC_LOCAL_COPY");
                 ot::Mesh* pMeshMutC = const_cast<ot::Mesh*>(pMesh);
                 if (lc_on && ets_local_copy_ok(m_uiEVar, pMesh)) {
                     if (lc_chk)
