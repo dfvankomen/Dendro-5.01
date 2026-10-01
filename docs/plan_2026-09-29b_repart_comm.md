@@ -298,3 +298,26 @@ sandwich bitwise per cycle) 0 mismatches.
   (600 s timeouts), so it is not K6; not chased.
 - Kingspeak arm K6D in kp/bundle/ab_guest.sbatch (sfc / graph_k6 / graph_t0): DENDRO_STEP_PROF, COMM_STATS,
   ZIPSYNC_STATS, POS_DUMP_DIR=vtu at steps 5/25/65 ('/' separator, comma-split env lists), compare with poscmp.py.
+
+### ALL + DX Kingspeak (2026-10-01; dendrolib 201163f6 = K6+targets default, + EVEC_LOCAL_COPY, + ONEHOP; em4big, 2 rounds)
+- np192 (28498880): wall sfc 193.3/192.7, graph 212.7/215.0 (1.11x), +copy 202.1/201.0 (1.045x), +copy+onehop 197.2/197.7 (**1.023x**). rkstep sfc 159.6-160.2, +copy+onehop 154.0-154.6 (labelled stepping 3.5 % FASTER than SFC). Remesh total 5.7 vs 17.0 s; one-hop: g2s 170 -> 25 ms, IGT 420 -> 320 ms, s2g ~790 ms. All md5 = SFC 34455595.
+- np384 (28498881): wall sfc 111.5/111.3, graph 1.16x, +copy 1.075x, +copy+onehop 117.3/118.2 (**1.057x**); rkstep 85.6-86.0 vs SFC 86.4-86.6. md5 graph arms 1335e24a != SFC (CSV max rel 3.9e-5); canon-keys-absent read=0, zip-sync off, so not K6.
+- DX np384 (28499832) pointwise: steps 40/41/42/45 identical (0 diffs, 31.3M positions); step 50 (after the remesh) labelled has 1206 extra positions + 584 ULP diffs (4.3e-18) in one region (bbox [6976,8896,10048]-[14400,16864,11328]) => a refinement decision flipped at the step-50 remesh. Diagnosis in ws_flags (agent).
+
+## EVEC_LOCAL_COPY default flip (2026-10-01)
+
+`DENDRO_EVEC_LOCAL_COPY` now default on (`=0` reverts; `_CHECK=1` still forces the checked path;
+non-CG / non-host / non-double vectors still take the full copy). jj 51aeb470. Build `evdef`.
+
+| gate | result |
+|---|---|
+| EM4 np4/np8 sfc + graph | all d7bbee89 |
+| EM4 np16 ragged (m3, REFINE=0) / levelwise (m4, REFINE=2) | d7bbee89 / d7bbee89 |
+| testPartitioning np4 + np8 (m3, m3ref1, m4, ragged) | 0 FAIL; ghost-count lines only differed (CANON_TARGETS), refs regenerated, rerun IDENTICAL |
+| nuts2 | == ref digits |
+| lw3 np16 sfc/lvl/lw/fp | min/max identical to sfc in every arm |
+| bssn np4 q1 | graph bf867af6, sfc 2ffba783 (= refs) |
+| EM4 np8 `_CHECK=1` | d7bbee89, 0 mismatches, no poison abort |
+| EM4 np8 `=0` | d7bbee89 (revert works) |
+
+Refs changed: ref/tp_base/np{4,8}_{m3,m3ref1,m4,ragged}.txt (TEST 2 node counts, 8bj pair counts); old copies kept as `.pre_targets`.
