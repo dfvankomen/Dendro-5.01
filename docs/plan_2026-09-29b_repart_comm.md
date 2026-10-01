@@ -304,6 +304,22 @@ sandwich bitwise per cycle) 0 mismatches.
 - np384 (28498881): wall sfc 111.5/111.3, graph 1.16x, +copy 1.075x, +copy+onehop 117.3/118.2 (**1.057x**); rkstep 85.6-86.0 vs SFC 86.4-86.6. md5 graph arms 1335e24a != SFC (CSV max rel 3.9e-5); canon-keys-absent read=0, zip-sync off, so not K6.
 - DX np384 (28499832) pointwise: steps 40/41/42/45 identical (0 diffs, 31.3M positions); step 50 (after the remesh) labelled has 1206 extra positions + 584 ULP diffs (4.3e-18) in one region (bbox [6976,8896,10048]-[14400,16864,11328]) => a refinement decision flipped at the step-50 remesh. Diagnosis in ws_flags (agent).
 
+### FL (2026-10-01): np384 em4big flag flip at the step-50 remesh; DENDRO_REMESH_FLAGS_SFC (opt-in, EM4 hunk work/flags/em4_flags_sfc.patch)
+- State is identical before the step-50 remesh (DX dumps), so the remesh flags differ. Two candidates: the labelled wavelet
+  value differs at round-off (H1), or the sibling rule `setMeshRefinementFlags` runs on the labelled mesh in `isReMeshUnzip`
+  (H2): a COARSE octet that is not contiguous on one labelled rank loses COARSE there, and the SFC twin never sees it. The
+  extra labelled positions (fewer coarsenings) match H2.
+- Fix `DENDRO_REMESH_FLAGS_SFC=1`: `Mesh::setRemeshRawFlags` makes `isReMeshUnzip` keep the raw wavelet flags on the
+  labelled TNs; EM4 `is_remesh` then calls `Mesh::filterRefineFlagsOnSFC(keptSFC)` (flags-only redistribute, sibling rule +
+  level cap on the twin, LOR), which is the SFC run's decision. The remesh path re-filters the same raw flags on the same twin.
+  `_CHECK=1` prints `[remesh-flags-sfc]` raw/sfc/labelled coarse+split counts and `flag_diff` (twin flags old path vs new).
+- Local: the mechanism is real (np16 with DENDRO_DISABLE_BLOCK_VOTE=1: flag_diff 248-424 per remesh), but with the block vote
+  flag_diff = 0 at np4/8/16 ragged/16 lw/32, md5 d7bbee89 / 795f6554 = SFC with the knob on. Not reproducible below np384.
+- Checkpoint restore (EM4_CHECKPT_WRITE=1, EM4_STOP_STEP=N, CHECKPT_FREQ=45): np4 sfc restore at 45 -> step 45/50 dumps and
+  wave/flag dumps bit-identical to the full run; graph restore labels the restored SFC mesh and matches too.
+- Kingspeak case FL (ab_guest.sbatch): sfc_cp writes the step-45 checkpoint, sfc_rs/graph_rs/graph_fx restore it; poscmp +
+  kp/bundle/flagcmp.py (wave = raw decision + wMax per TN, flags = final flags at ReMesh) decide H1 vs H2.
+
 ## EVEC_LOCAL_COPY default flip (2026-10-01)
 
 `DENDRO_EVEC_LOCAL_COPY` now default on (`=0` reverts; `_CHECK=1` still forces the checked path;
