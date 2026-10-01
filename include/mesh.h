@@ -3128,6 +3128,21 @@ class Mesh {
      * No-op (no collectives) when the knob is off. Collective on the active
      * comm; call once on the final mesh. */
     void dumpStepProf(std::ostream& out, const char* tag);
+
+    /**@brief Ghost slots of a CG vector that are read BEFORE the next ghost
+     * exchange refreshes them: send-map sources (DG entries resolved through
+     * E2N_CG), the non-primary sync sources, and the mirror/fixup sources.
+     * Slots delivered by the recv scatter map are excluded (the exchange
+     * overwrites them before any read). Sorted, unique, outside the local node
+     * range. Cached; rebuilt when any contributing list changes size. */
+    const std::vector<unsigned int>& getStageCopyGhostSlots();
+    /**@brief Sorted unique ghost slots delivered by the recv scatter map. */
+    const std::vector<unsigned int>& getRecvGhostSlots();
+  private:
+    std::vector<unsigned int> m_uiStageCopySlots;
+    std::vector<unsigned int> m_uiRecvGhostSlots;
+    size_t m_uiStageCopySig = (size_t)-1;
+  public:
     // DENDRO_MESH_PROF=1: seconds in the ctx unzip driver, split by phase
     static double s_dProfGhostBegin;
     static double s_dProfGhostEnd;

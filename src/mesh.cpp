@@ -27,6 +27,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <iterator>
 
 #include "TreeNode.h"
 #include "dendro.h"
@@ -1009,6 +1010,60 @@ void Mesh::dumpCommStatsCumulative(std::ostream &out, const char *tag) {
                 << " unzip=" << mn[2] << "/" << mx[2] << " s (min/max over ranks)"
                 << std::endl;
     }
+}
+
+const std::vector<unsigned int> &Mesh::getRecvGhostSlots() {
+    getStageCopyGhostSlots();
+    return m_uiRecvGhostSlots;
+}
+
+const std::vector<unsigned int> &Mesh::getStageCopyGhostSlots() {
+    const size_t sig = m_uiScatterMapActualNodeSend.size() +
+                       3 * m_uiScatterMapActualNodeRecv.size() +
+                       5 * m_uiZipLocalDupSrc.size() +
+                       7 * m_uiZipSyncSendCg.size() +
+                       11 * m_uiPassDDemotedToGhostCg.size() +
+                       13 * m_uiZipNonPrimaryToGhostCg.size() +
+                       17 * m_uiZipGhostToLocalAtConsensus.size();
+    if (sig == m_uiStageCopySig) return m_uiStageCopySlots;
+    m_uiStageCopySig = sig;
+    m_uiStageCopySlots.clear();
+    m_uiRecvGhostSlots.clear();
+    if (!m_uiIsActive) return m_uiStageCopySlots;
+    const unsigned int lb = m_uiNodeLocalBegin, le = m_uiNodeLocalEnd;
+    auto add = [&](std::vector<unsigned int> &v, unsigned int cg) {
+        if (cg < m_uiNumActualNodes && (cg < lb || cg >= le)) v.push_back(cg);
+    };
+    std::vector<unsigned int> &ex = m_uiStageCopySlots;
+    const bool useDG = (m_uiScatterMapSendIsDG.size() ==
+                        m_uiScatterMapActualNodeSend.size());
+    for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
+        unsigned int idx = m_uiScatterMapActualNodeSend[k];
+        if (useDG && m_uiScatterMapSendIsDG[k]) {
+            const unsigned int e = idx / m_uiNpE + m_uiElementLocalBegin;
+            idx                  = m_uiE2NMapping_CG[e * m_uiNpE + idx % m_uiNpE];
+        }
+        add(ex, idx);
+    }
+    for (auto cg : m_uiZipLocalDupSrc) add(ex, cg);
+    for (auto cg : m_uiZipSyncSendCg) add(ex, cg);
+    for (auto &kv : m_uiPassDDemotedToGhostCg) add(ex, kv.second);
+    for (auto &kv : m_uiZipNonPrimaryToGhostCg) add(ex, kv.second);
+    for (auto &kv : m_uiZipGhostToLocalAtConsensus) add(ex, kv.second);
+    for (auto cg : m_uiScatterMapActualNodeRecv) add(m_uiRecvGhostSlots, cg);
+    std::sort(m_uiRecvGhostSlots.begin(), m_uiRecvGhostSlots.end());
+    m_uiRecvGhostSlots.erase(
+        std::unique(m_uiRecvGhostSlots.begin(), m_uiRecvGhostSlots.end()),
+        m_uiRecvGhostSlots.end());
+    std::sort(ex.begin(), ex.end());
+    ex.erase(std::unique(ex.begin(), ex.end()), ex.end());
+    // recv slots are overwritten by the exchange before any read
+    std::vector<unsigned int> keep;
+    keep.reserve(ex.size());
+    std::set_difference(ex.begin(), ex.end(), m_uiRecvGhostSlots.begin(),
+                        m_uiRecvGhostSlots.end(), std::back_inserter(keep));
+    ex.swap(keep);
+    return ex;
 }
 
 void Mesh::dumpStepProf(std::ostream &out, const char *tag) {

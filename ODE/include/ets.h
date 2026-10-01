@@ -33,6 +33,117 @@ namespace ts {
 // (eOrder-scaled tree coords). bbox format: "xlo,xhi,ylo,yhi,zlo,zhi".
 // Optionally restrict to a specific step via EM4_CG_TRACE_STEP=N.
 // dumps to <dir>/<tag>_step<S>_sub<I>_r<R>.txt.
+// DENDRO_EVEC_LOCAL_COPY=1: the per-stage vector copy touches only the local
+// node range plus the ghost slots read before the next exchange (see
+// Mesh::getStageCopyGhostSlots); recv-delivered slots are overwritten by the
+// exchange first. _CHECK=1 additionally poisons every other slot, compares
+// against a full-copy shadow, and aborts if a poisoned slot is read.
+static inline bool ets_env_on(const char* name) {
+    const char* e = std::getenv(name);
+    return e && e[0] == '1' && e[1] == '\0';
+}
+
+static constexpr unsigned long long ETS_POISON_BITS = 0x7ff8dead0000beefULL;
+
+template <typename T>
+static bool ets_local_copy_ok(const ot::DVector<T, unsigned int>& v,
+                              const ot::Mesh* pMesh) {
+    return sizeof(T) == sizeof(double) &&
+           v.get_type() == ot::DVEC_TYPE::OCT_SHARED_NODES &&
+           v.get_loc() == ot::DVEC_LOC::HOST && v.is_ghost_allocated() &&
+           v.get_size() == (unsigned int)(v.get_dof() * pMesh->getDegOfFreedom());
+}
+
+template <typename T>
+static void ets_stage_copy_local(ot::Mesh* pMesh, ot::DVector<T, unsigned int>& dst,
+                                 const ot::DVector<T, unsigned int>& src) {
+    T* d       = dst.get_vec_ptr();
+    const T* s = const_cast<ot::DVector<T, unsigned int>&>(src).get_vec_ptr();
+    if (d == nullptr) return;
+    const size_t cgSz = pMesh->getDegOfFreedom();
+    const unsigned int lb = pMesh->getNodeLocalBegin();
+    const unsigned int le = pMesh->getNodeLocalEnd();
+    const std::vector<unsigned int>& ex = pMesh->getStageCopyGhostSlots();
+    for (unsigned int v = 0; v < src.get_dof(); v++) {
+        std::memcpy(d + v * cgSz + lb, s + v * cgSz + lb, sizeof(T) * (le - lb));
+        for (unsigned int cg : ex) d[v * cgSz + cg] = s[v * cgSz + cg];
+    }
+}
+
+template <typename T>
+static bool ets_is_poison(T x) {
+    unsigned long long b;
+    std::memcpy(&b, &x, sizeof(b));
+    return b == ETS_POISON_BITS;
+}
+
+/** CHECK: poison dst, copy local+extra, compare against the full-copy shadow. */
+template <typename T>
+static void ets_stage_copy_check(ot::Mesh* pMesh, ot::DVector<T, unsigned int>& dst,
+                                 const ot::DVector<T, unsigned int>& src,
+                                 std::vector<T>& shadow, int step, int stage) {
+    T* d = dst.get_vec_ptr();
+    if (d == nullptr) return;
+    const T* s = const_cast<ot::DVector<T, unsigned int>&>(src).get_vec_ptr();
+    const size_t n = src.get_size();
+    shadow.assign(s, s + n);
+    T pz;
+    const unsigned long long pb = ETS_POISON_BITS;
+    std::memcpy(&pz, &pb, sizeof(pz));
+    for (size_t i = 0; i < n; i++) d[i] = pz;
+    ets_stage_copy_local(pMesh, dst, src);
+    const size_t cgSz = pMesh->getDegOfFreedom();
+    const unsigned int lb = pMesh->getNodeLocalBegin();
+    const unsigned int le = pMesh->getNodeLocalEnd();
+    size_t bad = 0;
+    for (unsigned int v = 0; v < src.get_dof(); v++) {
+        for (unsigned int cg = lb; cg < le; cg++)
+            if (std::memcmp(&d[v * cgSz + cg], &shadow[v * cgSz + cg], sizeof(T))) bad++;
+        for (unsigned int cg : pMesh->getStageCopyGhostSlots())
+            if (std::memcmp(&d[v * cgSz + cg], &shadow[v * cgSz + cg], sizeof(T))) bad++;
+    }
+    if (bad) {
+        std::fprintf(stderr, "[evec-local-copy-check r%d step=%d stage=%d] copy mismatch vs shadow: %zu slots\n",
+                     pMesh->getMPIRank(), step, stage, bad);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+}
+
+/** CHECK after the stage's rhs: every slot the stage read must be unpoisoned. */
+template <typename T>
+static void ets_stage_read_check(ot::Mesh* pMesh, const ot::DVector<T, unsigned int>& tmp,
+                                 const ot::DVector<T, unsigned int>& st, int step,
+                                 int stage) {
+    const T* d = const_cast<ot::DVector<T, unsigned int>&>(tmp).get_vec_ptr();
+    const T* o = const_cast<ot::DVector<T, unsigned int>&>(st).get_vec_ptr();
+    if (d == nullptr) return;
+    const size_t cgSz = pMesh->getDegOfFreedom();
+    const unsigned int lb = pMesh->getNodeLocalBegin();
+    const unsigned int le = pMesh->getNodeLocalEnd();
+    size_t badRead = 0, badNan = 0;
+    unsigned int firstCg = 0;
+    auto chk = [&](unsigned int v, unsigned int cg) {
+        if (ets_is_poison(d[v * cgSz + cg])) {
+            if (!badRead) firstCg = cg;
+            badRead++;
+        }
+    };
+    for (unsigned int v = 0; v < tmp.get_dof(); v++) {
+        for (unsigned int cg = lb; cg < le; cg++) {
+            chk(v, cg);
+            if (std::isnan((double)o[v * cgSz + cg])) badNan++;
+        }
+        for (unsigned int cg : pMesh->getStageCopyGhostSlots()) chk(v, cg);
+        for (unsigned int cg : pMesh->getRecvGhostSlots()) chk(v, cg);
+    }
+    if (badRead || badNan) {
+        std::fprintf(stderr,
+                     "[evec-local-copy-check r%d step=%d stage=%d] poisoned read-set slots=%zu (first cg %u) nan stage-out=%zu\n",
+                     pMesh->getMPIRank(), step, stage, badRead, firstCg, badNan);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
+}
+
 // DENDRO_NAN_SCAN=1: per-phase NaN detector. Scans all dof fields of a
 // CG vector; on first hit prints rank/step/stage/tag, per-var counts and
 // the first few offending cgs (LOCAL vs ghost). Cheap enough to leave in
@@ -594,6 +705,9 @@ class ETS {
     /**@brief: evolution temp vector*/
     DVec m_uiEVecTmp[2];
 
+    /**@brief: full-copy shadow for DENDRO_EVEC_LOCAL_COPY_CHECK. */
+    std::vector<T> m_evecShadow;
+
     /**@brief: state true if the internal variables are allocated. */
     bool m_uiIsInternalAlloc = false;
 
@@ -1005,7 +1119,17 @@ void ETS<T, Ctx>::evolve() {
 
             {
                 dendro::stepprof::Scope sp(dendro::stepprof::EV_COPY);
-                m_uiEVecTmp[0].copy_data(m_uiEVar);
+                static const bool lc_chk = ets_env_on("DENDRO_EVEC_LOCAL_COPY_CHECK");
+                static const bool lc_on  = lc_chk || ets_env_on("DENDRO_EVEC_LOCAL_COPY");
+                ot::Mesh* pMeshMutC = const_cast<ot::Mesh*>(pMesh);
+                if (lc_on && ets_local_copy_ok(m_uiEVar, pMesh)) {
+                    if (lc_chk)
+                        ets_stage_copy_check(pMeshMutC, m_uiEVecTmp[0], m_uiEVar,
+                                             m_evecShadow, trace_step, stage);
+                    else
+                        ets_stage_copy_local(pMeshMutC, m_uiEVecTmp[0], m_uiEVar);
+                } else
+                    m_uiEVecTmp[0].copy_data(m_uiEVar);
             }
 
             {
@@ -1078,6 +1202,12 @@ void ETS<T, Ctx>::evolve() {
             {
                 dendro::stepprof::Scope sp(dendro::stepprof::EV_POST_STAGE);
                 m_uiAppCtx->post_stage(m_uiStVec[stage]);
+            }
+            {
+                static const bool lc_chk2 = ets_env_on("DENDRO_EVEC_LOCAL_COPY_CHECK");
+                if (lc_chk2 && ets_local_copy_ok(m_uiEVar, pMesh))
+                    ets_stage_read_check(const_cast<ot::Mesh*>(pMesh), m_uiEVecTmp[0],
+                                         m_uiStVec[stage], trace_step, stage);
             }
             em4_cg_trace(pMesh, m_uiStVec[stage].get_vec_ptr(),
                          m_uiStVec[stage].get_dof(), "20_postRHS",
