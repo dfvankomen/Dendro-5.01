@@ -4704,6 +4704,76 @@ class Mesh {
             }
         }
 
+        // DENDRO_RING_FINER_NBRS (default on, =0 reverts): edge/vertex slots the
+        // e2e chain drops as finer take the element touching the corner / edge low end
+        static const bool finerNbrs = [] {
+            const char* e = std::getenv("DENDRO_RING_FINER_NBRS");
+            return !(e && e[0] == '0');
+        }();
+        struct TnKey {
+            std::size_t operator()(const std::array<unsigned int, 4>& k) const {
+                std::size_t h = k[3];
+                for (int i = 0; i < 3; i++) h = h * 1000003u ^ k[i];
+                return h;
+            }
+        };
+        std::unordered_map<std::array<unsigned int, 4>, unsigned int, TnKey> tnIdx;
+        unsigned long long finerCnt[3] = {0, 0, 0};  // edge, vertex, no global id
+        if (finerNbrs) {
+            tnIdx.reserve(m_uiNumTotalElements);
+            for (unsigned int e = 0; e < m_uiNumTotalElements; e++)
+                tnIdx[{pNodes[e].getX(), pNodes[e].getY(), pNodes[e].getZ(),
+                       pNodes[e].getLevel()}] = e;
+        }
+        auto finerFill = [&](unsigned int ele, unsigned int dir) -> T {
+            int sg[3] = {0, 0, 0};
+            switch (dir) {
+                case OCT_DIR_LEFT_DOWN: sg[0] = -1; sg[1] = -1; break;
+                case OCT_DIR_LEFT_UP: sg[0] = -1; sg[1] = 1; break;
+                case OCT_DIR_LEFT_BACK: sg[0] = -1; sg[2] = -1; break;
+                case OCT_DIR_LEFT_FRONT: sg[0] = -1; sg[2] = 1; break;
+                case OCT_DIR_RIGHT_DOWN: sg[0] = 1; sg[1] = -1; break;
+                case OCT_DIR_RIGHT_UP: sg[0] = 1; sg[1] = 1; break;
+                case OCT_DIR_RIGHT_BACK: sg[0] = 1; sg[2] = -1; break;
+                case OCT_DIR_RIGHT_FRONT: sg[0] = 1; sg[2] = 1; break;
+                case OCT_DIR_DOWN_BACK: sg[1] = -1; sg[2] = -1; break;
+                case OCT_DIR_DOWN_FRONT: sg[1] = -1; sg[2] = 1; break;
+                case OCT_DIR_UP_BACK: sg[1] = 1; sg[2] = -1; break;
+                case OCT_DIR_UP_FRONT: sg[1] = 1; sg[2] = 1; break;
+                case OCT_DIR_LEFT_DOWN_BACK: sg[0] = -1; sg[1] = -1; sg[2] = -1; break;
+                case OCT_DIR_RIGHT_DOWN_BACK: sg[0] = 1; sg[1] = -1; sg[2] = -1; break;
+                case OCT_DIR_LEFT_UP_BACK: sg[0] = -1; sg[1] = 1; sg[2] = -1; break;
+                case OCT_DIR_RIGHT_UP_BACK: sg[0] = 1; sg[1] = 1; sg[2] = -1; break;
+                case OCT_DIR_LEFT_DOWN_FRONT: sg[0] = -1; sg[1] = -1; sg[2] = 1; break;
+                case OCT_DIR_RIGHT_DOWN_FRONT: sg[0] = 1; sg[1] = -1; sg[2] = 1; break;
+                case OCT_DIR_LEFT_UP_FRONT: sg[0] = -1; sg[1] = 1; sg[2] = 1; break;
+                case OCT_DIR_RIGHT_UP_FRONT: sg[0] = 1; sg[1] = 1; sg[2] = 1; break;
+                default: return LOOK_UP_TABLE_DEFAULT;
+            }
+            // point just outside the element; free axes take its min corner
+            const ot::TreeNode& t = pNodes[ele];
+            const long long mn[3] = {t.minX(), t.minY(), t.minZ()},
+                            mx[3] = {t.maxX(), t.maxY(), t.maxZ()};
+            const long long dom   = 1ll << m_uiMaxDepth;
+            unsigned int pt[3];
+            for (int d = 0; d < 3; d++) {
+                const long long c = sg[d] < 0 ? mn[d] - 1 : (sg[d] > 0 ? mx[d] : mn[d]);
+                if (c < 0 || c >= dom) return LOOK_UP_TABLE_DEFAULT;
+                pt[d] = (unsigned int)c;
+            }
+            for (int L = (int)m_uiMaxDepth; L > (int)t.getLevel(); L--) {
+                const unsigned int m = ~((1u << (m_uiMaxDepth - L)) - 1u);
+                auto it = tnIdx.find({pt[0] & m, pt[1] & m, pt[2] & m, (unsigned int)L});
+                if (it != tnIdx.end()) {
+                    finerCnt[dir >= OCT_DIR_LEFT_DOWN_BACK ? 1 : 0]++;
+                    if ((T)eid_vec[it->second] == (T)LOOK_UP_TABLE_DEFAULT) finerCnt[2]++;
+                    return (T)eid_vec[it->second];
+                }
+            }
+            // same/coarser neighbours the chain misses are left as before
+            return LOOK_UP_TABLE_DEFAULT;
+        };
+
         // for each local element, populate the map
         for (unsigned int ele = this->getElementLocalBegin();
              ele < this->getElementLocalEnd(); ele++) {
@@ -4800,6 +4870,9 @@ class Mesh {
                     oct_connectivity_map[lid_ele].edgeNeighbors[counter] =
                         eid_vec[temp_local];
                 }
+                else if (finerNbrs)
+                    oct_connectivity_map[lid_ele].edgeNeighbors[counter] =
+                        finerFill(ele, dir);
 
                 counter++;
             }
@@ -4817,12 +4890,26 @@ class Mesh {
                     oct_connectivity_map[lid_ele].vertexNeighbors[counter] =
                         eid_vec[temp_local];
                 }
+                else if (finerNbrs)
+                    oct_connectivity_map[lid_ele].vertexNeighbors[counter] =
+                        finerFill(ele, dir);
 
                 // without this every corner dir wrote to vertexNeighbors[0]:
                 // 7 of the 8 corners were silently dropped, so
                 // DENDRO_GRAPH_FULL_STENCIL fed fastpart 12 edges + 1 corner.
                 counter++;
             }
+        }
+        static const bool finerChk = [] {
+            const char* e = std::getenv("DENDRO_RING_FINER_NBRS_CHECK");
+            return e && e[0] == '1';
+        }();
+        if (finerNbrs && finerChk) {
+            unsigned long long g[3] = {0, 0, 0};
+            MPI_Allreduce(finerCnt, g, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+            if (!rank)
+                std::cout << "[ring-finer-nbrs] finer edge slots=" << g[0] << " vertex slots=" << g[1]
+                          << " without global id=" << g[2] << std::endl;
         }
         ele_offsets.push_back(num_ele_global);
 
