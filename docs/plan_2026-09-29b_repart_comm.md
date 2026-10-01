@@ -169,3 +169,10 @@ Sample: ~/research/repart_gate/pmpi/sample_sites_graph_np4.txt. Bundle copy: ~/r
 - Gates BSSN (q1 tinytest, refinement 3, np4, graph): off = on = CHECK = ref md5 7a18bafe/a83112e3/86470a02/b50bc05f, C_HAM L2 9.20617e-06; CHECK 10/10 s2g-direct 0 mismatches, 10/10 keep-sfc check=ok (twin_build ~80 ms vs adopt ~1.3 ms).
 - Timings (box shared, relative): BSSN [graph-remesh] mean of 9 g2s/IGT/s2g/total off 347/237/618/1202 ms, on 237/226/555/1018 ms. NLSM lw3 np16 (oversubscribed) [graph-remesh] total off 8.3/15.7/9.9 s -> on 5.2/8.2/7.0 s (lvl; fp same shape), g2s 6.0 -> 1.1 s, s2g 4.7-5.5 -> 1.4-2.5 s; nuts2 np4 g2s 172 -> 92 ms, s2g 276/581 -> 246/531 ms.
 - Risks: adopted kept mesh holds one extra SFC mesh of RAM; NLSM restore-branch stash untested at runtime; BSSN/NLSM labelled refs unchanged (no K6 here).
+
+### TAX + scaling, Kingspeak (2026-09-30; EM4, dendrolib 1f1f107e + EM4 K1/K2 default on)
+- TAX np192 small case (job 28497505): evolve sfc 34.8 s, graph 36.7 s; zip-sync costs mean 0.37 s (sync_pre 0.21 + post 0.11 + postaxpy 0.05; max up to 2.9 s on a few ranks). DISABLE_POST_SYNC / +POST_AXPY_SYNC (timing only) did not help (37.6 / 37.1 s). So at np192 the syncs are not the per-step tax; K6's per-step ceiling there is ~0.4 s.
+- Scaling, em4big (d12, tol 1e-10, 143.5k elements, t_end 2.5), K1-K3 on, 2 rounds:
+  np192 (jobs 28497506): wall sfc 197.4/197.0, graph 209.8/209.4 (1.06x); rkstep sfc 161.3, graph 160.7-161.0 (no per-step tax); remesh total sfc 7.1 s, graph 22.1-22.5 s; per labelled remesh g2s 166 / IGT 470-500 / s2g 846-850 / total ~1.5 s vs SFC ~0.47 s.
+  np384 (28497507): wall sfc 112.8/112.7, graph 128.2/127.5 (1.13x); rkstep 86.6 vs 91.9 (+6 %, 374 elem/rank); remesh 4.4 vs 15.1-15.3 s; per remesh g2s 92 / IGT 334-349 / s2g 583 / total ~1.0 s vs ~0.30 s.
+  Labelled/SFC remesh ratio ~3.2-3.4x at both P; absolute overhead shrinks with P like SFC's, so no P-growth hazard yet (K4 NBX low priority). np768 cancelled (32 guest nodes unavailable), to re-run with K6.
