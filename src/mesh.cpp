@@ -21205,7 +21205,15 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // K6c (keys + DENDRO_REPART_GHOST_RINGS=2): canonical owners of keyed
         // slots that the 2-ring push did not deliver are fetched as
         // topology-only records from their SFC source (splitter-routed by TN)
-        if (ckHave && ghostRings < 3) {
+        // DENDRO_REPART_CANON_TARGETS (default 1, =0 reverts): also with all
+        // three rings, owners outside the fetched set exist at scale (the
+        // 26-lists miss finer neighbours) and some sit in elements the unzip
+        // reads; fetch them as keyed topology records (tag 4)
+        static const bool canonTargets = [] {
+            const char* e = std::getenv("DENDRO_REPART_CANON_TARGETS");
+            return !(e && e[0] == '0');
+        }();
+        if (ckHave && (ghostRings < 3 || canonTargets)) {
             const Mesh* S = g_canonKeySrc ? g_canonKeySrc : this;
             struct TK { std::uint64_t a, b; bool operator==(const TK& o) const { return a == o.a && b == o.b; } };
             struct TKH { size_t operator()(const TK& k) const {
