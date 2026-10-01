@@ -4152,6 +4152,16 @@ bool Mesh::isReMeshUnzip(
                             }
                             std::fprintf(fp, "\n");
                         }
+                        for (unsigned int g = 0; g < m_uiAllElements.size(); g++) {
+                            const ot::TreeNode& o = pNodes[g];
+                            if (g == ele || o.maxX() < t.minX() || o.minX() > t.maxX() ||
+                                o.maxY() < t.minY() || o.minY() > t.maxY() ||
+                                o.maxZ() < t.minZ() || o.minZ() > t.maxZ())
+                                continue;
+                            std::fprintf(fp, "T %u %u %u %u %c\n", o.minX(), o.minY(), o.minZ(),
+                                         o.getLevel(),
+                                         (g >= m_uiElementLocalBegin && g < m_uiElementLocalEnd) ? 'L' : 'G');
+                        }
                         std::fputs(m_uiWaveProbeLog.c_str(), fp);
                         std::fclose(fp);
                     }
