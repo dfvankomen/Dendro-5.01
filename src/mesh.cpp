@@ -694,6 +694,12 @@ bool Mesh::canCloneE2ETwin() const {
     return ok == 1;
 }
 
+bool Mesh::allRanksActive() const {
+    int ok = m_uiIsActive ? 1 : 0;
+    MPI_Allreduce(MPI_IN_PLACE, &ok, 1, MPI_INT, MPI_MIN, m_uiCommGlobal);
+    return ok == 1;
+}
+
 // mirrors the prologue of the createMesh ctor plus what buildE2EMap leaves
 // behind on an E2E_ONLY mesh; every field below is copied (or recomputed
 // exactly as buildE2EMap does) from src's finished arrays. src's own

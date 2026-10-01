@@ -2281,6 +2281,14 @@ class Mesh {
     /**@brief true when cloneable by the E2ETwinTag constructor (collective) */
     bool canCloneE2ETwin() const;
 
+    /**
+     * @brief Collective over the global communicator (every rank must call,
+     * including ranks outside the active communicator): true iff no rank is
+     * inactive. A labelled partition needs every rank active, so callers stay
+     * on the SFC mesh when this is false.
+     */
+    bool allRanksActive() const;
+
     /**@brief the labelled mesh a graph twin built from src's local octants
      * and repartitionMeshGlobal() would give, built without the intermediate
      * E2E_ONLY twin: clone src's E2E-level state, inject src's owner masks
