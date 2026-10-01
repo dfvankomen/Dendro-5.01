@@ -939,6 +939,7 @@ void Mesh::computeExactGhostDest(const std::vector<unsigned int> &labels,
     std::vector<unsigned int> gSlot(nTot, 0);
     for (size_t i = 0; i < nLoc; i++) lab[lb + i] = (int)labels[i];
     {
+        repartRound();
         std::vector<MPI_Request> req;
         std::vector<unsigned int> sb(m_uiScatterMapElementRound1.size());
         for (size_t k = 0; k < sb.size(); k++) sb[k] = labels[m_uiScatterMapElementRound1[k]];
@@ -1003,6 +1004,7 @@ void Mesh::computeExactGhostDest(const std::vector<unsigned int> &labels,
     if (haveKeys) {
         const unsigned int npe = S->m_uiNpE;
         std::map<unsigned int, std::vector<unsigned int>> claims;  // src rank -> words
+        std::vector<std::vector<unsigned int>> farClaims(m_uiActiveNpes);
         std::vector<unsigned int> owners;
         for (size_t i = 0; i < nLoc; i++) {
             const size_t se = S->m_uiElementLocalBegin + i;
@@ -1021,7 +1023,19 @@ void Mesh::computeExactGhostDest(const std::vector<unsigned int> &labels,
                 if (o >= lb && o < le) {
                     for (unsigned int p : D1[i]) D[o - lb].emplace_back(p, (unsigned char)16);
                 } else if (gSrc[o] < 0) {
+                    // owner outside R1: TN-keyed claim to its splitter rank
                     st[EXG_OWNER_NOSRC]++;
+                    const ot::TreeNode &ot_ = m_uiAllElements[o];
+                    int q = 0;
+                    for (int r = 0; r < (int)m_uiActiveNpes; r++)
+                        if (!(ot_ < m_uiLocalSplitterElements[2 * r])) q = r;
+                    auto &w = farClaims[q];
+                    w.push_back(ot_.getX());
+                    w.push_back(ot_.getY());
+                    w.push_back(ot_.getZ());
+                    w.push_back(ot_.getLevel());
+                    w.push_back((unsigned int)D1[i].size());
+                    w.insert(w.end(), D1[i].begin(), D1[i].end());
                 } else {
                     auto &w = claims[(unsigned int)gSrc[o]];
                     w.push_back(gSlot[o]);
@@ -1032,6 +1046,7 @@ void Mesh::computeExactGhostDest(const std::vector<unsigned int> &labels,
             }
         }
         // round 2: one (possibly empty) claim message to every ghost source
+        repartRound();
         std::vector<MPI_Request> req;
         std::vector<std::vector<unsigned int>> sbuf(m_uiElementRecvProcList.size());
         for (size_t k = 0; k < m_uiElementRecvProcList.size(); k++) {
@@ -1059,6 +1074,36 @@ void Mesh::computeExactGhostDest(const std::vector<unsigned int> &labels,
             }
         }
         MPI_Waitall((int)req.size(), req.data(), MPI_STATUSES_IGNORE);
+        // rare: owners outside the R1 pattern (one Allreduce, exchange only if any)
+        int anyFar = 0, anyFarAll = 0;
+        for (const auto &w : farClaims) anyFar |= !w.empty();
+        repartRound();
+        MPI_Allreduce(&anyFar, &anyFarAll, 1, MPI_INT, MPI_MAX, comm);
+        if (anyFarAll) {
+            const int np = (int)m_uiActiveNpes;
+            std::vector<int> sc(np), rc(np), so(np, 0), ro(np, 0);
+            for (int q = 0; q < np; q++) sc[q] = (int)farClaims[q].size();
+            repartRound(2);
+            MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+            for (int q = 1; q < np; q++) {
+                so[q] = so[q - 1] + sc[q - 1];
+                ro[q] = ro[q - 1] + rc[q - 1];
+            }
+            std::vector<unsigned int> sb2, rb2(ro[np - 1] + rc[np - 1]);
+            for (const auto &w : farClaims) sb2.insert(sb2.end(), w.begin(), w.end());
+            MPI_Alltoallv(sb2.data(), sc.data(), so.data(), MPI_UNSIGNED, rb2.data(), rc.data(),
+                          ro.data(), MPI_UNSIGNED, comm);
+            for (size_t w = 0; w + 4 < rb2.size();) {
+                auto it = idx.find(exKey(rb2[w], rb2[w + 1], rb2[w + 2], rb2[w + 3]));
+                const unsigned int n = rb2[w + 4];
+                if (it != idx.end() && it->second >= lb && it->second < le)
+                    for (unsigned int k = 0; k < n; k++)
+                        D[it->second - lb].emplace_back(rb2[w + 5 + k], (unsigned char)16);
+                else
+                    st[EXG_OWNER_FAR_LOST]++;
+                w += 5 + n;
+            }
+        }
     }
 
     for (size_t i = 0; i < nLoc; i++) {
@@ -21826,22 +21871,23 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     if (!std::binary_search(exDst.begin() + exOff[i], exDst.begin() + exOff[i + 1], p))
                         x[std::min(d, 4u)]++;
             }
-            unsigned long long loc[40] = {}, tot[40];
+            unsigned long long loc[48] = {}, tot[48];
             for (int k = 0; k < EXG_NSTATS; k++) loc[k] = exSt[k];
             for (int k = 0; k < 10; k++) loc[10 + k] = m[k];
             for (int k = 0; k < 5; k++) loc[20 + k] = x[k];
             for (int k = 0; k < 5; k++) loc[25 + k] = dl[k];
             for (int k = 0; k < 9; k++) loc[30 + k] = dm[k];
-            MPI_Allreduce(loc, tot, 40, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+            MPI_Allreduce(loc, tot, 48, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
             unsigned long long miss = 0;
             for (int k = 10; k < 20; k++) miss += tot[k];
             if (!rank) {
                 std::printf("[exact-ghost-check] exact pairs touch=%llu owner=%llu finer_nbrs=%llu "
                             "claims=%llu | premise uncovered=%llu unlabelled=%llu owner_far=%llu "
-                            "owner_nosrc=%llu keysrc_mismatch=%llu\n",
+                            "owner_nosrc=%llu (lost %llu) keysrc_mismatch=%llu\n",
                             tot[EXG_TOUCH_PAIRS], tot[EXG_OWNER_PAIRS], tot[EXG_FINER_NBRS],
                             tot[EXG_OWNER_CLAIMS], tot[EXG_UNCOVERED], tot[EXG_UNLABELLED],
-                            tot[EXG_OWNER_FAR], tot[EXG_OWNER_NOSRC], tot[EXG_KEYSRC_MISMATCH]);
+                            tot[EXG_OWNER_FAR], tot[EXG_OWNER_NOSRC], tot[EXG_OWNER_FAR_LOST],
+                            tot[EXG_KEYSRC_MISMATCH]);
                 std::printf("[exact-ghost-check] missing=%llu face s/f/c=%llu/%llu/%llu "
                             "edge s/f/c=%llu/%llu/%llu vertex s/f/c=%llu/%llu/%llu owner=%llu "
                             "| delivered r1/r2/r3/tgt=%llu/%llu/%llu/%llu "

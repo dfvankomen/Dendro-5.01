@@ -357,3 +357,26 @@ non-CG / non-host / non-double vectors still take the full copy). jj 51aeb470. B
 | EM4 np8 `=0` | d7bbee89 (revert works) |
 
 Refs changed: ref/tp_base/np{4,8}_{m3,m3ref1,m4,ragged}.txt (TEST 2 node counts, 8bj pair counts); old copies kept as `.pre_targets`.
+
+## EXACT ghost push (2026-10-01; workspace dendrolib_dfvk_ws_exact, on lpqproqq)
+- `Mesh::computeExactGhostDest` (SFC source): D(e) = label(e) + labels of all geometrically touching elements
+  (hash walk incl. finer, local+ghost of the SFC mesh) + K6 owner closure (D1(f) of every f with a node owned by e).
+  Comm: 2 neighbour-sparse P2P rounds on the SFC R1 element pattern (ghost labels; owner claims) + 1 Allreduce
+  (owners outside R1, splitter-routed Alltoall/Alltoallv only if any: seen 2 owners in NLSM's first rebuild).
+- Premise holds: SFC R1 is a complete geometric ring (uncovered=0, unlabelled=0 in every tp/EM4/NLSM rebuild).
+  Node owners not touching the element exist (owner_far ~8-14k per tp rebuild: hanging nodes routed to a
+  coarser element's owner two hops away); they are all R1 ghosts of the source except the 2 NLSM cases.
+- `DENDRO_REPART_EXACT_GHOST_CHECK=1|2`: (a) D vs delivered (rings + targets), (b) shell + padding volume
+  cover and unzip-list completeness, labelled and SFC meshes. Current rebuild (np4-16, tp 4 arms, EM4
+  m3/ragged/levelwise, RING_FINER_NBRS 0 and 1): missing 0 everywhere (R2/R3 backfill), covers clean; but
+  touching elements arrive only as ring>=2 (nodal map invalid): EM4 np8 finer face 490 / edge 458+101 same /
+  vertex 111+65 same, FINER_NBRS=1 -> face 316, edge 142(second edge child)+91 same, vertex 2+62 same.
+  Over-fetch (EM4 np8, 8 rebuilds): rings deliver 73k ghost pushes vs exact 25k (R2 extra 11k, R3 24k, targets 13k).
+- `DENDRO_REPART_EXACT_GHOST=1` (opt-in, needs K6): push from D, no claim rounds, no owner targets. Gates: EM4
+  np4/np8 sfc+graph, np16 ragged (m3 REFINE=0) / levelwise (m4 REFINE=2) all d7bbee89 with _CHECK=2; tp NP=4/8
+  0 FAIL, COVERAGE + SM_COVERAGE clean (only TEST 2 ghost-node counts and the informational 8bj move:
+  m3 np4 0->108, ragged 4508->2555 / 9525->3087); nuts2 == ref.
+- EM4 np8 (8 rebuilds, box-relative): rounds 35-36 -> 24-25, [repart] TOTAL 470/492 -> 309/317 ms, ghost
+  elements/rank 1013 -> 326; np16 levelwise rounds 37 -> 26-28, TOTAL 873 -> 354 ms, ghosts 936 -> 293;
+  per-step ghost send nodes identical.
+- Kingspeak case `EG)` in kp/bundle/ab_guest.sbatch (np384 em4big, FL step-45 restore, sfc_rs/graph_rs/graph_ex).

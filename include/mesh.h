@@ -2314,6 +2314,7 @@ class Mesh {
         EXG_OWNER_NOSRC,       ///< ghost node owners outside R1 (premise)
         EXG_OWNER_CLAIMS,      ///< owner claims sent to other ranks
         EXG_KEYSRC_MISMATCH,   ///< local elements whose key-source TN differs
+        EXG_OWNER_FAR_LOST,    ///< outside-R1 owner claims whose owner was not found (premise)
         EXG_NSTATS
     };
 
@@ -2332,11 +2333,14 @@ class Mesh {
      *          label plus its touching neighbours' labels.
      * labels[i] itself is not listed.
      *
-     * Communication: no collectives. Two neighbour-sparse point-to-point
-     * rounds over the SFC R1 element pattern (m_uiElementSendProcList /
+     * Communication: two neighbour-sparse point-to-point rounds over the
+     * SFC R1 element pattern (m_uiElementSendProcList /
      * m_uiElementRecvProcList): (1) labels of the R1 ghosts, fixed sizes,
      * Isend/Irecv; (2) owner claims to the source rank of each ghost owner,
      * one message per neighbour pair (possibly empty), Isend + Probe/Recv.
+     * With the owner part: one MPI_Allreduce (any node owner outside the R1
+     * ghosts?) and, only if so, a splitter-routed TN-keyed claim exchange
+     * (Alltoall + Alltoallv).
      *
      * @param labels new owner rank (active comm) of each local element.
      * @param keySrc SFC mesh with E2N_CG / CG2DG whose local slice equals
