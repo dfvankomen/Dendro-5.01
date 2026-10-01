@@ -176,3 +176,20 @@ Sample: ~/research/repart_gate/pmpi/sample_sites_graph_np4.txt. Bundle copy: ~/r
   np192 (jobs 28497506): wall sfc 197.4/197.0, graph 209.8/209.4 (1.06x); rkstep sfc 161.3, graph 160.7-161.0 (no per-step tax); remesh total sfc 7.1 s, graph 22.1-22.5 s; per labelled remesh g2s 166 / IGT 470-500 / s2g 846-850 / total ~1.5 s vs SFC ~0.47 s.
   np384 (28497507): wall sfc 112.8/112.7, graph 128.2/127.5 (1.13x); rkstep 86.6 vs 91.9 (+6 %, 374 elem/rank); remesh 4.4 vs 15.1-15.3 s; per remesh g2s 92 / IGT 334-349 / s2g 583 / total ~1.0 s vs ~0.30 s.
   Labelled/SFC remesh ratio ~3.2-3.4x at both P; absolute overhead shrinks with P like SFC's, so no P-growth hazard yet (K4 NBX low priority). np768 cancelled (32 guest nodes unavailable), to re-run with K6.
+
+### K6 default flip (2026-09-30): DENDRO_REPART_CANON_KEYS on by default (`=0` reverts), `_CHECK` and the no-SFC-source cascade fallback intact
+- Code: one line in `Mesh::repartition` knob parse (`!(e && e[0]=='0')`). Build k6def (tp/em4/nuts/bssn), all gates knob-less.
+- Gates (rule 2026-09-30: correctness vs SFC, not old labelled md5s):
+
+| gate | result |
+|---|---|
+| EM4 np4/np8 sfc + graph | all d7bbee89 (graph was 2603beb3 / 32d48b0b) |
+| EM4 np16 ragged (m3, REFINE=0) / levelwise (m4, REFINE=2) | d7bbee89 / d7bbee89 (ragged was 0faf9dbb) |
+| tp NP=4, NP=8 | 0 FAIL; m4 identical; m3, m3ref1, ragged differ: COVERAGE and 7b unchanged, 8bb/8bc/8bd PASS maxErr 0, 8br dupPhysPos 0, TEST 10 maxErr unchanged (cg counts drop), 11 PASS (indep/dep counts +-few) |
+| tp refs regenerated, rerun | IDENTICAL x8 (old kept as np{4,8}_{m3,m3ref1,ragged}.txt.pre_k6; m4 unchanged) |
+| NLSM nuts2 np4 | == ref digits |
+| NLSM lw3 np16 sfc/lvl/lw/fp | min/max of all arms == sfc; sfc/lvl md5 == lw3_s3on; lw/fp md5 move in l2 digits only (new baseline work/lw3_k6def: sfc 1e88c240, lvl a3da76f6, lw 84ea973a, fp b96c0e11; old lw 36973a4a, fp 8e8c0a89) |
+| BSSN q1 np4 | graph Constraints a83112e3 -> bf867af6 (BH 7a18bafe, GW 86470a02/b50bc05f unchanged); graph vs sfc Constraints max rel diff 1.0e-13; C_HAM L2 9.20684e-06 both |
+| `=0` revert, EM4 np4 graph | 2603beb3 (old) |
+
+- Ref texts: scripts/em4.sh graph refs now d7bbee89 (old text in em4.sh.pre_k6); bssn.sh ref line for graph Constraints is now bf867af6 (was a83112e3).
