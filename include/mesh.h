@@ -2303,6 +2303,71 @@ class Mesh {
     static Mesh *repartitionFrom(const Mesh &src, PartitioningOptions method,
                                  const Point &dmin, const Point &dmax);
 
+    /**@brief Statistics slots filled by computeExactGhostDest. */
+    enum ExactGhostStat {
+        EXG_TOUCH_PAIRS = 0,   ///< (element, rank) pairs from touching neighbours
+        EXG_OWNER_PAIRS,       ///< (element, rank) pairs only needed as K6 owner
+        EXG_FINER_NBRS,        ///< (element, finer touching neighbour) pairs
+        EXG_UNCOVERED,         ///< neighbour cells no local/ghost element covers (premise)
+        EXG_UNLABELLED,        ///< touching neighbours outside the R1 ghost set (premise)
+        EXG_OWNER_FAR,         ///< node owners not touching the element (premise)
+        EXG_OWNER_NOSRC,       ///< ghost node owners outside R1 (premise)
+        EXG_OWNER_CLAIMS,      ///< owner claims sent to other ranks
+        EXG_KEYSRC_MISMATCH,   ///< local elements whose key-source TN differs
+        EXG_NSTATS
+    };
+
+    /**
+     * @brief Exact owner-side ghost destinations for a labelled rebuild.
+     *
+     * Called on the SFC source of a repartition (this mesh: an E2E-level
+     * twin/clone or an FDM mesh, with the SFC ctor's element ghost layer).
+     * For local element i the destination set is
+     *   D(i) = {labels[i]} + labels of every element touching i (closed
+     *          boxes, finer neighbours included, found geometrically in
+     *          the local + ghost element set)
+     *        + (owner part, when keySrc has an SFC E2N) D1(f) of every
+     *          local element f with a node whose canonical owner
+     *          (CG2DG[E2N_CG] of keySrc) is i, where D1(f) is f's own
+     *          label plus its touching neighbours' labels.
+     * labels[i] itself is not listed.
+     *
+     * Communication: no collectives. Two neighbour-sparse point-to-point
+     * rounds over the SFC R1 element pattern (m_uiElementSendProcList /
+     * m_uiElementRecvProcList): (1) labels of the R1 ghosts, fixed sizes,
+     * Isend/Irecv; (2) owner claims to the source rank of each ghost owner,
+     * one message per neighbour pair (possibly empty), Isend + Probe/Recv.
+     *
+     * @param labels new owner rank (active comm) of each local element.
+     * @param keySrc SFC mesh with E2N_CG / CG2DG whose local slice equals
+     *               this mesh's (the same mesh, or repartitionFrom's src);
+     *               nullptr skips the owner part.
+     * @param off CSR offsets (local count + 1).
+     * @param dst destination ranks, sorted per element.
+     * @param cls per destination: bits 0-1 contact (1 face, 2 edge,
+     *            3 vertex), bits 2-3 level of the neighbour (0 same, 1 finer,
+     *            2 coarser), 16 = needed only as a node owner.
+     * @param st  EXG_NSTATS counters (this rank).
+     */
+    void computeExactGhostDest(const std::vector<unsigned int> &labels,
+                               const Mesh *keySrc, std::vector<size_t> &off,
+                               std::vector<unsigned int> &dst,
+                               std::vector<unsigned char> &cls,
+                               unsigned long long *st) const;
+
+    /**
+     * @brief DENDRO_REPART_EXACT_GHOST_CHECK (b): geometric coverage of
+     * local element shells and block paddings by the present elements.
+     * For every local element, the 1-unit shell around it must be covered
+     * by present elements (exact R1); for every local block, the padding
+     * region (block box grown by the pad width, clipped to the domain) must
+     * be covered by present elements, and each present element overlapping
+     * the padding must be in the block's unzip element list. Collective
+     * (one Reduce to rank 0 of the active comm). Returns this rank's count
+     * of uncovered shells + uncovered paddings + unlisted writers.
+     */
+    unsigned long long checkExactGhostCover(const char *tag) const;
+
     /**@brief DENDRO_S2G_DIRECT_CHECK: first difference between this mesh's
      * key arrays and o's ("" when equal). e2eOnly compares just the E2E-level
      * state (pre-repartition twins), else the labelled mesh (element lists,

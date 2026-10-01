@@ -40,6 +40,15 @@
 // when both DENDRO_OMP_PART and _OPENMP are defined; otherwise it
 // expands to nothing, so the default build is byte-identical to a
 // codebase with no OMP annotations at all.
+// DENDRO_REPART_EXACT_GHOST_CHECK level (0 off, 1 report, 2 report + abort)
+static int exactGhostCheckLevel() {
+    static const int v = [] {
+        const char* e = std::getenv("DENDRO_REPART_EXACT_GHOST_CHECK");
+        return e ? std::atoi(e) : 0;
+    }();
+    return v;
+}
+
 #if defined(DENDRO_OMP_PART) && defined(_OPENMP)
   #include <omp.h>
   #define DENDRO_OMP_PRAGMA(x) _Pragma(#x)
@@ -287,6 +296,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             tb0      = MPI_Wtime();
             buildE2BlockMap();
             tb_e2blk = MPI_Wtime() - tb0;
+            if (exactGhostCheckLevel()) checkExactGhostCover("sfc");
             // E2N repair must be eager (mutates E2N_CG; no-op on unique-TN
             // SFC meshes).
             unifyE2NCgAcrossTNInstances();
@@ -581,6 +591,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             tb0      = MPI_Wtime();
             buildE2BlockMap();
             tb_e2blk = MPI_Wtime() - tb0;
+            if (exactGhostCheckLevel()) checkExactGhostCover("sfc");
             // E2N repair must be eager (see non-weighted ctor).
             unifyE2NCgAcrossTNInstances();
             // canon-writer table + zip plan: eager by default,
@@ -796,6 +807,393 @@ Mesh *Mesh::repartitionFrom(const Mesh &src, PartitioningOptions method,
     g->repartitionMeshGlobal();
     g_canonKeySrc = nullptr;
     return g;
+}
+
+namespace {
+struct ExTK {
+    std::uint64_t a, b;
+    bool operator==(const ExTK &o) const { return a == o.a && b == o.b; }
+};
+struct ExTKH {
+    size_t operator()(const ExTK &k) const {
+        std::uint64_t h = k.a * 0x9E3779B97F4A7C15ULL ^
+                          (k.b + 0x632BE59BD9B4E019ULL + (k.a << 6));
+        h ^= h >> 31;
+        h *= 0xff51afd7ed558ccdULL;
+        h ^= h >> 29;
+        return (size_t)h;
+    }
+};
+inline ExTK exKey(std::uint64_t x, std::uint64_t y, std::uint64_t z,
+                  std::uint64_t l) {
+    return ExTK{x | (y << 32), z | (l << 32)};
+}
+using ExIndex = std::unordered_map<ExTK, unsigned int, ExTKH>;
+
+ExIndex exBuildIndex(const std::vector<ot::TreeNode> &els, size_t n,
+                     unsigned int &lmax) {
+    ExIndex idx;
+    idx.reserve(2 * n);
+    lmax = 0;
+    for (size_t i = 0; i < n; i++) {
+        const ot::TreeNode &t = els[i];
+        idx.emplace(exKey(t.getX(), t.getY(), t.getZ(), t.getLevel()),
+                    (unsigned int)i);
+        lmax = std::max(lmax, t.getLevel());
+    }
+    return idx;
+}
+
+/**
+ * @brief Visit every element of idx whose closed box touches t's (finer
+ * neighbours included): cb(index, contact 1 face / 2 edge / 3 vertex,
+ * rel 0 same / 1 finer / 2 coarser). An element touching through several
+ * directions is visited once per direction. Returns the number of
+ * neighbour cells inside the domain that no element of idx covers.
+ */
+template <class F>
+unsigned long long exForEachTouching(const ot::TreeNode &t,
+                                     unsigned int maxDepth, unsigned int lmax,
+                                     const ExIndex &idx, F &&cb) {
+    struct Cell {
+        long long x, y, z;
+        unsigned int l;
+    };
+    const long long dom = 1ll << maxDepth;
+    const unsigned int L = t.getLevel();
+    const long long sz = 1ll << (maxDepth - L);
+    const long long an[3] = {t.getX(), t.getY(), t.getZ()};
+    unsigned long long uncovered = 0;
+    std::vector<Cell> stack;
+    for (int dz = -1; dz <= 1; dz++)
+        for (int dy = -1; dy <= 1; dy++)
+            for (int dx = -1; dx <= 1; dx++) {
+                if (!dx && !dy && !dz) continue;
+                const int d[3] = {dx, dy, dz};
+                long long c[3];
+                bool out = false;
+                for (int k = 0; k < 3; k++) {
+                    c[k] = an[k] + d[k] * sz;
+                    out |= (c[k] < 0 || c[k] >= dom);
+                }
+                if (out) continue;
+                const int contact = (dx != 0) + (dy != 0) + (dz != 0);
+                bool found = false;
+                for (int l = (int)L; l >= 0 && !found; l--) {
+                    const std::uint64_t m = ~((1ull << (maxDepth - l)) - 1ull);
+                    auto it = idx.find(exKey(c[0] & m, c[1] & m, c[2] & m, l));
+                    if (it != idx.end()) {
+                        cb(it->second, contact, l == (int)L ? 0 : 2);
+                        found = true;
+                    }
+                }
+                if (found) continue;
+                // subdivided: the children facing t, down to the finest level present
+                stack.clear();
+                stack.push_back({c[0], c[1], c[2], L});
+                while (!stack.empty()) {
+                    const Cell cc = stack.back();
+                    stack.pop_back();
+                    if (cc.l >= lmax || cc.l >= maxDepth) {
+                        uncovered++;
+                        continue;
+                    }
+                    const long long h = 1ll << (maxDepth - cc.l - 1);
+                    for (int o = 0; o < 8; o++) {
+                        const int ob[3] = {o & 1, (o >> 1) & 1, (o >> 2) & 1};
+                        bool ok = true;
+                        for (int k = 0; k < 3; k++)
+                            if ((d[k] < 0 && !ob[k]) || (d[k] > 0 && ob[k])) ok = false;
+                        if (!ok) continue;
+                        const Cell ch{cc.x + ob[0] * h, cc.y + ob[1] * h,
+                                      cc.z + ob[2] * h, cc.l + 1};
+                        auto it = idx.find(exKey(ch.x, ch.y, ch.z, ch.l));
+                        if (it != idx.end())
+                            cb(it->second, contact, 1);
+                        else
+                            stack.push_back(ch);
+                    }
+                }
+            }
+    return uncovered;
+}
+}  // namespace
+
+void Mesh::computeExactGhostDest(const std::vector<unsigned int> &labels,
+                                 const Mesh *keySrc, std::vector<size_t> &off,
+                                 std::vector<unsigned int> &dst,
+                                 std::vector<unsigned char> &cls,
+                                 unsigned long long *st) const {
+    for (int k = 0; k < EXG_NSTATS; k++) st[k] = 0;
+    const size_t lb = m_uiElementLocalBegin, le = m_uiElementLocalEnd;
+    const size_t nLoc = le - lb, nTot = m_uiNumTotalElements;
+    off.assign(nLoc + 1, 0);
+    dst.clear();
+    cls.clear();
+    if (!m_uiIsActive) return;
+    MPI_Comm comm = m_uiCommActive;
+    const int tagLab = 7301, tagClaim = 7302;
+
+    // round 1: labels of the R1 ghosts over the element ghost pattern
+    std::vector<int> lab(nTot, -1), gSrc(nTot, -1);
+    std::vector<unsigned int> gSlot(nTot, 0);
+    for (size_t i = 0; i < nLoc; i++) lab[lb + i] = (int)labels[i];
+    {
+        std::vector<MPI_Request> req;
+        std::vector<unsigned int> sb(m_uiScatterMapElementRound1.size());
+        for (size_t k = 0; k < sb.size(); k++) sb[k] = labels[m_uiScatterMapElementRound1[k]];
+        const size_t nRecv = m_uiGhostElementRound1Index.size();
+        std::vector<unsigned int> rb(nRecv);
+        for (unsigned int p : m_uiElementRecvProcList) {
+            req.emplace_back();
+            MPI_Irecv(rb.data() + m_uiRecvEleOffset[p], (int)m_uiRecvEleCount[p], MPI_UNSIGNED,
+                      (int)p, tagLab, comm, &req.back());
+        }
+        for (unsigned int p : m_uiElementSendProcList) {
+            req.emplace_back();
+            MPI_Isend(sb.data() + m_uiSendEleOffset[p], (int)m_uiSendEleCount[p], MPI_UNSIGNED,
+                      (int)p, tagLab, comm, &req.back());
+        }
+        MPI_Waitall((int)req.size(), req.data(), MPI_STATUSES_IGNORE);
+        for (unsigned int p : m_uiElementRecvProcList)
+            for (unsigned int k = m_uiRecvEleOffset[p]; k < m_uiRecvEleOffset[p] + m_uiRecvEleCount[p];
+                 k++) {
+                const unsigned int g = m_uiGhostElementRound1Index[k];
+                lab[g]  = (int)rb[k];
+                gSrc[g] = (int)p;
+                gSlot[g] = k - m_uiRecvEleOffset[p];
+            }
+    }
+
+    unsigned int lmax = 0;
+    const ExIndex idx = exBuildIndex(m_uiAllElements, nTot, lmax);
+
+    // touching neighbours: (rank, class) per local element, D1 = own label + touching labels
+    std::vector<std::vector<std::pair<unsigned int, unsigned char>>> D(nLoc);
+    std::vector<std::vector<unsigned int>> nbr(nLoc), D1(nLoc);
+    for (size_t i = 0; i < nLoc; i++) {
+        const ot::TreeNode &t = m_uiAllElements[lb + i];
+        auto &nb = nbr[i];
+        st[EXG_UNCOVERED] += exForEachTouching(
+            t, m_uiMaxDepth, lmax, idx, [&](unsigned int f, int contact, int rel) {
+                nb.push_back(f);
+                if (lab[f] < 0) {
+                    st[EXG_UNLABELLED]++;
+                    return;
+                }
+                D[i].emplace_back((unsigned int)lab[f], (unsigned char)(contact | (rel << 2)));
+            });
+        std::sort(nb.begin(), nb.end());
+        nb.erase(std::unique(nb.begin(), nb.end()), nb.end());
+        for (unsigned int f : nb)
+            if (m_uiAllElements[f].getLevel() > t.getLevel()) st[EXG_FINER_NBRS]++;
+        auto &d1 = D1[i];
+        d1.push_back(labels[i]);
+        for (const auto &pc : D[i]) d1.push_back(pc.first);
+        std::sort(d1.begin(), d1.end());
+        d1.erase(std::unique(d1.begin(), d1.end()), d1.end());
+    }
+
+    // owner part: D(o) += D1(f) for every node of local f owned by o
+    const Mesh *S = keySrc;
+    const bool haveKeys = S && S->m_uiIsActive && !S->m_uiCG2DG.empty() &&
+                          (size_t)(S->m_uiElementLocalEnd - S->m_uiElementLocalBegin) == nLoc &&
+                          S->m_uiAllElements.size() == m_uiAllElements.size() &&
+                          S->m_uiE2NMapping_CG.size() == S->m_uiAllElements.size() * S->m_uiNpE;
+    if (haveKeys) {
+        const unsigned int npe = S->m_uiNpE;
+        std::map<unsigned int, std::vector<unsigned int>> claims;  // src rank -> words
+        std::vector<unsigned int> owners;
+        for (size_t i = 0; i < nLoc; i++) {
+            const size_t se = S->m_uiElementLocalBegin + i;
+            if (!(S->m_uiAllElements[se] == m_uiAllElements[lb + i])) st[EXG_KEYSRC_MISMATCH]++;
+            owners.clear();
+            for (unsigned int n = 0; n < npe; n++) {
+                const unsigned int cg = S->m_uiE2NMapping_CG[se * npe + n];
+                if (cg >= S->m_uiCG2DG.size()) continue;
+                const unsigned int o = S->m_uiCG2DG[cg] / npe;
+                if (o != lb + i) owners.push_back(o);
+            }
+            std::sort(owners.begin(), owners.end());
+            owners.erase(std::unique(owners.begin(), owners.end()), owners.end());
+            for (unsigned int o : owners) {
+                if (!std::binary_search(nbr[i].begin(), nbr[i].end(), o)) st[EXG_OWNER_FAR]++;
+                if (o >= lb && o < le) {
+                    for (unsigned int p : D1[i]) D[o - lb].emplace_back(p, (unsigned char)16);
+                } else if (gSrc[o] < 0) {
+                    st[EXG_OWNER_NOSRC]++;
+                } else {
+                    auto &w = claims[(unsigned int)gSrc[o]];
+                    w.push_back(gSlot[o]);
+                    w.push_back((unsigned int)D1[i].size());
+                    w.insert(w.end(), D1[i].begin(), D1[i].end());
+                    st[EXG_OWNER_CLAIMS]++;
+                }
+            }
+        }
+        // round 2: one (possibly empty) claim message to every ghost source
+        std::vector<MPI_Request> req;
+        std::vector<std::vector<unsigned int>> sbuf(m_uiElementRecvProcList.size());
+        for (size_t k = 0; k < m_uiElementRecvProcList.size(); k++) {
+            const unsigned int q = m_uiElementRecvProcList[k];
+            auto it = claims.find(q);
+            if (it != claims.end()) sbuf[k].swap(it->second);
+            req.emplace_back();
+            MPI_Isend(sbuf[k].data(), (int)sbuf[k].size(), MPI_UNSIGNED, (int)q, tagClaim, comm,
+                      &req.back());
+        }
+        std::vector<unsigned int> rb;
+        for (unsigned int p : m_uiElementSendProcList) {
+            MPI_Status stt;
+            int cnt = 0;
+            MPI_Probe((int)p, tagClaim, comm, &stt);
+            MPI_Get_count(&stt, MPI_UNSIGNED, &cnt);
+            rb.resize(cnt);
+            MPI_Recv(rb.data(), cnt, MPI_UNSIGNED, (int)p, tagClaim, comm, MPI_STATUS_IGNORE);
+            for (int w = 0; w + 1 < cnt;) {
+                const unsigned int li = m_uiScatterMapElementRound1[m_uiSendEleOffset[p] + rb[w]];
+                const unsigned int n = rb[w + 1];
+                for (unsigned int k = 0; k < n; k++)
+                    D[li].emplace_back(rb[w + 2 + k], (unsigned char)16);
+                w += 2 + (int)n;
+            }
+        }
+        MPI_Waitall((int)req.size(), req.data(), MPI_STATUSES_IGNORE);
+    }
+
+    for (size_t i = 0; i < nLoc; i++) {
+        auto &d = D[i];
+        std::sort(d.begin(), d.end());
+        unsigned int last = UINT_MAX;
+        for (const auto &pc : d) {
+            if (pc.first == last || pc.first == labels[i]) continue;
+            last = pc.first;
+            dst.push_back(pc.first);
+            cls.push_back(pc.second);
+            st[pc.second == 16 ? EXG_OWNER_PAIRS : EXG_TOUCH_PAIRS]++;
+        }
+        off[i + 1] = dst.size();
+    }
+}
+
+unsigned long long Mesh::checkExactGhostCover(const char *tag) const {
+    if (!m_uiIsActive) return 0;
+    typedef __int128 I128;
+    const size_t nTot = m_uiNumTotalElements;
+    unsigned int lmax = 0;
+    const ExIndex idx = exBuildIndex(m_uiAllElements, nTot, lmax);
+    const long long S = std::max(1u, m_uiElementOrder);
+    const long long dom = (1ll << m_uiMaxDepth) * S;
+    auto vol = [](const long long *a, const long long *b) -> I128 {
+        I128 v = 1;
+        for (int k = 0; k < 3; k++) {
+            if (b[k] <= a[k]) return 0;
+            v *= (I128)(b[k] - a[k]);
+        }
+        return v;
+    };
+    auto boxOf = [&](unsigned int e, long long *a, long long *b) {
+        const ot::TreeNode &t = m_uiAllElements[e];
+        a[0] = (long long)t.minX() * S; b[0] = (long long)t.maxX() * S;
+        a[1] = (long long)t.minY() * S; b[1] = (long long)t.maxY() * S;
+        a[2] = (long long)t.minZ() * S; b[2] = (long long)t.maxZ() * S;
+    };
+    auto isect = [&](const long long *a, const long long *b, const long long *c,
+                     const long long *d) {
+        long long lo[3], hi[3];
+        for (int k = 0; k < 3; k++) {
+            lo[k] = std::max(a[k], c[k]);
+            hi[k] = std::min(b[k], d[k]);
+        }
+        return vol(lo, hi);
+    };
+    // 0 local, 1 shells short, 2 uncovered nbr cells, 3 blocks, 4 paddings short,
+    // 5 present writers unlisted, 6 listed writers outside the padding, 7 present writers
+    unsigned long long v[8] = {0, 0, 0, 0, 0, 0, 0, 0};
+    std::vector<unsigned int> nb;
+    auto touching = [&](unsigned int e) {
+        nb.clear();
+        v[2] += exForEachTouching(m_uiAllElements[e], m_uiMaxDepth, lmax, idx,
+                                  [&](unsigned int f, int, int) { nb.push_back(f); });
+        std::sort(nb.begin(), nb.end());
+        nb.erase(std::unique(nb.begin(), nb.end()), nb.end());
+    };
+    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
+        v[0]++;
+        long long a[3], b[3], sa[3], sb[3], fa[3], fb[3];
+        boxOf(e, a, b);
+        for (int k = 0; k < 3; k++) {
+            sa[k] = std::max(0ll, a[k] - 1);
+            sb[k] = std::min(dom, b[k] + 1);
+        }
+        const I128 need = vol(sa, sb) - vol(a, b);
+        I128 got = 0;
+        touching(e);
+        for (unsigned int f : nb) {
+            boxOf(f, fa, fb);
+            got += isect(fa, fb, sa, sb);
+        }
+        if (got != need) v[1]++;
+    }
+    std::vector<unsigned int> eid, geo;
+    for (unsigned int blk = 0; blk < m_uiLocalBlockList.size(); blk++) {
+        const ot::Block &B = m_uiLocalBlockList[blk];
+        const ot::TreeNode bn = B.getBlockNode();
+        const long long pw = (long long)B.get1DPadWidth() *
+                             (1ll << (m_uiMaxDepth - B.getRegularGridLev()));
+        long long ba[3] = {(long long)bn.minX() * S, (long long)bn.minY() * S,
+                           (long long)bn.minZ() * S};
+        long long bb[3] = {(long long)bn.maxX() * S, (long long)bn.maxY() * S,
+                           (long long)bn.maxZ() * S};
+        long long pa[3], pb[3];
+        for (int k = 0; k < 3; k++) {
+            pa[k] = std::max(0ll, ba[k] - pw);
+            pb[k] = std::min(dom, bb[k] + pw);
+        }
+        v[3]++;
+        const I128 need = vol(pa, pb) - vol(ba, bb);
+        geo.clear();
+        for (unsigned int e : B) {
+            long long a[3], b[3];
+            boxOf(e, a, b);
+            bool bdy = false;
+            for (int k = 0; k < 3; k++) bdy |= (a[k] == ba[k] || b[k] == bb[k]);
+            if (!bdy) continue;
+            touching(e);
+            geo.insert(geo.end(), nb.begin(), nb.end());
+        }
+        std::sort(geo.begin(), geo.end());
+        geo.erase(std::unique(geo.begin(), geo.end()), geo.end());
+        this->blkUnzipElementIDs(blk, eid);
+        std::sort(eid.begin(), eid.end());
+        eid.erase(std::unique(eid.begin(), eid.end()), eid.end());
+        I128 got = 0;
+        for (unsigned int f : geo) {
+            long long fa[3], fb[3];
+            boxOf(f, fa, fb);
+            const I128 inBlk = isect(fa, fb, ba, bb);
+            if (inBlk > 0) continue;
+            const I128 o = isect(fa, fb, pa, pb);
+            if (o == 0) continue;
+            got += o;
+            v[7]++;
+            if (!std::binary_search(eid.begin(), eid.end(), f)) v[5]++;
+        }
+        for (unsigned int f : eid) {
+            long long fa[3], fb[3];
+            boxOf(f, fa, fb);
+            if (isect(fa, fb, pa, pb) == 0 || isect(fa, fb, ba, bb) > 0) v[6]++;
+        }
+        if (got != need) v[4]++;
+    }
+    unsigned long long t[8];
+    MPI_Reduce(v, t, 8, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, m_uiCommActive);
+    if (!m_uiActiveRank)
+        std::printf("[exact-ghost-cover] %s local=%llu shells_short=%llu uncovered_cells=%llu "
+                    "blocks=%llu paddings_short=%llu writers=%llu unlisted=%llu "
+                    "listed_outside=%llu\n",
+                    tag, t[0], t[1], t[2], t[3], t[4], t[7], t[5], t[6]);
+    return v[1] + v[4] + v[5];
 }
 
 std::string Mesh::diffKeyArrays(const Mesh &o, bool e2eOnly) const {
@@ -21103,6 +21501,18 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         const char* e = std::getenv("DENDRO_REPART_CANON_KEYS_CHECK");
         return e && e[0] == '1';
     }();
+    // DENDRO_REPART_EXACT_GHOST=1 (opt-in, needs K6 keys): push every element
+    // once to its exact destination set (computeExactGhostDest: label, labels
+    // of touching elements incl. finer ones, K6 owner closure) instead of the
+    // R1-R3 claim rounds and the owner-target fetch.
+    // DENDRO_REPART_EXACT_GHOST_CHECK=1 compares the exact sets with what the
+    // rebuild delivers and checks shell/padding coverage; =2 also aborts (78)
+    // on anything missing
+    static const bool exactGhostEnv = [] {
+        const char* e = std::getenv("DENDRO_REPART_EXACT_GHOST");
+        return e && e[0] == '1';
+    }();
+    static const int exactGhostCheck = exactGhostCheckLevel();
     std::vector<std::uint64_t> ckRecv;
     bool ckHave = false, ckUse = false;
     std::vector<size_t> ckAbsent;  // keyed slots whose owner element was not fetched
@@ -21124,6 +21534,57 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         for (size_t i = 0; i < localSz; ++i)
             oct_connectivity_map[i].trank = pushLabels[i];
 
+        // SFC E2N source of the canonical owner keys (K6), decided before the
+        // ghost rings so the exact push (DENDRO_REPART_EXACT_GHOST) can use it
+        const Mesh* ckS = g_canonKeySrc ? g_canonKeySrc : this;
+        int ckAll = 0;
+        if (canonKeysEnv || canonCheck || exactGhostEnv || exactGhostCheck) {
+            const Mesh* S = ckS;
+            const size_t npeS = S->m_uiNpE;
+            const bool hasE2N =
+                S->m_uiIsActive && !S->m_uiIsLabelledRebuild &&
+                !S->m_uiCG2DG.empty() &&
+                S->m_uiE2NMapping_CG.size() == S->m_uiAllElements.size() * npeS;
+            // an E2E_ONLY SFC twin: build its SFC E2N here (cascade on the
+            // SFC ghost layer, same arrays an FDM ctor would build)
+            const bool canBuild = !hasE2N && S == this && !m_uiIsLabelledRebuild &&
+                                  m_uiE2NMapping_CG.empty() &&
+                                  m_uiIsNodalMapValid.size() == m_uiAllElements.size();
+            const bool sameLocal =
+                (size_t)(S->m_uiElementLocalEnd - S->m_uiElementLocalBegin) == localSz;
+            int ok = ((hasE2N || canBuild) && sameLocal) ? 1 : 0;
+            repartRound();
+            MPI_Allreduce(&ok, &ckAll, 1, MPI_INT, MPI_MIN, commActive);
+            if (ckAll && canBuild) {
+                const unsigned int eo = m_uiElementOrder;
+                m_uiElementOrder = 2;
+                m_uiNpE = (m_uiDim == 2) ? 9 : 27;
+                buildE2NMap();
+                m_uiSendNodeCount.assign(m_uiActiveNpes, 0);
+                m_uiRecvNodeCount.assign(m_uiActiveNpes, 0);
+                m_uiSendNodeOffset.assign(m_uiActiveNpes, 0);
+                m_uiRecvNodeOffset.assign(m_uiActiveNpes, 0);
+                m_uiScatterMapActualNodeSend.clear();
+                m_uiScatterMapActualNodeRecv.clear();
+                buildE2NWithSMRepartitioned(eo);
+                __phase("canon-keys: SFC E2N of E2E-only source");
+            }
+        }
+
+        // exact owner-side destinations: computed for the exact push and
+        // for its checker (which compares them with what the rings deliver)
+        const bool exactUse = exactGhostEnv && canonKeysEnv && ckAll && npes > 1;
+        std::vector<size_t> exOff;
+        std::vector<unsigned int> exDst;
+        std::vector<unsigned char> exCls;
+        unsigned long long exSt[EXG_NSTATS] = {};
+        const bool exHave = exactUse || (exactGhostCheck && npes > 1);
+        if (exHave) {
+            computeExactGhostDest(pushLabels, ckAll ? ckS : nullptr, exOff, exDst, exCls, exSt);
+            __phase("exact-ghost: destinations");
+        }
+        if (exactUse && !rank) std::cout << "[exact-ghost] push from exact destinations" << std::endl;
+
         std::vector<std::vector<std::pair<unsigned int, unsigned char>>> ring(localSz);
         std::vector<std::pair<size_t, unsigned int>> frontier, next;
         // a (g, p) pair sent in an earlier ring already put g at distance <= d-1
@@ -21138,7 +21599,11 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             return true;
         };
         for (size_t i = 0; i < localSz; ++i) frontier.emplace_back(i, pushLabels[i]);
-        for (unsigned char d = 1; d <= ghostRings; ++d) {
+        if (exactUse)
+            for (size_t i = 0; i < localSz; ++i)
+                for (size_t k = exOff[i]; k < exOff[i + 1]; ++k)
+                    ring[i].emplace_back(exDst[k], (unsigned char)(exCls[k] == 16 ? 2 : 1));
+        for (unsigned char d = 1; d <= (exactUse ? 0 : ghostRings); ++d) {
             next.clear();
             std::vector<std::vector<unsigned long long>> out(npes);
             auto emit = [&](unsigned int p, D_INT_L g) {
@@ -21174,36 +21639,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         for (int p = 0; p < npes; ++p)
             if (p != rank) nPushedRemote += out[p].size();
         if (canonKeysEnv || canonCheck) {
-            const Mesh* S = g_canonKeySrc ? g_canonKeySrc : this;
-            const size_t npeS = S->m_uiNpE;
-            const bool hasE2N =
-                S->m_uiIsActive && !S->m_uiIsLabelledRebuild &&
-                !S->m_uiCG2DG.empty() &&
-                S->m_uiE2NMapping_CG.size() == S->m_uiAllElements.size() * npeS;
-            // an E2E_ONLY SFC twin: build its SFC E2N here (cascade on the
-            // SFC ghost layer, same arrays an FDM ctor would build)
-            const bool canBuild = !hasE2N && S == this && !m_uiIsLabelledRebuild &&
-                                  m_uiE2NMapping_CG.empty() &&
-                                  m_uiIsNodalMapValid.size() == m_uiAllElements.size();
-            const bool sameLocal =
-                (size_t)(S->m_uiElementLocalEnd - S->m_uiElementLocalBegin) == localSz;
-            int ok = ((hasE2N || canBuild) && sameLocal) ? 1 : 0, all = 0;
-            repartRound();
-            MPI_Allreduce(&ok, &all, 1, MPI_INT, MPI_MIN, commActive);
-            if (all && canBuild) {
-                const unsigned int eo = m_uiElementOrder;
-                m_uiElementOrder = 2;
-                m_uiNpE = (m_uiDim == 2) ? 9 : 27;
-                buildE2NMap();
-                m_uiSendNodeCount.assign(m_uiActiveNpes, 0);
-                m_uiRecvNodeCount.assign(m_uiActiveNpes, 0);
-                m_uiSendNodeOffset.assign(m_uiActiveNpes, 0);
-                m_uiRecvNodeOffset.assign(m_uiActiveNpes, 0);
-                m_uiScatterMapActualNodeSend.clear();
-                m_uiScatterMapActualNodeRecv.clear();
-                buildE2NWithSMRepartitioned(eo);
-                __phase("canon-keys: SFC E2N of E2E-only source");
-            }
+            const Mesh* S = ckS;
+            const int all = ckAll;
             if (all) {
                 const unsigned int npe = S->m_uiNpE;
                 std::vector<std::vector<std::uint64_t>> kout(npes);
@@ -21274,7 +21711,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             const char* e = std::getenv("DENDRO_REPART_CANON_TARGETS");
             return !(e && e[0] == '0');
         }();
-        if (ckHave && (ghostRings < 3 || canonTargets)) {
+        // (target deliveries, recorded for the exact-ghost checker)
+        std::vector<std::pair<size_t, unsigned int>> tgtDeliv;
+        if (ckHave && (ghostRings < 3 || canonTargets) && !exactUse) {
             const Mesh* S = g_canonKeySrc ? g_canonKeySrc : this;
             struct TK { std::uint64_t a, b; bool operator==(const TK& o) const { return a == o.a && b == o.b; } };
             struct TKH { size_t operator()(const TK& k) const {
@@ -21341,6 +21780,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 o.trank = pushLabels[it->second];
                 o.isGhostTwo = true;
                 rep[reqSrc[k / 2]].push_back(o);
+                if (exHave) tgtDeliv.emplace_back(it->second, (unsigned int)reqSrc[k / 2]);
                 // targets are keyed rows too: the unzip reads some of them
                 const size_t nOwn = ckMake(it->second);
                 auto& kb = krep[reqSrc[k / 2]];
@@ -21358,6 +21798,74 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                           << " fetched=" << tot[1] << " not-found=" << tot[2] << std::endl;
         }
         MPI_Type_free(&octType);
+        if (exHave && exactGhostCheck) {
+            // (a) exact destinations vs delivered (rings + targets), per local element
+            // m: missing touching by contact (face/edge/vertex) x level (same/finer/coarser),
+            // m[9] missing owner-only; x: extra by ring 1..3, target; dl: delivered by ring
+            unsigned long long m[10] = {}, x[5] = {}, dl[5] = {}, dm[9] = {};
+            std::vector<std::vector<unsigned int>> tg(localSz);
+            for (const auto& [i, p] : tgtDeliv) tg[i].push_back(p);
+            std::vector<std::pair<unsigned int, unsigned int>> have;
+            for (size_t i = 0; i < localSz; ++i) {
+                have.clear();
+                for (const auto& [p, d] : ring[i]) have.emplace_back(p, d);
+                for (unsigned int p : tg[i]) have.emplace_back(p, 4u);
+                std::sort(have.begin(), have.end());
+                for (const auto& [p, d] : have) dl[std::min(d, 4u)]++;
+                for (size_t k = exOff[i]; k < exOff[i + 1]; ++k) {
+                    const unsigned int p = exDst[k], c = exCls[k];
+                    auto it = std::lower_bound(have.begin(), have.end(),
+                                               std::make_pair(p, 0u));
+                    if (it == have.end() || it->first != p) {
+                        m[c == 16 ? 9 : (c & 3) - 1 + 3 * ((c >> 2) & 3)]++;
+                    } else if (c != 16 && it->second >= 2) {
+                        dm[(c & 3) - 1 + 3 * ((c >> 2) & 3)]++;
+                    }
+                }
+                for (const auto& [p, d] : have)
+                    if (!std::binary_search(exDst.begin() + exOff[i], exDst.begin() + exOff[i + 1], p))
+                        x[std::min(d, 4u)]++;
+            }
+            unsigned long long loc[40] = {}, tot[40];
+            for (int k = 0; k < EXG_NSTATS; k++) loc[k] = exSt[k];
+            for (int k = 0; k < 10; k++) loc[10 + k] = m[k];
+            for (int k = 0; k < 5; k++) loc[20 + k] = x[k];
+            for (int k = 0; k < 5; k++) loc[25 + k] = dl[k];
+            for (int k = 0; k < 9; k++) loc[30 + k] = dm[k];
+            MPI_Allreduce(loc, tot, 40, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+            unsigned long long miss = 0;
+            for (int k = 10; k < 20; k++) miss += tot[k];
+            if (!rank) {
+                std::printf("[exact-ghost-check] exact pairs touch=%llu owner=%llu finer_nbrs=%llu "
+                            "claims=%llu | premise uncovered=%llu unlabelled=%llu owner_far=%llu "
+                            "owner_nosrc=%llu keysrc_mismatch=%llu\n",
+                            tot[EXG_TOUCH_PAIRS], tot[EXG_OWNER_PAIRS], tot[EXG_FINER_NBRS],
+                            tot[EXG_OWNER_CLAIMS], tot[EXG_UNCOVERED], tot[EXG_UNLABELLED],
+                            tot[EXG_OWNER_FAR], tot[EXG_OWNER_NOSRC], tot[EXG_KEYSRC_MISMATCH]);
+                std::printf("[exact-ghost-check] missing=%llu face s/f/c=%llu/%llu/%llu "
+                            "edge s/f/c=%llu/%llu/%llu vertex s/f/c=%llu/%llu/%llu owner=%llu "
+                            "| delivered r1/r2/r3/tgt=%llu/%llu/%llu/%llu "
+                            "extra r1/r2/r3/tgt=%llu/%llu/%llu/%llu\n",
+                            miss, tot[10], tot[13], tot[16], tot[11], tot[14], tot[17], tot[12],
+                            tot[15], tot[18], tot[19], tot[26], tot[27], tot[28], tot[29],
+                            tot[21], tot[22], tot[23], tot[24]);
+                std::printf("[exact-ghost-check] demoted (touching, delivered only as ring>=2) "
+                            "face s/f/c=%llu/%llu/%llu edge s/f/c=%llu/%llu/%llu vertex "
+                            "s/f/c=%llu/%llu/%llu\n",
+                            tot[30], tot[33], tot[36], tot[31], tot[34], tot[37], tot[32], tot[35],
+                            tot[38]);
+            }
+            if (exactGhostCheck >= 2 && miss) MPI_Abort(commActive, 78);
+        } else if (exHave && exactUse && countRounds) {
+            unsigned long long tot[EXG_NSTATS];
+            MPI_Reduce(exSt, tot, EXG_NSTATS, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            if (!rank)
+                std::printf("[exact-ghost] pairs touch=%llu owner=%llu claims=%llu premise "
+                            "uncovered=%llu unlabelled=%llu owner_far=%llu owner_nosrc=%llu\n",
+                            tot[EXG_TOUCH_PAIRS], tot[EXG_OWNER_PAIRS], tot[EXG_OWNER_CLAIMS],
+                            tot[EXG_UNCOVERED], tot[EXG_UNLABELLED], tot[EXG_OWNER_FAR],
+                            tot[EXG_OWNER_NOSRC]);
+        }
         for (const auto& o : new_oct_connectivity_map) {
             if (o.trank == (unsigned int)rank) my_partition.push_back(o.eid);
             if (o.trank == (unsigned int)rank || !o.isGhostTwo)
@@ -22741,6 +23249,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
             buildE2BlockMap();
             __phase("  blk: buildE2BlockMap");
+            if (exactGhostCheckLevel() &&
+                checkExactGhostCover("labelled") && exactGhostCheckLevel() >= 2)
+                MPI_Abort(commActive, 78);
             buildUnzipCanonicalWriterTable();
             __phase("  blk: buildUnzipCanonWriter");
             buildZipPlan();
