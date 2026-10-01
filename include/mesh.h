@@ -765,6 +765,7 @@ class Mesh {
     std::vector<std::pair<ot::TreeNode, int>> m_uiRepartOrigin;
     /** true when the last rebuild took its E2N from canonical SFC keys (K6) */
     bool m_uiCanonKeysBuilt = false;
+    bool m_uiRemeshRawFlags = false;
 
     /** Cached pos-bcast plan (mesh-only; see buildBcastPlan). Invalidated
      *  wherever CG2DG / all-elements / node ranges are rebuilt. */
@@ -4108,6 +4109,24 @@ class Mesh {
      * @param flags: OCT_SPLIT / OCT_COARSE / OCT_NO_CHANGE per local element.
      */
     void setLocalElementFlags(const std::vector<unsigned int> &flags);
+
+    /**
+     * @brief Raw-flag mode for isReMeshUnzip (DENDRO_REMESH_FLAGS_SFC): the
+     * wavelet flags go onto the local elements verbatim, without the
+     * co-local sibling rule, so they can be filtered on the SFC twin.
+     */
+    void setRemeshRawFlags(bool on) { m_uiRemeshRawFlags = on; }
+
+    /**
+     * @brief Routes the raw refinement flags of the local elements to the SFC
+     * twin of this (labelled) mesh and applies setMeshRefinementFlags there, so
+     * the sibling rule sees the SFC distribution, as in an SFC run.
+     * @param sfcTwin: SFC mesh over the same global octree.
+     * @param check: also run the labelled-side sibling rule first and count
+     * the twin elements whose final flag differs (rank 0 prints).
+     * @return true if the filtered flags change the mesh on any rank (collective).
+     */
+    bool filterRefineFlagsOnSFC(Mesh *sfcTwin, bool check = false);
 
     /**
      * @brief One-hop remesh transfer (DENDRO_REMESH_ONEHOP): moves a CG

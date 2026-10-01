@@ -4243,7 +4243,12 @@ bool Mesh::isReMeshUnzip(
         if (wave_fp) std::fclose(wave_fp);
         if (amrp_dir) amrp_call++;
 
-        if (isMeshLocalChanged)
+        if (m_uiRemeshRawFlags) {
+            for (unsigned int i = 0; i < numLocalElements; i++) {
+                ot::TreeNode& t = m_uiAllElements[eleOfst + i];
+                t.setFlag((refine_flags[i] << NUM_LEVEL_BITS) | t.getLevel());
+            }
+        } else if (isMeshLocalChanged)
             isMeshLocalChanged = this->setMeshRefinementFlags(refine_flags);
     }
 

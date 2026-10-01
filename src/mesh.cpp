@@ -24271,4 +24271,70 @@ void Mesh::setLocalElementFlags(const std::vector<unsigned int>& flags) {
     m_uiIsIGTSetup = false;
 }
 
+bool Mesh::filterRefineFlagsOnSFC(Mesh* sfcTwin, bool check) {
+    // raw labelled flags -> twin, sibling rule on the twin's distribution
+    std::vector<unsigned int> tw;
+    this->redistributeVec<double>(sfcTwin, nullptr, nullptr, 0, nullptr, &tw);
+    std::vector<unsigned int> old;
+    if (check) {
+        // what the labelled-side sibling rule would have handed the twin
+        std::vector<unsigned int> raw;
+        if (m_uiIsActive) {
+            raw.resize(m_uiNumLocalElements);
+            for (unsigned int i = 0; i < m_uiNumLocalElements; i++)
+                raw[i] = m_uiAllElements[m_uiElementLocalBegin + i].getFlag() >> NUM_LEVEL_BITS;
+            this->setMeshRefinementFlags(raw);
+        }
+        this->redistributeVec<double>(sfcTwin, nullptr, nullptr, 0, nullptr, &old);
+        if (m_uiIsActive) {
+            for (unsigned int i = 0; i < m_uiNumLocalElements; i++) {
+                ot::TreeNode& t = m_uiAllElements[m_uiElementLocalBegin + i];
+                t.setFlag((raw[i] << NUM_LEVEL_BITS) | t.getLevel());
+            }
+        }
+    }
+    bool changed = false;
+    unsigned long long cnt[6] = {0, 0, 0, 0, 0, 0};
+    if (sfcTwin->isActive()) {
+        const unsigned int n =
+            sfcTwin->getElementLocalEnd() - sfcTwin->getElementLocalBegin();
+        if (tw.size() != n) tw.assign(n, OCT_NO_CHANGE);
+        const auto& el = sfcTwin->getAllElements();
+        const unsigned int b = sfcTwin->getElementLocalBegin();
+        if (check) {
+            // the old path re-filtered the labelled-filtered flags on the twin
+            if (old.size() != n) old.assign(n, OCT_NO_CHANGE);
+            sfcTwin->setMeshRefinementFlags(old);
+            for (unsigned int i = 0; i < n; i++) old[i] = el[b + i].getFlag() >> NUM_LEVEL_BITS;
+        }
+        changed = sfcTwin->setMeshRefinementFlags(tw);
+        if (check) {
+            for (unsigned int i = 0; i < n; i++) {
+                const unsigned int fNew = el[b + i].getFlag() >> NUM_LEVEL_BITS;
+                cnt[0] += (tw[i] == OCT_COARSE);
+                cnt[1] += (fNew == OCT_COARSE);
+                cnt[2] += (old[i] == OCT_COARSE);
+                cnt[3] += (tw[i] == OCT_SPLIT);
+                cnt[4] += (fNew == OCT_SPLIT);
+                cnt[5] += (fNew != old[i]);
+            }
+        }
+    }
+    bool any = false;
+    MPI_Allreduce(&changed, &any, 1, MPI_CXX_BOOL, MPI_LOR, m_uiCommGlobal);
+    if (check) {
+        unsigned long long g[6];
+        MPI_Allreduce(cnt, g, 6, MPI_UNSIGNED_LONG_LONG, MPI_SUM, m_uiCommGlobal);
+        int rk;
+        MPI_Comm_rank(m_uiCommGlobal, &rk);
+        if (!rk)
+            std::cout << "[remesh-flags-sfc] raw_coarse=" << g[0]
+                      << " sfc_coarse=" << g[1] << " lab_coarse=" << g[2]
+                      << " raw_split=" << g[3] << " sfc_split=" << g[4]
+                      << " flag_diff=" << g[5] << " changed=" << any
+                      << std::endl;
+    }
+    return any;
+}
+
 }  // namespace ot
