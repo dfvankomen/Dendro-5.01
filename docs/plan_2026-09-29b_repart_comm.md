@@ -270,3 +270,9 @@ sandwich bitwise per cycle) 0 mismatches.
 - Risks: needs K6 + repart hints + co-local COARSE siblings (each checked, collective fallback); the final ghost
   exchange is one extra ghost-layer move (two-hop filled those slots through its transport); not ported to BSSN
   (pos-bcast, phantom fill) or NLSM (wavelet on the twin). Kingspeak np192 not measured.
+
+### K6D Kingspeak np192 em4big (job 28498281, dendrolib 04d1c3a4 = K6 + CANON_TARGETS, 1 round, STEP_PROF + pos dumps)
+- md5: sfc 34455595; graph K6+targets **34455595 (= SFC at np192)**; graph K6 targets=0 cb5ae14e. Targets: absent read slots 0 in every ring (10.5M target-row slots, none read); zip-sync pruned 0/0, global_active 0, local_dup/mirrors 0. targets=0: 7.7M absent R3 slots (153 read), zip-sync active.
+- Wall sfc 195.8, K6+targets 217.1, targets=0 210.5. rkstep 161.6 / 171.1 / 166.3; remesh total 5.9 / 19.9 / 18.2 s; s2g 722 (targets add ~100 ms) vs 623.
+- STEP_PROF gap K6+targets vs SFC (+9.5 s): evec_copy 5.0 -> 10.2 (+5.2, full-vector copies incl. the ~11x unread ghost layer), ge:wait +1.8, rhs_compute_other +1.2, mesh_waitAll +0.8, unzip_compute +0.4; zip-sync 0. Total bytes 1.50 TB vs SFC 1.52 TB.
+- Next: DENDRO_EVEC_LOCAL_COPY (copy only local + delivered ghost slots), then stop allocating unread ghost cg slots; K7 one-hop at scale.
