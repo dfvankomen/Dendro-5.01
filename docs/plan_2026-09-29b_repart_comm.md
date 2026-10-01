@@ -220,3 +220,33 @@ partition-free rules. Sums over all IGT calls of a run (EM4 t_end 10: 16 calls; 
   non-hanging element on its S' owner rank, which owns the node's owner element too). It needs no data,
   so S' can compute a per-element writer mask and hand it out with the routing answer: cheap. See K7
   design below.
+
+### K7 one-hop (design, 2026-09-30; workspace dendrolib_dfvk_ws_onehop)
+Route (b): the IGT runs from the labelled source; the SFC octrees carry topology and flags only.
+1. Flags g2s: `redistributeVec(dof=0, &flags)` (new flags-only mode, same hint/lean routing) labelled ->
+   kept SFC twin, `setMeshRefinementFlags`, `ReMesh` -> SFC successor S'. No vector moves.
+2. Final flags back: S (post-ReMesh, balance included) -> labelled source by the same flags-only call
+   (hint mode labels), `setLocalElementFlags` (raw, no sibling filter).
+3. Labelled successor L' = `buildGraphTwin(S')` (K2 `repartitionFrom`, K6 keys). Topology only.
+4. `L.oneHopTransfer(S', L', in, out)`: M2' blocks computed on L's local elements with the IGT code
+   (var-outer, one reused buffer, so coarse-injection leftovers are the SFC ones); each new element's
+   SFC owner (S' splitters) is asked, per node, "is this element the IGT writer (last non-hanging local
+   writer on the node's S' owner rank), and who owns the node on L'" (owner = label of the node's S'
+   owner element, which is local there; K6 makes it L''s owner). One positional reply (npe ints per
+   element, no count round). The source sends (position, dof values) only for writer nodes, straight
+   to the node's L' owner: every L' local node is written exactly once, from the same element and the
+   same bits as the SFC IGT. Then a ghost exchange on L' (DENDRO_REMESH_ONEHOP_GHOST, default on).
+Invariants: canonical ownership (K6: L' owner of a node = label of its S' owner element); writer rule =
+SFC IGT's, so the values equal the sandwich's by construction (no zip plan, orphan fill or pos-bcast
+needed: S' has no orphans, every owned node has exactly one writer, noW = multiW = 0 in the probe);
+COARSE siblings co-local on L (block vote); flags final before M2'.
+Collective fallback to the two-hop sandwich when: no K6 keys on L', L' hints != S' local elements,
+split COARSE sibling group on L, missing S' element / owner element, or any L' local node not written
+exactly once (vecOut discarded, two-hop run from the still-alive L, S, S').
+Moves per remesh: flags twice (4 B/element), one TN query (16 B/new element), one reply (4 B x npe per
+new element), values (24 B key + 8 B x dof per owned node, each once) — vs two full CG hops plus the
+SFC IGT exchange today.
+Gates: `_CHECK=1` runs the sandwich alongside and aborts (76) on any differing local value (also counts
+ghost slots); EM4 np4/np8 graph, np16 ragged (m3 REFINE=0) and levelwise (m4 REFINE=2) md5 = SFC
+d7bbee89; tp np4/np8 4 arms 0 FAIL, COVERAGE 0, TEST 10 maxErr unchanged, new TEST 10o (onehop vs
+sandwich bitwise per cycle) 0 mismatches.
