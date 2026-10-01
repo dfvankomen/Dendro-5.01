@@ -5504,6 +5504,20 @@ void Mesh::interGridTransfer(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
                         (2 * m_uiElementOrder + 1));
     wVec_m2.resize(recvOfst[npes - 1] + recvC[npes - 1]);
 
+    static const bool igtw_env = [] {
+        const char* e = std::getenv("DENDRO_IGT_WRITER_PROBE");
+        return e && e[0] == '1';
+    }();
+    const bool igtw_on = igtw_env && std::is_same<T, double>::value;
+    std::vector<IgtWriterRec> igtw_recs;
+    unsigned long long igtw_gofs = 0;
+    if (igtw_on) {
+        unsigned long long nl =
+            pMesh->isActive() ? pMesh->getNumLocalMeshElements() : 0;
+        MPI_Exscan(&nl, &igtw_gofs, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+        if (rank == 0) igtw_gofs = 0;
+    }
+
     for (unsigned int var = 0; var < dof; var++) {
         T* vec = vecIn + (var * cg_sz_old);
         T* out = vecOut + (var * cg_sz_new);
@@ -5769,8 +5783,12 @@ void Mesh::interGridTransfer(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
                             }
                         }
             }
+            if (igtw_on)
+                igtWriterProbeCollect(pMesh, (const double*)wVec_m2.data(),
+                                      var, igtw_gofs, igtw_recs);
         }
     }
+    if (igtw_on) igtWriterProbeReport(igtw_recs, comm);
 
     // probe: dump INPUT cg values (vec, the OLD mesh's cg array) keyed
     // by physical position. one file per (rank, call_id, var). dumped

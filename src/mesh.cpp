@@ -24,6 +24,9 @@
 
 #include "mesh.h"
 #include <mutex>
+#include <climits>
+#include <cmath>
+#include <cstring>
 
 #include "TreeNode.h"
 #include "dendro.h"
@@ -23972,6 +23975,190 @@ void Mesh::buildEleDGScopedPlan(const std::vector<unsigned int>& dtOfElem,
           plan.sendCnt);
     build(m_uiRecvEleOffset, m_uiRecvEleCount, recvElem, plan.recvPerm,
           plan.recvCnt);
+}
+
+void Mesh::igtWriterProbeCollect(const ot::Mesh* pMesh, const double* wm2,
+                                 unsigned int var, unsigned long long gofs,
+                                 std::vector<IgtWriterRec>& recs) {
+    const unsigned int eOrd = pMesh->getElementOrder();
+    const unsigned int npe  = pMesh->getNumNodesPerElement();
+    const unsigned int eB   = pMesh->getElementLocalBegin();
+    const unsigned int eE   = pMesh->getElementLocalEnd();
+    const unsigned int nB   = pMesh->getNodeLocalBegin();
+    const unsigned int nE   = pMesh->getNodeLocalEnd();
+    const unsigned int* e2n = pMesh->getE2NMapping().data();
+    const auto& cg2dg       = pMesh->getCG2DGMap();
+    const auto& elems       = pMesh->getAllElements();
+    std::vector<unsigned int> lastW(nE - nB, UINT_MAX);
+    for (unsigned int ele = eB; ele < eE; ele++)
+        for (unsigned int k = 0; k <= eOrd; k++)
+            for (unsigned int j = 0; j <= eOrd; j++)
+                for (unsigned int i = 0; i <= eOrd; i++) {
+                    if (pMesh->isNodeHanging(ele, i, j, k)) continue;
+                    const unsigned int cg =
+                        e2n[ele * npe + (k * (eOrd + 1) + j) * (eOrd + 1) + i];
+                    if (cg >= nB && cg < nE) lastW[cg - nB] = ele;
+                }
+    for (unsigned int ele = eB; ele < eE; ele++) {
+        const ot::TreeNode& tn = elems[ele];
+        const unsigned long long len = 1ull << (m_uiMaxDepth - tn.getLevel());
+        for (unsigned int k = 0; k <= eOrd; k++)
+            for (unsigned int j = 0; j <= eOrd; j++)
+                for (unsigned int i = 0; i <= eOrd; i++) {
+                    if (pMesh->isNodeHanging(ele, i, j, k)) continue;
+                    const unsigned int sub = (k * (eOrd + 1) + j) * (eOrd + 1) + i;
+                    const unsigned int cg  = e2n[ele * npe + sub];
+                    IgtWriterRec r;
+                    r.px   = (unsigned long long)tn.getX() * eOrd + i * len;
+                    r.py   = (unsigned long long)tn.getY() * eOrd + j * len;
+                    r.pz   = (unsigned long long)tn.getZ() * eOrd + k * len;
+                    r.gidx = gofs + (ele - eB);
+                    std::memcpy(&r.bits, &wm2[(ele - eB) * npe + sub], 8);
+                    r.var   = var;
+                    r.flags = 0;
+                    if (cg >= nB && cg < nE) {
+                        r.flags |= 2;
+                        if (lastW[cg - nB] == ele) r.flags |= 1;
+                        if (cg < cg2dg.size() && cg2dg[cg] / npe == ele)
+                            r.flags |= 4;
+                    }
+                    recs.push_back(r);
+                }
+    }
+}
+
+void Mesh::igtWriterProbeReport(std::vector<IgtWriterRec>& recs,
+                                MPI_Comm comm) {
+    static int callId = 0;
+    int rank, npes;
+    MPI_Comm_rank(comm, &rank);
+    MPI_Comm_size(comm, &npes);
+    auto dest = [npes](const IgtWriterRec& r) {
+        unsigned long long h = r.px * 0x9E3779B97F4A7C15ull ^
+                               r.py * 0xC2B2AE3D27D4EB4Full ^
+                               r.pz * 0x165667B19E3779F9ull;
+        h ^= h >> 29;
+        return (int)(h % (unsigned long long)npes);
+    };
+    std::vector<int> sc(npes, 0), rc(npes, 0), so(npes, 0), ro(npes, 0);
+    for (const auto& r : recs) sc[dest(r)]++;
+    std::vector<IgtWriterRec> sb(recs.size());
+    for (int p = 1; p < npes; p++) so[p] = so[p - 1] + sc[p - 1];
+    {
+        std::vector<int> c = so;
+        for (const auto& r : recs) sb[c[dest(r)]++] = r;
+    }
+    recs.clear();
+    recs.shrink_to_fit();
+    MPI_Alltoall(sc.data(), 1, MPI_INT, rc.data(), 1, MPI_INT, comm);
+    for (int p = 1; p < npes; p++) ro[p] = ro[p - 1] + rc[p - 1];
+    const size_t nr = (size_t)ro[npes - 1] + rc[npes - 1];
+    std::vector<IgtWriterRec> rb(nr);
+    MPI_Datatype rt;
+    MPI_Type_contiguous(sizeof(IgtWriterRec), MPI_BYTE, &rt);
+    MPI_Type_commit(&rt);
+    MPI_Alltoallv(sb.data(), sc.data(), so.data(), rt, rb.data(), rc.data(),
+                  ro.data(), rt, comm);
+    MPI_Type_free(&rt);
+    sb.clear();
+    sb.shrink_to_fit();
+    std::sort(rb.begin(), rb.end(), [](const IgtWriterRec& a,
+                                       const IgtWriterRec& b) {
+        if (a.px != b.px) return a.px < b.px;
+        if (a.py != b.py) return a.py < b.py;
+        if (a.pz != b.pz) return a.pz < b.pz;
+        if (a.var != b.var) return a.var < b.var;
+        return a.gidx < b.gidx;
+    });
+    // st: recs grps grpDis posDis grpDisOwnerRank noW multiW wNeMaxG wNeMinG
+    //     wNeOwnerElem noOwnerElem grpMulti
+    unsigned long long st[12] = {0};
+    double maxRel = 0.0, maxAbs = 0.0, maxVal = 0.0;
+    unsigned long long bigDis = 0;
+    st[0]          = nr;
+    size_t a       = 0;
+    bool posDis    = false;
+    auto samePos   = [](const IgtWriterRec& x, const IgtWriterRec& y) {
+        return x.px == y.px && x.py == y.py && x.pz == y.pz;
+    };
+    while (a < nr) {
+        size_t b = a + 1;
+        while (b < nr && samePos(rb[a], rb[b]) && rb[a].var == rb[b].var) b++;
+        st[1]++;
+        if (b - a > 1) st[11]++;
+        bool dis = false, disOwn = false;
+        int nW = 0, nOwn = 0;
+        unsigned long long wBits = 0, ownBits = 0, firstOwnRank = 0;
+        bool haveOwnRank = false;
+        double vmin = 0, vmax = 0;
+        for (size_t c = a; c < b; c++) {
+            double v;
+            std::memcpy(&v, &rb[c].bits, 8);
+            if (c == a) vmin = vmax = v;
+            vmin = std::min(vmin, v);
+            vmax = std::max(vmax, v);
+            if (rb[c].bits != rb[a].bits) dis = true;
+            if (rb[c].flags & 2) {
+                if (!haveOwnRank) {
+                    firstOwnRank = rb[c].bits;
+                    haveOwnRank  = true;
+                } else if (rb[c].bits != firstOwnRank)
+                    disOwn = true;
+            }
+            if (rb[c].flags & 1) {
+                nW++;
+                wBits = rb[c].bits;
+            }
+            if (rb[c].flags & 4) {
+                nOwn++;
+                ownBits = rb[c].bits;
+            }
+        }
+        if (dis) {
+            st[2]++;
+            posDis = true;
+            const double sc2 = std::max(std::fabs(vmin), std::fabs(vmax));
+            if (sc2 > 0) maxRel = std::max(maxRel, (vmax - vmin) / sc2);
+            maxAbs = std::max(maxAbs, vmax - vmin);
+            if (vmax - vmin > 1e-12 * sc2 && vmax - vmin > 1e-14) bigDis++;
+        }
+        maxVal = std::max(maxVal, std::max(std::fabs(vmin), std::fabs(vmax)));
+        if (disOwn) st[4]++;
+        if (nW == 0) st[5]++;
+        if (nW > 1) st[6]++;
+        if (nW == 1) {
+            if (wBits != rb[b - 1].bits) st[7]++;
+            if (wBits != rb[a].bits) st[8]++;
+            if (nOwn == 1 && wBits != ownBits) st[9]++;
+        }
+        if (nOwn == 0) st[10]++;
+        const bool lastOfPos = (b >= nr) || !samePos(rb[a], rb[b]);
+        if (lastOfPos) {
+            if (posDis) st[3]++;
+            posDis = false;
+        }
+        a = b;
+    }
+    unsigned long long g[12];
+    double gMax = 0;
+    MPI_Reduce(st, g, 12, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, comm);
+    MPI_Reduce(&maxRel, &gMax, 1, MPI_DOUBLE, MPI_MAX, 0, comm);
+    double gAbs = 0, gVal = 0;
+    unsigned long long gBig = 0;
+    MPI_Reduce(&maxAbs, &gAbs, 1, MPI_DOUBLE, MPI_MAX, 0, comm);
+    MPI_Reduce(&maxVal, &gVal, 1, MPI_DOUBLE, MPI_MAX, 0, comm);
+    MPI_Reduce(&bigDis, &gBig, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, comm);
+    if (!rank)
+        std::cout << "[igt-writer-probe] call=" << callId << " cand=" << g[0]
+                  << " grps=" << g[1] << " multi=" << g[11]
+                  << " disagree_grps=" << g[2] << " disagree_pos=" << g[3]
+                  << " disagree_ownrank=" << g[4] << " noW=" << g[5]
+                  << " multiW=" << g[6] << " w!=maxg=" << g[7]
+                  << " w!=ming=" << g[8] << " w!=ownerelem=" << g[9]
+                  << " noOwnerElem=" << g[10] << " maxrel=" << gMax
+                  << " maxabs=" << gAbs << " maxval=" << gVal
+                  << " big_grps=" << gBig << std::endl;
+    callId++;
 }
 
 }  // namespace ot
