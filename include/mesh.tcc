@@ -6039,9 +6039,11 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
         const char* v = std::getenv("DENDRO_REMESH_ONEHOP_PROF");
         return v && v[0] == '1';
     }();
+    // ghost fill of the transferred vector: off by default (the next ghost exchange refreshes every
+    // read ghost; on Expanse this first exchange on a fresh mesh cost ~1.1 s/remesh). =1 restores it.
     static const bool ghostFill = [] {
         const char* v = std::getenv("DENDRO_REMESH_ONEHOP_GHOST");
-        return !(v && v[0] == '0');
+        return v && v[0] == '1';
     }();
     double tph[6] = {0, 0, 0, 0, 0, 0};
     double tlast  = MPI_Wtime();
