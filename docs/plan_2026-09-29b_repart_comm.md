@@ -431,3 +431,25 @@ Refs changed: ref/tp_base/np{4,8}_{m3,m3ref1,m4,ragged}.txt; old copies kept as 
 - Knobs: `DENDRO_XCHG_BUF_POOL=0` off; `DENDRO_XCHG_BUF_POOL_MAX_MB` per-rank cap on pooled bytes (default 512; requests that would exceed it fall back to plain malloc/free, never fail); `DENDRO_XCHG_BUF_POOL_REPORT=1` prints `[xbuf-pool] rank= peak_MB= cap_MB= fallbacks=` per rank at exit; with `DENDRO_COMM_STATS=1` `dumpCommStats` also prints `xchg_buf_pool_peak_MB_max` (max over active ranks).
 - Memory: the pool holds the peak number of buffers in flight (+25 % headroom, prefaulted), per rank, for the process lifetime; it grows only to the largest exchange, so it is about the peak ghost-exchange footprint (measured per-rank peak: EM4 np8 22-30 MB, BSSN q1 np4 127-145 MB; with `MAX_MB=1` EM4 np8 stays <= 0.91 MB and ~95 fallbacks/rank, same md5), far below the cap.
 - Threading: the pool is mutex-guarded. Production is MPI-per-core with no OpenMP; no OpenMP region calls the ghost exchanges, so the lock is uncontended.
+
+## Exact ghost default flip (2026-10-02)
+
+`DENDRO_REPART_EXACT_GHOST` is now default on (`=0` reverts to the R1-R3 rings + owner targets). The path still falls back to the rings when K6 keys are off or its preconditions fail; `_CHECK` and `DENDRO_RING_FINER_NBRS` are unchanged. Evidence: Kingspeak em4big np192/np384 md5 = SFC, remesh 23-27 % faster; Expanse np384 md5 equal, remesh -28 %.
+
+Gates on the default build (bin exdef), no knobs:
+
+| gate | result |
+|---|---|
+| em4.sh np4/np8 sfc+graph | all d7bbee89 |
+| EM4 np16 ragged (m3, REFINE=0) / lvl (m4, REFINE=2) | d7bbee89 / d7bbee89 |
+| testPartitioning np4, np8 (m3, m3ref1, m4, ragged) | 0 FAIL, COVERAGE clean, TEST 10/11 unchanged |
+| nuts2.sh | == ref |
+| lw3 np16 sfc/lvl/lw/fp | min/max of every arm equal to sfc (to ~1e-12 in l2 only) |
+| bssn.sh graph | 7a18bafe / bf867af6 / 86470a02 / b50bc05f |
+| EXACT_GHOST=0 EM4 np8 | d7bbee89 |
+| EXACT_GHOST_CHECK=1 EM4 np8 graph | missing=0 |
+| WAVE_COVER_CHECK=1 EM4 np8 graph | unwritten=0 |
+
+tp refs: TEST 2 ghost-exchange node counts drop (np4 m3 319415 -> 265709, np8 m3 477074 -> 389177, m4/m3ref1 about -25 %). Refs regenerated (`ref/tp_base/np{4,8}_*.txt`, old kept as `.pre_exact`), rerun IDENTICAL.
+
+Unexpected: np4 m3 TEST 8bj [canonical phys_pos] goes 0 -> 108 (e, sub) pairs routing differently graph vs SFC (maxDiff 4); `=0` gives 0 again. It is a red informational line (not counted as FAIL); pre/post-ghost-exchange 8bj bit-mismatches stay 0 and EM4 md5 is unchanged. Ragged 8bj improves (np4 4696 -> 2555, np8 9868 -> 3087). Worth a look but not a blocker.
