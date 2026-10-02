@@ -21569,7 +21569,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         const char* e = std::getenv("DENDRO_REPART_CANON_KEYS_CHECK");
         return e && e[0] == '1';
     }();
-    // DENDRO_REPART_EXACT_GHOST=1 (opt-in, needs K6 keys): push every element
+    // DENDRO_REPART_EXACT_GHOST (default on, =0 reverts; needs K6 keys, else rings): push every element
     // once to its exact destination set (computeExactGhostDest: label, labels
     // of touching elements incl. finer ones, K6 owner closure) instead of the
     // R1-R3 claim rounds and the owner-target fetch.
@@ -21578,7 +21578,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // on anything missing
     static const bool exactGhostEnv = [] {
         const char* e = std::getenv("DENDRO_REPART_EXACT_GHOST");
-        return e && e[0] == '1';
+        return !(e && e[0] == '0');   // default on; =0 reverts to the ring path
     }();
     static const int exactGhostCheck = exactGhostCheckLevel();
     std::vector<std::uint64_t> ckRecv;
