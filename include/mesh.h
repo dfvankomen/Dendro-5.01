@@ -1415,6 +1415,18 @@ class Mesh {
      * Alltoallv over the rank-aligned lists, then a mesh-wide active flag so
      * every rank agrees whether the per-step collective runs. */
     void pruneZipSync();
+    /**@brief DENDRO_ZIPPLAN_FAST: finish the fast-plan decision on the final
+     * scatter map (collective); returns true when the fast plan stands and
+     * the prune is done, false when the caller must prune (full rebuild or
+     * check mode). */
+    bool zipFastFinish();
+    /**@brief DENDRO_ZIPPLAN_FAST_CHECK: compare the pruned full plan with the
+     * stashed fast plan, abort (83) on any difference (collective). */
+    void zipFastCompare();
+    bool m_uiZipFastPending = false;
+    bool m_uiZipFastCheck   = false;
+    bool m_uiZipFastNoRetry = false;
+    std::vector<unsigned int> m_uiZipFastStashCg, m_uiZipFastStashIdx;
 
     /**@brief DENDRO_ZIPPLAN_DIST=1: home-rank arbitration for buildZipPlan.
      *

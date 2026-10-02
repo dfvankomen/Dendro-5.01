@@ -9123,6 +9123,7 @@ void Mesh::pruneZipSync() {
         return !(e && e[0] == '0');
     }();
     if (!pruneLabelled && !check && m_uiIsLabelledRebuild) return;
+    if (m_uiZipFastPending && zipFastFinish()) return;
     const int npes = m_uiActiveNpes;
     SlotFlags delivered(m_uiNumActualNodes);
     for (const unsigned int c : m_uiScatterMapActualNodeRecv) delivered.insert(c);
@@ -9213,12 +9214,77 @@ void Mesh::pruneZipSync() {
     MPI_Allreduce(&any, &anyG, 1, MPI_INT, MPI_MAX, m_uiCommActive);
     m_uiZipSyncGlobalActive = anyG != 0;
     m_uiZipSyncPruned       = true;
+    if (m_uiZipFastCheck) zipFastCompare();
     if (std::getenv("DENDRO_ZIPSYNC_STATS"))
         std::cout << "[zipsync-prune r" << m_uiActiveRank << "] recv " << recvN
                   << "->" << m_uiZipSyncRecvCg.size() << " send " << sendN
                   << "->" << m_uiZipSyncSendCg.size()
                   << " ghost_winners=" << ghostWinners << " active=" << anyG
                   << std::endl;
+}
+
+bool Mesh::zipFastFinish() {
+    // a ghost send source of the final scatter map would keep a side-channel
+    // entry in the full build: then the fast plan is not the full one
+    const unsigned int npe = m_uiNpE, nAll = m_uiNumActualNodes;
+    const bool useDG = m_uiScatterMapSendIsDG.size() == m_uiScatterMapActualNodeSend.size();
+    int bad = 0;
+    for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size() && !bad; k++) {
+        unsigned int idx = m_uiScatterMapActualNodeSend[k];
+        if (useDG && m_uiScatterMapSendIsDG[k])
+            idx = m_uiE2NMapping_CG[(idx / npe + m_uiElementLocalBegin) * npe + idx % npe];
+        if (idx < nAll && (idx < m_uiNodeLocalBegin || idx >= m_uiNodeLocalEnd)) bad = 1;
+    }
+    // _FORCEMISS=1: rank 0 reports a miss, so the full-rebuild fallback runs
+    static const bool forceMiss = [] {
+        const char* e = std::getenv("DENDRO_ZIPPLAN_FAST_FORCEMISS");
+        return e && e[0] == '1';
+    }();
+    if (forceMiss && !m_uiActiveRank) bad = 1;
+    int badAll = 0;
+    MPI_Allreduce(&bad, &badAll, 1, MPI_INT, MPI_MAX, m_uiCommActive);
+    m_uiZipFastPending = false;
+    static const bool prof = [] {
+        const char* e = std::getenv("DENDRO_ZIPPLAN_PROF");
+        return e && e[0] == '1';
+    }();
+    if (prof && !m_uiActiveRank)
+        std::printf("[zipplan-fast] final scatter map: ghost send sources on %d rank(s)%s\n",
+                    badAll, badAll ? ", full rebuild" : "");
+    if (badAll) {
+        m_uiZipFastCheck = false;
+        m_uiZipFastStashCg.clear();
+        m_uiZipFastStashIdx.clear();
+        m_uiZipFastNoRetry = true;
+        buildZipPlan();
+        m_uiZipFastNoRetry = false;
+        return false;
+    }
+    if (m_uiZipFastCheck) return false;  // prune the full lists, then compare
+    m_uiZipSyncGlobalActive = false;
+    m_uiZipSyncPruned       = true;
+    return true;
+}
+
+void Mesh::zipFastCompare() {
+    unsigned long long d[8] = {
+        m_uiZipPlanCg != m_uiZipFastStashCg, m_uiZipPlanUnzipIdx != m_uiZipFastStashIdx,
+        !m_uiZipSyncSendCg.empty() || !m_uiZipSyncRecvCg.empty(),
+        !m_uiZipLocalDupSrc.empty() || !m_uiZipLocalDupDst.empty(),
+        !m_uiZipNonPrimaryToGhostCg.empty(), !m_uiZipGhostToLocalAtConsensus.empty(),
+        !m_uiPassDDemotedToGhostCg.empty() || !m_uiPassDDemotedLocalCgs.empty() ||
+            !m_uiLocalNonPrimaryCg.empty(),
+        (unsigned long long)m_uiZipSyncGlobalActive};
+    MPI_Allreduce(MPI_IN_PLACE, d, 8, MPI_UNSIGNED_LONG_LONG, MPI_SUM, m_uiCommActive);
+    if (!m_uiActiveRank)
+        std::printf("[zipplan-fast-check] ranks differing: plan_cg=%llu plan_idx=%llu sync=%llu "
+                    "local_dup=%llu znp=%llu fixup=%llu passd/nonprimary=%llu active=%llu\n",
+                    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+    m_uiZipFastCheck = false;
+    m_uiZipFastStashCg.clear();
+    m_uiZipFastStashIdx.clear();
+    for (auto v : d)
+        if (v) MPI_Abort(m_uiCommActive, 83);
 }
 
 void Mesh::buildZipPlan() {
@@ -9664,6 +9730,150 @@ void Mesh::buildZipPlanCore() {
         encodeKey(e, n, x, y, z);
         return findMyMin(PhysKey3{x, y, z});
     };
+
+    // DENDRO_ZIPPLAN_FAST=1: when no ghost claim survives the claim filter and
+    // every local cg is the only local cg at its position (owner element
+    // local), each position has exactly one claim, so the arbitration only
+    // confirms the local fold: plan = every local cg with its myMin writer,
+    // empty side channel, no mirrors. Collective decision (one Allreduce),
+    // else the full build; pruneZipSync finishes the decision on the final
+    // scatter map. _CHECK=1 also runs the full build and pruneZipSync aborts
+    // (83) on any difference; _CHECK_PERTURB=1 corrupts one fast entry on
+    // rank 0 to prove the check fires.
+    static const bool zpFastEnv = [] {
+        const char* v = std::getenv("DENDRO_ZIPPLAN_FAST");
+        return v && v[0] == '1';
+    }();
+    static const bool zpFastChk = [] {
+        const char* v = std::getenv("DENDRO_ZIPPLAN_FAST_CHECK");
+        return v && v[0] == '1';
+    }();
+    static const bool zpFastPerturb = [] {
+        const char* v = std::getenv("DENDRO_ZIPPLAN_FAST_CHECK_PERTURB");
+        return v && v[0] == '1';
+    }();
+    std::vector<unsigned int> fastPlanCg, fastPlanIdx;
+    double zpfWait = 0.0;  // decision Allreduce, absorbs arrival skew
+    m_uiZipFastPending = false;
+    m_uiZipFastCheck   = false;
+    if (zpFastEnv && !m_uiZipFastNoRetry && m_uiActiveNpes > 1) {
+        static const bool fastEnvOk = [] {
+            const char* pl = std::getenv("DENDRO_ZIPSYNC_PRUNE");
+            const char* pc = std::getenv("DENDRO_ZIPSYNC_CHECK");
+            const char* cf = std::getenv("DENDRO_ZIPPLAN_CLAIM_FILTER");
+            const char* pz = std::getenv("DENDRO_ZIPSYNC_PRUNE_LABELLED");
+            const char* ef = std::getenv("DENDRO_ENABLE_ELEM_READ_FIXUP");
+            return (pl ? std::atoi(pl) : 2) >= 2 && !(pc && pc[0] == '1') &&
+                   !(cf && cf[0] == '0') && !(pz && pz[0] == '0') &&
+                   !(ef && ef[0] == '1') && !std::getenv("DENDRO_ZIPPLAN_STATS") &&
+                   !DENDRO_PROBE_GETENV("DENDRO_PASSD_CLEANUP_DBG") &&
+                   !DENDRO_PROBE_GETENV("DENDRO_DUP_PROBE_DIR");
+        }();
+        const unsigned int nAll = m_uiNumActualNodes;
+        // reason bits: 1 env, 2 mesh state, 4 local position shared / owner
+        // not local, 8 a ghost claim survives the filter
+        int why = 0;
+        if (!fastEnvOk) why |= 1;
+        if (!(m_uiCanonKeysBuilt || !m_uiIsLabelledRebuild) ||
+            !m_uiPassDDemotedToGhostCg.empty() || !m_uiPassDDemotedLocalCgs.empty() ||
+            m_e2b_unzip_counts.size() != m_uiNumTotalElements || m_uiCG2DG.size() < nAll)
+            why |= 2;
+        int ok = why == 0;
+        if (ok) {
+            // one local cg per position, its owner element local
+            std::vector<unsigned char> grpUsed(myMin.size(), 0);
+            for (unsigned int cg = nLB; cg < nLE && ok; cg++) {
+                const unsigned int dg = m_uiCG2DG[cg];
+                if (dg == LOOK_UP_TABLE_DEFAULT) { ok = 0; break; }
+                const unsigned int e = dg / npe;
+                if (e < m_uiElementLocalBegin || e >= m_uiElementLocalEnd) { ok = 0; break; }
+                const LocalClaim* w = findMyMinDg(e, dg % npe);
+                if (!w || grpUsed[w - myMin.data()]++) ok = 0;
+            }
+            if (!ok) why |= 4;
+        }
+        if (ok) {
+            // no ghost claim survives the claim filter for being read and
+            // undelivered or a mirror target; ghost send sources are checked
+            // in pruneZipSync on the final scatter map (the labelled rebuild
+            // shrinks it in between)
+            std::vector<unsigned char> keep(nAll, 0);
+            for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
+                if (m_e2b_unzip_counts[e] == 0) continue;
+                for (unsigned int k = 0; k < npe; k++) {
+                    const unsigned int c = m_uiE2NMapping_CG[(size_t)e * npe + k];
+                    if (c < nAll) keep[c] = 1;
+                }
+            }
+            for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
+                if (kv.second < nAll) keep[kv.second] = 1;
+            for (unsigned int c : m_uiScatterMapActualNodeRecv)
+                if (c < nAll) keep[c] = 0;
+            for (unsigned int c = 0; c < nAll && ok; c++)
+                if (keep[c] && (c < nLB || c >= nLE)) ok = 0;
+            if (!ok) why |= 8;
+        }
+        int whyAll = 0;
+        const double zpfPre = __zp_on ? MPI_Wtime() : 0.0;
+        MPI_Allreduce(&why, &whyAll, 1, MPI_INT, MPI_BOR, m_uiCommActive);
+        zpfWait = __zp_on ? MPI_Wtime() - zpfPre : 0.0;
+        const int okAll = whyAll == 0;
+        if (__zp_on && !m_uiActiveRank)
+            std::printf("[zipplan-fast] taken=%d why=%d (labelled=%d keys=%d)\n", okAll, whyAll,
+                        (int)m_uiIsLabelledRebuild, (int)m_uiCanonKeysBuilt);
+        if (okAll) {
+            fastPlanCg.reserve(nLE - nLB);
+            fastPlanIdx.reserve(nLE - nLB);
+            for (unsigned int cg = nLB; cg < nLE; cg++) {
+                const unsigned int dg = m_uiCG2DG[cg];
+                const LocalClaim* mit = findMyMinDg(dg / npe, dg % npe);
+                const unsigned int we = mit->elem, ws = mit->sub;
+                if (we < m_uiElementLocalBegin || we >= m_uiElementLocalEnd) continue;
+                const unsigned int blk = m_uiE2BlkMap[we - m_uiElementLocalBegin];
+                if (blk == LOOK_UP_TABLE_DEFAULT) continue;
+                const auto& block          = m_uiLocalBlockList[blk];
+                const ot::TreeNode blkNode = block.getBlockNode();
+                const unsigned int regLev  = block.getRegularGridLev();
+                const unsigned int lx = block.getAllocationSzX(), ly = block.getAllocationSzY();
+                const unsigned int pw = block.get1DPadWidth();
+                const unsigned int ei = (pNodes[we].getX() - blkNode.getX()) >> (m_uiMaxDepth - regLev);
+                const unsigned int ej = (pNodes[we].getY() - blkNode.getY()) >> (m_uiMaxDepth - regLev);
+                const unsigned int ek = (pNodes[we].getZ() - blkNode.getZ()) >> (m_uiMaxDepth - regLev);
+                const unsigned int i = ws % (eOrd + 1), j = (ws / (eOrd + 1)) % (eOrd + 1),
+                                   kk = ws / ((eOrd + 1) * (eOrd + 1));
+                fastPlanCg.push_back(cg);
+                fastPlanIdx.push_back(block.getOffset() + (ek * eOrd + kk + pw) * (ly * lx) +
+                                      (ej * eOrd + j + pw) * lx + (ei * eOrd + i + pw));
+            }
+            if (zpFastChk && zpFastPerturb && !m_uiActiveRank && !fastPlanIdx.empty())
+                fastPlanIdx[0] ^= 1u;
+            m_uiZipFastPending = true;
+            if (!zpFastChk) {
+                m_uiZipPlanCg.swap(fastPlanCg);
+                m_uiZipPlanUnzipIdx.swap(fastPlanIdx);
+                m_uiZipSyncSendCounts.assign(m_uiActiveNpes, 0);
+                m_uiZipSyncRecvCounts.assign(m_uiActiveNpes, 0);
+                m_uiZipSyncSendOffsets.assign(m_uiActiveNpes, 0);
+                m_uiZipSyncRecvOffsets.assign(m_uiActiveNpes, 0);
+                m_uiZipSyncSendCg.clear();
+                m_uiZipSyncRecvCg.clear();
+                m_uiZipLocalDupSrc.clear();
+                m_uiZipLocalDupDst.clear();
+                m_uiZipNonPrimaryToGhostCg.clear();
+                m_uiZipGhostToLocalAtConsensus.clear();
+                this->unifyE2NCgAcrossTNInstances();
+                if (__zp_on && !m_uiActiveRank)
+                    std::printf("[zipplan-prof] fast total=%.1f ms (allreduce wait=%.1f, plan=%zu)\n",
+                                (MPI_Wtime() - __zp_t0) * 1e3, zpfWait * 1e3,
+                                m_uiZipPlanCg.size());
+                return;
+            }
+            // check mode: the full build runs too; pruneZipSync compares
+            m_uiZipFastCheck = true;
+            m_uiZipFastStashCg.swap(fastPlanCg);
+            m_uiZipFastStashIdx.swap(fastPlanIdx);
+        }
+    }
 
     // For each LOCAL cg, find its phys_pos via cg2dg. We advertise
     // (phys_pos, my_local_cg, my smallest-TreeNode local elem here:
