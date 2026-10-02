@@ -6434,12 +6434,12 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
             return (size_t)h;
         }
     };
-    // DENDRO_ONEHOP_FLAT_INDEX=1: flat chained index over the local cg positions instead of
+    // DENDRO_ONEHOP_FLAT_INDEX (default on, =0 reverts): flat chained index over the local cg positions instead of
     // the node-based multimap (same matches, same writes). _CHECK=1 also runs the multimap
     // into a scratch vector and aborts (75) on any differing local value or write count
     static const bool flatIdx = [] {
         const char* v = std::getenv("DENDRO_ONEHOP_FLAT_INDEX");
-        return v && v[0] == '1';
+        return !(v && v[0] == '0');
     }();
     static const bool flatChk = [] {
         const char* v = std::getenv("DENDRO_ONEHOP_FLAT_INDEX_CHECK");
