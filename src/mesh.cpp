@@ -9731,7 +9731,7 @@ void Mesh::buildZipPlanCore() {
         return findMyMin(PhysKey3{x, y, z});
     };
 
-    // DENDRO_ZIPPLAN_FAST (default on, =0 reverts): when no ghost claim survives the claim filter and
+    // DENDRO_ZIPPLAN_FAST (default 1 = labelled rebuilds, 2 = SFC too, 0 off): when no ghost claim survives the claim filter and
     // every local cg is the only local cg at its position (owner element
     // local), each position has exactly one claim, so the arbitration only
     // confirms the local fold: plan = every local cg with its myMin writer,
@@ -9740,10 +9740,13 @@ void Mesh::buildZipPlanCore() {
     // scatter map. _CHECK=1 also runs the full build and pruneZipSync aborts
     // (83) on any difference; _CHECK_PERTURB=1 corrupts one fast entry on
     // rank 0 to prove the check fires.
-    static const bool zpFastEnv = [] {
+    // default = labelled rebuilds only (SFC keeps the full build: at np384 on kingspeak the fast
+    // path read ~1 % slower on SFC rkstep+remesh, cause unknown); =2 also takes it on SFC meshes
+    static const int zpFastMode = [] {
         const char* v = std::getenv("DENDRO_ZIPPLAN_FAST");
-        return !(v && v[0] == '0');
+        return v ? std::atoi(v) : 1;
     }();
+    const bool zpFastEnv = zpFastMode == 2 || (zpFastMode == 1 && m_uiCanonKeysBuilt);  // K6 labelled rebuild (m_uiIsLabelledRebuild is set after the plan)
     static const bool zpFastChk = [] {
         const char* v = std::getenv("DENDRO_ZIPPLAN_FAST_CHECK");
         return v && v[0] == '1';
