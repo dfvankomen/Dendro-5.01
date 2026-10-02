@@ -22982,39 +22982,152 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             recvOff[p] = recvOff[p - 1] + recvCount[p - 1];
         int totalRecv = recvOff[npes - 1] + recvCount[npes - 1];
 
-        // Exchange counts to get send counts
-        std::vector<int> sendCount(npes);
-        repartRound();
-        MPI_Alltoall(recvCount.data(), 1, MPI_INT, sendCount.data(), 1,
-                     MPI_INT, commActive);
+        // DG globals with the receiver's isDG tag in the top bit, so the
+        // sender knows which entries should read from m_uiLocalNodalDG vs vec
+        constexpr std::uint64_t kIsDGBit = std::uint64_t(1) << 63;
+        auto reqWord = [&](int p, size_t i) {
+            return std::uint64_t(recvNodeDGG[p][i]) |
+                   (recvNodeIsDG[p][i] ? kIsDGBit : 0);
+        };
+        std::vector<std::uint64_t> recvBuf;
+        auto packRecv = [&]() {
+            if (recvBuf.size() == (size_t)totalRecv) return;
+            recvBuf.resize(totalRecv);
+            int off = 0;
+            for (int p = 0; p < npes; p++)
+                for (size_t i = 0; i < recvNodeDGG[p].size(); i++)
+                    recvBuf[off++] = reqWord(p, i);
+        };
+
+        // request round: each receiver sends its requested DG globals to the
+        // owner; the owner gets per-peer lists in rank order.
+        // DENDRO_SM_RUNS=1 (default off): send each per-peer list as runs of
+        // consecutive globals, one word per run (start | len-1 << 32, isDG
+        // bit kept); requests come element by element, so ~9x fewer words,
+        // and the owner decodes straight from the runs (one lookup per run).
+        // _CHECK=1 also runs the plain round + decode and aborts 86 if any
+        // send list differs (_PERTURB=1 flips one entry to prove it bites).
+        // DENDRO_SM_PROF=1: entry barrier + per-round timers and sizes
+        static const int smRuns = [] {
+            const char* e = std::getenv("DENDRO_SM_RUNS");
+            const char* c = std::getenv("DENDRO_SM_RUNS_CHECK");
+            return (e && e[0] == '1' ? 1 : 0) | (c && c[0] == '1' ? 2 : 0);
+        }();
+        static const bool smPerturb = [] {
+            const char* e = std::getenv("DENDRO_SM_RUNS_PERTURB");
+            return e && e[0] == '1';
+        }();
+        static const bool smProf = [] {
+            const char* e = std::getenv("DENDRO_SM_PROF");
+            return e && e[0] == '1';
+        }();
+        double smT[5] = {0, 0, 0, 0, 0};  // wait, round, counts, payload, encode
+        size_t smWords = 0;               // words this rank put on the wire
+        auto plainRound = [&](std::vector<int>& sc,
+                              std::vector<std::uint64_t>& sb) {
+            packRecv();
+            sc.assign(npes, 0);
+            const double t0 = MPI_Wtime();
+            repartRound();
+            MPI_Alltoall(recvCount.data(), 1, MPI_INT, sc.data(), 1, MPI_INT,
+                         commActive);
+            const double t1 = MPI_Wtime();
+            std::vector<int> so(npes, 0);
+            for (int p = 1; p < npes; p++) so[p] = so[p - 1] + sc[p - 1];
+            sb.resize((size_t)so[npes - 1] + sc[npes - 1]);
+            repartRound();
+            MPI_Alltoallv(recvBuf.data(), recvCount.data(), recvOff.data(),
+                          MPI_UINT64_T, sb.data(), sc.data(), so.data(),
+                          MPI_UINT64_T, commActive);
+            smT[2] = t1 - t0;
+            smT[3] = MPI_Wtime() - t1;
+            smWords = (size_t)totalRecv;
+        };
+        auto runsRound = [&](std::vector<int>& sc,
+                             std::vector<std::uint64_t>& w) {
+            constexpr std::uint64_t kLo = 0xffffffffull, kMaxLen = 0x7fffffffull;
+            const double tE = MPI_Wtime();
+            std::vector<std::uint64_t> rw;
+            std::vector<int> rwc(npes, 0), rwo(npes, 0);
+            rw.reserve(totalRecv / 4 + npes);
+            for (int p = 0; p < npes; p++) {
+                rwo[p] = (int)rw.size();
+                const size_t e = recvNodeDGG[p].size();
+                for (size_t i = 0; i < e;) {
+                    const std::uint64_t w0 = reqWord(p, i);
+                    const std::uint64_t f = w0 & kIsDGBit, s = w0 & kLo;
+                    std::uint64_t len = 1;
+                    while (i + len < e && len <= kMaxLen &&
+                           reqWord(p, i + len) == (f | (s + len)))
+                        len++;
+                    rw.push_back(f | s | ((len - 1) << 32));
+                    i += len;
+                }
+                rwc[p] = (int)rw.size() - rwo[p];
+            }
+            const double t0 = MPI_Wtime();
+            smT[4] = t0 - tE;
+            std::vector<int> wc(npes, 0), wo(npes, 0);
+            repartRound();
+            MPI_Alltoall(rwc.data(), 1, MPI_INT, wc.data(), 1, MPI_INT, commActive);
+            const double t1 = MPI_Wtime();
+            for (int p = 1; p < npes; p++) wo[p] = wo[p - 1] + wc[p - 1];
+            w.resize((size_t)wo[npes - 1] + wc[npes - 1]);
+            repartRound();
+            MPI_Alltoallv(rw.data(), rwc.data(), rwo.data(), MPI_UINT64_T, w.data(),
+                          wc.data(), wo.data(), MPI_UINT64_T, commActive);
+            smT[2] = t1 - t0;
+            smT[3] = MPI_Wtime() - t1;
+            smWords = rw.size();
+            // requests per peer (runs arrive in rank order)
+            sc.assign(npes, 0);
+            for (int p = 0; p < npes; p++)
+                for (int k = wo[p]; k < wo[p] + wc[p]; k++)
+                    sc[p] += (int)((w[k] & ~kIsDGBit) >> 32) + 1;
+        };
+        // runs mode: sendBuf holds the received runs, not the requests
+        std::vector<int> sendCount;
+        std::vector<std::uint64_t> sendBuf;
+        if (smProf) {
+            const double t0 = MPI_Wtime();
+            MPI_Barrier(commActive);
+            smT[0] = MPI_Wtime() - t0;
+        }
+        {
+            const double t0 = MPI_Wtime();
+            if (smRuns & 1) runsRound(sendCount, sendBuf);
+            else plainRound(sendCount, sendBuf);
+            smT[1] = MPI_Wtime() - t0;
+        }
+        if (smProf) {
+            int peersR = 0, peersS = 0;
+            for (int p = 0; p < npes; p++) {
+                peersR += recvCount[p] != 0;
+                peersS += sendCount[p] != 0;
+            }
+            double v[9] = {smT[0], smT[1], smT[2], smT[3], (double)totalRecv,
+                           (double)smWords, (double)peersR, (double)peersS, smT[4]};
+            double mx[9], sm[9];
+            MPI_Reduce(v, mx, 9, MPI_DOUBLE, MPI_MAX, 0, commActive);
+            MPI_Reduce(v, sm, 9, MPI_DOUBLE, MPI_SUM, 0, commActive);
+            if (!rank)
+                std::printf("[sm-prof] np=%d runs=%d wait max/avg %.2f/%.2f ms "
+                            "round %.2f/%.2f counts %.2f/%.2f payload %.2f/%.2f "
+                            "encode %.2f/%.2f | requests max/avg %.0f/%.0f "
+                            "wire words %.0f/%.0f peers req %.0f/%.1f served %.0f/%.1f\n",
+                            npes, smRuns & 1, mx[0] * 1e3, sm[0] * 1e3 / npes,
+                            mx[1] * 1e3, sm[1] * 1e3 / npes, mx[2] * 1e3,
+                            sm[2] * 1e3 / npes, mx[3] * 1e3, sm[3] * 1e3 / npes,
+                            mx[8] * 1e3, sm[8] * 1e3 / npes, mx[4], sm[4] / npes,
+                            mx[5], sm[5] / npes, mx[6], sm[6] / npes, mx[7],
+                            sm[7] / npes);
+        }
 
         std::vector<int> sendOff(npes, 0);
         for (int p = 1; p < npes; p++)
             sendOff[p] = sendOff[p - 1] + sendCount[p - 1];
         int totalSend = sendOff[npes - 1] + sendCount[npes - 1];
-
-        // DG globals with the receiver's isDG tag in the top bit, so the
-        // sender knows which entries should read from m_uiLocalNodalDG vs vec
-        constexpr std::uint64_t kIsDGBit = std::uint64_t(1) << 63;
-        std::vector<std::uint64_t> sendBuf(totalSend);
-        std::vector<std::uint64_t> recvBuf(totalRecv);
-        {
-            int off = 0;
-            for (int p = 0; p < npes; p++)
-                for (size_t i = 0; i < recvNodeDGG[p].size(); i++)
-                    recvBuf[off++] = std::uint64_t(recvNodeDGG[p][i]) |
-                                     (recvNodeIsDG[p][i] ? kIsDGBit : 0);
-        }
-        repartRound();
-        MPI_Alltoallv(recvBuf.data(), recvCount.data(), recvOff.data(),
-                      MPI_UINT64_T, sendBuf.data(), sendCount.data(),
-                      sendOff.data(), MPI_UINT64_T, commActive);
         __phase("  sm: exchange");
-        std::vector<unsigned char> sendIsDGBuf(totalSend);
-        for (int i = 0; i < totalSend; i++) {
-            sendIsDGBuf[i] = (sendBuf[i] & kIsDGBit) ? 1 : 0;
-            sendBuf[i] &= ~kIsDGBit;
-        }
 
         // Decode (ownerGid, sub) on sender. Three modes:
         //  1. Receiver tagged isDG=1 (R2 boundary): use DG path,
@@ -23028,26 +23141,22 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         //     only a fallback for the downstream orphan-cg issue in
         //     graph-partitioned meshes; Mesh::orphanPreGather in the
         //     user code is the actual workaround.
-        std::vector<unsigned int> sendSM(totalSend);
-        std::vector<unsigned char> sendIsDG(totalSend, 0);
-        for (int i = 0; i < totalSend; i++) {
-            unsigned int gid =
-                static_cast<unsigned int>(sendBuf[i] / m_uiNpE);
-            unsigned int nid =
-                static_cast<unsigned int>(sendBuf[i] % m_uiNpE);
+        auto lookupEle = [&](unsigned int gid) {
             const auto git = globaltoNewLocal.find(gid);
-            unsigned int localEle = git != globaltoNewLocal.end()
-                                        ? (unsigned int)git->second
-                                        : m_uiElementLocalBegin;
+            return git != globaltoNewLocal.end() ? (unsigned int)git->second
+                                                 : m_uiElementLocalBegin;
+        };
+        auto decodeOne = [&](unsigned int localEle, unsigned int nid,
+                             bool reqDG, unsigned int& outSM,
+                             unsigned char& outDG) {
             const bool inLocalRange =
                 (localEle >= m_uiElementLocalBegin &&
                  localEle < m_uiElementLocalEnd);
 
-            if (sendIsDGBuf[i] && inLocalRange) {
-                sendSM[i] =
-                    (localEle - m_uiElementLocalBegin) * m_uiNpE + nid;
-                sendIsDG[i] = 1;
-                continue;
+            if (reqDG && inLocalRange) {
+                outSM = (localEle - m_uiElementLocalBegin) * m_uiNpE + nid;
+                outDG = 1;
+                return;
             }
 
             unsigned int cg = m_uiE2NMapping_CG[localEle * m_uiNpE + nid];
@@ -23055,16 +23164,77 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                             cg < m_uiNodeLocalEnd);
 
             if (cgLocal) {
-                sendSM[i]   = cg;
-                sendIsDG[i] = 0;
+                outSM = cg;
+                outDG = 0;
             } else if (inLocalRange) {
-                sendSM[i] =
-                    (localEle - m_uiElementLocalBegin) * m_uiNpE + nid;
-                sendIsDG[i] = 1;
+                outSM = (localEle - m_uiElementLocalBegin) * m_uiNpE + nid;
+                outDG = 1;
             } else {
-                sendSM[i]   = cg;
-                sendIsDG[i] = 0;
+                outSM = cg;
+                outDG = 0;
             }
+        };
+        // one entry per request, in place on the plain buffer
+        auto decodePlain = [&](std::vector<std::uint64_t>& buf,
+                               std::vector<unsigned int>& outSM,
+                               std::vector<unsigned char>& outDG) {
+            const int n = (int)buf.size();
+            std::vector<unsigned char> isDGBuf(n);
+            for (int i = 0; i < n; i++) {
+                isDGBuf[i] = (buf[i] & kIsDGBit) ? 1 : 0;
+                buf[i] &= ~kIsDGBit;
+            }
+            outSM.assign(n, 0);
+            outDG.assign(n, 0);
+            for (int i = 0; i < n; i++) {
+                unsigned int gid = static_cast<unsigned int>(buf[i] / m_uiNpE);
+                unsigned int nid = static_cast<unsigned int>(buf[i] % m_uiNpE);
+                decodeOne(lookupEle(gid), nid, isDGBuf[i], outSM[i], outDG[i]);
+            }
+        };
+        std::vector<unsigned int> sendSM;
+        std::vector<unsigned char> sendIsDG;
+        if (smRuns & 1) {
+            // straight from the runs: one lookup per element, no request buffer
+            sendSM.assign(totalSend, 0);
+            sendIsDG.assign(totalSend, 0);
+            int i = 0;
+            for (const std::uint64_t x : sendBuf) {
+                const bool f = (x & kIsDGBit) != 0;
+                const std::uint64_t s = x & 0xffffffffull;
+                const std::uint64_t len = ((x & ~kIsDGBit) >> 32) + 1;
+                unsigned int gid = (unsigned int)(s / m_uiNpE);
+                unsigned int nid = (unsigned int)(s % m_uiNpE);
+                unsigned int le  = lookupEle(gid);
+                for (std::uint64_t j = 0; j < len; j++, i++) {
+                    decodeOne(le, nid, f, sendSM[i], sendIsDG[i]);
+                    if (++nid == m_uiNpE) {
+                        nid = 0;
+                        le  = lookupEle(++gid);
+                    }
+                }
+            }
+        } else {
+            decodePlain(sendBuf, sendSM, sendIsDG);
+        }
+        if ((smRuns & 3) == 3) {
+            // old round + old per-request decode, compared list by list
+            std::vector<int> c2;
+            std::vector<std::uint64_t> b2;
+            std::vector<unsigned int> sm2;
+            std::vector<unsigned char> dg2;
+            plainRound(c2, b2);
+            decodePlain(b2, sm2, dg2);
+            if (smPerturb && !sendSM.empty()) sendSM[0] ^= 1;
+            const unsigned long long bad =
+                (c2 != sendCount) || (sm2 != sendSM) || (dg2 != sendIsDG);
+            unsigned long long badAll = 0;
+            MPI_Allreduce(&bad, &badAll, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
+                          commActive);
+            if (!rank)
+                std::printf("[sm-runs-check] ranks with a different send map: "
+                            "%llu\n", badAll);
+            if (badAll) MPI_Abort(commActive, 86);
         }
 
         __phase("  sm: decode");
