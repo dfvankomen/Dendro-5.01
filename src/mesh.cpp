@@ -9731,7 +9731,7 @@ void Mesh::buildZipPlanCore() {
         return findMyMin(PhysKey3{x, y, z});
     };
 
-    // DENDRO_ZIPPLAN_FAST=1: when no ghost claim survives the claim filter and
+    // DENDRO_ZIPPLAN_FAST (default on, =0 reverts): when no ghost claim survives the claim filter and
     // every local cg is the only local cg at its position (owner element
     // local), each position has exactly one claim, so the arbitration only
     // confirms the local fold: plan = every local cg with its myMin writer,
@@ -9742,7 +9742,7 @@ void Mesh::buildZipPlanCore() {
     // rank 0 to prove the check fires.
     static const bool zpFastEnv = [] {
         const char* v = std::getenv("DENDRO_ZIPPLAN_FAST");
-        return v && v[0] == '1';
+        return !(v && v[0] == '0');
     }();
     static const bool zpFastChk = [] {
         const char* v = std::getenv("DENDRO_ZIPPLAN_FAST_CHECK");
