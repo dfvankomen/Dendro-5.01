@@ -42,7 +42,7 @@ namespace xbuf {
 inline bool poolOn() {
     static const bool on = [] {
         const char* e = std::getenv("DENDRO_XCHG_BUF_POOL");
-        return e && e[0] == '1';
+        return !(e && e[0] == '0');
     }();
     return on;
 }
