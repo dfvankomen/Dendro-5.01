@@ -1385,6 +1385,7 @@ Mesh::~Mesh() {
     m_uiRecvProcList.clear();
     m_uiE2BlkMap.clear();
 
+    if (m_uiCommActive != MPI_COMM_NULL) xprofFlush();
     if (m_uiCommActive != MPI_COMM_NULL && m_uiCommActive != MPI_COMM_WORLD) {
         MPI_Comm_free(&m_uiCommActive);
         m_uiCommActive = MPI_COMM_NULL;
@@ -23656,6 +23657,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                   << (MPI_Wtime() - __t_start) * 1e3 << " ms" << std::endl;
     }
     if (partStatsEnabled()) dumpPartitionStats(std::cout, "repart");
+    xprofProbe();
 }
 
 template <typename T>
@@ -24508,24 +24510,31 @@ void ot::Mesh::ensureBlockZipPlan() {
 }
 
 namespace ot {
-bool Mesh::xprofOn() {
-    static const bool on = [] {
+namespace {
+constexpr int XP_REC = 19;  // phases 0-9, total, minflt, majflt, lazy, variant, dof, send, recv, valid
+}
+
+int Mesh::xprofLevel() {
+    static const int lv = [] {
         const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF");
-        return e && std::atoi(e) >= 1;
+        return e ? std::atoi(e) : 0;
     }();
-    return on;
+    return lv;
+}
+
+int Mesh::xprofCalls() {
+    static const int n = [] {
+        const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF_CALLS");
+        const int v = e ? std::atoi(e) : 2;
+        return v < 1 ? 1 : (v > 16 ? 16 : v);
+    }();
+    return n;
 }
 
 bool Mesh::xprofBegin() {
     m_xpActive = false;
-    if (!xprofOn() || !m_uiIsActive) return false;
-    static const int ncalls = [] {
-        const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF_CALLS");
-        return e ? std::atoi(e) : 2;
-    }();
-    if (m_xpCalls >= ncalls) return false;
-    static int nextId = 0;
-    if (m_xpId < 0) m_xpId = nextId++;
+    if (xprofLevel() < 1 || !m_uiIsActive || m_xpCalls >= xprofCalls())
+        return false;
     for (double& t : m_xpT) t = 0.0;
     struct rusage ru;
     getrusage(RUSAGE_SELF, &ru);
@@ -24533,21 +24542,77 @@ bool Mesh::xprofBegin() {
     m_xpFlt[1] = ru.ru_majflt;
     m_xpActive = true;
     m_xpLast   = MPI_Wtime();
-    MPI_Barrier(m_uiCommActive);
-    xprofMark(0);
     return true;
 }
 
-void Mesh::xprofProbe(unsigned int dof, size_t tsize) {
-    for (double& t : m_xpP) t = 0.0;
-    static const int level = [] {
-        const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF");
-        return e ? std::atoi(e) : 0;
+void Mesh::xprofRecord(int variant, unsigned int dof, size_t sendN,
+                       size_t recvN) {
+    if (!m_xpActive) return;
+    m_xpActive = false;
+    struct rusage ru;
+    getrusage(RUSAGE_SELF, &ru);
+    if (m_xpRec.empty()) m_xpRec.assign((size_t)xprofCalls() * XP_REC, 0.0);
+    double* r  = &m_xpRec[(size_t)m_xpCalls * XP_REC];
+    double tot = 0.0;
+    for (int i = 0; i < 10; i++) {
+        r[i] = m_xpT[i] * 1e3;
+        tot += r[i];
+    }
+    r[10]      = tot;
+    r[11]      = (double)(ru.ru_minflt - m_xpFlt[0]);
+    r[12]      = (double)(ru.ru_majflt - m_xpFlt[1]);
+    r[13]      = m_xpLazyMs;
+    r[14]      = variant;
+    r[15]      = dof;
+    r[16]      = (double)(sendN * dof);
+    r[17]      = (double)(recvN * dof);
+    r[18]      = 1.0;
+    m_xpLazyMs = 0.0;
+    m_xpCalls++;
+}
+
+void Mesh::xprofFlush() {
+    if (xprofLevel() < 1 || !m_uiIsActive || m_uiCommActive == MPI_COMM_NULL)
+        return;
+    const int n = xprofCalls() * XP_REC;
+    std::vector<double> loc(m_xpRec);
+    loc.resize(n, 0.0);
+    std::vector<double> mx(n), sm(n);
+    MPI_Reduce(loc.data(), mx.data(), n, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
+    MPI_Reduce(loc.data(), sm.data(), n, MPI_DOUBLE, MPI_SUM, 0, m_uiCommActive);
+    m_xpRec.clear();
+    if (m_uiActiveRank != 0) return;
+    static int meshId = 0;
+    const int id = meshId++;
+    for (int c = 0; c < xprofCalls(); c++) {
+        const double* m = &mx[(size_t)c * XP_REC];
+        const double* u = &sm[(size_t)c * XP_REC];
+        if (m[18] == 0.0) continue;
+        std::printf(
+            "[first-xchg] mesh=%d call=%d %s dof=%.0f labelled=%d ranks=%.0f/%d "
+            "sync=%.2f alloc=%.2f post=%.2f pack=%.2f isend=%.2f wait=%.2f "
+            "unpack=%.2f mirror=%.2f free=%.2f total=%.2f ms (max) "
+            "lazy_before=%.2f ms minflt=%.0f/%.0f majflt=%.0f (max/sum) "
+            "maxsend=%.0f maxrecv=%.0f\n",
+            id, c, m[14] > 0.5 ? (u[14] < u[18] ? "mixed" : "ctx") : "plain",
+            m[15], (int)m_uiIsLabelledRebuild, u[18], m_uiActiveNpes, m[1], m[2],
+            m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[13], m[11], u[11],
+            m[12], m[16], m[17]);
+    }
+    std::fflush(stdout);
+}
+
+void Mesh::xprofProbe() {
+    if (xprofLevel() < 2 || !m_uiIsActive || m_uiActiveNpes <= 1) return;
+    static const unsigned int dof = [] {
+        const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF_DOF");
+        const int v   = e ? std::atoi(e) : 8;
+        return (unsigned int)(v < 1 ? 1 : v);
     }();
-    if (!m_xpActive || level < 2) return;
-    const int tag = 0x7e11;
-    const auto& sP = m_uiSendProcList;
-    const auto& rP = m_uiRecvProcList;
+    const size_t tsize = sizeof(double);
+    const int tag      = 0x7e11;
+    const auto& sP     = m_uiSendProcList;
+    const auto& rP     = m_uiRecvProcList;
     std::vector<MPI_Request> req;
     auto handshake = [&](MPI_Comm c) {
         char sb = 0;
@@ -24588,58 +24653,31 @@ void Mesh::xprofProbe(unsigned int dof, size_t tsize) {
         }
         MPI_Waitall((int)req.size(), req.data(), MPI_STATUSES_IGNORE);
     };
-    auto timed = [&](int i, auto&& f) {
+    double t[5] = {-1, 0, 0, 0, 0};
+    auto timed  = [&](int i, auto&& f) {
         MPI_Barrier(m_uiCommActive);
         const double t0 = MPI_Wtime();
         f();
-        m_xpP[i] = (MPI_Wtime() - t0) * 1e3;
+        t[i] = (MPI_Wtime() - t0) * 1e3;
     };
-    if (m_uiActiveNpes == m_uiGlobalNpes) timed(0, [&] { handshake(m_uiCommGlobal); });
+    // the peer lists are mesh-comm ranks; only reuse them on the global comm
+    // when the two are congruent (same group, same order)
+    int cmp = MPI_UNEQUAL;
+    MPI_Comm_compare(m_uiCommActive, m_uiCommGlobal, &cmp);
+    timed(4, [] {});
+    if (cmp == MPI_CONGRUENT) timed(0, [&] { handshake(m_uiCommGlobal); });
     timed(1, [&] { handshake(m_uiCommActive); });
     timed(2, exchange);
     timed(3, exchange);
-    MPI_Barrier(m_uiCommActive);
-    m_xpLast = MPI_Wtime();
-}
-
-void Mesh::xprofReport(const char* variant, unsigned int dof, size_t sendN,
-                       size_t recvN) {
-    if (!m_xpActive) return;
-    m_xpActive = false;
-    struct rusage ru;
-    getrusage(RUSAGE_SELF, &ru);
-    double loc[14], mx[14], sm[14];
-    double tot = 0.0;
-    for (int i = 0; i < 10; i++) {
-        loc[i] = m_xpT[i] * 1e3;
-        if (i) tot += loc[i];
+    double mx[5];
+    MPI_Reduce(t, mx, 5, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
+    if (m_uiActiveRank == 0) {
+        std::printf("[first-xchg-probe] labelled=%d ranks=%d dof=%u hs_global=%.2f "
+                    "hs_comm=%.2f warm_xchg=%.2f warm_xchg2=%.2f ms (max)%s\n",
+                    (int)m_uiIsLabelledRebuild, m_uiActiveNpes, dof, mx[0], mx[1],
+                    mx[2], mx[3], cmp == MPI_CONGRUENT ? "" : " (global comm not congruent: skipped)");
+        std::fflush(stdout);
     }
-    loc[10] = tot;
-    loc[11] = (double)(ru.ru_minflt - m_xpFlt[0]);
-    loc[12] = (double)(ru.ru_majflt - m_xpFlt[1]);
-    loc[13] = m_xpLazyMs;
-    m_xpLazyMs = 0.0;
-    MPI_Reduce(loc, mx, 14, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
-    MPI_Reduce(loc, sm, 14, MPI_DOUBLE, MPI_SUM, 0, m_uiCommActive);
-    unsigned long long n[2] = {sendN * dof, recvN * dof}, nm[2];
-    MPI_Reduce(n, nm, 2, MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, m_uiCommActive);
-    double pm[4];
-    MPI_Reduce(m_xpP, pm, 4, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
-    if (m_uiActiveRank == 0 && pm[1] > 0.0)
-        std::printf("[first-xchg] mesh=%d call=%d probe hs_world=%.2f hs_comm=%.2f "
-                    "warm_xchg=%.2f warm_xchg2=%.2f ms (max)\n",
-                    m_xpId, m_xpCalls, pm[0], pm[1], pm[2], pm[3]);
-    if (m_uiActiveRank == 0)
-        std::printf(
-            "[first-xchg] mesh=%d call=%d %s dof=%u labelled=%d "
-            "bar=%.2f sync=%.2f alloc=%.2f post=%.2f pack=%.2f isend=%.2f "
-            "wait=%.2f unpack=%.2f mirror=%.2f free=%.2f total=%.2f ms (max) "
-            "lazy_since_last=%.2f ms minflt=%.0f/%.0f majflt=%.0f (max/sum) "
-            "maxsend=%llu maxrecv=%llu\n",
-            m_xpId, m_xpCalls, variant, dof, (int)m_uiIsLabelledRebuild, mx[0],
-            mx[1], mx[2], mx[3], mx[4], mx[5], mx[6], mx[7], mx[8], mx[9],
-            mx[10], mx[13], mx[11], sm[11], mx[12], nm[0], nm[1]);
-    m_xpCalls++;
 }
 
 void Mesh::ghostPosCheck(const char* tag) {
