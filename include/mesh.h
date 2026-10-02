@@ -2161,10 +2161,10 @@ class Mesh {
     /** DENDRO_FIRST_XCHG_PROF=1 probe: phase split (side-channel sync, buffer
      *  alloc, irecv post, pack, isend, wait, unpack, mirror + post-sync, free),
      *  page faults and lazy builds of the first few ghost exchanges on each
-     *  mesh. Recorded locally with no MPI inside the exchange; reduced (max and
-     *  sum over the mesh comm) by xprofFlush from the destructor, next to the
-     *  collective MPI_Comm_free. Phase indices: 1 sync, 2 alloc, 3 post,
-     *  4 pack, 5 isend, 6 wait, 7 unpack, 8 mirror, 9 free. */
+     *  mesh. Never collective: each rank writes one "[first-xchg]" record per
+     *  profiled exchange to its own file (dendro::bc::rec; aggregate with
+     *  tools/breadcrumbs.py). Phase indices: 1 sync, 2 alloc, 3 post, 4 pack,
+     *  5 isend, 6 wait, 7 unpack, 8 mirror, 9 free. */
     static int xprofLevel();
     static int xprofCalls();
     bool xprofBegin();
@@ -2178,14 +2178,13 @@ class Mesh {
         if (m_xpActive) m_xpLast = MPI_Wtime();
     }
     void xprofRecord(int variant, unsigned int dof, size_t sendN, size_t recvN);
-    /** Collective over the mesh comm: reduce and print the recorded slots. */
-    void xprofFlush();
     /** DENDRO_FIRST_XCHG_PROF=2, collective over the mesh comm (called at the
-     *  end of repartitionMeshGlobal): time a zero-byte handshake with every
-     *  exchange peer on the global comm (only when congruent with the mesh
-     *  comm), then on the mesh comm, then two exchanges of the real sizes
-     *  (DENDRO_FIRST_XCHG_PROF_DOF doubles per node, default 8) through
-     *  persistent probe-only buffers, and print the max over ranks. */
+     *  end of repartitionMeshGlobal, which every active rank reaches): times a
+     *  one-byte handshake with every exchange peer, then two exchanges of the
+     *  real sizes (DENDRO_FIRST_XCHG_PROF_DOF doubles per node, default 8)
+     *  through probe-only buffers. Each rank records its own times; waits spin
+     *  on MPI_Test and record a "[first-xchg-stall]" line with the pending
+     *  peers after DENDRO_FIRST_XCHG_PROF_STALL seconds (default 20). */
     void xprofProbe();
     bool m_xpActive    = false;
     const void* m_xpVec = nullptr;
@@ -2194,7 +2193,6 @@ class Mesh {
     double m_xpLazyMs  = 0.0;
     double m_xpT[10]   = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     long m_xpFlt[2]    = {0, 0};
-    std::vector<double> m_xpRec;
     /** DENDRO_BREADCRUMB_DIR: per-rank construction id (marks mesh.ctor+). */
     static int bcNextId();
     void bcCtorDone() const;

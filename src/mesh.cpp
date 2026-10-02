@@ -1399,7 +1399,6 @@ Mesh::~Mesh() {
     m_uiRecvProcList.clear();
     m_uiE2BlkMap.clear();
 
-    if (m_uiCommActive != MPI_COMM_NULL) xprofFlush();
     if (m_uiCommActive != MPI_COMM_NULL && m_uiCommActive != MPI_COMM_WORLD) {
         MPI_Comm_free(&m_uiCommActive);
         m_uiCommActive = MPI_COMM_NULL;
@@ -24527,10 +24526,6 @@ void ot::Mesh::ensureBlockZipPlan() {
 }
 
 namespace ot {
-namespace {
-constexpr int XP_REC = 19;  // phases 0-9, total, minflt, majflt, lazy, variant, dof, send, recv, valid
-}
-
 int Mesh::bcNextId() {
     static int next = 0;
     const int id = next++;
@@ -24581,57 +24576,20 @@ void Mesh::xprofRecord(int variant, unsigned int dof, size_t sendN,
     m_xpActive = false;
     struct rusage ru;
     getrusage(RUSAGE_SELF, &ru);
-    if (m_xpRec.empty()) m_xpRec.assign((size_t)xprofCalls() * XP_REC, 0.0);
-    double* r  = &m_xpRec[(size_t)m_xpCalls * XP_REC];
-    double tot = 0.0;
-    for (int i = 0; i < 10; i++) {
-        r[i] = m_xpT[i] * 1e3;
-        tot += r[i];
-    }
-    r[10]      = tot;
-    r[11]      = (double)(ru.ru_minflt - m_xpFlt[0]);
-    r[12]      = (double)(ru.ru_majflt - m_xpFlt[1]);
-    r[13]      = m_xpLazyMs;
-    r[14]      = variant;
-    r[15]      = dof;
-    r[16]      = (double)(sendN * dof);
-    r[17]      = (double)(recvN * dof);
-    r[18]      = 1.0;
+    double ms[10], tot = 0.0;
+    for (int i = 0; i < 10; i++) tot += (ms[i] = m_xpT[i] * 1e3);
+    dendro::bc::rec(
+        "[first-xchg] mesh=%d call=%d %s dof=%u labelled=%d rank=%d np=%d "
+        "sync=%.3f alloc=%.3f post=%.3f pack=%.3f isend=%.3f wait=%.3f "
+        "unpack=%.3f mirror=%.3f free=%.3f total=%.3f lazy_before=%.3f "
+        "minflt=%ld majflt=%ld send=%zu recv=%zu",
+        m_bcId, m_xpCalls, variant ? "ctx" : "plain", dof,
+        (int)m_uiIsLabelledRebuild, m_uiActiveRank, m_uiActiveNpes, ms[1],
+        ms[2], ms[3], ms[4], ms[5], ms[6], ms[7], ms[8], ms[9], tot, m_xpLazyMs,
+        ru.ru_minflt - m_xpFlt[0], ru.ru_majflt - m_xpFlt[1], sendN * dof,
+        recvN * dof);
     m_xpLazyMs = 0.0;
     m_xpCalls++;
-}
-
-void Mesh::xprofFlush() {
-    if (xprofLevel() < 1 || !m_uiIsActive || m_uiCommActive == MPI_COMM_NULL)
-        return;
-    const int n = xprofCalls() * XP_REC;
-    std::vector<double> loc(m_xpRec);
-    loc.resize(n, 0.0);
-    std::vector<double> mx(n), sm(n);
-    dendro::bc::mark("xflush+ id=%d np=%d", m_bcId, m_uiActiveNpes);
-    MPI_Reduce(loc.data(), mx.data(), n, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
-    MPI_Reduce(loc.data(), sm.data(), n, MPI_DOUBLE, MPI_SUM, 0, m_uiCommActive);
-    dendro::bc::mark("xflush- id=%d", m_bcId);
-    m_xpRec.clear();
-    if (m_uiActiveRank != 0) return;
-    static int meshId = 0;
-    const int id = meshId++;
-    for (int c = 0; c < xprofCalls(); c++) {
-        const double* m = &mx[(size_t)c * XP_REC];
-        const double* u = &sm[(size_t)c * XP_REC];
-        if (m[18] == 0.0) continue;
-        dendro::bc::line(
-            "[first-xchg] mesh=%d call=%d %s dof=%.0f labelled=%d ranks=%.0f/%d "
-            "sync=%.2f alloc=%.2f post=%.2f pack=%.2f isend=%.2f wait=%.2f "
-            "unpack=%.2f mirror=%.2f free=%.2f total=%.2f ms (max) "
-            "lazy_before=%.2f ms minflt=%.0f/%.0f majflt=%.0f (max/sum) "
-            "maxsend=%.0f maxrecv=%.0f",
-            id, c, m[14] > 0.5 ? (u[14] < u[18] ? "mixed" : "ctx") : "plain",
-            m[15], (int)m_uiIsLabelledRebuild, u[18], m_uiActiveNpes, m[1], m[2],
-            m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[13], m[11], u[11],
-            m[12], m[16], m[17]);
-    }
-    std::fflush(stdout);
 }
 
 void Mesh::xprofProbe() {
@@ -24641,25 +24599,65 @@ void Mesh::xprofProbe() {
         const int v   = e ? std::atoi(e) : 8;
         return (unsigned int)(v < 1 ? 1 : v);
     }();
+    static const double stallSec = [] {
+        const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF_STALL");
+        const double v = e ? std::atof(e) : 20.0;
+        return v > 0.0 ? v : 20.0;
+    }();
     dendro::bc::mark("xprobe+ id=%d np=%d", m_bcId, m_uiActiveNpes);
     const size_t tsize = sizeof(double);
     const int tag      = 0x7e11;
     const auto& sP     = m_uiSendProcList;
     const auto& rP     = m_uiRecvProcList;
     std::vector<MPI_Request> req;
-    auto handshake = [&](MPI_Comm c) {
+    std::vector<int> peer;  // peer of each request, -1 for the barrier
+    auto waitAll = [&](const char* phase) {
+        const double t0 = MPI_Wtime();
+        bool reported   = false;
+        for (;;) {
+            int done = 0;
+            MPI_Testall((int)req.size(), req.data(), &done, MPI_STATUSES_IGNORE);
+            if (done) break;
+            if (!reported && MPI_Wtime() - t0 > stallSec) {
+                reported = true;
+                std::string pend;
+                for (size_t i = 0; i < req.size(); i++) {
+                    if (req[i] == MPI_REQUEST_NULL) continue;
+                    int f = 0;
+                    MPI_Request_get_status(req[i], &f, MPI_STATUS_IGNORE);
+                    if (!f) pend += " " + std::to_string(peer[i]);
+                }
+                dendro::bc::rec("[first-xchg-stall] mesh=%d phase=%s rank=%d np=%d "
+                                "after=%.0fs pending:%s",
+                                m_bcId, phase, m_uiActiveRank, m_uiActiveNpes,
+                                stallSec, pend.c_str());
+            }
+        }
+    };
+    auto barrier = [&](const char* phase) {
+        req.assign(1, MPI_REQUEST_NULL);
+        peer.assign(1, -1);
+        MPI_Ibarrier(m_uiCommActive, &req[0]);
+        waitAll(phase);
+    };
+    auto handshake = [&]() {
         char sb = 0;
         std::vector<char> rb(rP.size());
         req.clear();
+        peer.clear();
         for (size_t i = 0; i < rP.size(); i++) {
             req.emplace_back();
-            MPI_Irecv(&rb[i], 1, MPI_CHAR, (int)rP[i], tag, c, &req.back());
+            peer.push_back((int)rP[i]);
+            MPI_Irecv(&rb[i], 1, MPI_CHAR, (int)rP[i], tag, m_uiCommActive,
+                      &req.back());
         }
         for (size_t i = 0; i < sP.size(); i++) {
             req.emplace_back();
-            MPI_Isend(&sb, 1, MPI_CHAR, (int)sP[i], tag, c, &req.back());
+            peer.push_back((int)sP[i]);
+            MPI_Isend(&sb, 1, MPI_CHAR, (int)sP[i], tag, m_uiCommActive,
+                      &req.back());
         }
-        MPI_Waitall((int)req.size(), req.data(), MPI_STATUSES_IGNORE);
+        waitAll("handshake");
     };
     static std::vector<char> sbuf, rbuf;
     auto exchange = [&]() {
@@ -24672,47 +24670,38 @@ void Mesh::xprofProbe() {
         if (sbuf.size() < sN) sbuf.assign(sN + sN / 4, 0);
         if (rbuf.size() < rN) rbuf.assign(rN + rN / 4, 0);
         req.clear();
+        peer.clear();
         for (const unsigned int p : rP) {
             req.emplace_back();
+            peer.push_back((int)p);
             MPI_Irecv(rbuf.data() + (size_t)dof * tsize * m_uiRecvNodeOffset[p],
                       (int)((size_t)dof * tsize * m_uiRecvNodeCount[p]), MPI_BYTE,
                       (int)p, tag + 1, m_uiCommActive, &req.back());
         }
         for (const unsigned int p : sP) {
             req.emplace_back();
+            peer.push_back((int)p);
             MPI_Isend(sbuf.data() + (size_t)dof * tsize * m_uiSendNodeOffset[p],
                       (int)((size_t)dof * tsize * m_uiSendNodeCount[p]), MPI_BYTE,
                       (int)p, tag + 1, m_uiCommActive, &req.back());
         }
-        MPI_Waitall((int)req.size(), req.data(), MPI_STATUSES_IGNORE);
+        waitAll("exchange");
     };
-    double t[5] = {-1, 0, 0, 0, 0};
+    double t[3] = {0, 0, 0};
     auto timed  = [&](int i, auto&& f) {
-        MPI_Barrier(m_uiCommActive);
+        barrier("barrier");
         const double t0 = MPI_Wtime();
         f();
         t[i] = (MPI_Wtime() - t0) * 1e3;
     };
-    // the peer lists are mesh-comm ranks; only reuse them on the global comm
-    // when the two are congruent (same group, same order)
-    int cmp = MPI_UNEQUAL;
-    MPI_Comm_compare(m_uiCommActive, m_uiCommGlobal, &cmp);
-    timed(4, [] {});
-    if (cmp == MPI_CONGRUENT) timed(0, [&] { handshake(m_uiCommGlobal); });
-    timed(1, [&] { handshake(m_uiCommActive); });
+    timed(0, handshake);
+    timed(1, exchange);
     timed(2, exchange);
-    timed(3, exchange);
-    double mx[5];
-    MPI_Reduce(t, mx, 5, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
     dendro::bc::mark("xprobe- id=%d", m_bcId);
-    if (m_uiActiveRank == 0) {
-        dendro::bc::line(
-            "[first-xchg-probe] labelled=%d ranks=%d dof=%u hs_global=%.2f "
-            "hs_comm=%.2f warm_xchg=%.2f warm_xchg2=%.2f ms (max)%s",
-            (int)m_uiIsLabelledRebuild, m_uiActiveNpes, dof, mx[0], mx[1], mx[2],
-            mx[3], cmp == MPI_CONGRUENT ? "" : " (global comm not congruent: skipped)");
-        std::fflush(stdout);
-    }
+    dendro::bc::rec("[first-xchg-probe] mesh=%d labelled=%d rank=%d np=%d dof=%u "
+                    "hs_comm=%.3f warm_xchg=%.3f warm_xchg2=%.3f",
+                    m_bcId, (int)m_uiIsLabelledRebuild, m_uiActiveRank,
+                    m_uiActiveNpes, dof, t[0], t[1], t[2]);
 }
 
 void Mesh::ghostPosCheck(const char* tag) {
