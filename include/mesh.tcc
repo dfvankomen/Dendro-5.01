@@ -5544,6 +5544,7 @@ void Mesh::interGridTransfer(T*& vec, const ot::Mesh* pMesh,
 template <typename T>
 void Mesh::interGridTransfer(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
                              INTERGRID_TRANSFER_MODE mode, unsigned int dof) {
+    dendro::bc::Scope bcScope("igt", m_bcId);
     // probe (off by default): dump post-transfer cg values keyed by
     // (phys_pos, dof_var) for the NEW mesh, one file per rank. used to
     // diff graph vs SFC after a remesh. set DENDRO_IGT_DUMP_DIR=/path.
@@ -6063,6 +6064,7 @@ template <typename T>
 bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
                           T* vecOut, unsigned int dof,
                           INTERGRID_TRANSFER_MODE mode) {
+    dendro::bc::Scope bcScope("onehop", m_bcId);
     MPI_Comm comm = m_uiCommGlobal;
     int rank, npes;
     MPI_Comm_rank(comm, &rank);
@@ -7072,6 +7074,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                            unsigned int dof,
                            std::vector<unsigned int>* unfilledOut,
                            std::vector<unsigned int>* dstFlags) const {
+    dendro::bc::Scope bcScope("redist", m_bcId);
     if (unfilledOut) unfilledOut->clear();
     if (dstFlags) dstFlags->clear();
     // Redistribute `dof` CG fields across a partition change. `this`

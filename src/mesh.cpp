@@ -251,7 +251,10 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         double t_e2e_end = MPI_Wtime();
         t_e2e            = t_e2e_end - t_e2e_begin;
 
-        if (smType == SM_TYPE::E2E_ONLY) return;
+        if (smType == SM_TYPE::E2E_ONLY) {
+            bcCtorDone();
+            return;
+        }
 
         double t_e2n_begin = MPI_Wtime();
         if (smType == SM_TYPE::FDM) {
@@ -406,6 +409,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
     if (m_uiIsBlockSetup && partStatsEnabled()) dumpPartitionStats(std::cout, "ctor");
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished building the mesh!");
+    bcCtorDone();
 }
 
 Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
@@ -546,7 +550,10 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         double t_e2e_end = MPI_Wtime();
         t_e2e            = t_e2e_end - t_e2e_begin;
 
-        if (smType == SM_TYPE::E2E_ONLY) return;
+        if (smType == SM_TYPE::E2E_ONLY) {
+            bcCtorDone();
+            return;
+        }
 
         double t_e2n_begin = MPI_Wtime();
 
@@ -695,6 +702,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
     if (m_uiIsBlockSetup && partStatsEnabled()) dumpPartitionStats(std::cout, "ctor");
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished building the mesh!");
+    bcCtorDone();
 }
 
 bool Mesh::canCloneE2ETwin() const {
@@ -775,6 +783,7 @@ Mesh::Mesh(const Mesh &s, E2ETwinTag) {
         for (unsigned int e = m_uiElementPostGhostBegin; e < m_uiElementPostGhostEnd; e++)
             if (!r1[e]) m_uiIsNodalMapValid[e] = false;
     }
+    bcCtorDone();
 }
 
 // DENDRO_REPART_CANON_KEYS: the SFC mesh whose E2N supplies the canonical
@@ -782,6 +791,7 @@ Mesh::Mesh(const Mesh &s, E2ETwinTag) {
 static const Mesh* g_canonKeySrc = nullptr;
 Mesh *Mesh::repartitionFrom(const Mesh &src, PartitioningOptions method,
                             const Point &dmin, const Point &dmax) {
+    dendro::bc::Scope bcScope("repartFrom", src.m_bcId);
     if (!src.canCloneE2ETwin()) return nullptr;
     Mesh *g = new Mesh(src, E2ETwinTag{});
     g->setDomainBounds(dmin, dmax);
@@ -1357,6 +1367,10 @@ std::string Mesh::diffKeyArrays(const Mesh &o, bool e2eOnly) const {
 }
 
 Mesh::~Mesh() {
+    if (dendro::bc::on())
+        dendro::bc::mark("mesh.dtor id=%d active=%d np=%d labelled=%d", m_bcId,
+                         (int)m_uiIsActive, m_uiActiveNpes,
+                         (int)m_uiIsLabelledRebuild);
     m_uiPreGhostOctants.clear();
     m_uiPostGhostOctants.clear();
 
@@ -17141,6 +17155,7 @@ bool Mesh::isNodeHanging(unsigned int eleID, unsigned int ix, unsigned int jy,
 ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                        unsigned int (*getWeight)(const ot::TreeNode *),
                        unsigned int *blk_tags, unsigned int blk_tag_sz) {
+    dendro::bc::Scope bcScope("remesh", m_bcId);
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Creating new mesh during remesh");
     std::vector<ot::TreeNode> balOct1;  // new balanced octree.
@@ -17537,6 +17552,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
 
 ot::Mesh *Mesh::ReMeshRepartitioned(unsigned int grainSz, double ld_tol,
                                     unsigned int sfK) {
+    dendro::bc::Scope bcScope("remeshRepart", m_bcId);
     std::vector<ot::TreeNode> balOct;
 
     if (m_uiIsActive) {
@@ -20809,6 +20825,7 @@ void Mesh::blkUnzipElementIDs(unsigned int blk,
 void Mesh::repartitionMeshGlobal(bool do_block_creation,
                                  bool do_fastpart_filesave,
                                  std::string fileprefix) {
+    dendro::bc::Scope bcScope("repartGlobal", m_bcId);
     invalidateBcastPlan();
     if (!m_uiIsActive) return;
 
@@ -24514,6 +24531,19 @@ namespace {
 constexpr int XP_REC = 19;  // phases 0-9, total, minflt, majflt, lazy, variant, dof, send, recv, valid
 }
 
+int Mesh::bcNextId() {
+    static int next = 0;
+    const int id = next++;
+    dendro::bc::mark("mesh.ctor+ id=%d", id);
+    return id;
+}
+
+void Mesh::bcCtorDone() const {
+    if (dendro::bc::on())
+        dendro::bc::mark("mesh.ctor- id=%d active=%d np=%d", m_bcId,
+                         (int)m_uiIsActive, m_uiActiveNpes);
+}
+
 int Mesh::xprofLevel() {
     static const int lv = [] {
         const char* e = std::getenv("DENDRO_FIRST_XCHG_PROF");
@@ -24578,8 +24608,10 @@ void Mesh::xprofFlush() {
     std::vector<double> loc(m_xpRec);
     loc.resize(n, 0.0);
     std::vector<double> mx(n), sm(n);
+    dendro::bc::mark("xflush+ id=%d np=%d", m_bcId, m_uiActiveNpes);
     MPI_Reduce(loc.data(), mx.data(), n, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
     MPI_Reduce(loc.data(), sm.data(), n, MPI_DOUBLE, MPI_SUM, 0, m_uiCommActive);
+    dendro::bc::mark("xflush- id=%d", m_bcId);
     m_xpRec.clear();
     if (m_uiActiveRank != 0) return;
     static int meshId = 0;
@@ -24588,12 +24620,12 @@ void Mesh::xprofFlush() {
         const double* m = &mx[(size_t)c * XP_REC];
         const double* u = &sm[(size_t)c * XP_REC];
         if (m[18] == 0.0) continue;
-        std::printf(
+        dendro::bc::line(
             "[first-xchg] mesh=%d call=%d %s dof=%.0f labelled=%d ranks=%.0f/%d "
             "sync=%.2f alloc=%.2f post=%.2f pack=%.2f isend=%.2f wait=%.2f "
             "unpack=%.2f mirror=%.2f free=%.2f total=%.2f ms (max) "
             "lazy_before=%.2f ms minflt=%.0f/%.0f majflt=%.0f (max/sum) "
-            "maxsend=%.0f maxrecv=%.0f\n",
+            "maxsend=%.0f maxrecv=%.0f",
             id, c, m[14] > 0.5 ? (u[14] < u[18] ? "mixed" : "ctx") : "plain",
             m[15], (int)m_uiIsLabelledRebuild, u[18], m_uiActiveNpes, m[1], m[2],
             m[3], m[4], m[5], m[6], m[7], m[8], m[9], m[10], m[13], m[11], u[11],
@@ -24609,6 +24641,7 @@ void Mesh::xprofProbe() {
         const int v   = e ? std::atoi(e) : 8;
         return (unsigned int)(v < 1 ? 1 : v);
     }();
+    dendro::bc::mark("xprobe+ id=%d np=%d", m_bcId, m_uiActiveNpes);
     const size_t tsize = sizeof(double);
     const int tag      = 0x7e11;
     const auto& sP     = m_uiSendProcList;
@@ -24671,11 +24704,13 @@ void Mesh::xprofProbe() {
     timed(3, exchange);
     double mx[5];
     MPI_Reduce(t, mx, 5, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
+    dendro::bc::mark("xprobe- id=%d", m_bcId);
     if (m_uiActiveRank == 0) {
-        std::printf("[first-xchg-probe] labelled=%d ranks=%d dof=%u hs_global=%.2f "
-                    "hs_comm=%.2f warm_xchg=%.2f warm_xchg2=%.2f ms (max)%s\n",
-                    (int)m_uiIsLabelledRebuild, m_uiActiveNpes, dof, mx[0], mx[1],
-                    mx[2], mx[3], cmp == MPI_CONGRUENT ? "" : " (global comm not congruent: skipped)");
+        dendro::bc::line(
+            "[first-xchg-probe] labelled=%d ranks=%d dof=%u hs_global=%.2f "
+            "hs_comm=%.2f warm_xchg=%.2f warm_xchg2=%.2f ms (max)%s",
+            (int)m_uiIsLabelledRebuild, m_uiActiveNpes, dof, mx[0], mx[1], mx[2],
+            mx[3], cmp == MPI_CONGRUENT ? "" : " (global comm not congruent: skipped)");
         std::fflush(stdout);
     }
 }

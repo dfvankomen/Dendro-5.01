@@ -1000,6 +1000,7 @@ void ETS<T, Ctx>::evolve() {
     } \
 } while (0)
     _EV_TRACE("00_enter");
+    dendro::bc::Scope bcEvolve("evolve", (int)m_uiTimeInfo._m_uiStep);
     dendro::stepprof::EvolveScope spEvolve;
 
     dendro::logger::debug(dendro::logger::Scope{"ETS"},

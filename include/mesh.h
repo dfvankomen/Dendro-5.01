@@ -48,6 +48,7 @@
 #include "TreeNode.h"
 #include "asyncExchangeContex.h"
 #include "block.h"
+#include "breadcrumb.h"
 #include "dendro.h"
 #include "dendroProfileParams.h"  // only need to profile unzip_asyn for bssn. remove this header file later.
 #include "key.h"
@@ -2194,6 +2195,10 @@ class Mesh {
     double m_xpT[10]   = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     long m_xpFlt[2]    = {0, 0};
     std::vector<double> m_xpRec;
+    /** DENDRO_BREADCRUMB_DIR: per-rank construction id (marks mesh.ctor+). */
+    static int bcNextId();
+    void bcCtorDone() const;
+    int m_bcId = bcNextId();
 
     /**@brief Public wrapper for broadcastCgValuesByPhysPos. */
     template <typename T>
