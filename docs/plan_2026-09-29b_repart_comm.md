@@ -453,3 +453,18 @@ Gates on the default build (bin exdef), no knobs:
 tp refs: TEST 2 ghost-exchange node counts drop (np4 m3 319415 -> 265709, np8 m3 477074 -> 389177, m4/m3ref1 about -25 %). Refs regenerated (`ref/tp_base/np{4,8}_*.txt`, old kept as `.pre_exact`), rerun IDENTICAL.
 
 Unexpected: np4 m3 TEST 8bj [canonical phys_pos] goes 0 -> 108 (e, sub) pairs routing differently graph vs SFC (maxDiff 4); `=0` gives 0 again. It is a red informational line (not counted as FAIL); pre/post-ghost-exchange 8bj bit-mismatches stay 0 and EM4 md5 is unchanged. Ragged 8bj improves (np4 4696 -> 2555, np8 9868 -> 3087). Worth a look but not a blocker.
+
+## 2026-10-02 — one-hop + flat index + fast zip plan default on
+
+- One-hop (`DENDRO_REMESH_ONEHOP`, EM4/BSSN solver repos, =0 reverts) and `DENDRO_ONEHOP_FLAT_INDEX` (a628f81c) default on;
+  `DENDRO_ZIPPLAN_FAST` (bd062512 + 350f0d05) default on: zip plan straight from the local writer fold when every
+  position has one claimant (K6 / SFC), one Allreduce, prune-time fallback to the full build; `_CHECK=1` aborts 83.
+- Gates (all three on, plus `_CHECK`s): EM4 np4/8 sfc+graph, np16 ragged/lvl = d7bbee89; tp NP=4/8 identical to base;
+  nuts2/lw3 identical; BSSN refs; zip-plan check 17/17 (EM4), 13/13 (BSSN), 0 differences.
+- At scale (em4big, md5 34455595 everywhere): Kingspeak np192 labelled 1.00× SFC wall (rkstep −2 %), np384 1.027×
+  (rkstep +0.6 %, remesh 8.7 vs 4.8 s); flat index write 110→50 ms/remesh at np192. Kingspeak ZC np192: fast plan
+  taken 19/19 sfc + 19/19 graph, check-clean. Expanse np384 short: ~1.03×; zip plan 84→23 ms/rebuild; identical arms
+  differ ±0.26 s remesh, so sub-0.3 s effects need the phase timers.
+- Labelled rebuild at np384 now ~270–330 ms: sm exchange 61–65, fetch 37, partition decision 26, zip plan 23,
+  connmap 20. One-hop ~120–200 ms (xchg 36–100). Next targets: sm exchange, one-hop records (owner TN, sub).
+- Harness trap: scripts lacked `OMP_NUM_THREADS=1` (libgomp spin, timings 3–7× off); now pinned.
