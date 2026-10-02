@@ -699,10 +699,13 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
     DendroUInt_128 octVolume =
         0;  // 128-bit integer to store oct volume inside a block.
 
-    // DENDRO_OCT2BLK_MAX_SPAN=s caps blocks at 2^s elements per side (unset: no cap)
+    // blocks span at most OCT2BLK_MAX_SPAN levels (2^s elements per side); DENDRO_OCT2BLK_MAX_SPAN overrides
+#ifndef OCT2BLK_MAX_SPAN
+#define OCT2BLK_MAX_SPAN 31
+#endif
     const char* spanEnv     = std::getenv("DENDRO_OCT2BLK_MAX_SPAN");
     const unsigned int maxBlkSpan =
-        spanEnv ? (unsigned int)std::atoi(spanEnv) : maxDepth;
+        spanEnv ? (unsigned int)std::atoi(spanEnv) : OCT2BLK_MAX_SPAN;
 
     while (!initialBLocks.empty()) {
         tmpBlock = initialBLocks.back();

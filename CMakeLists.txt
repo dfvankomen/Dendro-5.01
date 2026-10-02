@@ -160,6 +160,7 @@ option(DENDRO_REPORT_BUILD_CONFIG
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
 set(OCT2BLK_COARSEST_LEV 0 CACHE STRING "Coarsest Level")
+set(OCT2BLK_MAX_SPAN 2 CACHE STRING "Max levels a merged block spans (2^s elements per side); 31 = no cap")
 set(NUM_NPES_THRESHOLD 2 CACHE STRING "NPES Threshold")
 
 
@@ -328,6 +329,7 @@ endmacro()
 
 target_compile_definitions(dendro_config INTERFACE -DMATVEC_PROFILE)
 target_compile_definitions(dendro_config INTERFACE -DOCT2BLK_COARSEST_LEV=${OCT2BLK_COARSEST_LEV})
+target_compile_definitions(dendro_config INTERFACE -DOCT2BLK_MAX_SPAN=${OCT2BLK_MAX_SPAN})
 
 dendro_add_def(USE_64BIT_INDICES USE_64BIT_INDICES)
 dendro_add_def(HILBERT_ORDERING HILBERT_ORDERING)
