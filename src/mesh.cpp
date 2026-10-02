@@ -1627,8 +1627,13 @@ void Mesh::dumpCommStats(std::ostream &out, const char *tag) {
     DendroIntL maxv[5]  = {0, 0, 0, 0, 0};
     par::Mpi_Reduce(local, sum, 5, MPI_SUM, 0, m_uiCommActive);
     par::Mpi_Reduce(local, maxv, 5, MPI_MAX, 0, m_uiCommActive);
+    // exchange buffer pool peak (bytes per rank), max over active ranks
+    DendroIntL poolPeak = (DendroIntL)xbuf::poolPeakBytes(), poolPeakMax = 0;
+    par::Mpi_Reduce(&poolPeak, &poolPeakMax, 1, MPI_MAX, 0, m_uiCommActive);
 
     if (m_uiActiveRank == 0) {
+        out << "[comm-stats] " << tag << " xchg_buf_pool_peak_MB_max="
+            << (double)poolPeakMax / 1048576.0 << std::endl;
         // partition-quality proxy: max per-rank bytes-sent over the mean.
         const double meanBytesSent =
             (m_uiActiveNpes > 0) ? (double)sum[0] / (double)m_uiActiveNpes

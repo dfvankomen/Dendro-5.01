@@ -12,7 +12,9 @@
 #ifndef DENDRO_5_0_UPDATECTX_H
 #define DENDRO_5_0_UPDATECTX_H
 
+#include <cstdio>
 #include <cstdlib>
+#include <mutex>
 #include <cstring>
 #include <unordered_map>
 #include <utility>
@@ -22,13 +24,20 @@
 
 namespace ot {
 
-/**@brief Process-wide pool for ghost-exchange buffers (DENDRO_XCHG_BUF_POOL=1).
+/**@brief Process-wide pool for ghost-exchange buffers (default ON,
+ * DENDRO_XCHG_BUF_POOL=0 disables).
  * Buffers are kept across exchanges and meshes, so a new mesh's first exchange
- * reuses warm, already-faulted (and transport-registered) memory instead of
- * fresh malloc pages. Blocks grow with headroom and are prefaulted when created;
- * a free block too small for a request is released, so the block count stays at
- * the peak number of buffers in flight. DENDRO_XCHG_BUF_POOL_CHECK=1 poisons
- * every handed-out buffer with NaN bytes to prove no stale content is read. */
+ * reuses warm, already-faulted and transport-registered (RDMA reg-cache hit)
+ * memory instead of fresh mmap'd pages. Blocks grow with headroom and are
+ * prefaulted when created; a free block too small for a request is released,
+ * so the block count stays at the peak number of buffers in flight.
+ * DENDRO_XCHG_BUF_POOL_MAX_MB (default 512) caps the pooled bytes per rank;
+ * requests that would exceed it fall back to plain malloc/free (never fails).
+ * DENDRO_XCHG_BUF_POOL_CHECK=1 poisons every handed-out buffer with 0xff bytes
+ * to prove no stale content is read. DENDRO_XCHG_BUF_POOL_REPORT=1 prints the
+ * per-rank peak at exit; peak is also reduced in dumpCommStats.
+ * Thread safety: guarded by a mutex (exchanges are normally issued from one
+ * thread per rank; production is MPI-per-core with no OpenMP). */
 namespace xbuf {
 inline bool poolOn() {
     static const bool on = [] {
@@ -44,17 +53,50 @@ inline bool poolCheck() {
     }();
     return on;
 }
+inline size_t poolCapBytes() {
+    static const size_t cap = [] {
+        const char* e = std::getenv("DENDRO_XCHG_BUF_POOL_MAX_MB");
+        double mb     = (e && e[0]) ? std::atof(e) : 512.0;
+        if (mb < 0) mb = 0;
+        return (size_t)(mb * 1048576.0);
+    }();
+    return cap;
+}
 struct Pool {
     std::vector<std::pair<void*, size_t>> free;
     std::unordered_map<void*, size_t> used;
+    std::mutex mtx;
+    size_t total = 0;  // bytes held by the pool (free + in use)
+    size_t peak  = 0;
+    size_t fallbacks = 0;
+    int rank     = -1;
 };
+inline void poolReport();
 inline Pool& pool() {
     static Pool p;
     return p;
 }
+/**@brief peak pooled bytes on this rank (0 if the pool was never used). */
+inline size_t poolPeakBytes() { return pool().peak; }
+inline void poolReport() {
+    Pool& P = pool();
+    if (P.peak == 0 && P.fallbacks == 0) return;
+    std::fprintf(stderr,
+                 "[xbuf-pool] rank=%d peak_MB=%.2f cap_MB=%.0f fallbacks=%zu\n",
+                 P.rank, P.peak / 1048576.0, poolCapBytes() / 1048576.0,
+                 P.fallbacks);
+}
 inline void* acquire(size_t bytes) {
     if (!poolOn()) return malloc(bytes);
-    Pool& P    = pool();
+    Pool& P = pool();
+    std::lock_guard<std::mutex> lk(P.mtx);
+    if (P.rank < 0) {
+        int init = 0;
+        MPI_Initialized(&init);
+        if (init) MPI_Comm_rank(MPI_COMM_WORLD, &P.rank);
+        const char* r = std::getenv("DENDRO_XCHG_BUF_POOL_REPORT");
+        if (r && r[0] == '1') std::atexit([] { poolReport(); });
+    }
     long best  = -1;
     long large = -1;
     for (size_t i = 0; i < P.free.size(); i++) {
@@ -71,15 +113,23 @@ inline void* acquire(size_t bytes) {
         cap = P.free[best].second;
         P.free.erase(P.free.begin() + best);
     } else {
+        const size_t pg = 4096;
+        cap = ((bytes + bytes / 4 + pg) / pg) * pg;
+        size_t dropped = (large >= 0) ? P.free[large].second : 0;
+        if (P.total - dropped + cap > poolCapBytes()) {
+            P.fallbacks++;
+            return malloc(bytes);  // over the cap: untracked plain buffer
+        }
         // nothing fits: drop the largest (too small) free block, grow
         if (large >= 0) {
             std::free(P.free[large].first);
+            P.total -= dropped;
             P.free.erase(P.free.begin() + large);
         }
-        const size_t pg = 4096;
-        cap = ((bytes + bytes / 4 + pg) / pg) * pg;
         if (posix_memalign(&p, pg, cap) != 0) return malloc(bytes);
         std::memset(p, 0, cap);
+        P.total += cap;
+        if (P.total > P.peak) P.peak = P.total;
     }
     P.used[p] = cap;
     if (poolCheck()) std::memset(p, 0xff, bytes);
@@ -92,6 +142,7 @@ inline void release(void* p) {
         return;
     }
     Pool& P = pool();
+    std::lock_guard<std::mutex> lk(P.mtx);
     auto it = P.used.find(p);
     if (it == P.used.end()) {
         std::free(p);
