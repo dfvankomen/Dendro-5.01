@@ -1274,6 +1274,68 @@ int main(int argc, char** argv) {
         Z = pN[oe].getZ() + ok * (len / (double)eOrd);
     };
 
+    // PARTTEST_8BJ_DIAG=1: classify the [canonical phys_pos] mismatches (post exchange)
+    static const bool diag8bj = [] {
+        const char* v = std::getenv("PARTTEST_8BJ_DIAG");
+        return v && v[0] == '1';
+    }();
+    unsigned long long dg8[16] = {};
+    std::vector<unsigned char> cgReadByUnzip;
+    if (diag8bj && mesh_repartitioned->isActive()) {
+        const auto& cnt = mesh_repartitioned->getE2BUnzipMapCounts();
+        const auto& e2n = mesh_repartitioned->getE2NMapping();
+        const unsigned int npe = mesh_repartitioned->getNumNodesPerElement();
+        cgReadByUnzip.assign(mesh_repartitioned->getDegOfFreedom(), 0);
+        for (unsigned int e = 0; e < cnt.size(); e++)
+            if (cnt[e] > 0)
+                for (unsigned int n = 0; n < npe; n++) cgReadByUnzip[e2n[e * npe + n]] = 1;
+    }
+    auto cgPos = [&](const ot::Mesh* m, unsigned int e, unsigned int n, double* P) {
+        const unsigned int npe = m->getNumNodesPerElement();
+        const unsigned int eOrd = m->getElementOrder();
+        const auto* pN = m->getAllElements().data();
+        const unsigned int dg = m->getCG2DGMap()[m->getE2NMapping()[e * npe + n]];
+        const unsigned int oe = dg / npe, rem = dg % npe;
+        const double len = (double)(1u << (m_uiMaxDepth - pN[oe].getLevel())) / eOrd;
+        P[0] = pN[oe].getX() + (rem % (eOrd + 1)) * len;
+        P[1] = pN[oe].getY() + ((rem / (eOrd + 1)) % (eOrd + 1)) * len;
+        P[2] = pN[oe].getZ() + (rem / ((eOrd + 1) * (eOrd + 1))) * len;
+    };
+    auto classify8bj = [&](unsigned int e, unsigned int eS, unsigned int n,
+                           const std::vector<double>& vS, const std::vector<double>& vG) {
+        const ot::Mesh* G = mesh_repartitioned;
+        const ot::Mesh* S = mesh;
+        const unsigned int npe = G->getNumNodesPerElement(), eOrd = G->getElementOrder();
+        const bool gLoc = e >= G->getElementLocalBegin() && e < G->getElementLocalEnd();
+        const bool sLoc = eS >= S->getElementLocalBegin() && eS < S->getElementLocalEnd();
+        const auto& cnt = G->getE2BUnzipMapCounts();
+        const bool rd = gLoc || (e < cnt.size() && cnt[e] > 0);
+        dg8[gLoc ? 0 : 1]++;
+        if (!gLoc && rd) dg8[2]++;
+        if (sLoc) dg8[3]++;
+        const unsigned int i = n % (eOrd + 1), j = (n / (eOrd + 1)) % (eOrd + 1),
+                           k = n / ((eOrd + 1) * (eOrd + 1));
+        if (G->isNodeHanging(e, i, j, k)) dg8[4]++;
+        double a[3], b[3];
+        cgPos(G, e, n, a);
+        cgPos(S, eS, n, b);
+        if (a[0] != b[0] || a[1] != b[1] || a[2] != b[2]) {
+            dg8[5]++;
+            if (rd) dg8[6]++;
+        }
+        const unsigned int cgG = G->getE2NMapping()[e * npe + n];
+        const unsigned int cgS = S->getE2NMapping()[eS * npe + n];
+        if (std::memcmp(&vG[cgG], &vS[cgS], sizeof(double)) != 0) {
+            dg8[7]++;
+            if (rd) dg8[8]++;
+        }
+        if (cgG >= G->getNodeLocalBegin() && cgG < G->getNodeLocalEnd()) dg8[9]++;
+        if (!rd && cgG < cgReadByUnzip.size() && cgReadByUnzip[cgG]) dg8[10]++;
+        if (rd && sLoc) dg8[11]++;
+        if (rd && G->isNodeHanging(e, i, j, k)) dg8[12]++;
+        if (rd && sLoc && std::memcmp(&vG[cgG], &vS[cgS], sizeof(double)) != 0) dg8[13]++;
+    };
+
     auto cmp_elem_sub = [&](bool doGhostExchange, const char* tag) {
         std::vector<double> vSfc, vGraph;
         mesh->createVector(vSfc, func);
@@ -1327,9 +1389,23 @@ int main(int argc, char** argv) {
                                          std::abs(sy - gry),
                                          std::abs(sz - grz)});
                     if (d > maxCanonDiff) maxCanonDiff = d;
-                    if (d > 0) canonMismatch++;
+                    if (d > 0) {
+                        canonMismatch++;
+                        if (diag8bj && doGhostExchange) classify8bj(e, eSfc, n, vSfc, vGraph);
+                    }
                 }
             }
+        }
+        if (diag8bj && doGhostExchange) {
+            MPI_Allreduce(MPI_IN_PLACE, dg8, 16, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+            if (!rank)
+                std::printf("[8bj-diag] rows: graph local=%llu ghost=%llu | ghost rows unzip-read=%llu "
+                            "| sfc row local=%llu | hanging=%llu | cg-path pos differs=%llu (unzip-read %llu) "
+                            "| value differs=%llu (unzip-read %llu) | graph cg local=%llu | ghost rows with "
+                            "cg also read by an unzip-read row=%llu | read rows: sfc-local=%llu hanging=%llu sfc-local+value-differs=%llu\n",
+                            dg8[0], dg8[1], dg8[2], dg8[3], dg8[4], dg8[5], dg8[6], dg8[7], dg8[8],
+                            dg8[9], dg8[10], dg8[11], dg8[12], dg8[13]);
+            std::fill(std::begin(dg8), std::end(dg8), 0ull);
         }
         int gCM;
         double gMCD;
