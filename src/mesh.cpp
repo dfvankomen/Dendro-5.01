@@ -23001,7 +23001,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         // request round: each receiver sends its requested DG globals to the
         // owner; the owner gets per-peer lists in rank order.
-        // DENDRO_SM_RUNS=1 (default off): send each per-peer list as runs of
+        // DENDRO_SM_RUNS (default on, =0 reverts): send each per-peer list as runs of
         // consecutive globals, one word per run (start | len-1 << 32, isDG
         // bit kept); requests come element by element, so ~9x fewer words,
         // and the owner decodes straight from the runs (one lookup per run).
@@ -23011,7 +23011,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         static const int smRuns = [] {
             const char* e = std::getenv("DENDRO_SM_RUNS");
             const char* c = std::getenv("DENDRO_SM_RUNS_CHECK");
-            return (e && e[0] == '1' ? 1 : 0) | (c && c[0] == '1' ? 2 : 0);
+            return (e && e[0] == '0' ? 0 : 1) | (c && c[0] == '1' ? 2 : 0);
         }();
         static const bool smPerturb = [] {
             const char* e = std::getenv("DENDRO_SM_RUNS_PERTURB");
