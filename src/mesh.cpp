@@ -22847,8 +22847,115 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // an R1 element via canonical chain), master's 1:1 mirror
         // convention ensures the physical positions coincide and
         // values match.
+        // DENDRO_SM_FUSED (default off): walk + dedup in one pass. CG requests are deduped as
+        // they are walked (first peer per slot in a stamp, a second peer in a set), DG requests
+        // are kept aside and appended after, so each per-peer list comes out in the two-pass
+        // order; no per-node division. _CHECK=1 also runs the two-pass path and aborts (89) if
+        // any per-peer list differs (_PERTURB=1 drops one entry on rank 0 to prove it bites)
+        static const int smFused = [] {
+            const char* e = std::getenv("DENDRO_SM_FUSED");
+            const char* c = std::getenv("DENDRO_SM_FUSED_CHECK");
+            return (e && e[0] == '1' ? 1 : 0) | (c && c[0] == '1' ? 2 : 0);
+        }();
+        static const bool smFusedPerturb = [] {
+            const char* e = std::getenv("DENDRO_SM_FUSED_PERTURB");
+            return e && e[0] == '1';
+        }();
+        const bool fusedChk = smFused == 3;
+        const bool runOld   = !(smFused & 1) || fusedChk;
+        std::vector<std::vector<unsigned int>> fSM, fDGG;
+        std::vector<std::vector<unsigned char>> fIsDG;
+        if (smFused & 1) {
+            fSM.resize(npes);
+            fDGG.resize(npes);
+            fIsDG.resize(npes);
+            std::vector<std::vector<unsigned int>> dgSM(npes), dgDGG(npes);
+            std::vector<unsigned int> own(m_uiNumActualNodes, 0u);
+            std::unordered_set<std::uint64_t> coll;
+            const unsigned int eo = m_uiElementOrder;
+            std::vector<unsigned char> bnd(m_uiNpE);
+            for (unsigned int n = 0; n < m_uiNpE; ++n) {
+                const unsigned int ni = n % (eo + 1), nj = (n / (eo + 1)) % (eo + 1),
+                                   nk = n / ((eo + 1) * (eo + 1));
+                bnd[n] = ni == 0 || ni == eo || nj == 0 || nj == eo || nk == 0 || nk == eo;
+            }
+            const unsigned int* e2nCG = m_uiE2NMapping_CG.data();
+            const unsigned int* e2nDG = m_uiE2NMapping_DG.data();
+            for (unsigned int ele_id = 0; ele_id < m_uiNumTotalElements; ele_id++) {
+                if (ckUse && ckOff[ele_id] == SIZE_MAX) continue;
+                const bool dgPath = new_oct_connectivity_map[ele_id].isGhostTwo && !ckUse;
+                const size_t eb   = (size_t)ele_id * m_uiNpE;
+                for (unsigned int n = 0; n < m_uiNpE; ++n) {
+                    const unsigned int cgIdx = e2nCG[eb + n];
+                    if (cgIdx >= m_uiNodeLocalBegin && cgIdx < m_uiNodeLocalEnd) continue;
+                    if (keepSlots && !keepSlots->count(cgIdx)) continue;
+                    const unsigned int ownerDG    = e2nDG[eb + n];
+                    const unsigned int ownerLocal = ownerDG / m_uiNpE;
+                    const unsigned int ownerSub   = ownerDG % m_uiNpE;
+                    if (dgPath && bnd[n]) {
+                        const bool self = ownerLocal == ele_id && ownerSub == n;
+                        const auto& oc  = new_oct_connectivity_map[self ? ele_id : ownerLocal];
+                        if ((int)oc.trank == rank) continue;
+                        dgSM[oc.trank].push_back(cgIdx);
+                        dgDGG[oc.trank].push_back(oc.eid * m_uiNpE + (self ? n : ownerSub));
+                        continue;
+                    }
+                    const auto& oc = new_oct_connectivity_map[ownerLocal];
+                    const unsigned int t = oc.trank;
+                    if ((int)t == rank) continue;
+                    if (cgIdx >= own.size()) own.resize(cgIdx + 1, 0u);
+                    unsigned int& o = own[cgIdx];
+                    if (o == t + 1) continue;
+                    if (o == 0)
+                        o = t + 1;
+                    else if (!coll.insert(((std::uint64_t)t << 32) | cgIdx).second)
+                        continue;
+                    fSM[t].push_back(cgIdx);
+                    fDGG[t].push_back(oc.eid * m_uiNpE + ownerSub);
+                    fIsDG[t].push_back(0);
+                }
+            }
+            // DG requests for slots not already asked of the same peer
+            std::vector<unsigned int> dgStamp(own.size(), 0u);
+            for (int p = 0; p < npes; p++)
+                for (size_t i = 0; i < dgSM[p].size(); i++) {
+                    const unsigned int c = dgSM[p][i];
+                    if (c >= own.size()) {
+                        own.resize(c + 1, 0u);
+                        dgStamp.resize(c + 1, 0u);
+                    }
+                    if (own[c] == (unsigned int)p + 1u ||
+                        (own[c] != 0 && coll.count(((std::uint64_t)p << 32) | c)) ||
+                        dgStamp[c] == (unsigned int)p + 1u)
+                        continue;
+                    dgStamp[c] = (unsigned int)p + 1u;
+                    fSM[p].push_back(c);
+                    fDGG[p].push_back(dgDGG[p][i]);
+                    fIsDG[p].push_back(1);
+                }
+            if (smFusedPerturb && !rank)
+                for (int p = 0; p < npes; p++)
+                    if (!fSM[p].empty()) {
+                        fSM[p].pop_back();
+                        fDGG[p].pop_back();
+                        fIsDG[p].pop_back();
+                        break;
+                    }
+            if (!rank) {
+                size_t ent = 0;
+                for (int p = 0; p < npes; p++) ent += fSM[p].size();
+                std::printf("[sm-fused] r0 entries=%zu second-peer=%zu\n", ent, coll.size());
+            }
+            if (!fusedChk)
+                for (int p = 0; p < npes; p++) {
+                    std::swap(recvNodeSM_r[p], fSM[p]);
+                    std::swap(recvNodeDGG[p], fDGG[p]);
+                    std::swap(recvNodeIsDG[p], fIsDG[p]);
+                    recvCount[p] = recvNodeSM_r[p].size();
+                }
+        }
         const unsigned int eOrd_s = m_uiElementOrder;
-        for (unsigned int ele_id = 0; ele_id < m_uiNumTotalElements;
+        for (unsigned int ele_id = 0; runOld && ele_id < m_uiNumTotalElements;
              ele_id++) {
             const bool isR2 = new_oct_connectivity_map[ele_id].isGhostTwo;
             if (ckUse && ckOff[ele_id] == SIZE_MAX) continue;  // K6: topology-only row
@@ -22933,8 +23040,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             const char* e = std::getenv("DENDRO_SM_SET_DEDUP");
             return e && e[0] == '1';
         }();
-        std::vector<unsigned int> smStamp(m_uiNumActualNodes, 0u);
-        for (unsigned int p = 0; p < npes; p++) {
+        std::vector<unsigned int> smStamp(runOld ? m_uiNumActualNodes : 0u, 0u);
+        for (unsigned int p = 0; runOld && p < npes; p++) {
             std::vector<unsigned int> outSM;
             std::vector<unsigned int> outDGG;
             std::vector<unsigned char> outIsDG;
@@ -22973,6 +23080,15 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             std::swap(recvNodeDGG[p], outDGG);
             std::swap(recvNodeIsDG[p], outIsDG);
             recvCount[p] = recvNodeSM_r[p].size();
+        }
+        if (fusedChk) {
+            unsigned long long bad = 0;
+            for (int p = 0; p < npes; p++)
+                bad += fSM[p] != recvNodeSM_r[p] || fDGG[p] != recvNodeDGG[p] ||
+                       fIsDG[p] != recvNodeIsDG[p];
+            MPI_Allreduce(MPI_IN_PLACE, &bad, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
+            if (!rank) std::printf("[sm-fused-check] differing per-peer lists: %llu\n", bad);
+            if (bad) MPI_Abort(commActive, 89);
         }
 
         __phase("  sm: dedup");
