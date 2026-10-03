@@ -480,3 +480,18 @@ Unexpected: np4 m3 TEST 8bj [canonical phys_pos] goes 0 -> 108 (e, sub) pairs ro
   1.88 s vs SFC 1.87 s (noise ±0.3 s). Gates: all green; sm check 18/18 clean; `=0` arm d7bbee89.
 - Kingspeak np384 (kp272–285, slower remesh nodes): labelled 117.5 s vs SFC-original 115.3 s ≈ 1.02×.
 - Expanse total ~427 SU.
+
+## 2026-10-03 — onehop groups + fused sm default on; all-defaults at scale
+
+- `DENDRO_ONEHOP_GROUPS` (41a10cac): reply as (owner, sub mask) per element, records grouped per (element, owner),
+  e2n-direct write with position-lookup fallback; `=2` groups + lookup; `_CHECK` rc 88. `DENDRO_SM_FUSED` (30962bd1):
+  one-pass sm walk + dedup, same per-peer order; `_CHECK` rc 89. Both default on (729f2e1a, `=0` reverts).
+- Gates on the default build: EM4 np4/8 sfc+graph, np16 ragged/lvl d7bbee89; tp NP=4/8 identical; NLSM identical;
+  BSSN refs. Taken: EM4 graph 7 groups / 8 fused calls, checks 7/7 + 8/8; BSSN 9/9 + 10/10; `=0` arm 0 calls.
+- Kingspeak np384 kp234–257 (GF 28506447): at-scale check 15/15 clean, 0 hashed. Off → on: rebuild 141.5 → 132.7 ms,
+  sm walk+dedup 18 → 9, onehop xchg 20.4 → 14.4, write 26.5 → 20.0, remesh 7.53 → 7.17 s, wall 110.15 → 109.7 s vs
+  SFC 108.25 s = **1.013×**. All-defaults before this (ND2 28506330): np384 1.016×, np192 1.00× (rkstep −2.5 %).
+- Remaining labelled-only at np384: ~175 ms/remesh (rebuild ~130 over ~10 phases of 10–20 ms; onehop ~75 with
+  query/xchg/write 14–20 each). Next candidate: onehop query owner-side isNodeHanging scan (82–86 ms np64 locally).
+- Harness traps this round: zsh `set -- $x` doesn't split (ran three EM4 runs in the main workspace); `pkill -f` /
+  `pgrep -f` patterns match the waiter's own command line; harness default WORK moved off a dead session dir.
