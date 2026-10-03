@@ -468,3 +468,15 @@ Unexpected: np4 m3 TEST 8bj [canonical phys_pos] goes 0 -> 108 (e, sub) pairs ro
 - Labelled rebuild at np384 now ~270–330 ms: sm exchange 61–65, fetch 37, partition decision 26, zip plan 23,
   connmap 20. One-hop ~120–200 ms (xchg 36–100). Next targets: sm exchange, one-hop records (owner TN, sub).
 - Harness trap: scripts lacked `OMP_NUM_THREADS=1` (libgomp spin, timings 3–7× off); now pinned.
+
+## 2026-10-02 (late) — fast zip plan labelled-only, sm run-length round default on
+
+- `DENDRO_ZIPPLAN_FAST` now 1 = labelled (K6) rebuilds only, 2 = SFC too, 0 off (99a3e094). Kingspeak np384 same-node
+  interleaved SFC A/B: the fast path read ~1 % slower on SFC rkstep+remesh (92.4/91.9 vs 90.9/91.1 s) though its plan
+  build was faster (20–28 vs 76–109 ms); cause unknown, so SFC (the baseline) keeps the full build. Gate trap: keying on
+  `m_uiIsLabelledRebuild` silently disabled it (set after the plan) — use `m_uiCanonKeysBuilt`; always confirm `taken=`.
+- `DENDRO_SM_RUNS` default on (7ccad943 + 09acdfc3): run-length sm request round (~9.8× fewer words). Expanse np384:
+  sm exchange 62 → 6.5 ms/rebuild (wait ≤ 0.2 ms, so bytes not skew), labelled rebuild 224–318 → 169–197 ms, remesh
+  1.88 s vs SFC 1.87 s (noise ±0.3 s). Gates: all green; sm check 18/18 clean; `=0` arm d7bbee89.
+- Kingspeak np384 (kp272–285, slower remesh nodes): labelled 117.5 s vs SFC-original 115.3 s ≈ 1.02×.
+- Expanse total ~427 SU.
