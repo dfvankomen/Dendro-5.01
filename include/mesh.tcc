@@ -6287,7 +6287,7 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
         return true;
     };
 
-    // DENDRO_ONEHOP_GROUPS (default off): the owner's reply and the records travel as
+    // DENDRO_ONEHOP_GROUPS (default 1, =0 reverts): the owner's reply and the records travel as
     // per-(element, labelled owner) groups [x|y<<32, z|lev<<32, sub mask, values var-major]
     // instead of npe ints per element and one (x,y,z) per node; the owner writes a group
     // through lNew's E2N of the same element when that cg is local and sits at the node's
@@ -6296,7 +6296,7 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
     // write count, miss count or owner error
     static const int grpMode = [] {
         const char* v = std::getenv("DENDRO_ONEHOP_GROUPS");
-        return v ? std::atoi(v) : 0;
+        return v ? std::atoi(v) : 1;
     }();
     static const bool grpChk = [] {
         const char* v = std::getenv("DENDRO_ONEHOP_GROUPS_CHECK");

@@ -22847,7 +22847,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // an R1 element via canonical chain), master's 1:1 mirror
         // convention ensures the physical positions coincide and
         // values match.
-        // DENDRO_SM_FUSED (default off): walk + dedup in one pass. CG requests are deduped as
+        // DENDRO_SM_FUSED (default on, =0 reverts): walk + dedup in one pass. CG requests are deduped as
         // they are walked (first peer per slot in a stamp, a second peer in a set), DG requests
         // are kept aside and appended after, so each per-peer list comes out in the two-pass
         // order; no per-node division. _CHECK=1 also runs the two-pass path and aborts (89) if
@@ -22855,7 +22855,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         static const int smFused = [] {
             const char* e = std::getenv("DENDRO_SM_FUSED");
             const char* c = std::getenv("DENDRO_SM_FUSED_CHECK");
-            return (e && e[0] == '1' ? 1 : 0) | (c && c[0] == '1' ? 2 : 0);
+            return (e && e[0] == '0' ? 0 : 1) | (c && c[0] == '1' ? 2 : 0);
         }();
         static const bool smFusedPerturb = [] {
             const char* e = std::getenv("DENDRO_SM_FUSED_PERTURB");
