@@ -112,14 +112,20 @@ int writeVecToFile(const char* fName, const ot::Mesh* pMesh, const T* vec) {
         return 1;
     }
 
-    fwrite(&numNodes, sizeof(unsigned int), 1, outfile);
-    fwrite(&nLocalBegin, sizeof(unsigned int), 1, outfile);
-    fwrite(&nLocalEnd, sizeof(unsigned int), 1, outfile);
-    if (numNodes > 0)
-        fwrite((vec + nLocalBegin), sizeof(T), pMesh->getNumLocalMeshNodes(),
-               outfile);
+    const size_t numLocal = pMesh->getNumLocalMeshNodes();
+    bool ok = fwrite(&numNodes, sizeof(unsigned int), 1, outfile) == 1 &&
+              fwrite(&nLocalBegin, sizeof(unsigned int), 1, outfile) == 1 &&
+              fwrite(&nLocalEnd, sizeof(unsigned int), 1, outfile) == 1;
+    if (ok && numNodes > 0)
+        ok = fwrite((vec + nLocalBegin), sizeof(T), numLocal, outfile) ==
+             numLocal;
 
-    fclose(outfile);
+    // a full disk can surface only at close, when the buffer is flushed
+    ok = (fclose(outfile) == 0) && ok;
+    if (!ok) {
+        std::cout << fName << " file write failed. " << std::endl;
+        return 1;
+    }
     dendro::logger::debug("Finished writing vec to file: ", fName);
     return 0;
 }
@@ -140,15 +146,21 @@ int writeVecToFile(const char* fName, const ot::Mesh* pMesh, const T** vec,
         return 1;
     }
 
-    fwrite(&numNodes, sizeof(unsigned int), 1, outfile);
-    fwrite(&nLocalBegin, sizeof(unsigned int), 1, outfile);
-    fwrite(&nLocalEnd, sizeof(unsigned int), 1, outfile);
-    if (numNodes > 0)
-        for (unsigned int i = 0; i < numVars; i++)
-            fwrite((vec[i] + nLocalBegin), sizeof(T),
-                   pMesh->getNumLocalMeshNodes(), outfile);
+    const size_t numLocal = pMesh->getNumLocalMeshNodes();
+    bool ok = fwrite(&numNodes, sizeof(unsigned int), 1, outfile) == 1 &&
+              fwrite(&nLocalBegin, sizeof(unsigned int), 1, outfile) == 1 &&
+              fwrite(&nLocalEnd, sizeof(unsigned int), 1, outfile) == 1;
+    if (ok && numNodes > 0)
+        for (unsigned int i = 0; ok && i < numVars; i++)
+            ok = fwrite((vec[i] + nLocalBegin), sizeof(T), numLocal, outfile) ==
+                 numLocal;
 
-    fclose(outfile);
+    // a full disk can surface only at close, when the buffer is flushed
+    ok = (fclose(outfile) == 0) && ok;
+    if (!ok) {
+        std::cout << fName << " file write failed. " << std::endl;
+        return 1;
+    }
     dendro::logger::debug("Finished writing vec to file: ", fName);
     return 0;
 }
@@ -163,9 +175,13 @@ int readVecFromFile(const char* fName, const ot::Mesh* pMesh, T* vec) {
         std::cout << fName << " file open failed " << std::endl;
         return 1;
     }
-    size_t fr_status = fread(&numNodes, sizeof(unsigned int), 1, infile);
-    fr_status        = fread(&nLocalBegin, sizeof(unsigned int), 1, infile);
-    fr_status        = fread(&nLocalEnd, sizeof(unsigned int), 1, infile);
+    if (fread(&numNodes, sizeof(unsigned int), 1, infile) != 1 ||
+        fread(&nLocalBegin, sizeof(unsigned int), 1, infile) != 1 ||
+        fread(&nLocalEnd, sizeof(unsigned int), 1, infile) != 1) {
+        std::cout << fName << " file header is truncated. " << std::endl;
+        fclose(infile);
+        return 1;
+    }
 
     if (numNodes !=
         (pMesh->getNumPreMeshNodes() + pMesh->getNumLocalMeshNodes() +
@@ -173,6 +189,7 @@ int readVecFromFile(const char* fName, const ot::Mesh* pMesh, T* vec) {
         std::cout << fName
                   << " file number of total node mismatched with the mesh. "
                   << std::endl;
+        fclose(infile);
         return 1;
     }
     if (nLocalBegin != pMesh->getNodeLocalBegin()) {
@@ -180,18 +197,24 @@ int readVecFromFile(const char* fName, const ot::Mesh* pMesh, T* vec) {
             << fName
             << " file local node begin location mismatched with the mesh. "
             << std::endl;
+        fclose(infile);
         return 1;
     }
     if (nLocalEnd != pMesh->getNodeLocalEnd()) {
         std::cout << fName
                   << " file local node end location mismatched with the mesh. "
                   << std::endl;
+        fclose(infile);
         return 1;
     }
 
-    if (numNodes > 0)
-        fr_status = fread((vec + nLocalBegin), sizeof(T),
-                          pMesh->getNumLocalMeshNodes(), infile);
+    const size_t numLocal = pMesh->getNumLocalMeshNodes();
+    if (numNodes > 0 &&
+        fread((vec + nLocalBegin), sizeof(T), numLocal, infile) != numLocal) {
+        std::cout << fName << " file is truncated. " << std::endl;
+        fclose(infile);
+        return 1;
+    }
 
     fclose(infile);
     dendro::logger::debug("Finished reading vec from file: ", fName);
@@ -210,9 +233,13 @@ int readVecFromFile(const char* fName, const ot::Mesh* pMesh, T** vec,
         return 1;
     }
 
-    size_t fr_status = fread(&numNodes, sizeof(unsigned int), 1, infile);
-    fr_status        = fread(&nLocalBegin, sizeof(unsigned int), 1, infile);
-    fr_status        = fread(&nLocalEnd, sizeof(unsigned int), 1, infile);
+    if (fread(&numNodes, sizeof(unsigned int), 1, infile) != 1 ||
+        fread(&nLocalBegin, sizeof(unsigned int), 1, infile) != 1 ||
+        fread(&nLocalEnd, sizeof(unsigned int), 1, infile) != 1) {
+        std::cout << fName << " file header is truncated. " << std::endl;
+        fclose(infile);
+        return 1;
+    }
 
     if (numNodes !=
         (pMesh->getNumPreMeshNodes() + pMesh->getNumLocalMeshNodes() +
@@ -220,6 +247,7 @@ int readVecFromFile(const char* fName, const ot::Mesh* pMesh, T** vec,
         std::cout << fName
                   << " file number of total node mismatched with the mesh. "
                   << std::endl;
+        fclose(infile);
         return 1;
     }
     if (nLocalBegin != pMesh->getNodeLocalBegin()) {
@@ -227,19 +255,26 @@ int readVecFromFile(const char* fName, const ot::Mesh* pMesh, T** vec,
             << fName
             << " file local node begin location mismatched with the mesh. "
             << std::endl;
+        fclose(infile);
         return 1;
     }
     if (nLocalEnd != pMesh->getNodeLocalEnd()) {
         std::cout << fName
                   << " file local node end location mismatched with the mesh. "
                   << std::endl;
+        fclose(infile);
         return 1;
     }
 
+    const size_t numLocal = pMesh->getNumLocalMeshNodes();
     if (numNodes > 0)
         for (unsigned int i = 0; i < numVars; i++)
-            fr_status = fread((vec[i] + nLocalBegin), sizeof(T),
-                              pMesh->getNumLocalMeshNodes(), infile);
+            if (fread((vec[i] + nLocalBegin), sizeof(T), numLocal, infile) !=
+                numLocal) {
+                std::cout << fName << " file is truncated. " << std::endl;
+                fclose(infile);
+                return 1;
+            }
 
     fclose(infile);
     dendro::logger::debug("Finished reading vec from file: ", fName);
