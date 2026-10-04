@@ -6,6 +6,7 @@
 // two known IVPs), and linear stability boundaries (|R(z)| <= 1). Multistep RK:
 // order via the real evolve_msrk recurrence, and stability via the companion-
 // matrix spectral radius (checked against the arXiv:2603.05763 intercepts).
+// TSRK: same, over its 9-dim (y + two stage clouds) map.
 //
 // Embedded pairs (RKF45, Cash-Karp) use their 5th-order rows, so expected 5.
 // Run: ./testTimeIntegratorOrder   (exit 0 = all pass, 1 = failure)
@@ -372,6 +373,255 @@ static double msrk_stability_boundary(const DendroScalar* a,
     return 0.5 * (lo + hi);
 }
 
+// ETS_TSRK's recurrence (ets_tsrk.h), which the code below must match:
+//   Y_i     = y_n + h*( A1[i].F1 + A2[i].F2 + sum_{j<i} r[i][j] K_j )
+//   K_i     = f(t_n + c_i h, Y_i)
+//   y_{n+1} = y_n + h*( b.K + v1.F1 + v2.F2 ),  then F2 <- F1, F1 <- K
+static const unsigned int TS_S = 4, TS_DEPTH = 2;
+
+struct TsrkTab {
+    DendroScalar c[4], A1[16], A2[16], r[16], b[4], v1[4], v2[4];
+    TsrkTab() { ts::get_tsrk_o6_tableau(c, A1, A2, r, b, v1, v2); }
+};
+
+static std::vector<double> tsrk_micro_eval(const RhsFn& f, double t,
+                                           const std::vector<double>& y,
+                                           double absc, double h) {
+    unsigned int ns6;
+    const DendroScalar *c6, *b6, *a6;
+    ts::get_rk_tableau(ETSType::RK6, ns6, c6, b6, a6);
+    std::vector<double> ye = rk_step(f, ns6, c6, b6, a6, t, y, absc * h);
+    std::vector<double> dy(y.size());
+    f(t + absc * h, ye, dy);
+    return dy;
+}
+
+static double tsrk_integrate_err(const Problem& p, double T, int N) {
+    const TsrkTab tb;
+    unsigned int ns6;
+    const DendroScalar *c6, *b6, *a6;
+    ts::get_rk_tableau(ETSType::RK6, ns6, c6, b6, a6);
+
+    std::vector<double> y = p.exact(0.0);
+    const double h        = T / N;
+    double t              = 0.0;
+    // hist[0..S-1] = F1 (one step back), hist[S..2S-1] = F2 (two back)
+    std::vector<std::vector<double>> hist(TS_DEPTH * TS_S,
+                                          std::vector<double>(y.size(), 0.0));
+
+    for (unsigned int n = 0; n < TS_DEPTH && (int)n < N; n++) {
+        for (unsigned int j = 0; j < TS_S; j++) hist[TS_S + j] = hist[j];
+        for (unsigned int j = 0; j < TS_S; j++)
+            hist[j] = tsrk_micro_eval(p.rhs, t, y, tb.c[j], h);
+        y = rk_step(p.rhs, ns6, c6, b6, a6, t, y, h);
+        t += h;
+    }
+
+    for (int n = (int)TS_DEPTH; n < N; n++) {
+        std::vector<std::vector<double>> K(TS_S);
+        for (unsigned int i = 0; i < TS_S; i++) {
+            std::vector<double> Y = y;
+            for (std::size_t d = 0; d < y.size(); d++) {
+                double acc = 0.0;
+                for (unsigned int j = 0; j < TS_S; j++)
+                    acc += tb.A1[i * TS_S + j] * hist[j][d] +
+                           tb.A2[i * TS_S + j] * hist[TS_S + j][d];
+                for (unsigned int j = 0; j < i; j++)
+                    acc += tb.r[i * TS_S + j] * K[j][d];
+                Y[d] += h * acc;
+            }
+            std::vector<double> dy(y.size());
+            p.rhs(t + tb.c[i] * h, Y, dy);
+            K[i] = dy;
+        }
+        for (std::size_t d = 0; d < y.size(); d++) {
+            double acc = 0.0;
+            for (unsigned int i = 0; i < TS_S; i++)
+                acc += tb.b[i] * K[i][d] + tb.v1[i] * hist[i][d] +
+                       tb.v2[i] * hist[TS_S + i][d];
+            y[d] += h * acc;
+        }
+        for (unsigned int j = 0; j < TS_S; j++) hist[TS_S + j] = hist[j];
+        for (unsigned int j = 0; j < TS_S; j++) hist[j] = K[j];
+        t += h;
+    }
+
+    std::vector<double> ye = p.exact(T);
+    double e               = 0.0;
+    for (std::size_t d = 0; d < y.size(); d++)
+        e = std::max(e, std::fabs(y[d] - ye[d]));
+    return e;
+}
+
+static double tsrk_observed_order(const Problem& p) {
+    double best = 0.0;
+    std::vector<double> errs;
+    for (int N : NSWEEP) errs.push_back(tsrk_integrate_err(p, SWEEP_T, N));
+    for (std::size_t i = 0; i + 1 < errs.size(); i++) {
+        if (errs[i] < 1e-11 || errs[i] > 1e-1) continue;
+        if (errs[i + 1] < 1e-13) continue;
+        best = std::max(best, std::log2(errs[i] / errs[i + 1]));
+    }
+    return best;
+}
+
+// y' = (z/h) y on state s = [y, G1_0..3, G2_0..3], G = h*F.
+static std::vector<cplx> tsrk_lin_step(const TsrkTab& tb, cplx z,
+                                       const std::vector<cplx>& s) {
+    const cplx y = s[0];
+    std::vector<cplx> g(TS_S, cplx(0.0, 0.0));
+    for (unsigned int i = 0; i < TS_S; i++) {
+        cplx Y = y;
+        for (unsigned int j = 0; j < TS_S; j++)
+            Y += tb.A1[i * TS_S + j] * s[1 + j] +
+                 tb.A2[i * TS_S + j] * s[1 + TS_S + j];
+        for (unsigned int j = 0; j < i; j++) Y += tb.r[i * TS_S + j] * g[j];
+        g[i] = z * Y;
+    }
+    std::vector<cplx> ns(1 + TS_DEPTH * TS_S, cplx(0.0, 0.0));
+    cplx yn = y;
+    for (unsigned int i = 0; i < TS_S; i++)
+        yn += tb.b[i] * g[i] + tb.v1[i] * s[1 + i] + tb.v2[i] * s[1 + TS_S + i];
+    ns[0] = yn;
+    for (unsigned int i = 0; i < TS_S; i++) {
+        ns[1 + i]         = g[i];          // F1 <- this step's stage derivs
+        ns[1 + TS_S + i]  = s[1 + i];      // F2 <- old F1
+    }
+    return ns;
+}
+
+// Gelfand: rho = lim ||M^k s||^(1/k). The map is 9-dim, so no closed form.
+static double tsrk_specrad(const TsrkTab& tb, cplx z, int iters) {
+    const unsigned int dim = 1 + TS_DEPTH * TS_S;
+    std::vector<cplx> s(dim, cplx(1.0, 0.0));
+    // Do not drop this burn-in: averaging the transient biases rho by ~1e-5,
+    // enough to report a stable method's interval as zero.
+    const int burn = iters;
+    for (int k = 0; k < burn; k++) {
+        s = tsrk_lin_step(tb, z, s);
+        double nrm = 0.0;
+        for (const auto& v : s) nrm += std::norm(v);
+        nrm = std::sqrt(nrm);
+        if (nrm < 1e-300) return 0.0;
+        for (auto& v : s) v /= nrm;
+    }
+    double logsum = 0.0;
+    for (int k = 0; k < iters; k++) {
+        s = tsrk_lin_step(tb, z, s);
+        double nrm = 0.0;
+        for (const auto& v : s) nrm += std::norm(v);
+        nrm = std::sqrt(nrm);
+        if (nrm < 1e-300) return 0.0;
+        logsum += std::log(nrm);
+        for (auto& v : s) v /= nrm;
+    }
+    return std::exp(logsum / iters);
+}
+
+static double tsrk_stability_boundary(const TsrkTab& tb, int axis) {
+    auto zof = [axis](double x) {
+        return axis == 0 ? cplx(-x, 0.0) : cplx(0.0, x);
+    };
+    const double tol = 1e-7;  // rho == 1 exactly at z = 0
+    const double step = 2e-3;
+    double lo = 0.0, hi = 0.0;
+    for (double x = step; x < 6.0; x += step) {
+        if (tsrk_specrad(tb, zof(x), 2000) > 1.0 + tol) {
+            lo = x - step;
+            hi = x;
+            break;
+        }
+    }
+    if (hi == 0.0) return 0.0;
+    for (int it = 0; it < 40; it++) {
+        double mid = 0.5 * (lo + hi);
+        if (tsrk_specrad(tb, zof(mid), 6000) <= 1.0 + tol)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    return 0.5 * (lo + hi);
+}
+
+static double msrk_specrad_gelfand(const DendroScalar* a, const DendroScalar* b,
+                                   unsigned int F, unsigned int H, cplx z,
+                                   int iters) {
+    const unsigned int dim = H + 1;
+    std::vector<cplx> s(dim, cplx(1.0, 0.0));
+    for (int pass = 0; pass < 2; pass++) {
+        double logsum = 0.0;
+        for (int k = 0; k < iters; k++) {
+            s = msrk_lin_step(a, b, F, H, z, s);
+            s.resize(dim, cplx(0.0, 0.0));
+            double nrm = 0.0;
+            for (const auto& v : s) nrm += std::norm(v);
+            nrm = std::sqrt(nrm);
+            if (nrm < 1e-300) return 0.0;
+            logsum += std::log(nrm);
+            for (auto& v : s) v /= nrm;
+        }
+        if (pass == 1) return std::exp(logsum / iters);  // post burn-in
+    }
+    return 0.0;
+}
+
+static double msrk_imag_boundary_gelfand(const DendroScalar* a,
+                                         const DendroScalar* b, unsigned int F,
+                                         unsigned int H) {
+    double lo = 0.0, hi = 0.0;
+    for (double x = 2e-3; x < 6.0; x += 2e-3)
+        if (msrk_specrad_gelfand(a, b, F, H, cplx(0.0, x), 2000) > 1.0 + 1e-7) {
+            lo = x - 2e-3;
+            hi = x;
+            break;
+        }
+    if (hi == 0.0) return 0.0;
+    for (int it = 0; it < 40; it++) {
+        const double mid = 0.5 * (lo + hi);
+        if (msrk_specrad_gelfand(a, b, F, H, cplx(0.0, mid), 6000) <= 1.0 + 1e-7)
+            lo = mid;
+        else
+            hi = mid;
+    }
+    return 0.5 * (lo + hi);
+}
+
+static int validate_specrad() {
+    int bad = 0;
+    std::printf(
+        "\n=== validation: the iterative spectral radius TSRK relies on ===\n");
+
+    const TsrkTab tb;
+    double worst = 0.0;
+    for (double x : {-0.2, -0.1, -0.01, 0.01, 0.05, 0.1})
+        worst = std::max(worst, std::fabs(tsrk_specrad(tb, cplx(x, 0.0), 6000) -
+                                          std::exp(x)));
+    const bool mapok = worst < 1e-8;
+    if (!mapok) bad++;
+    std::printf(
+        "  TSRK map vs exp(z), real axis: max |rho - exp(z)| = %.2e   %s\n",
+        worst, mapok ? "PASS" : "FAIL");
+
+    struct V { ETSType t; const char* n; };
+    for (const V& v : {V{ETSType::RK4_MSRK2_1, "MSRK2_1"},
+                       V{ETSType::RK4_MSRK2_2, "MSRK2_2"},
+                       V{ETSType::RK4_MSRK3, "MSRK3"}}) {
+        DendroScalar a[16], b[4], c[4];
+        unsigned int F = 0, H = 0;
+        ts::get_msrk_tableau(v.t, a, b, c, F, H);
+        const double g  = msrk_imag_boundary_gelfand(a, b, F, H);
+        const double cf = msrk_stability_boundary(a, b, F, H, 1);
+        const bool ok   = std::fabs(g - cf) < 1e-3;
+        if (!ok) bad++;
+        std::printf(
+            "  same estimator on %-8s imag boundary: %.4f vs closed-form "
+            "%.4f   %s\n",
+            v.n, g, cf, ok ? "PASS" : "FAIL");
+    }
+    return bad;
+}
+
+
 int main() {
     const std::vector<SchemeSpec> schemes = {
         {ETSType::RK3, "RK3", 3},
@@ -534,6 +784,35 @@ int main() {
         "  imag-axis intercepts validated against arXiv:2603.05763; note they\n"
         "  far exceed the single-step high-order schemes above (RK6=0.079),\n"
         "  which is why 4th-order MSRK is the practical comm-reduction path.\n");
+
+    failures += validate_specrad();
+
+    // TSRK is not in get_rk_tableau()'s dispatch, so the sweep above skips it.
+    {
+        const TsrkTab tb;
+        double obs = 0.0;
+        for (const auto& prob : problems)
+            obs = std::max(obs, tsrk_observed_order(prob));
+        const double rb = tsrk_stability_boundary(tb, 0);
+        const double ib = tsrk_stability_boundary(tb, 1);
+
+        const bool order_ok = obs >= (6 - 0.4);
+        const bool stab_ok = std::fabs(ib - 1.85) < 0.05;  // findings/14
+        if (!order_ok || !stab_ok) failures++;
+
+        std::printf(
+            "\n=== TSRK (depth-2 multistep RK) — order + stability ===\n"
+            "%-14s %6s %8s %10s %10s %10s %10s\n",
+            "variant", "theory", "order", "real-axis", "imag-axis", "imag-ref",
+            "fresh/step");
+        std::printf("%-14s %6d %8.3f %10.4f %10.4f %10.2f %10u   %s\n",
+                    "RK6_TSRK", 6, obs, rb, ib, 1.85, TS_S,
+                    (order_ok && stab_ok) ? "PASS" : "FAIL");
+        std::printf(
+            "  order via the real evolve_bootstrap/evolve_tsrk recurrence (RK6\n"
+            "  micro-integration startup); stability via the 9-dim amplification\n"
+            "  map (y + two 4-stage history clouds), spectral radius by Gelfand.\n");
+    }
 
     std::printf("\n%s (%d check%s failed)\n\n",
                 failures == 0 ? "ALL CHECKS PASS" : "FAILURES DETECTED",
