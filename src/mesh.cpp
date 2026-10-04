@@ -16237,6 +16237,35 @@ void Mesh::findBlockNeighborsWithoutSFC(ot::Block &blk) {
     //           << std::endl;
 }
 
+// DENDRO_SPATIAL_HASH_FULLKEY (default on, =0 reverts): the old key packed
+// z at bit 50 and lost its high bits for coordinates >= 2^14 (maxDepth >= 15),
+// so cells aliased and block edge/vertex neighbours came back wrong or
+// missing -> unwritten edge/corner unzip padding on labelled meshes. Pack the
+// level-L cell index (L bits per axis) instead; exact for L <= 19.
+static bool spatialHashFullKey() {
+    static const bool on = [] {
+        const char *v = std::getenv("DENDRO_SPATIAL_HASH_FULLKEY");
+        return !(v && v[0] == '0');
+    }();
+    return on;
+}
+// DENDRO_SPATIAL_HASH_CHECK=1: every hash lookup is checked against a linear
+// scan for the deepest containing element; abort (94) on a mismatch.
+static bool spatialHashCheck() {
+    static const bool on = [] {
+        const char *v = std::getenv("DENDRO_SPATIAL_HASH_CHECK");
+        return v && v[0] == '1';
+    }();
+    return on;
+}
+static inline uint64_t spatialHashKey(uint64_t L, uint64_t x, uint64_t y,
+                                      uint64_t z, unsigned int maxDepth) {
+    if (!spatialHashFullKey()) return L | (x << 6) | (y << 28) | (z << 50);
+    const unsigned int sh = maxDepth - (unsigned int)L;
+    return L | ((x >> sh) << 5) | ((y >> sh) << (5 + L)) |
+           ((z >> sh) << (5 + 2 * L));
+}
+
 bool Mesh::findContainingElementInAllNodes(const ot::TreeNode &searchNode,
                                            unsigned int &result) {
     // Fast path: spatial hash lookup. Walk levels from finest (max depth)
@@ -16254,19 +16283,38 @@ bool Mesh::findContainingElementInAllNodes(const ot::TreeNode &searchNode,
             const uint32_t cx         = sx & mask;
             const uint32_t cy         = sy & mask;
             const uint32_t cz         = sz & mask;
-            const uint64_t key        =
-                (uint64_t)L |
-                ((uint64_t)cx << 6) |
-                ((uint64_t)cy << 28) |
-                ((uint64_t)cz << 50);
+            const uint64_t key = spatialHashKey(L, cx, cy, cz, m_uiMaxDepth);
             auto it = m_uiAllElementsSpatialHash.find(key);
             if (it != m_uiAllElementsSpatialHash.end()) {
                 result = it->second;
-                return true;
+                break;
+            }
+            result = LOOK_UP_TABLE_DEFAULT;
+        }
+        if (spatialHashCheck()) {
+            // deepest containing element by linear scan
+            unsigned int best = LOOK_UP_TABLE_DEFAULT;
+            for (unsigned int e = 0; e < m_uiAllElements.size(); e++)
+                if (m_uiAllElements[e].contains(searchNode) &&
+                    (best == LOOK_UP_TABLE_DEFAULT ||
+                     m_uiAllElements[e].getLevel() >
+                         m_uiAllElements[best].getLevel()))
+                    best = e;
+            const bool okHit =
+                (best == LOOK_UP_TABLE_DEFAULT)
+                    ? result == LOOK_UP_TABLE_DEFAULT
+                    : (result != LOOK_UP_TABLE_DEFAULT &&
+                       m_uiAllElements[result] == m_uiAllElements[best]);
+            if (!okHit) {
+                std::cerr << "[spatial-hash] CHECK FAIL r" << m_uiActiveRank
+                          << " point " << searchNode.getX() << " "
+                          << searchNode.getY() << " " << searchNode.getZ()
+                          << " hash=" << result << " scan=" << best
+                          << std::endl;
+                MPI_Abort(m_uiCommGlobal, 94);
             }
         }
-        result = LOOK_UP_TABLE_DEFAULT;
-        return false;
+        return result != LOOK_UP_TABLE_DEFAULT;
     }
 
     // first search the local elements, because it's more likely our target will
@@ -16313,15 +16361,16 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
     // partitioned meshes degrades to O(num_blocks * num_coords * N),
     // which was ~6.5s for a 16k-element Random partition run.
     m_uiAllElementsSpatialHash.clear();
-    m_uiAllElementsSpatialHash.reserve(m_uiAllElements.size());
-    for (unsigned int e = 0; e < m_uiAllElements.size(); e++) {
+    // the full key needs 5 + 3 * maxDepth bits; deeper trees take the scan
+    const bool hashOk = !spatialHashFullKey() || m_uiMaxDepth <= 19;
+    if (hashOk) m_uiAllElementsSpatialHash.reserve(m_uiAllElements.size());
+    for (unsigned int e = 0; hashOk && e < m_uiAllElements.size(); e++) {
         const auto &tn = m_uiAllElements[e];
         const uint64_t L  = tn.getLevel();
         const uint64_t cx = tn.getX();
         const uint64_t cy = tn.getY();
         const uint64_t cz = tn.getZ();
-        const uint64_t key =
-            L | (cx << 6) | (cy << 28) | (cz << 50);
+        const uint64_t key = spatialHashKey(L, cx, cy, cz, m_uiMaxDepth);
         m_uiAllElementsSpatialHash[key] = e;
     }
 
