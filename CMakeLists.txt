@@ -64,6 +64,7 @@ option(PROFILE_TREE_SORT "Profile the tree sort code" OFF)
 option(WITH_BLAS_LAPACK "Build using BLAS and LAPACK" ON)
 option(DENDRO_VTK_BINARY "Write VTK/VTU files in binary mode" ON)
 option(DENDRO_VTK_ZLIB_COMPRES "Compress VTK/VTU (requires Binary)" OFF)
+option(DENDRO_ENABLE_HDF5 "Build the VTKHDF (parallel HDF5) output writer (default OFF = no HDF5 dependency)" OFF)
 option(ALLTOALL_SPARSE "Use isend/irecv for ghost exchange" OFF)
 option(ENABLE_DENDRO_PROFILE_COUNTERS "Enable dendro internal profile counters" OFF)
 option(PROFILE_MESH "Report per-stage mesh construction timings (sort/balance/e2e/e2n/sm/blk)" OFF)
@@ -171,6 +172,16 @@ find_package(MPI REQUIRED)
 # GSL
 find_package(GSL REQUIRED)
 
+# HDF5, parallel only: the VTKHDF writer does collective MPI-IO writes
+if(DENDRO_ENABLE_HDF5)
+  find_package(HDF5 REQUIRED COMPONENTS C)
+  if(NOT HDF5_IS_PARALLEL)
+    message(FATAL_ERROR "DENDRO_ENABLE_HDF5 needs a parallel (MPI) HDF5, found a serial ${HDF5_VERSION} "
+                        "(HDF5_DIR=${HDF5_DIR}). Point HDF5_ROOT at a parallel one; a cached HDF5_DIR "
+                        "takes precedence, so clear it with -UHDF5_DIR")
+  endif()
+endif()
+
 # spdlog allows for logging!
 FetchContent_Declare(
     spdlog
@@ -276,6 +287,9 @@ set(ODE_SRC
     ODE/src/rkTransport.cpp ODE/src/enutsOp.cpp)
 
 set(IO_SRC IO/vtk/src/oct2vtk.cpp IO/vtk/src/checkPoint.cpp)
+if(DENDRO_ENABLE_HDF5)
+  list(APPEND IO_SRC IO/hdf5/src/oct2vtkhdf.cpp)
+endif()
 
 set(ZLIB_SRC
     IO/zlib/src/adler32.c IO/zlib/src/compress.c IO/zlib/src/crc32.c
@@ -320,6 +334,7 @@ dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
 
 dendro_add_def(DENDRO_TENSOR_SIMD DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_REPORT_BUILD_CONFIG DENDRO_REPORT_BUILD_CONFIG)
+dendro_add_def(DENDRO_ENABLE_HDF5 DENDRO_ENABLE_HDF5)
 
 # Resolve the effective unzip/zip + threading flags. DENDRO_HYBRID_OMP is the
 # umbrella for all intra-rank OpenMP threading: it implies the block-parallel
@@ -420,6 +435,12 @@ target_include_directories(dendro_config INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include
     ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc
 )
+if(DENDRO_ENABLE_HDF5)
+  target_include_directories(dendro_config INTERFACE
+      ${CMAKE_CURRENT_SOURCE_DIR}/IO/hdf5/include
+      ${HDF5_INCLUDE_DIRS}
+  )
+endif()
 # NOTE: GR/include is deliberately NOT added here. Six of its headers share a
 # name with a solver-local copy (adm2bssn.h, gwExtract.h, sph.h, swsh.h,
 # TPUtilities.h, TwoPunctures.h) while the solvers migrate onto the shared
@@ -428,6 +449,9 @@ target_include_directories(dendro_config INTERFACE
 # usage requirement, so reaching for GR headers is opt-in and explicit.
 
 target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m)
+if(DENDRO_ENABLE_HDF5)
+  target_link_libraries(dendro5 PUBLIC ${HDF5_LIBRARIES})
+endif()
 
 if(WITH_BLAS_LAPACK)
   target_compile_definitions(dendro5 PUBLIC WITH_BLAS_LAPACK)
@@ -541,6 +565,15 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS} 6 1e-3)
   set_tests_properties(testMeshInvariants testMeshInvariants_2rank
                        PROPERTIES TIMEOUT 600)
+  if(DENDRO_ENABLE_HDF5)
+    dendro_add_example(testVTKHDF test/src/testVTKHDF.cpp)
+    add_test(NAME testVTKHDF COMMAND testVTKHDF 6 1e-3)
+    add_test(NAME testVTKHDF_3rank
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testVTKHDF>
+                     ${MPIEXEC_POSTFLAGS} 7 1e-4)
+    set_tests_properties(testVTKHDF testVTKHDF_3rank PROPERTIES TIMEOUT 600)
+  endif()
   add_test(NAME testUnzipExact COMMAND testUnzipExact 6 1e-3)
   set_tests_properties(testUnzipExact PROPERTIES TIMEOUT 600)
   add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
