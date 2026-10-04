@@ -1,9 +1,9 @@
-// Mesh-based time-integrator validation: builds a real Dendro octree and
-// evolves through the actual ts::ETS / ts::ETS_MSRK path vs an analytical
-// solution. Modes:
-//   decay : du/dt = -lambda*u (decoupled -> clean temporal order)
-//   adv   : du/dt = -a*du/dx (BL6 compact-FD; interior error, spatial-limited)
+// Temporal order of every BSSN_RK_TYPE scheme on a real octree, through the
+// actual ts::ETS / ts::ETS_MSRK / ts::ETS_TSRK path.
+//   decay : du/dt = -lambda*u, error vs the analytic solution
+//   adv   : du/dt = -a*du/dx,  error vs a fine-dt RK6 reference on the same mesh
 // Run:  ./testMeshTimeIntegrator maxDepth eleOrder [decay|adv|both]
+//       exit 0 = all pass, 1 = failure
 
 #include <cmath>
 #include <cstdio>
@@ -169,6 +169,46 @@ class MeshTICtx : public ts::Ctx<MeshTICtx, DendroScalar, unsigned int> {
         return eg;
     }
 
+    // Masked identically to max_error(), so the two are comparable.
+    std::vector<double> interior_state() {
+        DendroScalar* u;
+        m_evar.to_2d(&u);
+        std::vector<double> out;
+        for (unsigned int n = m_uiMesh->getNodeLocalBegin();
+             n < m_uiMesh->getNodeLocalEnd(); n++) {
+            if (m_adv) {
+                const double x = m_ic[n];
+                if (x < 0.15 || x > 0.85) continue;
+            }
+            out.push_back(u[n]);
+        }
+        return out;
+    }
+
+    double max_error_vs(const std::vector<double>& ref) {
+        const std::vector<double> cur = interior_state();
+        double e                      = 0.0;
+        for (std::size_t i = 0; i < cur.size() && i < ref.size(); i++)
+            e = std::max(e, std::fabs(cur[i] - ref[i]));
+        double eg = e;
+        MPI_Allreduce(&e, &eg, 1, MPI_DOUBLE, MPI_MAX,
+                      m_uiMesh->getMPIGlobalCommunicator());
+        return eg;
+    }
+
+    double max_abs() {
+        DendroScalar* u;
+        m_evar.to_2d(&u);
+        double m = 0.0;
+        for (unsigned int n = m_uiMesh->getNodeLocalBegin();
+             n < m_uiMesh->getNodeLocalEnd(); n++)
+            m = std::max(m, std::fabs(u[n]));
+        double mg = m;
+        MPI_Allreduce(&m, &mg, 1, MPI_DOUBLE, MPI_MAX,
+                      m_uiMesh->getMPIGlobalCommunicator());
+        return mg;
+    }
+
     DVec& get_evolution_vars() { return m_evar; }
     DVec& get_constraint_vars() { return m_evar; }
     DVec& get_primitive_vars() { return m_evar; }
@@ -204,41 +244,131 @@ class MeshTICtx : public ts::Ctx<MeshTICtx, DendroScalar, unsigned int> {
 
 // ---------------------------------------------------------------------------
 // kind: 0 = single-step ETS, 1 = ETS_MSRK, 2 = ETS_TSRK
-static void run(ot::Mesh* mesh, const char* name, ts::ETSType type, int kind,
-                bool adv, double T, MPI_Comm comm) {
+struct Scheme {
+    ts::ETSType type;
+    const char* name;
+    int kind;
+    int order;
+    double imag_reach;  // ODE imag-axis reach, from testTimeIntegratorOrder
+};
+
+// imag_reach is reported by testTimeIntegratorOrder, not computed here.
+static const std::vector<Scheme> SCHEMES = {
+    {ts::ETSType::RK3, "RK3", 0, 3, 1.7321},
+    {ts::ETSType::RK4, "RK4", 0, 4, 2.8284},
+    {ts::ETSType::RK5, "RK5", 0, 5, 0.8523},
+    {ts::ETSType::RK4_MSRK2_1, "RK4_MSRK2_1", 1, 4, 2.5387},
+    {ts::ETSType::RK4_MSRK2_2, "RK4_MSRK2_2", 1, 4, 2.4620},
+    {ts::ETSType::RK4_MSRK3, "RK4_MSRK3", 1, 4, 1.3071},
+    {ts::ETSType::RK4_RALSTON, "RK4_RALSTON", 0, 4, 2.8284},
+    {ts::ETSType::RK45_CASH_KARP, "RK45_CASH_KARP", 0, 5, 0.0430},
+    {ts::ETSType::RKF45, "RKF45", 0, 5, 0.0320},
+    {ts::ETSType::RK5_NYSTROM, "RK5_NYSTROM", 0, 5, 0.0290},
+    {ts::ETSType::RK6, "RK6", 0, 6, 0.0790},
+    {ts::ETSType::RK6_TSRK, "RK6_TSRK", 2, 6, 1.8500},
+};
+
+// blowup > 0 stops early and returns false once |u| exceeds it; NaN counts.
+template <typename ETST>
+static bool drive(ETST& ets, MeshTICtx& ctx, int nsteps, double blowup) {
+    ets.init();
+    for (int i = 0; i < nsteps; i++) {
+        ets.evolve();
+        if (blowup > 0.0 && !(ctx.max_abs() < blowup)) return false;
+    }
+    return true;
+}
+
+static bool evolve_steps(MeshTICtx& ctx, const Scheme& sc, double dt,
+                         int nsteps, double blowup) {
+    ctx.set_ts_info({0.0, dt * nsteps, 0, 0.0, dt});
+    if (sc.kind == 1) {
+        ts::ETS_MSRK<DendroScalar, MeshTICtx> ets(&ctx, sc.type);
+        ets.set_ets_coefficients(ts::ETSType::RK4);
+        return drive(ets, ctx, nsteps, blowup);
+    }
+    if (sc.kind == 2) {
+        ts::ETS_TSRK<DendroScalar, MeshTICtx> ets(&ctx);
+        return drive(ets, ctx, nsteps, blowup);
+    }
+    ts::ETS<DendroScalar, MeshTICtx> ets(&ctx);
+    ets.set_ets_coefficients(sc.type);
+    return drive(ets, ctx, nsteps, blowup);
+}
+
+static double run_decay(ot::Mesh* mesh, const Scheme& sc, double T,
+                        std::vector<double>& errs_out) {
     const std::vector<int> Ns = {10, 20, 40, 80};
-    std::vector<double> errs;
+    errs_out.clear();
     for (int N : Ns) {
-        MeshTICtx ctx(mesh, adv);
-        ctx.set_ts_info({0.0, T, 0, 0.0, T / N});
-        if (kind == 1) {
-            ts::ETS_MSRK<DendroScalar, MeshTICtx> ets(&ctx, type);
-            ets.set_ets_coefficients(ts::ETSType::RK4);
-            ets.init();
-            for (int s = 0; s < N; s++) ets.evolve();
-        } else if (kind == 2) {
-            ts::ETS_TSRK<DendroScalar, MeshTICtx> ets(&ctx);
-            ets.init();
-            for (int s = 0; s < N; s++) ets.evolve();
-        } else {
-            ts::ETS<DendroScalar, MeshTICtx> ets(&ctx);
-            ets.set_ets_coefficients(type);
-            ets.init();
-            for (int s = 0; s < N; s++) ets.evolve();
-        }
-        errs.push_back(ctx.max_error());
+        MeshTICtx ctx(mesh, false);
+        evolve_steps(ctx, sc, T / N, N, 0.0);
+        errs_out.push_back(ctx.max_error());
     }
     double best = 0.0;
-    for (std::size_t i = 0; i + 1 < errs.size(); i++)
-        if (errs[i] > 1e-13)
-            best = std::max(best, std::log2(errs[i] / errs[i + 1]));
-    int rank;
-    MPI_Comm_rank(comm, &rank);
-    if (!rank) {
-        std::printf("  %-14s errs =", name);
-        for (double e : errs) std::printf(" %.3e", e);
-        std::printf("   order ~ %.2f\n", best);
+    for (std::size_t i = 0; i + 1 < errs_out.size(); i++)
+        if (errs_out[i] > 1e-13 && errs_out[i + 1] > 1e-14)
+            best = std::max(best, std::log2(errs_out[i] / errs_out[i + 1]));
+    return best;
+}
+
+// Do not add a max-stable-dt probe here: this operator has its own growth mode
+// (~2.9/unit time), so any such bisection measures the operator, not the scheme.
+static const int NADV_LVL    = 4;
+static const int NADV_STEPS0 = 8;
+static const int REF_REFINE  = 16;
+static const double BLOWUP   = 1e4;  // only catches genuine divergence/NaN
+
+static std::vector<double> reference_state(ot::Mesh* mesh, double T,
+                                           int nsteps) {
+    const Scheme ref{ts::ETSType::RK6, "ref", 0, 6, 0.0790};
+    MeshTICtx ctx(mesh, true);
+    if (!evolve_steps(ctx, ref, T / nsteps, nsteps, BLOWUP)) return {};
+    return ctx.interior_state();
+}
+
+static double adv_err(ot::Mesh* mesh, const Scheme& sc, double T, int nsteps,
+                      const std::vector<double>& ref) {
+    MeshTICtx ctx(mesh, true);
+    if (!evolve_steps(ctx, sc, T / nsteps, nsteps, BLOWUP)) return -1.0;
+    return ctx.max_error_vs(ref);
+}
+
+// Coarsest dt whose RK4 error lands in [1e-6, 1e-2], so four halvings resolve.
+static double calibrate_dt(ot::Mesh* mesh, int& nref_out) {
+    const Scheme rk4{ts::ETSType::RK4, "RK4", 0, 4, 2.8284};
+    for (double dt = 0.05; dt > 1e-6; dt *= 0.5) {
+        const double T   = NADV_STEPS0 * dt;
+        const int nref   = NADV_STEPS0 * (1 << (NADV_LVL - 1)) * REF_REFINE;
+        std::vector<double> ref = reference_state(mesh, T, nref);
+        if (ref.empty()) continue;
+        const double e = adv_err(mesh, rk4, T, NADV_STEPS0, ref);
+        if (e > 1e-6 && e < 1e-2) {
+            nref_out = nref;
+            return dt;
+        }
     }
+    nref_out = 0;
+    return 0.0;
+}
+
+static double run_adv_order(ot::Mesh* mesh, const Scheme& sc, double dt0,
+                            int nref, std::vector<double>& errs_out) {
+    const double T          = NADV_STEPS0 * dt0;
+    std::vector<double> ref = reference_state(mesh, T, nref);
+    errs_out.clear();
+    if (ref.empty()) return -1.0;
+    for (int l = 0; l < NADV_LVL; l++)
+        errs_out.push_back(
+            adv_err(mesh, sc, T, NADV_STEPS0 * (1 << l), ref));
+    double best = 0.0;
+    for (std::size_t i = 0; i + 1 < errs_out.size(); i++) {
+        if (errs_out[i] <= 0.0 || errs_out[i + 1] <= 0.0) continue;
+        if (errs_out[i] > 1e-1 || errs_out[i] < 1e-12) continue;
+        if (errs_out[i + 1] < 1e-14) continue;
+        best = std::max(best, std::log2(errs_out[i] / errs_out[i + 1]));
+    }
+    return best;
 }
 
 int main(int argc, char** argv) {
@@ -264,21 +394,86 @@ int main(int argc, char** argv) {
                                     0.3, DENDRO_DEFAULT_SF_K);
     mesh->setDomainBounds(Point(0.0, 0.0, 0.0), Point(1.0, 1.0, 1.0));
 
-    if ((mode == "decay" || mode == "both")) {
-        if (!rank) std::printf("=== DECAY  du/dt=-%.1f u  (clean temporal order) ===\n", LAMBDA);
-        run(mesh, "RK4", ts::ETSType::RK4, 0, false, 1.0, comm);
-        run(mesh, "RK6", ts::ETSType::RK6, 0, false, 1.0, comm);
-        run(mesh, "RK4_MSRK2_1", ts::ETSType::RK4_MSRK2_1, 1, false, 1.0, comm);
-        run(mesh, "RK6_TSRK", ts::ETSType::RK6_TSRK, 2, false, 1.0, comm);
+    int failures = 0;
+
+    if (mode == "decay" || mode == "both") {
+        if (!rank)
+            std::printf(
+                "\n=== DECAY  du/dt=-%.1f u  — temporal order vs analytic ===\n"
+                "%-16s %6s %8s   %s\n",
+                LAMBDA, "scheme", "theory", "order", "errors (N=10,20,40,80)");
+        for (const auto& sc : SCHEMES) {
+            std::vector<double> errs;
+            const double obs    = run_decay(mesh, sc, 1.0, errs);
+            const bool order_ok = obs >= (sc.order - 0.5);
+            if (!order_ok) failures++;
+            if (!rank) {
+                std::printf("%-16s %6d %8.2f  ", sc.name, sc.order, obs);
+                for (double e : errs) std::printf(" %.2e", e);
+                std::printf("   %s\n", order_ok ? "PASS" : "FAIL");
+            }
+        }
     }
-    if ((mode == "adv" || mode == "both")) {
-        if (!rank) std::printf("=== ADVECTION  du/dt=-%.1f du/dx  (BL6, T=0.1, interior) ===\n", AVEL);
-        run(mesh, "RK4", ts::ETSType::RK4, 0, true, 0.1, comm);
-        run(mesh, "RK6", ts::ETSType::RK6, 0, true, 0.1, comm);
-        run(mesh, "RK6_TSRK", ts::ETSType::RK6_TSRK, 2, true, 0.1, comm);
+
+    if (mode == "adv" || mode == "both") {
+        if (eOrder < 6) {
+            if (!rank)
+                std::printf(
+                    "\nADVECTION skipped: BL6 needs eleOrder >= 6 (got %u); "
+                    "try `%s %u 6 adv`.\n",
+                    eOrder, argv[0], m_uiMaxDepth);
+            delete mesh;
+            MPI_Finalize();
+            return 1;
+        }
+
+        int nref        = 0;
+        const double dt0 = calibrate_dt(mesh, nref);
+        if (dt0 <= 0.0) {
+            if (!rank)
+                std::printf(
+                    "\nADVECTION: could not calibrate a dt whose RK4 error "
+                    "lands in [1e-6, 1e-2]\n");
+            failures++;
+        } else {
+            if (!rank)
+                std::printf(
+                    "\n=== ADVECTION  du/dt=-%.1f du/dx  (BL6/JTT6) ===\n"
+                    "temporal order vs an RK6 reference at dt/%d on the same "
+                    "mesh,\nwhich cancels the ~1e-3 BL6 spatial error. dt0=%.3e, "
+                    "shared by\nevery scheme, so the error columns compare "
+                    "directly.\n"
+                    "%-16s %6s %8s %10s   %s\n",
+                    AVEL, (1 << (NADV_LVL - 1)) * REF_REFINE, dt0, "scheme",
+                    "theory", "order", "imag-reach",
+                    "errors (dt0 -> dt0/8)");
+            for (const auto& sc : SCHEMES) {
+                std::vector<double> errs;
+                const double obs    = run_adv_order(mesh, sc, dt0, nref, errs);
+                const bool order_ok = obs >= (sc.order - 0.5);
+                if (!order_ok) failures++;
+                if (!rank) {
+                    std::printf("%-16s %6d %8.2f %10.4f  ", sc.name, sc.order,
+                                obs, sc.imag_reach);
+                    for (double e : errs) std::printf(" %.2e", e);
+                    std::printf("   %s\n", order_ok ? "PASS" : "FAIL");
+                }
+            }
+            if (!rank)
+                std::printf(
+                    "  imag-reach is from testTimeIntegratorOrder's linear\n"
+                    "  analysis: the order above is real, but a scheme with\n"
+                    "  reach 0.03-0.08 can only cash it in at a dt ~35x smaller\n"
+                    "  than RK4's on the same operator.\n");
+        }
     }
+
+    if (!rank)
+        std::printf("\n%s (%d check%s failed)\n\n",
+                    failures == 0 ? "ALL CHECKS PASS" : "FAILURES DETECTED",
+                    failures, failures == 1 ? "" : "s");
 
     delete mesh;
     MPI_Finalize();
-    return 0;
+    return failures == 0 ? 0 : 1;
 }
