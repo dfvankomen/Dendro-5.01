@@ -3746,6 +3746,28 @@ class Mesh {
     template <typename T>
     void unzip_scatter_labelled(const T *in, T *out, unsigned int dof = 1);
 
+    /** blk_filter values below -1 split the unzip by SOURCE element instead of by
+     * destination block (DENDRO_UNZIP_SRC_SPLIT): EARLY scatters the local elements
+     * whose nodes are all owned by this rank, which needs no ghost data and can run
+     * while the exchange is in flight; LATE scatters every other element. Each
+     * element is scattered exactly once across the two calls. */
+    static constexpr int UNZIP_SRC_EARLY = -2;
+    static constexpr int UNZIP_SRC_LATE  = -3;
+    /** 1 for a local element that reads no ghost-owned node (built on first use) */
+    std::vector<unsigned char> m_uiEleGhostFree;
+    inline void buildEleGhostFree() {
+        if (m_uiEleGhostFree.size() == m_uiAllElements.size()) return;
+        m_uiEleGhostFree.assign(m_uiAllElements.size(), 0);
+        for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
+            unsigned char f = 1;
+            for (unsigned int n = 0; n < m_uiNpE && f; n++) {
+                const unsigned int cg = m_uiE2NMapping_CG[e * m_uiNpE + n];
+                f = (cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd);
+            }
+            m_uiEleGhostFree[e] = f;
+        }
+    }
+
     /** true when the mesh has a non-SFC block (a labelled mesh), or
      * DENDRO_UNZIP_LABELLED_PATH=1 forces the labelled scatter everywhere */
     inline bool useLabelledUnzip() const {
