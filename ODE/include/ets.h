@@ -1228,8 +1228,11 @@ void ETS<T, Ctx>::evolve() {
             }
             {
                 dendro::stepprof::Scope sp(dendro::stepprof::EV_RHS);
+                const double rpT0 = MPI_Wtime();
                 m_uiAppCtx->rhs(&m_uiEVecTmp[0], &m_uiStVec[stage], 1,
                                 current_t_adv);
+                dendro::stepprof::rankprof::acc()[dendro::stepprof::rankprof::RHS_TOTAL] +=
+                    MPI_Wtime() - rpT0;
             }
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);

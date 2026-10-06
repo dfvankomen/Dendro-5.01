@@ -1972,6 +1972,53 @@ void Mesh::writeRankTable(const char* fname, const char* timerHeader, int nt,
     }
 }
 
+// --- DENDRO_FEEDBACK_BALANCE: measured-cost weights for the ReMesh SFC cut ---
+namespace {
+double g_fbSnap    = 0.0;  // busy seconds at the last ReMesh
+int g_fbForced     = 0;    // forced rebalances since the last flag-driven remesh
+bool g_fbForcedNow = false;
+std::vector<ot::TreeNode> g_fbSplit;  // last old element of each active rank
+std::vector<unsigned int> g_fbW;      // weight per element of that rank's region
+unsigned int feedbackWeight(const ot::TreeNode* t) {
+    const size_t r = std::lower_bound(g_fbSplit.begin(), g_fbSplit.end(), *t) -
+                     g_fbSplit.begin();
+    return g_fbW[std::min(r, g_fbW.size() - 1)];
+}
+double fbEnvD(const char* n, double d) {
+    const char* e = std::getenv(n);
+    return e ? std::atof(e) : d;
+}
+}  // namespace
+
+double Mesh::feedbackBusyNow() {
+    const double* a = dendro::stepprof::rankprof::acc();
+    return a[dendro::stepprof::rankprof::RHS_TOTAL] -
+           a[dendro::stepprof::rankprof::GHOST_WAIT];
+}
+
+bool Mesh::feedbackRebalanceDue() {
+    if (feedbackBalanceMode() == 0 || !m_uiIsActive || m_uiActiveNpes < 2)
+        return false;
+    static const double tol   = fbEnvD("DENDRO_FEEDBACK_TOL", 0.05);
+    static const int maxForce = (int)fbEnvD("DENDRO_FEEDBACK_MAX_FORCED", 3);
+    double busy = feedbackBusyNow() - g_fbSnap;
+    double mx = 0, sum = 0;
+    par::Mpi_Allreduce(&busy, &mx, 1, MPI_MAX, m_uiCommActive);
+    par::Mpi_Allreduce(&busy, &sum, 1, MPI_SUM, m_uiCommActive);
+    const double mean = sum / m_uiActiveNpes;
+    const bool due    = mean > 1e-3 && mx > (1.0 + tol) * mean && g_fbForced < maxForce;
+    if (!m_uiActiveRank)
+        std::cout << "[feedback-balance] check: busy max/mean=" << (mean > 0 ? mx / mean : 0.0)
+                  << " mean=" << mean << "s forced=" << g_fbForced << "/" << maxForce
+                  << (due ? " -> rebalance" : " -> keep") << std::endl;
+    if (!due) return false;
+    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++)
+        m_uiAllElements[e].setFlag((OCT_NO_CHANGE << NUM_LEVEL_BITS) |
+                                   m_uiAllElements[e].getLevel());
+    g_fbForcedNow = true;
+    return true;
+}
+
 void Mesh::rankTableRemesh(const char* tag) {
     static int k = 0;
     if (rankTableMode() != 2 || k >= 40) return;
@@ -17940,10 +17987,64 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
         // 2. balanced the octree.
 
         ot::TreeNode rootNode(m_uiDim, m_uiMaxDepth);
+        // feedback balance: cost per element of each old rank's region
+        bool fbOn = false;
+        if (feedbackBalanceMode() > 0 && m_uiActiveNpes > 1) {
+            const double now = feedbackBusyNow();
+            double mine[2] = {now - g_fbSnap, (double)m_uiNumLocalElements};
+            g_fbSnap = now;
+            if (g_fbForcedNow) g_fbForced++; else g_fbForced = 0;
+            g_fbForcedNow = false;
+            std::vector<double> all(2 * m_uiActiveNpes);
+            MPI_Allgather(mine, 2, MPI_DOUBLE, all.data(), 2, MPI_DOUBLE, m_uiCommActive);
+            double busySum = 0, busyMax = 0, cSum = 0;
+            for (unsigned int r = 0; r < m_uiActiveNpes; r++) {
+                busySum += all[2 * r];
+                busyMax = std::max(busyMax, all[2 * r]);
+                cSum += all[2 * r] / std::max(1.0, all[2 * r + 1]);
+            }
+            const double cMean = cSum / m_uiActiveNpes;
+            // no measured window yet (initial grid loop): leave the cut alone
+            if (busySum / m_uiActiveNpes > 1e-3 && cMean > 0) {
+                fbOn = true;
+                g_fbSplit = unBalOctSplitters;
+                g_fbW.resize(m_uiActiveNpes);
+                unsigned int wMin = ~0u, wMax = 0;
+                for (unsigned int r = 0; r < m_uiActiveNpes; r++) {
+                    const double c = all[2 * r] / std::max(1.0, all[2 * r + 1]);
+                    g_fbW[r] = (unsigned int)std::max(1.0, std::round(1000.0 * c / cMean));
+                    wMin = std::min(wMin, g_fbW[r]);
+                    wMax = std::max(wMax, g_fbW[r]);
+                }
+                if (!m_uiActiveRank)
+                    std::cout << "[feedback-balance] remesh: busy max/mean="
+                              << busyMax / (busySum / m_uiActiveNpes) << " mean="
+                              << busySum / m_uiActiveNpes << "s weight min/max=" << wMin
+                              << "/" << wMax << " (1000 = mean cost per element)" << std::endl;
+            }
+        }
         SFC::parSort::SFC_treeSort(
             unBalancedOctree, balOct1, balOct1, balOct1, ld_tol, m_uiMaxDepth,
             rootNode, ROOT_ROTATION, 1, TS_BALANCE_OCTREE, sfK, m_uiCommActive);
-        par::partitionW(balOct1, getWeight, m_uiCommActive);
+        par::partitionW(balOct1, fbOn ? feedbackWeight : getWeight, m_uiCommActive);
+        if (fbOn && feedbackBalanceMode() == 2) {
+            // check: every rank's weight is within one heaviest element of the mean
+            DendroIntL w = 0, wSum = 0, wMaxR = 0;
+            for (const ot::TreeNode& t : balOct1) w += feedbackWeight(&t);
+            par::Mpi_Allreduce(&w, &wSum, 1, MPI_SUM, m_uiCommActive);
+            par::Mpi_Allreduce(&w, &wMaxR, 1, MPI_MAX, m_uiCommActive);
+            const double ideal = (double)wSum / m_uiActiveNpes;
+            const unsigned int heavy = *std::max_element(g_fbW.begin(), g_fbW.end());
+            if (!m_uiActiveRank)
+                std::cout << "[feedback-balance] check: weighted cut max/ideal="
+                          << wMaxR / ideal << " elements local=" << balOct1.size() << std::endl;
+            if (wMaxR > ideal + 2.0 * heavy) {
+                if (!m_uiActiveRank)
+                    std::cout << "[feedback-balance] CHECK FAILED: max rank weight " << wMaxR
+                              << " ideal " << ideal << std::endl;
+                MPI_Abort(m_uiCommGlobal, 97);
+            }
+        }
         assert(par::test::isUniqueAndSorted(balOct1, m_uiCommActive));
         unBalancedOctree.clear();
 

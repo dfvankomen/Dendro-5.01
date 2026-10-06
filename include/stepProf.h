@@ -85,9 +85,10 @@ inline long long* cnt() {
  *  SIDE_WAIT : zip-sync comm (Irecv/Isend/Waitall or Alltoallv) in
  *              syncZipNonPrimary + the Waitall in broadcastCgValuesByPhysPosStep. */
 namespace rankprof {
-enum { GHOST_WAIT = 0, GHOST_PACK, SIDE_WAIT, NUM };
+// RHS_TOTAL: wall time inside the solver rhs call of ETS::evolve (includes GHOST_WAIT)
+enum { GHOST_WAIT = 0, GHOST_PACK, SIDE_WAIT, RHS_TOTAL, NUM };
 inline double* acc() {
-    static double a[NUM] = {0, 0, 0};
+    static double a[NUM] = {};
     return a;
 }
 }  // namespace rankprof
