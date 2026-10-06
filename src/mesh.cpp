@@ -119,6 +119,7 @@ double t_e2n_sort_g[3];
 
 namespace ot {
 bool Mesh::s_uiNextCtorLazyZipPlan = false;
+bool Mesh::s_uiNextCtorKeepCut = false;
 
 namespace {
 // scaled-int (x, y, z) phys-position key used by audit, buildZipPlan,
@@ -592,8 +593,11 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         par::splitComm2way(m_uiIsActive, &m_uiCommActive, m_uiCommGlobal);
     }
 
-    shrinkOrExpandOctree(in, ld_tol, sf_k, m_uiIsActive, m_uiCommActive,
-                         m_uiCommGlobal, getWeight);
+    // with every rank active there is nothing to shrink or expand, and a cut
+    // ReMesh asked to keep must survive
+    if (!(s_uiNextCtorKeepCut && p_npes == m_uiGlobalNpes))
+        shrinkOrExpandOctree(in, ld_tol, sf_k, m_uiIsActive, m_uiCommActive,
+                             m_uiCommGlobal, getWeight);
 
     m_uiMeshDomain_min = 0;
     m_uiMeshDomain_max = (1u << (m_uiMaxDepth));
@@ -17924,6 +17928,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Creating new mesh during remesh");
     std::vector<ot::TreeNode> balOct1;  // new balanced octree.
+    bool fbOn = false;  // feedback-balance weights are active for this remesh
 
     if (m_uiIsActive) {
         static const char* flagDumpDir = std::getenv("DENDRO_REMESH_FLAG_DUMP");
@@ -17988,7 +17993,6 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
 
         ot::TreeNode rootNode(m_uiDim, m_uiMaxDepth);
         // feedback balance: cost per element of each old rank's region
-        bool fbOn = false;
         if (feedbackBalanceMode() > 0 && m_uiActiveNpes > 1) {
             const double now = feedbackBusyNow();
             double mine[2] = {now - g_fbSnap, (double)m_uiNumLocalElements};
@@ -18026,25 +18030,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
         SFC::parSort::SFC_treeSort(
             unBalancedOctree, balOct1, balOct1, balOct1, ld_tol, m_uiMaxDepth,
             rootNode, ROOT_ROTATION, 1, TS_BALANCE_OCTREE, sfK, m_uiCommActive);
-        par::partitionW(balOct1, fbOn ? feedbackWeight : getWeight, m_uiCommActive);
-        if (fbOn && feedbackBalanceMode() == 2) {
-            // check: every rank's weight is within one heaviest element of the mean
-            DendroIntL w = 0, wSum = 0, wMaxR = 0;
-            for (const ot::TreeNode& t : balOct1) w += feedbackWeight(&t);
-            par::Mpi_Allreduce(&w, &wSum, 1, MPI_SUM, m_uiCommActive);
-            par::Mpi_Allreduce(&w, &wMaxR, 1, MPI_MAX, m_uiCommActive);
-            const double ideal = (double)wSum / m_uiActiveNpes;
-            const unsigned int heavy = *std::max_element(g_fbW.begin(), g_fbW.end());
-            if (!m_uiActiveRank)
-                std::cout << "[feedback-balance] check: weighted cut max/ideal="
-                          << wMaxR / ideal << " elements local=" << balOct1.size() << std::endl;
-            if (wMaxR > ideal + 2.0 * heavy) {
-                if (!m_uiActiveRank)
-                    std::cout << "[feedback-balance] CHECK FAILED: max rank weight " << wMaxR
-                              << " ideal " << ideal << std::endl;
-                MPI_Abort(m_uiCommGlobal, 97);
-            }
-        }
+        par::partitionW(balOct1, getWeight, m_uiCommActive);
         assert(par::test::isUniqueAndSorted(balOct1, m_uiCommActive));
         unBalancedOctree.clear();
 
@@ -18342,6 +18328,11 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
             std::swap(balOct1, balOct2);
             balOct2.clear();
 
+            // feedback balance: the sort above balanced by count; this cut is the
+            // one the new mesh keeps (needs every rank active, see the ctor)
+            fbOn = fbOn && m_uiActiveNpes == m_uiGlobalNpes;
+            if (fbOn) par::partitionW(balOct1, feedbackWeight, m_uiCommActive);
+
             // repartition balOct1 to ensure that it is not partitioned across,
             // children of the same parent.
             enforceSiblingsAreNotPartitioned(balOct1, m_uiCommActive);
@@ -18357,12 +18348,40 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
         return !(e && e[0] == '0');
     }();
     s_uiNextCtorLazyZipPlan = lazySuccessor;
+    s_uiNextCtorKeepCut     = fbOn;
     ot::Mesh *pMesh =
         new ot::Mesh(balOct1, 1, m_uiElementOrder, m_uiCommGlobal,
                      m_uiIsBlockSetup, m_uiScatterMapType, grainSz, ld_tol, sfK,
                      getWeight, blk_tags, blk_tag_sz);
     s_uiNextCtorLazyZipPlan = false;
+    s_uiNextCtorKeepCut     = false;
     pMesh->setDomainBounds(m_uiDMinPt, m_uiDMaxPt);
+    if (fbOn && pMesh->isActive()) {
+        // what the new mesh actually holds: weight and element count per rank
+        const ot::TreeNode* pn = pMesh->getAllElements().data();
+        DendroIntL w = 0, wSum = 0, wMaxR = 0;
+        for (unsigned int e = pMesh->getElementLocalBegin(); e < pMesh->getElementLocalEnd(); e++)
+            w += feedbackWeight(pn + e);
+        DendroIntL ne[2] = {(DendroIntL)pMesh->getNumLocalMeshElements(),
+                            -(DendroIntL)pMesh->getNumLocalMeshElements()}, gn[2];
+        MPI_Comm c = pMesh->getMPICommunicator();
+        const int np = pMesh->getMPICommSize();
+        par::Mpi_Allreduce(&w, &wSum, 1, MPI_SUM, c);
+        par::Mpi_Allreduce(&w, &wMaxR, 1, MPI_MAX, c);
+        par::Mpi_Allreduce(ne, gn, 2, MPI_MAX, c);
+        const double ideal = (double)wSum / np;
+        const unsigned int heavy = *std::max_element(g_fbW.begin(), g_fbW.end());
+        if (!pMesh->getMPIRank())
+            std::cout << "[feedback-balance] new mesh: weight max/ideal=" << wMaxR / ideal
+                      << " elements per rank min/max=" << -gn[1] << "/" << gn[0] << std::endl;
+        // check mode: exact up to one sibling family (7 elements) per boundary
+        if (feedbackBalanceMode() == 2 && wMaxR > ideal + 9.0 * heavy) {
+            if (!pMesh->getMPIRank())
+                std::cout << "[feedback-balance] CHECK FAILED: max rank weight " << wMaxR
+                          << " ideal " << ideal << std::endl;
+            MPI_Abort(m_uiCommGlobal, 97);
+        }
+    }
 
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished creating the new mesh during remesh!");

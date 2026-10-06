@@ -663,6 +663,9 @@ class Mesh {
      *  (set by ReMesh under DENDRO_LAZY_ZIPPLAN_SUCCESSOR; the remesh successor is
      *  only the s2g transport source in the sandwich solvers) */
     static bool s_uiNextCtorLazyZipPlan;
+    /** set by ReMesh when it has already made the final (weighted, sibling-safe)
+     * cut, so the ctor must not repartition its input (DENDRO_FEEDBACK_BALANCE) */
+    static bool s_uiNextCtorKeepCut;
     // zip-plan entries grouped by block (for block-local zips on labelled meshes)
     bool m_uiBlkZipPlanBuilt = false;
     std::vector<unsigned int> m_uiBlkZipPlanStart;
