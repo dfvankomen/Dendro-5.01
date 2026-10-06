@@ -856,6 +856,7 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
     }
     spPack.stop();
     dendro::stepprof::Scope spComm(dendro::stepprof::SYNC_COMM);
+    const double rpSideT0 = MPI_Wtime();
     if (m_uiZipSyncPruned) {
         // after the prune only a few partners remain: point-to-point instead
         // of an O(P) collective
@@ -880,6 +881,8 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
                            recvBuf.data(), rCnt.data(), rOff.data(),
                            m_uiCommActive);
     }
+    dendro::stepprof::rankprof::acc()[dendro::stepprof::rankprof::SIDE_WAIT] +=
+        MPI_Wtime() - rpSideT0;
     spComm.stop();
     if (this->commStatsOn()) {
         s_uiCommStatSyncBytesAll += (DendroIntL)(sendN * dof * sizeof(T));
@@ -1050,8 +1053,13 @@ void Mesh::broadcastCgValuesByPhysPosStep(T* vec, unsigned int dof) {
                            m_uiBcastStepSendCounts[p] * (int)dof, p, 0x2aa,
                            m_uiCommActive, &reqs.back());
         }
-    if (!reqs.empty())
-        MPI_Waitall((int)reqs.size(), reqs.data(), MPI_STATUSES_IGNORE);
+    {
+        const double rpBT0 = MPI_Wtime();
+        if (!reqs.empty())
+            MPI_Waitall((int)reqs.size(), reqs.data(), MPI_STATUSES_IGNORE);
+        dendro::stepprof::rankprof::acc()[dendro::stepprof::rankprof::SIDE_WAIT] +=
+            MPI_Wtime() - rpBT0;
+    }
     for (size_t k = 0; k < recvN; k++) {
         const unsigned int cg = m_uiBcastStepRecvDstCg[k];
         const T* src = recvBuf.data() + k * dof;
@@ -1906,6 +1914,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
     }
     if (xpb) xprofMark(1);
     dendro::stepprof::Scope spPackSend(dendro::stepprof::GB_PACK_SEND);
+    const double rpPackT0 = MPI_Wtime();
 
     // send recv buffers.
     T* sendB = NULL;
@@ -2023,6 +2032,8 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                                              : 0,
                                      sizeof(T));
 
+        dendro::stepprof::rankprof::acc()[dendro::stepprof::rankprof::GHOST_PACK] +=
+            MPI_Wtime() - rpPackT0;
         if (xpb) xprofMark(5);
         m_uiCommTag++;
     }
@@ -2076,10 +2087,13 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
         dendro::timer::t_ghost_wait.start();
 #endif
         dendro::stepprof::Scope spWait(dendro::stepprof::GE_WAIT);
+        const double rpT0 = MPI_Wtime();
         MPI_Waitall(sendProcList.size(), ctx.m_send_req.data(),
                     MPI_STATUSES_IGNORE);
         MPI_Waitall(recvProcList.size(), ctx.m_recv_req.data(),
                     MPI_STATUSES_IGNORE);
+        dendro::stepprof::rankprof::acc()[dendro::stepprof::rankprof::GHOST_WAIT] +=
+            MPI_Wtime() - rpT0;
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
         dendro::timer::t_ghost_wait.stop();
 #endif

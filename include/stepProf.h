@@ -78,6 +78,20 @@ inline long long* cnt() {
     return c;
 }
 
+/** Always-on per-rank cumulative wall seconds (DENDRO_RANK_TABLE columns). Plain
+ * MPI_Wtime pairs, never reset, no behaviour change.
+ *  GHOST_WAIT: the two MPI_Waitall (send then recv) in readFromGhostEnd(ctx).
+ *  GHOST_PACK: send-buffer pack + Irecv/Isend posting in readFromGhostBegin(ctx).
+ *  SIDE_WAIT : zip-sync comm (Irecv/Isend/Waitall or Alltoallv) in
+ *              syncZipNonPrimary + the Waitall in broadcastCgValuesByPhysPosStep. */
+namespace rankprof {
+enum { GHOST_WAIT = 0, GHOST_PACK, SIDE_WAIT, NUM };
+inline double* acc() {
+    static double a[NUM] = {0, 0, 0};
+    return a;
+}
+}  // namespace rankprof
+
 /** True only while ETS::evolve() is running, so init / output / remesh-time
  * calls into the same Mesh routines are not counted as step cost. */
 inline bool& inEvolve() {

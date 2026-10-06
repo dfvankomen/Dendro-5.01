@@ -3373,6 +3373,35 @@ class Mesh {
      * (not gated by DENDRO_COMM_STATS) so it can be called at each repartition;
      * callers gate the call site. */
     void dumpPartitionStats(std::ostream& out, const char* tag);
+
+    /**@brief per-rank cost table (DENDRO_RANK_TABLE). Static columns of this
+     * rank's mesh, in order: elements, blocks, padded_points, zip_nodes_local,
+     * send_nodes, recv_nodes, send_partners, recv_partners, max_block_side,
+     * n_blocks_side1, n_blocks_side2, n_blocks_side4 (sides 3..7),
+     * n_blocks_side8plus. */
+#define DENDRO_HAS_RANK_TABLE 1
+    static constexpr int rankTableNumStatic = 13;
+    static const char* rankTableStaticHeader() {
+        return "elements,blocks,padded_points,zip_nodes_local,send_nodes,"
+               "recv_nodes,send_partners,recv_partners,max_block_side,"
+               "n_blocks_side1,n_blocks_side2,n_blocks_side4,n_blocks_side8plus";
+    }
+    void rankTableStatic(double* out) const;
+    /** collective over the active comm. Gathers the static columns plus nt
+     * per-rank timer values (tvals, may be null when nt==0) and writes a csv on
+     * active rank 0; timerHeader is the comma list of nt names. */
+    void writeRankTable(const char* fname, const char* timerHeader, int nt,
+                        const double* tvals) const;
+    /** DENDRO_RANK_TABLE: 0 off, 1 final only, 2 final + per-remesh */
+    static int rankTableMode() {
+        static const int m = [] {
+            const char* e = std::getenv("DENDRO_RANK_TABLE");
+            return e ? std::atoi(e) : 0;
+        }();
+        return m;
+    }
+    /** per-remesh static table (mode 2, first 40 builds); collective */
+    void rankTableRemesh(const char* tag);
     static bool partStatsEnabled() {
         static const bool on = [] {
             const char* e = std::getenv("DENDRO_PART_STATS");

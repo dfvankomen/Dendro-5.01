@@ -23,6 +23,7 @@
  * */
 
 #include "mesh.h"
+#include <fstream>
 #include <mutex>
 #include <sys/resource.h>
 #include <climits>
@@ -512,6 +513,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
     // DENDRO_PART_STATS=1: partition snapshot of every block-building mesh
     // (the SFC arm's meshes; print only)
     if (m_uiIsBlockSetup && partStatsEnabled()) dumpPartitionStats(std::cout, "ctor");
+    if (m_uiIsBlockSetup && rankTableMode() == 2) rankTableRemesh("ctor");
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished building the mesh!");
     bcCtorDone();
@@ -861,6 +863,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
     // DENDRO_PART_STATS=1: partition snapshot of every block-building mesh
     // (the SFC arm's meshes; print only)
     if (m_uiIsBlockSetup && partStatsEnabled()) dumpPartitionStats(std::cout, "ctor");
+    if (m_uiIsBlockSetup && rankTableMode() == 2) rankTableRemesh("ctor");
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished building the mesh!");
     bcCtorDone();
@@ -1908,6 +1911,76 @@ void Mesh::dumpPartitionStats(std::ostream &out, const char *tag) {
             << " max_send_partners=" << maxv[3]
             << " lts_substep_eff=" << ltsEff << std::endl;
     }
+}
+
+void Mesh::rankTableStatic(double* out) const {
+    double mx = 0, n1 = 0, n2 = 0, n4 = 0, n8 = 0, pad = 0;
+    for (const ot::Block& b : m_uiLocalBlockList) {
+        const unsigned int s = b.getElemSz1D();
+        mx = std::max(mx, (double)s);
+        if (s <= 1) n1++;
+        else if (s == 2) n2++;
+        else if (s < 8) n4++;
+        else n8++;
+        pad += (double)b.getAllocationSzX() * b.getAllocationSzY() *
+               b.getAllocationSzZ();
+    }
+    out[0]  = (double)m_uiNumLocalElements;
+    out[1]  = (double)m_uiLocalBlockList.size();
+    out[2]  = pad;
+    out[3]  = (double)getNumLocalMeshNodes();
+    out[4]  = (double)getGhostExcgTotalSendNodeCount();
+    out[5]  = (double)getGhostExcgTotalRecvNodeCount();
+    out[6]  = (double)m_uiSendProcList.size();
+    out[7]  = (double)m_uiRecvProcList.size();
+    out[8]  = mx;
+    out[9]  = n1;
+    out[10] = n2;
+    out[11] = n4;
+    out[12] = n8;
+}
+
+void Mesh::writeRankTable(const char* fname, const char* timerHeader, int nt,
+                          const double* tvals) const {
+    if (!m_uiIsActive) return;
+    const int nc = rankTableNumStatic + nt;
+    std::vector<double> row(nc, -1.0);
+    rankTableStatic(row.data());
+    for (int i = 0; i < nt; i++) row[rankTableNumStatic + i] = tvals[i];
+    std::vector<double> all;
+    if (m_uiActiveRank == 0) all.resize((size_t)nc * m_uiActiveNpes);
+    MPI_Gather(row.data(), nc, MPI_DOUBLE, all.data(), nc, MPI_DOUBLE, 0,
+               m_uiCommActive);
+    if (m_uiActiveRank != 0) return;
+    std::ofstream f(fname);
+    if (f.fail()) {
+        std::cout << "[rank-table] cannot open " << fname << std::endl;
+        return;
+    }
+    f << "rank," << rankTableStaticHeader();
+    if (nt > 0) f << "," << timerHeader;
+    f << "\n";
+    f.precision(9);
+    for (unsigned int r = 0; r < m_uiActiveNpes; r++) {
+        f << r;
+        for (int c = 0; c < nc; c++) {
+            const double v = all[(size_t)r * nc + c];
+            if (c < rankTableNumStatic || v < 0) f << "," << (long long)v;
+            else f << "," << v;
+        }
+        f << "\n";
+    }
+}
+
+void Mesh::rankTableRemesh(const char* tag) {
+    static int k = 0;
+    if (rankTableMode() != 2 || k >= 40) return;
+    char fn[64];
+    snprintf(fn, sizeof(fn), "rank_table_remesh%d.csv", k);
+    writeRankTable(fn, "", 0, nullptr);
+    if (m_uiIsActive && m_uiActiveRank == 0)
+        std::cout << "[rank-table] " << fn << " tag=" << tag << std::endl;
+    k++;
 }
 
 void Mesh::generateSearchKeys() {
@@ -24605,6 +24678,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                   << (MPI_Wtime() - __t_start) * 1e3 << " ms" << std::endl;
     }
     if (partStatsEnabled()) dumpPartitionStats(std::cout, "repart");
+    if (rankTableMode() == 2) rankTableRemesh("repart");
     xprofProbe();
 }
 
