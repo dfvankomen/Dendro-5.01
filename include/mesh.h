@@ -3407,8 +3407,9 @@ class Mesh {
     void rankTableRemesh(const char* tag);
 
     /**@brief DENDRO_FEEDBACK_BALANCE=1: the SFC cut of every ReMesh weights each
-     * element by the measured busy time per element (rhs call minus ghost wait,
-     * since the previous ReMesh) of the rank that owned its region.
+     * element by the measured busy time per element (the whole step minus the
+     * ghost and barrier waits, since the previous ReMesh) of the rank that owned
+     * its region; DENDRO_FEEDBACK_GAIN (default 0.5) scales the correction.
      * _CHECK=1 also verifies the weighted cut and aborts (code 97) on a miss. */
 #define DENDRO_HAS_FEEDBACK_BALANCE 1
     static int feedbackBalanceMode() {

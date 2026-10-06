@@ -1996,8 +1996,10 @@ double fbEnvD(const char* n, double d) {
 
 double Mesh::feedbackBusyNow() {
     const double* a = dendro::stepprof::rankprof::acc();
-    return a[dendro::stepprof::rankprof::RHS_TOTAL] -
-           a[dendro::stepprof::rankprof::GHOST_WAIT];
+    // everything this rank does in a step except waiting on others
+    return a[dendro::stepprof::rankprof::EVOLVE_TOTAL] -
+           a[dendro::stepprof::rankprof::GHOST_WAIT] -
+           a[dendro::stepprof::rankprof::BARRIER_WAIT];
 }
 
 bool Mesh::feedbackRebalanceDue() {
@@ -18008,6 +18010,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                 cSum += all[2 * r] / std::max(1.0, all[2 * r + 1]);
             }
             const double cMean = cSum / m_uiActiveNpes;
+            static const double fbGain = fbEnvD("DENDRO_FEEDBACK_GAIN", 0.5);
             // no measured window yet (initial grid loop): leave the cut alone
             if (busySum / m_uiActiveNpes > 1e-3 && cMean > 0) {
                 fbOn = true;
@@ -18016,7 +18019,10 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                 unsigned int wMin = ~0u, wMax = 0;
                 for (unsigned int r = 0; r < m_uiActiveNpes; r++) {
                     const double c = all[2 * r] / std::max(1.0, all[2 * r + 1]);
-                    g_fbW[r] = (unsigned int)std::max(1.0, std::round(1000.0 * c / cMean));
+                    // half the measured correction, capped: a region's cost per
+                    // element is not uniform, so the full step overshoots
+                    const double rel = std::min(1.25, std::max(0.8, 1.0 + fbGain * (c / cMean - 1.0)));
+                    g_fbW[r] = (unsigned int)std::max(1.0, std::round(1000.0 * rel));
                     wMin = std::min(wMin, g_fbW[r]);
                     wMax = std::max(wMax, g_fbW[r]);
                 }

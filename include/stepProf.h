@@ -86,7 +86,8 @@ inline long long* cnt() {
  *              syncZipNonPrimary + the Waitall in broadcastCgValuesByPhysPosStep. */
 namespace rankprof {
 // RHS_TOTAL: wall time inside the solver rhs call of ETS::evolve (includes GHOST_WAIT)
-enum { GHOST_WAIT = 0, GHOST_PACK, SIDE_WAIT, RHS_TOTAL, NUM };
+// EVOLVE_TOTAL: wall time of ETS::evolve; BARRIER_WAIT: its closing barrier
+enum { GHOST_WAIT = 0, GHOST_PACK, SIDE_WAIT, RHS_TOTAL, EVOLVE_TOTAL, BARRIER_WAIT, NUM };
 inline double* acc() {
     static double a[NUM] = {};
     return a;
@@ -119,7 +120,8 @@ struct Scope {
 /** Wraps one ETS::evolve() call: opens the counting window and times it. */
 struct EvolveScope {
     Scope s_;
-    EvolveScope() : s_(EV_TOTAL) {
+    double rpT0_;
+    EvolveScope() : s_(EV_TOTAL), rpT0_(MPI_Wtime()) {
         if (enabled()) {
             inEvolve() = true;
             s_.on_ = true;
@@ -127,6 +129,7 @@ struct EvolveScope {
         }
     }
     ~EvolveScope() {
+        rankprof::acc()[rankprof::EVOLVE_TOTAL] += MPI_Wtime() - rpT0_;
         if (!enabled()) return;
         s_.stop();
         inEvolve() = false;

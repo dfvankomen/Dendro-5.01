@@ -1375,7 +1375,10 @@ void ETS<T, Ctx>::evolve() {
     _EV_TRACE("32_pre_waitAll");
     {
         dendro::stepprof::Scope sp(dendro::stepprof::EV_WAITALL);
+        const double rpT0 = MPI_Wtime();
         pMesh->waitAll();
+        dendro::stepprof::rankprof::acc()[dendro::stepprof::rankprof::BARRIER_WAIT] +=
+            MPI_Wtime() - rpT0;
     }
     _EV_TRACE("33_post_waitAll");
 
