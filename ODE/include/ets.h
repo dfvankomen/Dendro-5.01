@@ -83,6 +83,19 @@ static void ets_stage_copy_local(ot::Mesh* pMesh, ot::DVector<T, unsigned int>& 
     }
 }
 
+/** the ghost slots of ets_stage_copy_local only (the local range is written elsewhere) */
+template <typename T>
+static void ets_stage_copy_ghost(ot::Mesh* pMesh, ot::DVector<T, unsigned int>& dst,
+                                 const ot::DVector<T, unsigned int>& src) {
+    T* d       = dst.get_vec_ptr();
+    const T* s = const_cast<ot::DVector<T, unsigned int>&>(src).get_vec_ptr();
+    if (d == nullptr) return;
+    const size_t cgSz = pMesh->getDegOfFreedom();
+    const std::vector<unsigned int>& ex = pMesh->getStageCopyGhostSlots();
+    for (unsigned int v = 0; v < src.get_dof(); v++)
+        for (unsigned int cg : ex) d[v * cgSz + cg] = s[v * cgSz + cg];
+}
+
 template <typename T>
 static bool ets_is_poison(T x) {
     unsigned long long b;
@@ -1146,37 +1159,49 @@ void ETS<T, Ctx>::evolve() {
                 std::fflush(stderr);
             }
 
-            {
-                dendro::stepprof::Scope sp(dendro::stepprof::EV_COPY);
-                static const bool lc_chk = ets_env_on("DENDRO_EVEC_LOCAL_COPY_CHECK");
-                static const bool lc_on  = lc_chk || !ets_env_off("DENDRO_EVEC_LOCAL_COPY");
-                ot::Mesh* pMeshMutC = const_cast<ot::Mesh*>(pMesh);
-                if (lc_on && ets_local_copy_ok(m_uiEVar, pMesh)) {
-                    if (lc_chk)
-                        ets_stage_copy_check(pMeshMutC, m_uiEVecTmp[0], m_uiEVar,
-                                             m_evecShadow, trace_step, stage);
-                    else
-                        ets_stage_copy_local(pMeshMutC, m_uiEVecTmp[0], m_uiEVar);
-                } else
-                    m_uiEVecTmp[0].copy_data(m_uiEVar);
-            }
-
-            {
-                dendro::stepprof::Scope sp(dendro::stepprof::EV_AXPY_STAGE);
-                // Fused: tmp += sum_p (aip*dt)*StVec[p] in one region (bit-identical).
-                DendroScalar a_cf[ETS_MAX_STAGES];
-                const DVec* a_sp[ETS_MAX_STAGES];
-                unsigned int a_n = 0;
-                for (unsigned int p = 0; p < stage; p++) {
-                    const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
-                    if (aip != 0.0) {
-                        a_cf[a_n] = aip * dt;
-                        a_sp[a_n] = &m_uiStVec[p];
-                        a_n++;
-                    }
+            // tmp = EVar + sum_p (aip*dt)*StVec[p]
+            DendroScalar a_cf[ETS_MAX_STAGES];
+            const DVec* a_sp[ETS_MAX_STAGES];
+            unsigned int a_n = 0;
+            for (unsigned int p = 0; p < stage; p++) {
+                const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
+                if (aip != 0.0) {
+                    a_cf[a_n] = aip * dt;
+                    a_sp[a_n] = &m_uiStVec[p];
+                    a_n++;
                 }
-                if (a_n)
-                    DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
+            }
+            static const bool lc_chk = ets_env_on("DENDRO_EVEC_LOCAL_COPY_CHECK");
+            static const bool lc_on  = lc_chk || !ets_env_off("DENDRO_EVEC_LOCAL_COPY");
+            // DENDRO_EVEC_FUSED_COPY (default on, =0 reverts): one pass does the copy
+            // and the stage sum over the local nodes (bit-identical to copy + axpy)
+            static const bool fuse_on = !ets_env_off("DENDRO_EVEC_FUSED_COPY");
+            ot::Mesh* pMeshMutC = const_cast<ot::Mesh*>(pMesh);
+            bool fused = false;
+            if (fuse_on && lc_on && !lc_chk && a_n && ets_local_copy_ok(m_uiEVar, pMesh)) {
+                dendro::stepprof::Scope sp(dendro::stepprof::EV_AXPY_STAGE);
+                fused = DVec::copy_axpy_multi(pMesh, m_uiEVar, a_n, a_cf, a_sp,
+                                              m_uiEVecTmp[0]);
+                if (fused) ets_stage_copy_ghost(pMeshMutC, m_uiEVecTmp[0], m_uiEVar);
+            }
+            if (!fused) {
+                {
+                    dendro::stepprof::Scope sp(dendro::stepprof::EV_COPY);
+                    if (lc_on && ets_local_copy_ok(m_uiEVar, pMesh)) {
+                        if (lc_chk)
+                            ets_stage_copy_check(pMeshMutC, m_uiEVecTmp[0], m_uiEVar,
+                                                 m_evecShadow, trace_step, stage);
+                        else
+                            ets_stage_copy_local(pMeshMutC, m_uiEVecTmp[0], m_uiEVar);
+                    } else
+                        m_uiEVecTmp[0].copy_data(m_uiEVar);
+                }
+                {
+                    dendro::stepprof::Scope sp(dendro::stepprof::EV_AXPY_STAGE);
+                    // Fused: tmp += sum_p (aip*dt)*StVec[p] in one region (bit-identical).
+                    if (a_n)
+                        DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
+                }
             }
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);

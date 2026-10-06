@@ -147,6 +147,14 @@ class DVector {
                            const T* coeffs, const DVector<T, I>* const* srcs,
                            DVector<T, I>& y);
 
+    // y = base + sum_{j<n} coeffs[j]*srcs[j] over the local nodes, in one pass.
+    // Same per-node arithmetic as copying base into y and then axpy_multi, so
+    // the result is bit-identical; it saves the separate copy pass. Returns
+    // false (and does nothing) when the fused form does not apply.
+    static bool copy_axpy_multi(const ot::Mesh* const pMesh, const DVector<T, I>& base,
+                                unsigned int n, const T* coeffs,
+                                const DVector<T, I>* const* srcs, DVector<T, I>& y);
+
     static void axpby(const ot::Mesh* const pMesh, T a, const DVector<T, I>& x,
                       T b, DVector<T, I>& y, bool local_only = true);
 
@@ -543,6 +551,41 @@ void DVector<T, I>::axpy_multi(const ot::Mesh* const pMesh, unsigned int n,
             for (unsigned int j = 0; j < n; j++) acc += cf[j] * sp[j][idx];
             y_ptr[idx] = acc;
         }
+}
+
+template <typename T, typename I>
+bool DVector<T, I>::copy_axpy_multi(const ot::Mesh* const pMesh,
+                                    const DVector<T, I>& base, unsigned int n,
+                                    const T* coeffs,
+                                    const DVector<T, I>* const* srcs,
+                                    DVector<T, I>& y) {
+    constexpr unsigned int MAXJ = 16;
+    if (n == 0 || n > MAXJ || y.m_data_ptr == nullptr || base.m_data_ptr == nullptr ||
+        y.m_vec_loc != DVEC_LOC::HOST || y.m_vec_type != DVEC_TYPE::OCT_SHARED_NODES ||
+        y.m_size != base.m_size || y.m_dof != base.m_dof)
+        return false;
+    const unsigned int sz_dof = y.m_size / y.m_dof;
+    const unsigned int nb     = pMesh->getNodeLocalBegin();
+    const unsigned int ne     = pMesh->getNodeLocalEnd();
+    T* __restrict__ y_ptr       = y.m_data_ptr;
+    const T* __restrict__ b_ptr = base.m_data_ptr;
+    const T* sp[MAXJ];
+    T cf[MAXJ];
+    for (unsigned int j = 0; j < n; j++) {
+        sp[j] = srcs[j]->m_data_ptr;
+        cf[j] = coeffs[j];
+    }
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
+    for (unsigned int v = 0; v < y.m_dof; v++)
+        for (unsigned int node = nb; node < ne; node++) {
+            const unsigned int idx = v * sz_dof + node;
+            T acc                  = b_ptr[idx];
+            for (unsigned int j = 0; j < n; j++) acc += cf[j] * sp[j][idx];
+            y_ptr[idx] = acc;
+        }
+    return true;
 }
 
 template <typename T, typename I>
