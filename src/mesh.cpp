@@ -24466,6 +24466,86 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                         }
                     }
                 }
+                // DENDRO_SCATTER_NODE_COUNT=1 (count only): how many of the ghost slots
+                // in (2) the unzip can actually read. a same-level or finer ghost
+                // element only feeds the nodes that land inside the padded block; a
+                // coarser one, or one with a hanging node, is counted whole.
+                static const bool nodeCount = [] {
+                    const char* e = std::getenv("DENDRO_SCATTER_NODE_COUNT");
+                    return e && e[0] == '1';
+                }();
+                if (nodeCount) {
+                    SlotFlags elemLvl(m_uiNumActualNodes), nodeLvl(m_uiNumActualNodes);
+                    const unsigned int eO = m_uiElementOrder, n1 = eO + 1;
+                    auto ghostCg = [&](unsigned int cg) {
+                        return cg < m_uiNodeLocalBegin || cg >= m_uiNodeLocalEnd;
+                    };
+                    std::vector<unsigned int> ids;
+                    for (unsigned int b = 0; b < m_uiLocalBlockList.size(); b++) {
+                        const ot::Block& B   = m_uiLocalBlockList[b];
+                        const ot::TreeNode bn = B.getBlockNode();
+                        const unsigned int rl = B.getRegularGridLev();
+                        const long long PW = B.get1DPadWidth();
+                        const long long L[3] = {(long long)B.getAllocationSzX(),
+                                                (long long)B.getAllocationSzY(),
+                                                (long long)B.getAllocationSzZ()};
+                        blkUnzipElementIDs(b, ids);
+                        for (unsigned int eid : ids) {
+                            if (eid >= m_uiElementLocalBegin && eid < m_uiElementLocalEnd)
+                                continue;
+                            const ot::TreeNode& t = m_uiAllElements[eid];
+                            const unsigned int el = t.getLevel();
+                            bool whole = el < rl || (el > rl && (eO & 1u));
+                            for (unsigned int n = 0; n < m_uiNpE && !whole; n++)
+                                whole = isNodeHanging(eid, n % n1, (n / n1) % n1, n / (n1 * n1));
+                            const long long sz = 1ll << (m_uiMaxDepth - el);
+                            const long long e3[3] = {((long long)t.getX() - (long long)bn.getX()) / sz,
+                                                     ((long long)t.getY() - (long long)bn.getY()) / sz,
+                                                     ((long long)t.getZ() - (long long)bn.getZ()) / sz};
+                            for (unsigned int n = 0; n < m_uiNpE; n++) {
+                                const unsigned int cg = m_uiE2NMapping_CG[eid * m_uiNpE + n];
+                                if (!ghostCg(cg)) continue;
+                                elemLvl.insert(cg);
+                                bool in = whole;
+                                if (!in) {
+                                    const long long q[3] = {n % n1, (n / n1) % n1, n / (n1 * n1)};
+                                    in = true;
+                                    for (int d = 0; d < 3 && in; d++) {
+                                        long long ix;
+                                        if (el == rl) ix = e3[d] * eO + q[d] + PW;
+                                        else {  // one level finer: every other node coincides
+                                            if (q[d] & 1) { in = false; break; }
+                                            ix = e3[d] * (eO / 2) + q[d] / 2 + PW;
+                                        }
+                                        in = ix >= 0 && ix < L[d];
+                                    }
+                                }
+                                if (in) nodeLvl.insert(cg);
+                            }
+                        }
+                    }
+                    // slots kept for any other reason stay regardless
+                    DendroIntL c[4] = {0, 0, 0, 0}, g[4];
+                    SlotFlags other(m_uiNumActualNodes);
+                    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++)
+                        for (unsigned int n = 0; n < m_uiNpE; n++) {
+                            const unsigned int cg = m_uiE2NMapping_CG[e * m_uiNpE + n];
+                            if (ghostCg(cg)) other.insert(cg);
+                        }
+                    for (unsigned int cg = 0; cg < m_uiNumActualNodes; cg++) {
+                        if (!ghostCg(cg)) continue;
+                        const bool o = other.count(cg), el = elemLvl.count(cg), nl = nodeLvl.count(cg);
+                        c[0] += (o || el);  // kept today
+                        c[1] += (o || nl);  // kept with the node-level rule
+                        c[2] += o;          // read through local elements
+                        c[3] += el;         // ghost-element slots feeding padding
+                    }
+                    par::Mpi_Allreduce(c, g, 4, MPI_SUM, commActive);
+                    if (!rank)
+                        std::cout << "[scatter-node-count] kept now=" << g[0] << " node-level=" << g[1]
+                                  << " (" << (g[0] ? 100.0 * g[1] / g[0] : 0.0) << " %) local-element reads="
+                                  << g[2] << " padding-feed slots=" << g[3] << std::endl;
+                }
                 // (3) mirror sources — post-exchange last-writers of
                 // non-primary local cgs must keep full-map semantics
                 for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
