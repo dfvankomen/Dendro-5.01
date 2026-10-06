@@ -218,7 +218,7 @@ int main(int argc, char** argv) {
                     const unsigned int lx     = blkList[blk].getAllocationSzX();
                     const unsigned int ly     = blkList[blk].getAllocationSzY();
                     const unsigned int lz     = blkList[blk].getAllocationSzZ();
-                    const unsigned int offset = blkList[blk].getOffset();
+                    const DendroIntL offset = blkList[blk].getOffset();
 
                     const DendroScalar* bdata =
                         m_uiBVec[blk]._vec[INDEX_PT_SYNC].data();

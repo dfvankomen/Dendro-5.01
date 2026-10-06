@@ -275,6 +275,9 @@ class Ctx {
     /**@brief: returns the time stamp info, related to ets*/
     inline void set_ts_info(ts::TSInfo ts_info) { m_uiTinfo = ts_info; }
 
+    /**@brief: set just the timestep size (dt), leaving the rest of TSInfo. */
+    inline void set_timestep(double dt) { m_uiTinfo._m_uiTh = dt; }
+
     /**@breif: returns the ETS synced status*/
     inline bool is_ets_synced() const { return m_uiIsETSSynced; }
 
@@ -411,6 +414,53 @@ class Ctx {
                                 unsigned int sf_k     = DENDRO_DEFAULT_SF_K);
 
     /**
+     * @brief Refine the initial grid until the element count stabilizes.
+     *
+     * Repeatedly: is_remesh()? -> remesh_and_gridtransfer, stopping when
+     * is_remesh() is false, the global element count stops changing, or max_iter
+     * is reached. This is the init_grid_iter loop every solver's main.cpp
+     * open-codes; it uses only base Ctx + mesh facilities (no solver globals).
+     * Apply the initial conditions BEFORE calling (the refine reads the state).
+     */
+    void refine_initial_grid(MPI_Comm comm, unsigned int max_iter,
+                             unsigned int grain_sz = DENDRO_DEFAULT_GRAIN_SZ,
+                             double ld_tol         = DENDRO_DEFAULT_LB_TOL,
+                             unsigned int sf_k     = DENDRO_DEFAULT_SF_K) {
+        // comm is passed in (the global comm): remesh_and_gridtransfer frees the
+        // old mesh's sub-communicator, so a comm cached off m_uiMesh would dangle.
+        int rank;
+        MPI_Comm_rank(comm, &rank);
+        if (!rank)
+            std::cout << "Starting init_grid_iter loop (max=" << max_iter
+                      << " iters)" << std::endl;
+        for (unsigned int iter = 1; iter <= max_iter; iter++) {
+            if (!is_remesh()) {
+                if (!rank)
+                    std::cout << "[init_grid_iter " << iter
+                              << "] mesh converged (is_remesh=false)" << std::endl;
+                break;
+            }
+            DendroIntL old_el_l = m_uiMesh->getNumLocalMeshElements();
+            remesh_and_gridtransfer(grain_sz, ld_tol, sf_k);
+            DendroIntL new_el_l = m_uiMesh->getNumLocalMeshElements();
+            // Allreduce (not Reduce): the convergence check runs on every rank.
+            DendroIntL old_el_g = 0, new_el_g = 0;
+            par::Mpi_Allreduce(&old_el_l, &old_el_g, 1, MPI_SUM, comm);
+            par::Mpi_Allreduce(&new_el_l, &new_el_g, 1, MPI_SUM, comm);
+            if (!rank)
+                std::cout << "[init_grid_iter " << iter << "] elements "
+                          << old_el_g << " -> " << new_el_g << std::endl;
+            if (new_el_g == old_el_g) {
+                if (!rank)
+                    std::cout << "[init_grid_iter " << iter
+                              << "] mesh converged (stable element count)"
+                              << std::endl;
+                break;
+            }
+        }
+    }
+
+    /**
      * @brief performs unzip operation,
      *
      * @param in : input zip vector.
@@ -522,6 +572,89 @@ class Ctx {
     }
 };
 
+/**
+ * @brief CFL-stable timestep from the mesh's finest level.
+ *
+ * dt = cfl * domain_extent * (2^(maxDepth - lmax) / ele_order) / 2^maxDepth
+ *
+ * Solver-agnostic grid math (no equation content) -- previously copy-pasted into
+ * every generated main.cpp at init and again on every remesh. `domain_extent` is
+ * the physical width along an axis (e.g. COMPD_MAX[0] - COMPD_MIN[0]).
+ */
+inline double compute_cfl_dt(ot::Mesh* mesh, double cfl, double domain_extent,
+                             unsigned int ele_order) {
+    unsigned int lmin, lmax;
+    mesh->computeMinMaxLevel(lmin, lmax);
+    return cfl * (domain_extent *
+                  ((1u << (m_uiMaxDepth - lmax)) / ((double)ele_order)) /
+                  ((double)(1u << m_uiMaxDepth)));
+}
+
+/** @brief Largest per-block allocation (points) over the mesh's local blocks. */
+inline unsigned int max_block_points(ot::Mesh* mesh) {
+    const auto& blkList = mesh->getLocalBlockList();
+    unsigned int m = 0;
+    for (unsigned int i = 0; i < blkList.size(); i++) {
+        unsigned int bsz = blkList[i].getAllocationSzX() *
+                           blkList[i].getAllocationSzY() *
+                           blkList[i].getAllocationSzZ();
+        if (bsz > m) m = bsz;
+    }
+    return m;
+}
+
+/**
+ * @brief (Re)allocate a derivative workspace sized to the mesh's largest block.
+ *
+ * Frees `existing` (delete[] nullptr is a safe no-op, so the first call passes
+ * nullptr) and returns a fresh `count * max_block_points(mesh)` buffer. Replaces
+ * the alloc/realloc loop that was copy-pasted into every generated main.cpp at
+ * init, after initial refinement, and on every remesh. `count` is the only
+ * per-solver input (the deriv-struct's count() / NUM_DERIVATIVES).
+ */
+inline double* realloc_deriv_workspace(double* existing, ot::Mesh* mesh,
+                                       unsigned int count) {
+    delete[] existing;
+    return new double[(size_t)count * max_block_points(mesh)];
+}
+
+/**
+ * @brief Seed a uniform block-adaptive octree covering a physical box.
+ *
+ * Fills `tmpNodes` with TreeNodes at `reg_level` tiling [box_min, box_max],
+ * mapping physical -> octree coords by the affine transform (per axis)
+ *   g = (oct_extent / phys_extent) * (c - phys_min) + oct_min.
+ * This is the index-math loop every GR solver's main.cpp open-codes
+ * (X_TO_GRIDX + stepSz + clamp + TreeNode push); only the box/level/domain
+ * differ. `phys_*`/`oct_*` are the COMPD and OCTREE bounds (double[3]).
+ */
+inline void seed_block_adaptive_octree(
+        std::vector<ot::TreeNode>& tmpNodes,
+        const double* box_min, const double* box_max,
+        const double* phys_min, const double* phys_max,
+        const double* oct_min, const double* oct_max,
+        unsigned int reg_level) {
+    auto to_grid = [&](double c, int d) -> unsigned int {
+        const double rg = oct_max[d] - oct_min[d];
+        const double rp = phys_max[d] - phys_min[d];
+        return (unsigned int)((rg / rp) * (c - phys_min[d]) + oct_min[d]);
+    };
+    const unsigned int xb = to_grid(box_min[0], 0), xe = to_grid(box_max[0], 0);
+    const unsigned int yb = to_grid(box_min[1], 1), ye = to_grid(box_max[1], 1);
+    const unsigned int zb = to_grid(box_min[2], 2), ze = to_grid(box_max[2], 2);
+    const unsigned int stepSz = 1u << (m_uiMaxDepth - reg_level);
+    const unsigned int octMax = 1u << m_uiMaxDepth;
+    for (unsigned int x = xb; x < xe; x += stepSz)
+        for (unsigned int y = yb; y < ye; y += stepSz)
+            for (unsigned int z = zb; z < ze; z += stepSz) {
+                unsigned int xc = (x >= octMax) ? x - 1 : x;
+                unsigned int yc = (y >= octMax) ? y - 1 : y;
+                unsigned int zc = (z >= octMax) ? z - 1 : z;
+                tmpNodes.push_back(
+                    ot::TreeNode(xc, yc, zc, reg_level, m_uiDim, m_uiMaxDepth));
+            }
+}
+
 template <typename DerivedCtx, typename T, typename I>
 void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                                   unsigned int async_k) {
@@ -546,6 +679,52 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
     assert(sz_per_dof_zip == m_uiMesh->getDegOfFreedom());
 
     if (in.get_loc() == ot::DVEC_LOC::HOST) {
+#ifdef DENDRO_UNZIP_OVERLAP
+        // Comm/compute overlap: post all ghost exchanges, unzip the interior
+        // (ghost-independent) blocks while the messages are in flight, then
+        // wait for ghosts and unzip the boundary (ghost-dependent) blocks.
+        // Interior blocks read only local data, so unzipping them before
+        // readFromGhostEnd is correct (see flagBlockGhostDependancies).
+        for (unsigned int i = 0; i < async_k; i++) {
+            const unsigned int v_begin  = ((i * dof) / async_k);
+            const unsigned int v_end    = (((i + 1) * dof) / async_k);
+            const unsigned int batch_sz = (v_end - v_begin);
+            m_uiMesh->readFromGhostBegin(
+                m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+        }
+
+#ifdef __PROFILE_CTX__
+        m_uiCtxpt[CTXPROFILE::UNZIP].start();
+#endif
+        for (unsigned int i = 0; i < async_k; i++) {
+            const unsigned int v_begin  = ((i * dof) / async_k);
+            const unsigned int v_end    = (((i + 1) * dof) / async_k);
+            const unsigned int batch_sz = (v_end - v_begin);
+            m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
+                            out_ptr + v_begin * sz_per_dof_uzip, batch_sz,
+                            (int)ot::UNZIP_INDEPENDENT);
+        }
+#ifdef __PROFILE_CTX__
+        m_uiCtxpt[CTXPROFILE::UNZIP].stop();
+#endif
+
+        for (unsigned int i = 0; i < async_k; i++) {
+            const unsigned int v_begin  = ((i * dof) / async_k);
+            const unsigned int v_end    = (((i + 1) * dof) / async_k);
+            const unsigned int batch_sz = (v_end - v_begin);
+            m_uiMesh->readFromGhostEnd(
+                m_mpi_ctx[i], in_ptr + v_begin * sz_per_dof_zip, batch_sz);
+#ifdef __PROFILE_CTX__
+            m_uiCtxpt[CTXPROFILE::UNZIP].start();
+#endif
+            m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
+                            out_ptr + v_begin * sz_per_dof_uzip, batch_sz,
+                            (int)ot::UNZIP_DEPENDENT);
+#ifdef __PROFILE_CTX__
+            m_uiCtxpt[CTXPROFILE::UNZIP].stop();
+#endif
+        }
+#else
         // unzip on the host.
         const bool prof = ot::Mesh::meshProfOn();
         double t0 = prof ? MPI_Wtime() : 0.0;
@@ -580,8 +759,29 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
 
             {
                 dendro::stepprof::Scope spUz(dendro::stepprof::UZ_UNZIP_COMPUTE);
+#ifdef DENDRO_UNZIP_BATCH
+                // Same work as Mesh::unzip below, but unzip_scatter_batch loops the
+                // variables INSIDE one parallel region against a dof=1-sized all_dg,
+                // instead of materializing a (numTotalElements * batch_sz * nPe)
+                // scratch and zero-filling it on every call (mesh.tcc:11295). The DG
+                // values, and therefore the results, are identical -- only the
+                // scratch size and the fork/join count change.
+                {
+                    // batch_sz pointers (dof/async_k, so ~6): trivially small next
+                    // to the per-element scratch this call avoids allocating.
+                    std::vector<const T*> ins(batch_sz);
+                    std::vector<T*> outs(batch_sz);
+                    for (unsigned int v = 0; v < batch_sz; v++) {
+                        ins[v]  = in_ptr + (v_begin + v) * sz_per_dof_zip;
+                        outs[v] = out_ptr + (v_begin + v) * sz_per_dof_uzip;
+                    }
+                    m_uiMesh->unzip_scatter_batch(ins.data(), outs.data(),
+                                                  batch_sz);
+                }
+#else
                 m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
                                 out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
+#endif
             }
             if (prof) { const double t1 = MPI_Wtime(); ot::Mesh::s_dProfUnzip += t1 - t0; t0 = t1; }
 
@@ -589,6 +789,7 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
             m_uiCtxpt[CTXPROFILE::UNZIP].stop();
 #endif
         }
+#endif
 
     } else if (in.get_loc() == ot::DVEC_LOC::DEVICE) {
 #ifdef __CUDACC__

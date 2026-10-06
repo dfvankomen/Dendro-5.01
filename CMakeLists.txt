@@ -17,6 +17,41 @@ project(Dendro-5.0-Library C CXX Fortran)
 
 
 # ==========================
+# CPU ARCHITECTURE
+# ==========================
+# when built standalone, set a default arch target so the compiler can
+# actually vectorize. when included as a subdirectory, the parent project
+# is expected to set arch flags itself (e.g. via add_compile_options).
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+  set(DENDRO_CPU_ARCH "native" CACHE STRING "Target CPU architecture (native, x86-64-v3, znver3, etc.)")
+  set(DENDRO_CPU_ARCH_STRINGS
+      "native"
+      "nosimd"
+      "znver1" "znver2" "znver3" "znver4"
+      "haswell" "broadwell" "skylake-avx512" "cascadelake" "icelake-server"
+      "generic_avx2" "x86-64-v3"
+  )
+  set_property(CACHE DENDRO_CPU_ARCH PROPERTY STRINGS ${DENDRO_CPU_ARCH_STRINGS})
+
+  if(DENDRO_CPU_ARCH STREQUAL "nosimd")
+    # Pure-scalar profiling baseline: x86-64 v1 (SSE2 is mandated by the ABI, but
+    # disable AVX/AVX2/AVX-512 and auto-vectorization). This controls the COMPILED
+    # production explicit derivative kernels. NOTE: the LIBXSMM matrix-form path JITs
+    # at runtime from CPUID, not these flags — force it with LIBXSMM_TARGET=sse.
+    add_compile_options(-march=x86-64 -mno-avx -mno-avx2 -mno-avx512f -fno-tree-vectorize)
+  elseif(DENDRO_CPU_ARCH STREQUAL "generic_avx2")
+    add_compile_options(-mavx2 -mfma)
+  elseif(DENDRO_CPU_ARCH IN_LIST DENDRO_CPU_ARCH_STRINGS)
+    add_compile_options(-march=${DENDRO_CPU_ARCH})
+  else()
+    message(FATAL_ERROR "Unknown DENDRO_CPU_ARCH: ${DENDRO_CPU_ARCH}")
+  endif()
+
+  message(STATUS "Dendro standalone build — target arch: ${DENDRO_CPU_ARCH}")
+endif()
+
+
+# ==========================
 # DENDRO LIBRARY OPTIONS
 # ==========================
 option(USE_64BIT_INDICES "Use 64-Bit indices (Reverts to 32-bit if OFF)" ON)
@@ -29,14 +64,89 @@ option(PROFILE_TREE_SORT "Profile the tree sort code" OFF)
 option(WITH_BLAS_LAPACK "Build using BLAS and LAPACK" ON)
 option(DENDRO_VTK_BINARY "Write VTK/VTU files in binary mode" ON)
 option(DENDRO_VTK_ZLIB_COMPRES "Compress VTK/VTU (requires Binary)" OFF)
+option(DENDRO_ENABLE_HDF5 "Build the VTKHDF (parallel HDF5) output writer (default OFF = no HDF5 dependency)" OFF)
 option(ALLTOALL_SPARSE "Use isend/irecv for ghost exchange" OFF)
 option(ENABLE_DENDRO_PROFILE_COUNTERS "Enable dendro internal profile counters" OFF)
+option(PROFILE_MESH "Report per-stage mesh construction timings (sort/balance/e2e/e2n/sm/blk)" OFF)
 option(RK_SOLVER_OVERLAP_COMM_AND_COMP "Enable RK solver comm/comp overlap" ON)
 option(WITH_CUDA "Build dendro with CUDA" OFF)
 option(BUILD_WITH_PETSC "Build dendro with PETSc" OFF)
 option(USE_FD_INTERP_FOR_UNZIP "Use FD style interpolation for unzip" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "Allow MPI to be aware of CUDA support" OFF)
-option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" OFF)
+# Default ON: matrix-form/compact derivs read the full block including the
+# never-filled boundary-ghost padding, so un-zeroed alloc -> NaN. Hybrid-OMP
+# zeros via first-touch; pure-MPI builds rely on this. Turn OFF only for perf A/B.
+option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" ON)
+# ---------------------------------------------------------------------------
+# Unzip/zip speedup toggles
+#
+# DENDRO_UNZIP_SPEEDUP is the single master switch for the MPI-safe unzip/zip
+# speedups: the integer-index same-level scatter fast path and the SIMD
+# wavelet tensor kernels. Flip it to swap between the baseline and the
+# optimized path in one place (e.g. -DDENDRO_UNZIP_SPEEDUP=ON for benchmark
+# builds).
+#
+# The two sub-flags below stay individually overridable so each speedup can be
+# exercised on its own during experiments (e.g. scatter fast path ON, SIMD
+# OFF). DENDRO_UNZIP_OMP (the reserved OpenMP / hybrid hook) forces BOTH
+# speedups on, since the hybrid block-parallel path relies on them to run fast.
+# ---------------------------------------------------------------------------
+option(DENDRO_UNZIP_SPEEDUP
+       "Master toggle for the MPI-safe unzip/zip speedups (integer-index scatter fast path + SIMD wavelet tensor kernels)"
+       OFF)
+option(DENDRO_UNZIP_SCATTER_FAST
+       "Use the integer-index same-level scatter fast path in Mesh::unzip_scatter (Phase 1 optimization). No effect when DENDRO_UNZIP_OMP is ON: that path always uses the integer kernels."
+       OFF)
+option(DENDRO_ZIP_PLAN
+       "Precompute zip()'s ownership filter into a flat index plan (~12 bytes per owned node)"
+       ON)
+
+option(DENDRO_UNZIP_OMP
+       "Enable OpenMP block-parallel unzip path (reserved hook; implementation lives on a separate hybrid branch). Implies the unzip/zip speedups."
+       OFF)
+# Route Ctx::unzip through Mesh::unzip_scatter_batch instead of Mesh::unzip.
+# Identical results; it only changes how the DG precompute scratch is sized.
+# Mesh::unzip_scatter allocates all_dg as (numTotalElements * dof * nPe) doubles
+# and std::vector value-initializes it -- a per-rank, DRAM-sized buffer that is
+# zero-filled on EVERY call and that the serial path never allocates at all
+# (it uses a dof*nPe element-local temporary). unzip_scatter_batch loops the
+# variables inside one parallel region and reuses a dof=1-sized all_dg, so the
+# scratch shrinks by dof x. Default OFF keeps the current path bit-for-bit.
+option(DENDRO_UNZIP_BATCH
+       "Use Mesh::unzip_scatter_batch in Ctx::unzip (dof x smaller DG scratch, one fork/join per batch; default OFF = unchanged)"
+       OFF)
+option(DENDRO_TENSOR_SIMD
+       "Enable AVX2/AVX-512 SIMD specializations for the wavelet tensor kernels in FEM/src/tensor.cpp (M=5, 7, 9 for eO=4, 6, 8). Requires the compiler to target AVX2+FMA (e.g. -march=native)."
+       OFF)
+# Opt-in OpenMP threading INSIDE the Mesh constructor (src/mesh.cpp), which is
+# otherwise serial-per-rank -- so under DENDRO_HYBRID_OMP with T threads, T-1 sit
+# idle for the whole of createMesh/ReMesh (measured on production q12/16 nodes:
+# init 91 s at T=1 -> 241 s at T=4; it scales AGAINST T). A separate opt-in flag
+# rather than folding into DENDRO_HYBRID_OMP, mirroring DENDRO_UNZIP_BATCH: it
+# keeps a clean A/B and keeps the default path bit-for-bit unchanged.
+# Scope is deliberately narrow -- see the notes in src/mesh.cpp. buildE2EMap is a
+# multi-round MPI pipeline with data-dependent scatters and is NOT a target.
+option(DENDRO_MESH_OMP
+       "Thread the per-block loops in the Mesh ctor (default OFF = unchanged, serial)"
+       OFF)
+# Opt-in MPI comm/compute overlap in the unzip: post the ghost exchange, unzip
+# the interior (ghost-independent) blocks while messages are in flight, then
+# wait and unzip the boundary blocks. Default OFF = unchanged behavior. Implies
+# the OpenMP unzip path. Payoff is multi-node (intra-node MPI is shared-memory).
+option(DENDRO_UNZIP_OVERLAP
+       "Overlap ghost-exchange comm with interior-block unzip in Ctx::unzip (implies DENDRO_UNZIP_OMP; default OFF = unchanged)"
+       OFF)
+# Project-wide switch for the hybrid OpenMP/MPI path brought in from the
+# derivatives workstream. Default OFF keeps the MPI-first behavior. When ON it
+# enables the OpenMP threading the hybrid path relies on (e.g. TwoPunctures
+# initial-data solve via TP_OMP_THREADS). Propagated through dendro_config so
+# downstream solvers that compile the hybrid sources pick it up too.
+option(DENDRO_HYBRID_OMP
+       "Enable the hybrid OpenMP/MPI path (OpenMP threading on top of MPI; default OFF = MPI-first)"
+       OFF)
+option(DENDRO_REPORT_BUILD_CONFIG
+       "Emit #pragma message banners at compile time reporting which unzip/SIMD optimizations are active (diagnostic)"
+       OFF)
 option(DENDRO_ENABLE_DEBUG_PROBES "Compile in env-gated debug probes (recv/send probes, remesh dump, cg trace, etc.) — only needed when actively bisecting" OFF)
 option(DENDRO_ENABLE_OPENMP_PARTITIONING "Use OpenMP threading in graph-partitioning hot paths (audit hash, audit phase-2 element loop, zip-plan myMin). Off by default — dendro is MPI-only by default." OFF)
 
@@ -52,6 +162,9 @@ set(NUM_NPES_THRESHOLD 2 CACHE STRING "NPES Threshold")
 # ==========================
 include(FetchContent)
 
+# ctest registration (only populated when BUILD_DENDRO_EXAMPLES is on)
+enable_testing()
+
 # OpenMP
 find_package(OpenMP REQUIRED)
 
@@ -61,6 +174,16 @@ find_package(MPI REQUIRED)
 # GSL
 find_package(GSL REQUIRED)
 
+# HDF5, parallel only: the VTKHDF writer does collective MPI-IO writes
+if(DENDRO_ENABLE_HDF5)
+  find_package(HDF5 REQUIRED COMPONENTS C)
+  if(NOT HDF5_IS_PARALLEL)
+    message(FATAL_ERROR "DENDRO_ENABLE_HDF5 needs a parallel (MPI) HDF5, found a serial ${HDF5_VERSION} "
+                        "(HDF5_DIR=${HDF5_DIR}). Point HDF5_ROOT at a parallel one; a cached HDF5_DIR "
+                        "takes precedence, so clear it with -UHDF5_DIR")
+  endif()
+endif()
+
 # spdlog allows for logging!
 FetchContent_Declare(
     spdlog
@@ -69,6 +192,46 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(spdlog)
 
+# libxsmm for optimized small matrix multiplications
+option(USE_LOCAL_XSMM "Use a local copy of libxsmm's source instead of fetching at build" OFF)
+
+if (USE_LOCAL_XSMM)
+  set(LOCAL_XSMM_PATH "" CACHE PATH "Path to local libxsmm repository")
+  if(NOT EXISTS "${LOCAL_XSMM_PATH}/CMakeLists.txt")
+    message(FATAL_ERROR "LOCAL_XSMM_PATH is either not set or is pointing to an invalid libxsmm source")
+  endif()
+endif()
+
+if (USE_LOCAL_XSMM)
+  FetchContent_Declare(
+    xsmm
+    SOURCE_DIR ${LOCAL_XSMM_PATH}
+  )
+else()
+  FetchContent_Declare(
+    xsmm
+    GIT_REPOSITORY https://github.com/libxsmm/libxsmm.git
+    GIT_TAG main
+    GIT_SHALLOW TRUE
+  )
+endif()
+
+FetchContent_GetProperties(xsmm)
+if(NOT xsmm_POPULATED)
+  FetchContent_Populate(xsmm)
+endif()
+set(LIBXSMMROOT ${xsmm_SOURCE_DIR})
+file(GLOB _GLOB_XSMM_SRCS LIST_DIRECTORIES false CONFIGURE_DEPENDS ${LIBXSMMROOT}/src/*.c)
+list(REMOVE_ITEM _GLOB_XSMM_SRCS ${LIBXSMMROOT}/src/libxsmm_generator_gemm_driver.c)
+set(XSMM_INCLUDE_DIRS ${LIBXSMMROOT}/include)
+add_library(xsmm STATIC ${_GLOB_XSMM_SRCS})
+target_include_directories(xsmm PUBLIC ${XSMM_INCLUDE_DIRS})
+target_compile_definitions(xsmm PUBLIC LIBXSMM_DEFAULT_CONFIG)
+target_compile_definitions(xsmm PRIVATE __BLAS=0)
+target_compile_definitions(xsmm PRIVATE _GNU_SOURCE)
+target_compile_definitions(xsmm PRIVATE STATIC=0)
+target_compile_options(xsmm PRIVATE "-fPIC")
+
 # make sure we have BhaHAHA included
 if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/lib/BHaHAHA")
   add_subdirectory(lib/BHaHAHA)
@@ -76,6 +239,11 @@ endif()
 
 set(FASTPART_LIB_DIR "/path/to/fastpart/lib" CACHE PATH "Directory location of the fastpart library folder")
 set(FASTPART_INCLUDE_DIR "/path/to/fastpart/include" CACHE PATH "Directory location of the fastpart include folder")
+
+# GR utilities (BH struct, TwoPunctures, etc.)
+if(IS_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/GR")
+  add_subdirectory(GR)
+endif()
 
 # ==========================
 # SOURCE FILES
@@ -88,8 +256,31 @@ set(DENDRO_SRC
     src/mesh.cpp src/octUtils.cpp src/dendroIO.cpp src/block.cpp
     src/sc_flops.cpp src/profiler.cpp src/dendroProfileParams.cpp src/oda.cpp
     src/odaUtils.cpp src/sub_oda.cpp src/meshUtils.cpp src/waveletRefEl.cpp
-    test/src/meshTestUtils.cpp src/aeh_bhahaha.cpp src/logger.cpp
+    test/src/meshTestUtils.cpp src/aeh_bhahaha.cpp src/bh_history.cpp
+    src/logger.cpp
+    src/derivatives.cpp
+    src/derivatives/derivs_explicit.cpp
+    src/derivatives/adv_derivs_explicit.cpp
+    src/derivatives/derivs_compact.cpp
+    src/derivatives/derivs_matrixonly.cpp
+    src/derivatives/derivs_banded.cpp
+    src/derivatives/derivs_ccfd.cpp
+    src/derivatives/derivs_utils.cpp
+    src/derivatives/impl_explicitmatrix.cpp
+    src/derivatives/impl_byuderivs.cpp
+    src/derivatives/impl_ccfd.cpp
+    src/derivatives/impl_kimderivs.cpp
+    src/derivatives/impl_jonathantyler.cpp
+    src/derivatives/impl_bradylivescu.cpp
+    src/derivatives/impl_boris.cpp
+    src/derivatives/impl_hybrid_approaches.cpp
+    src/derivatives/filt_kodiss_explicit.cpp
+    src/derivatives/nova_derivs.cpp
 )
+
+# NOTE: generated derivative scheme files (src/derivatives/generated/*.cpp) are
+# NOT standalone compilation units -- they're #include'd into impl_*.cpp files.
+# Do NOT glob them as source files.
 
 set(FEM_SRC
     FEM/examples/src/laplace.cpp FEM/src/basis.cpp FEM/src/refel.cpp
@@ -100,6 +291,9 @@ set(ODE_SRC
     ODE/src/rkTransport.cpp ODE/src/enutsOp.cpp)
 
 set(IO_SRC IO/vtk/src/oct2vtk.cpp IO/vtk/src/checkPoint.cpp)
+if(DENDRO_ENABLE_HDF5)
+  list(APPEND IO_SRC IO/hdf5/src/oct2vtkhdf.cpp)
+endif()
 
 set(ZLIB_SRC
     IO/zlib/src/adler32.c IO/zlib/src/compress.c IO/zlib/src/crc32.c
@@ -139,6 +333,71 @@ dendro_add_def(ALLTOALL_SPARSE ALLTOALL_SPARSE)
 dendro_add_def(RK_SOLVER_OVERLAP_COMM_AND_COMP RK_SOLVER_OVERLAP_COMM_AND_COMP)
 dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
+dendro_add_def(DENDRO_UNZIP_SCATTER_FAST DENDRO_UNZIP_SCATTER_FAST)
+dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
+
+dendro_add_def(DENDRO_TENSOR_SIMD DENDRO_TENSOR_SIMD)
+dendro_add_def(DENDRO_REPORT_BUILD_CONFIG DENDRO_REPORT_BUILD_CONFIG)
+dendro_add_def(DENDRO_ENABLE_HDF5 DENDRO_ENABLE_HDF5)
+
+# Resolve the effective unzip/zip + threading flags. DENDRO_HYBRID_OMP is the
+# umbrella for all intra-rank OpenMP threading: it implies the block-parallel
+# unzip path (DENDRO_UNZIP_OMP). The master switch and the (effective) unzip-OMP
+# hook both force the scatter fast path + SIMD tensor kernels on; otherwise each
+# sub-flag is honored as set.
+set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ${DENDRO_UNZIP_SCATTER_FAST})
+set(DENDRO_TENSOR_SIMD_EFFECTIVE ${DENDRO_TENSOR_SIMD})
+set(DENDRO_UNZIP_SPEEDUP_EFFECTIVE ${DENDRO_UNZIP_SPEEDUP})
+set(DENDRO_UNZIP_OMP_EFFECTIVE ${DENDRO_UNZIP_OMP})
+if(DENDRO_HYBRID_OMP)
+  set(DENDRO_UNZIP_OMP_EFFECTIVE ON)
+endif()
+# The comm/compute overlap needs the block-parallel (OMP) unzip path.
+if(DENDRO_UNZIP_OVERLAP)
+  set(DENDRO_UNZIP_OMP_EFFECTIVE ON)
+endif()
+# unzip_scatter_batch has no blk_filter parameter, so it cannot express the
+# overlap path's interior/boundary block split. Combining them would silently
+# unzip every block in the "interior" pass -- reading ghost data that has not
+# arrived yet. Fail loudly instead.
+if(DENDRO_UNZIP_BATCH AND DENDRO_UNZIP_OVERLAP)
+  message(FATAL_ERROR
+          "DENDRO_UNZIP_BATCH and DENDRO_UNZIP_OVERLAP are mutually exclusive: "
+          "unzip_scatter_batch takes no blk_filter, so it cannot split interior "
+          "from boundary blocks. Enable one or the other.")
+endif()
+if(DENDRO_UNZIP_SPEEDUP OR DENDRO_UNZIP_OMP_EFFECTIVE)
+  set(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE ON)
+  set(DENDRO_TENSOR_SIMD_EFFECTIVE ON)
+  set(DENDRO_UNZIP_SPEEDUP_EFFECTIVE ON)
+endif()
+
+# a requested OFF that gets forced back ON is otherwise invisible
+foreach(_flag DENDRO_UNZIP_SCATTER_FAST DENDRO_TENSOR_SIMD DENDRO_UNZIP_OMP)
+  if(NOT ${_flag} AND ${_flag}_EFFECTIVE)
+    message(STATUS "${_flag}=OFF overridden to ON by the unzip master/OMP switches")
+  endif()
+endforeach()
+
+message(STATUS
+        "Dendro unzip/zip speedups: master=${DENDRO_UNZIP_SPEEDUP_EFFECTIVE} "
+        "scatter_fast=${DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE} "
+        "tensor_simd=${DENDRO_TENSOR_SIMD_EFFECTIVE} omp=${DENDRO_UNZIP_OMP_EFFECTIVE}")
+message(STATUS "Dendro hybrid OpenMP/MPI path: ${DENDRO_HYBRID_OMP} (implies unzip OMP)")
+
+# DENDRO_UNZIP_SPEEDUP is also emitted as a single umbrella compile def so
+# downstream code can `#ifdef DENDRO_UNZIP_SPEEDUP` instead of testing both
+# sub-macros. It is defined whenever the bundled speedups are active (master
+# switch on, or forced on by the OpenMP hooks).
+dendro_add_def(DENDRO_UNZIP_SPEEDUP_EFFECTIVE DENDRO_UNZIP_SPEEDUP)
+dendro_add_def(DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE DENDRO_UNZIP_SCATTER_FAST)
+dendro_add_def(DENDRO_UNZIP_OMP_EFFECTIVE DENDRO_UNZIP_OMP)
+dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
+dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
+dendro_add_def(DENDRO_ZIP_PLAN DENDRO_ZIP_PLAN)
+dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
+dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
+dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
 
 if(ALLTOALLV_FIX)
   target_compile_definitions(dendro_config INTERFACE ALLTOALLV_FIX KWAY=${KWAY})
@@ -160,6 +419,12 @@ endif()
 # OpenMP threading in graph-partitioning hot paths (off by default; opt-in)
 if(DENDRO_ENABLE_OPENMP_PARTITIONING)
   target_compile_definitions(dendro_config INTERFACE DENDRO_OMP_PART)
+endif()
+
+# Separate from the counters above: this reports once per mesh build (init +
+# every remesh), so it is too chatty to fold into the per-step counters.
+if(PROFILE_MESH)
+  target_compile_definitions(dendro_config INTERFACE __PROFILE_MESH__)
 endif()
 
 # VTK Logic
@@ -184,8 +449,23 @@ target_include_directories(dendro_config INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/IO/vtk/include
     ${CMAKE_CURRENT_SOURCE_DIR}/IO/zlib/inc
 )
+if(DENDRO_ENABLE_HDF5)
+  target_include_directories(dendro_config INTERFACE
+      ${CMAKE_CURRENT_SOURCE_DIR}/IO/hdf5/include
+      ${HDF5_INCLUDE_DIRS}
+  )
+endif()
+# NOTE: GR/include is deliberately NOT added here. Six of its headers share a
+# name with a solver-local copy (adm2bssn.h, gwExtract.h, sph.h, swsh.h,
+# TPUtilities.h, TwoPunctures.h) while the solvers migrate onto the shared
+# module, so putting it on every dendro5 consumer would decide those by include
+# order. Link the `dendro_gr` target instead -- it carries GR/include as a
+# usage requirement, so reaching for GR headers is opt-in and explicit.
 
-target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA m)
+target_link_libraries(dendro5 PUBLIC dendro_config MPI::MPI_CXX OpenMP::OpenMP_CXX GSL::gsl spdlog::spdlog BHaHAHA xsmm m)
+if(DENDRO_ENABLE_HDF5)
+  target_link_libraries(dendro5 PUBLIC ${HDF5_LIBRARIES})
+endif()
 
 if(WITH_BLAS_LAPACK)
   target_compile_definitions(dendro5 PUBLIC WITH_BLAS_LAPACK)
@@ -225,7 +505,12 @@ if(WITH_CUDA)
   endif()
 
   # define the target GPU architectures (e.g., 70=Volta, 75=Turing, 80=Ampere, 89=Ada, 90=Hopper)
-  set(CMAKE_CUDA_ARCHITECTURES 75 80 CACHE STRING "CUDA Architectures" FORCE)
+  # NOTE: no FORCE — let the consuming build / -DCMAKE_CUDA_ARCHITECTURES pick the
+  # arch (A100=80, RTX3060=86). A forced multi-arch list also breaks the device
+  # link of the refel_1d __constant__ across the dendro5 static-lib boundary.
+  if(NOT CMAKE_CUDA_ARCHITECTURES)
+    set(CMAKE_CUDA_ARCHITECTURES 75 80 CACHE STRING "CUDA Architectures")
+  endif()
 
   # turn on relocatable device code!
   set(CMAKE_CUDA_SEPARABLE_COMPILATION ON)
@@ -277,6 +562,98 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(meshE2NCheck examples/src/meshE2NCheck.cpp)
   dendro_add_example(run_all_tests test/src/run_all_tests.cpp)
   dendro_add_example(benchUtils test/src/benchUtils.cpp)
+  dendro_add_example(benchUnzipSameLevel test/src/benchUnzipSameLevel.cpp)
+  dendro_add_example(benchUnzipGather test/src/benchUnzipGather.cpp)
+  dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
+  dendro_add_example(testUnzipExact test/src/testUnzipExact.cpp)
+  dendro_add_example(testMeshInvariants test/src/testMeshInvariants.cpp)
+  dendro_add_example(testOctreeStructure test/src/testOctreeStructure.cpp)
+  add_test(NAME testOctreeStructure COMMAND testOctreeStructure 6 1e-3)
+  add_test(NAME testOctreeStructure_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testOctreeStructure>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3)
+  set_tests_properties(testOctreeStructure testOctreeStructure_2rank
+                       PROPERTIES TIMEOUT 600)
+  add_test(NAME testMeshInvariants COMMAND testMeshInvariants 6 1e-3)
+  add_test(NAME testMeshInvariants_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3)
+  set_tests_properties(testMeshInvariants testMeshInvariants_2rank
+                       PROPERTIES TIMEOUT 600)
+  if(DENDRO_ENABLE_HDF5)
+    dendro_add_example(testVTKHDF test/src/testVTKHDF.cpp)
+    add_test(NAME testVTKHDF COMMAND testVTKHDF 6 1e-3)
+    add_test(NAME testVTKHDF_3rank
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testVTKHDF>
+                     ${MPIEXEC_POSTFLAGS} 7 1e-4)
+    set_tests_properties(testVTKHDF testVTKHDF_3rank PROPERTIES TIMEOUT 600)
+  endif()
+  add_test(NAME testUnzipExact COMMAND testUnzipExact 6 1e-3)
+  set_tests_properties(testUnzipExact PROPERTIES TIMEOUT 600)
+  add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
+
+  # Self-checking, no arguments, no MPI, well under a second each.
+  foreach(T testCloneNewSize testDerivSet testExplicitSimd testKOMatrix testKOSign testKOSimd)
+    add_test(NAME ${T} COMMAND ${T})
+    set_tests_properties(${T} PROPERTIES TIMEOUT 120 LABELS unit)
+  endforeach()
+
+  # --- doctest-based unit tests (serial, registered with ctest) ---
+  if(NOT TARGET doctest::doctest)
+    FetchContent_Declare(
+        doctest
+        GIT_REPOSITORY https://github.com/doctest/doctest.git
+        GIT_TAG        v2.5.3
+    )
+    FetchContent_MakeAvailable(doctest)
+  endif()
+  list(APPEND CMAKE_MODULE_PATH ${doctest_SOURCE_DIR}/scripts/cmake)
+  include(doctest)
+
+  function(dendro_add_doctest TARGET_NAME)
+    add_executable(${TARGET_NAME} ${ARGN})
+    target_link_libraries(${TARGET_NAME} PRIVATE dendro5 MPI::MPI_CXX doctest::doctest quadmath m)
+    doctest_discover_tests(${TARGET_NAME})
+  endfunction()
+
+  dendro_add_doctest(testTensorKernels test/src/testTensorKernels.cpp)
+  dendro_add_doctest(testProlongation test/src/testProlongation.cpp)
+  dendro_add_example(testZipExact test/src/testZipExact.cpp)
+  foreach(SAB 1 2 3)
+    dendro_add_example(testZipExact_sabotage${SAB} test/src/testZipExact.cpp)
+    target_compile_definitions(testZipExact_sabotage${SAB} PRIVATE ZIP_GATE_SABOTAGE=${SAB})
+  endforeach()
+
+  foreach(EO 4 6 8)
+    add_test(NAME testZipExact_eO${EO} COMMAND testZipExact 6 1e-3 0.1 ${EO} 4)
+    set_tests_properties(testZipExact_eO${EO} PROPERTIES TIMEOUT 600)
+  endforeach()
+  # the sabotage builds exist to show the gate can go red, so require that
+  foreach(SAB 1 2 3)
+    add_test(NAME testZipExact_sabotage${SAB}
+             COMMAND testZipExact_sabotage${SAB} 6 1e-3 0.1 6 4)
+    set_tests_properties(testZipExact_sabotage${SAB}
+                         PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
+  endforeach()
+  dendro_add_example(testStabilityEvolution test/src/testStabilityEvolution.cpp)
+  # Smoke test: reports a checksum but does not assert on it. The TIMEOUT is the
+  # point -- a broken eO=8 interpolation shows up as runaway refinement, not a
+  # bad exit code.
+  add_test(NAME testStabilityEvolution_eO8
+           COMMAND testStabilityEvolution 8 1e-4 0.1 8 5 24 1e-6)
+  set_tests_properties(testStabilityEvolution_eO8 PROPERTIES TIMEOUT 300)
+  dendro_add_example(testIsReMeshUnzip test/src/testIsReMeshUnzip.cpp)
+  dendro_add_example(testInterpFaceClamp test/src/testInterpFaceClamp.cpp)
+  dendro_add_example(testAehBhahahaGuards test/src/testAehBhahahaGuards.cpp)
+
+  # compile-checks GR/ and pins the Lebedev/SWSH table invariants
+  if(TARGET dendro_gr)
+    dendro_add_example(testGwExtract test/src/testGwExtract.cpp)
+    target_link_libraries(testGwExtract PRIVATE dendro_gr)
+  endif()
 
   dendro_add_example(testLTSBlkVec ODE/examples/testLTSBlkVec.cpp)
   dendro_add_example(dgVecTest FEM/examples/src/dgVecTest.cpp)
@@ -296,6 +673,49 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testPartitioningEvolve test/src/partitioningEvolveTest.cpp)
   dendro_add_example(edgeCutCompare test/src/edgeCutCompare.cpp)
 
+  # --- Derivative tests (require toml11 for config) ---
+  # fetch toml11 if the parent project hasn't already provided it
+  if(NOT TARGET toml11::toml11)
+    FetchContent_Declare(
+        toml11
+        GIT_REPOSITORY https://github.com/ToruNiina/toml11.git
+        GIT_TAG        v4.4.0
+    )
+    FetchContent_MakeAvailable(toml11)
+  endif()
+  function(dendro_add_deriv_test TARGET_NAME)
+    add_executable(${TARGET_NAME} ${ARGN})
+    target_link_libraries(${TARGET_NAME} PRIVATE dendro5 MPI::MPI_CXX toml11::toml11 m)
+    target_include_directories(${TARGET_NAME} PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/include/derivatives)
+  endfunction()
+
+  dendro_add_deriv_test(testCompactDerivs test/src/testCompactDerivs.cpp)
+  dendro_add_deriv_test(testMatrixMul test/src/testMatMul.cpp)
+  dendro_add_deriv_test(testNOVA test/src/testNova.cpp)
+  dendro_add_deriv_test(testKODiss test/src/testKODiss.cpp)
+  dendro_add_deriv_test(testDerivOnGrid test/src/derivativeConvergence.cpp test/src/derivativeCtx.cpp)
+  dendro_add_deriv_test(buildGlobalMat test/src/globalMatrixBuilding.cpp test/src/derivativeCtx.cpp)
+  dendro_add_deriv_test(testLibXSMMvBLAS test/src/testLibXSMMvBLAS.cpp)
+  dendro_add_deriv_test(testAllDerivs test/src/testAllDerivs.cpp)
+  dendro_add_deriv_test(testDerivConvergence test/src/testDerivConvergence.cpp)
+  add_test(NAME testDerivConvergence_orderGate
+           COMMAND testDerivConvergence convergence_results.csv --gate)
+  set_tests_properties(testDerivConvergence_orderGate PROPERTIES TIMEOUT 900)
+  dendro_add_deriv_test(testBandedVsXSMM test/src/testBandedVsXSMM.cpp)
+  dendro_add_deriv_test(testCCFD test/src/testCCFD.cpp)
+  dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)
+  dendro_add_deriv_test(testRhsWorkflow test/src/testRhsWorkflow.cpp)
+  dendro_add_deriv_test(testDerivSet test/src/testDerivSet.cpp)
+  dendro_add_deriv_test(benchDerivBlockStage test/src/benchDerivBlockStage.cpp)
+  dendro_add_deriv_test(testKOMatrix test/src/testKOMatrix.cpp)
+  dendro_add_deriv_test(testExplicitSimd test/src/testExplicitSimd.cpp)
+  dendro_add_deriv_test(testKOSimd test/src/testKOSimd.cpp)
+  dendro_add_deriv_test(testKOSign test/src/testKOSign.cpp)
+  dendro_add_deriv_test(testCloneNewSize test/src/testCloneNewSize.cpp)
+  dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
+  dendro_add_deriv_test(testMeshTimeIntegrator test/src/testMeshTimeIntegrator.cpp)
+
   if(WITH_CUDA)
     # cuda GPU tests
     add_executable(run_meshgpu_tests ${CMAKE_CURRENT_SOURCE_DIR}/GPU/src/run_meshgpu_tests.cu)
@@ -303,5 +723,24 @@ if(BUILD_DENDRO_EXAMPLES)
     target_include_directories(run_meshgpu_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GPU/include)
     # NOTE: CUDA_SEPARABLE_COMPILATION is a necessity for the refel stuff (keeps us from having to redefine it)
     set_target_properties(run_meshgpu_tests PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+
+    add_executable(testMeshGpuVsCpu ${CMAKE_CURRENT_SOURCE_DIR}/GPU/src/testMeshGpuVsCpu.cu)
+    target_link_libraries(testMeshGpuVsCpu PRIVATE dendro5)
+    target_include_directories(testMeshGpuVsCpu PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/GPU/include)
+    set_target_properties(testMeshGpuVsCpu PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+    # order 2 is left out: the bump refinement yields a uniform mesh there, so the
+    # run would not exercise a level jump
+    add_test(NAME testMeshGpuVsCpu_eO4 COMMAND testMeshGpuVsCpu 5 1e-3 4)
+    add_test(NAME testMeshGpuVsCpu_eO6 COMMAND testMeshGpuVsCpu 5 1e-3 6)
+    add_test(NAME testMeshGpuVsCpu_eO8 COMMAND testMeshGpuVsCpu 5 1e-3 8)
+    # two ranks is the only coverage the DG ghost packers get
+    add_test(NAME testMeshGpuVsCpu_2rank
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshGpuVsCpu>
+                     ${MPIEXEC_POSTFLAGS} 5 1e-3 8)
+    set_tests_properties(testMeshGpuVsCpu_eO4 testMeshGpuVsCpu_eO6
+                         testMeshGpuVsCpu_eO8 testMeshGpuVsCpu_2rank
+                         PROPERTIES TIMEOUT 600 LABELS gpu
+                                    SKIP_RETURN_CODE 77)
   endif()
 endif()

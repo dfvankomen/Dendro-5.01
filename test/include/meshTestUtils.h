@@ -2598,9 +2598,9 @@ bool ot::test::isSphereInterpValid(
         }
 
     Point domain_limit[2] = {d_min, d_max};
-    Point grid_limit[2]   = {Point(0, 0, 0), Point((double)(1u << m_uiMaxDepth),
-                                                   (double)(1u << m_uiMaxDepth),
-                                                   (double)(1u << m_uiMaxDepth))};
+    Point grid_limit[2] = {Point(0, 0, 0), Point((double)(1u << m_uiMaxDepth),
+                                                 (double)(1u << m_uiMaxDepth),
+                                                 (double)(1u << m_uiMaxDepth))};
 
     ot::da::interpolateToCoords(pMesh, vec, &(*(coords.begin())), coords.size(),
                                 grid_limit, domain_limit,
@@ -2713,7 +2713,7 @@ bool ot::test::isSubScatterMapValid(ot::Mesh* const pMesh,
 
         unsigned int sz[3], bflag, pwidth;
         for (unsigned int blk = 0; blk < blkList.size(); blk++) {
-            const unsigned int offset = blkList[blk].getOffset();
+            const DendroIntL offset = blkList[blk].getOffset();
             sz[0]                     = blkList[blk].getAllocationSzX();
             sz[1]                     = blkList[blk].getAllocationSzY();
             sz[2]                     = blkList[blk].getAllocationSzZ();
@@ -2751,7 +2751,7 @@ bool ot::test::isSubScatterMapValid(ot::Mesh* const pMesh,
 }
 
 template <typename T>
-bool isDGGhostValid(ot::Mesh* pMesh, T* vec,
+bool ot::test::isDGGhostValid(ot::Mesh* pMesh, T* vec,
                     std::function<void(T, T, T, T*)> fn, T tol) {
     bool valid = true;
     if (pMesh->getMPICommSizeGlobal() > 1 && pMesh->isActive()) {

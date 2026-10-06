@@ -32,6 +32,16 @@
 
 #include "TreeNode.h"
 #include "dendro.h"
+
+#ifdef DENDRO_MESH_OMP
+// Don't rely on these arriving transitively: omp.h reaches here only via
+// profiler.h, and ompUtils.h only via sfcSort.h. Both are accidents of the
+// include graph, not contracts.
+#include <omp.h>
+
+#include "ompUtils.h"
+#endif
+
 #include "logger.h"
 #include "octUtils.h"
 
@@ -67,6 +77,41 @@ double t_e2e_g[3];
 double t_e2n_g[3];
 double t_sm_g[3];
 double t_blk_g[3];
+
+// e2n sub-stage split. e2n is the largest slice of the ctor (~43%), but it is not
+// one thing: it is an independent per-element init, a cross-element fixup that is
+// a true RAW/WAW chain, and a pile of sorts. Only the first is threadable, so the
+// aggregate number cannot tell you whether threading e2n is worth anything. These
+// deltas are always computed (an MPI_Wtime pair per ctor is ~ns); only the
+// reporting is gated, matching the t_e2e/t_e2n idiom above.
+double t_e2n_fix;     // element-order fixup inside buildE2NWithSM
+double t_e2nC_loopA;  // e2n.C: per-element face/edge/vertex fixup (e-indexed, disjoint)
+double t_e2nC_sort;   // e2n.C: std::sort + unique + full-vector copies (serial)
+double t_e2nC_sortonly; // e2n.C: JUST the std::sort -- the parallelizable part
+double t_e2nC_tail;   // e2n.C: unique + cg2dg copy + resize + restore copies
+double t_e2n3_sortDG; // e2n.3: std::sort of E2N_DG_Sorted (plain uint)
+double t_e2n3_sortCG; // e2n.3: std::sort of m_uiCG2DG (plain uint)
+double t_e2nC_bc;     // e2n.C: dg2cg fill + e2n_cg remap
+double t_e2nC_sm;     // e2n.C: send/recv scatter-map rebuild (order-defining, NOT threadable)
+double t_e2n_map;     // buildE2NMap() as a whole
+double t_e2n_sm;      // computeNodalScatterMap4() -- the FDM nodal scatter map
+double t_e2n_dginit;  // per-element DG index init -- independent
+double t_e2n_hang;    // hanging-node fixup -- writes NEIGHBOUR slots, NOT threadable
+double t_e2n_sort;    // sort/unique/SFC + CG numbering -- sequential by nature
+double t_e2n_fix_g[3];
+double t_e2nC_loopA_g[3];
+double t_e2nC_sort_g[3];
+double t_e2nC_sortonly_g[3];
+double t_e2nC_tail_g[3];
+double t_e2n3_sortDG_g[3];
+double t_e2n3_sortCG_g[3];
+double t_e2nC_bc_g[3];
+double t_e2nC_sm_g[3];
+double t_e2n_map_g[3];
+double t_e2n_sm_g[3];
+double t_e2n_dginit_g[3];
+double t_e2n_hang_g[3];
+double t_e2n_sort_g[3];
 
 // #define DEBUG_E2N_MAPPING_SM
 // #define DEBUG_MESH_GENERATION
@@ -144,12 +189,40 @@ struct PhysKey3Hash {
 };
 }  // anonymous namespace
 
+// Threading canary for the Mesh ctor -- see the declaration in mesh.h.
+// 0 means no threaded stage ran (the honest answer whenever DENDRO_MESH_OMP is
+// off, and today also when it is on, since no stage is threaded yet).
+unsigned int mesh_ctor_omp_threads = 0;
 Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
            unsigned int activeNpes, MPI_Comm comm, bool pBlockSetup,
            SM_TYPE smType, unsigned int grainSz, double ld_tol,
            unsigned int sf_k) {
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Now constructing mesh object");
+    // Threading canary -- see mesh_ctor_omp_threads in mesh.h. Diagnostic only.
+    // Reset to 0 = "no threaded region has run in this ctor". A threaded stage
+    // overwrites it from INSIDE its parallel region. Deliberately NOT
+    // omp_get_max_threads() here: that reports what the runtime could hand out,
+    // which is true even with zero pragmas in the file -- it would read 4 at
+    // OMP_NUM_THREADS=4 against entirely serial code and certify nothing.
+    mesh_ctor_omp_threads = 0;
+    // Zero the e2n sub-stage timers: buildE2N_DG does not set them, and createMesh
+    // runs more than once (init grid convergence), so without this a path that
+    // skips buildE2NMap would silently report the PREVIOUS mesh's numbers.
+    t_e2n_fix = 0.0;
+    t_e2nC_loopA = 0.0;
+    t_e2nC_sort = 0.0;
+    t_e2nC_sortonly = 0.0;
+    t_e2nC_tail = 0.0;
+    t_e2n3_sortDG = 0.0;
+    t_e2n3_sortCG = 0.0;
+    t_e2nC_bc = 0.0;
+    t_e2nC_sm = 0.0;
+    t_e2n_map = 0.0;
+    t_e2n_sm = 0.0;
+    t_e2n_dginit = 0.0;
+    t_e2n_hang = 0.0;
+    t_e2n_sort = 0.0;
     m_uiCommGlobal     = comm;
     m_uiIsBlockSetup   = pBlockSetup;
     m_uiScatterMapType = smType;
@@ -229,7 +302,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         MPI_Comm_rank(m_uiCommActive, &m_uiActiveRank);
         MPI_Comm_size(m_uiCommActive, &m_uiActiveNpes);
 
-        if (!m_uiActiveRank)
+        if (!m_uiGlobalRank)
             std::cout << " [MPI_COMM_SWITCH]: Selected comm.size: "
                       << m_uiActiveNpes << " also hi" << std::endl;
 
@@ -356,6 +429,38 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                                  "mesh sm (DG type) ");
         par::computeOverallStats(&t_blk, t_blk_g, m_uiCommActive,
                                  "block setup ");
+        // e2n sub-split: how much of e2n is actually threadable. dginit is the
+        // only order-independent piece; hang is a cross-element RAW/WAW chain and
+        // sort is sequential by nature. If dginit is a small share of e2n, then
+        // threading e2n buys ~nothing and the mesh lever is the block loop alone.
+        par::computeOverallStats(&t_e2n_map, t_e2n_map_g, m_uiCommActive,
+                                 "  e2n.A buildE2NMap total ");
+        par::computeOverallStats(&t_e2n_sm, t_e2n_sm_g, m_uiCommActive,
+                                 "  e2n.B nodal scatter map (computeNodalScatterMap4) ");
+        par::computeOverallStats(&t_e2n_fix, t_e2n_fix_g, m_uiCommActive,
+                                 "  e2n.C element-order fixup (40 loops, no sorts) ");
+        par::computeOverallStats(&t_e2nC_loopA, t_e2nC_loopA_g, m_uiCommActive,
+                                 "    e2n.C1 loopA fixup (candidate) ");
+        par::computeOverallStats(&t_e2nC_sort, t_e2nC_sort_g, m_uiCommActive,
+                                 "    e2n.C2 std::sort+copies (serial) ");
+        par::computeOverallStats(&t_e2nC_sortonly, t_e2nC_sortonly_g, m_uiCommActive,
+                                 "      e2n.C2a std::sort ONLY (parallelizable) ");
+        par::computeOverallStats(&t_e2nC_tail, t_e2nC_tail_g, m_uiCommActive,
+                                 "      e2n.C2b unique+copies (memcpy-bound) ");
+        par::computeOverallStats(&t_e2nC_bc, t_e2nC_bc_g, m_uiCommActive,
+                                 "    e2n.C3 dg2cg+remap ");
+        par::computeOverallStats(&t_e2nC_sm, t_e2nC_sm_g, m_uiCommActive,
+                                 "    e2n.C4 scatter-map rebuild (NOT threadable) ");
+        par::computeOverallStats(&t_e2n3_sortDG, t_e2n3_sortDG_g, m_uiCommActive,
+                                 "    e2n.3a sort E2N_DG (plain uint) ");
+        par::computeOverallStats(&t_e2n3_sortCG, t_e2n3_sortCG_g, m_uiCommActive,
+                                 "    e2n.3b sort m_uiCG2DG (plain uint) ");
+        par::computeOverallStats(&t_e2n_dginit, t_e2n_dginit_g, m_uiCommActive,
+                                 "  e2n.1 dginit (THREADABLE) ");
+        par::computeOverallStats(&t_e2n_hang, t_e2n_hang_g, m_uiCommActive,
+                                 "  e2n.2 hangfix (not threadable) ");
+        par::computeOverallStats(&t_e2n_sort, t_e2n_sort_g, m_uiCommActive,
+                                 "  e2n.3 sort+numbering (not threadable) ");
 #endif
 
         if (m_uiActiveNpes > 1) {
@@ -419,6 +524,30 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
            unsigned int *blk_tags, unsigned int blk_tags_sz) {
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Now constructing mesh object");
+    // Threading canary -- see mesh_ctor_omp_threads in mesh.h. Diagnostic only.
+    // Reset to 0 = "no threaded region has run in this ctor". A threaded stage
+    // overwrites it from INSIDE its parallel region. Deliberately NOT
+    // omp_get_max_threads() here: that reports what the runtime could hand out,
+    // which is true even with zero pragmas in the file -- it would read 4 at
+    // OMP_NUM_THREADS=4 against entirely serial code and certify nothing.
+    mesh_ctor_omp_threads = 0;
+    // Zero the e2n sub-stage timers: buildE2N_DG does not set them, and createMesh
+    // runs more than once (init grid convergence), so without this a path that
+    // skips buildE2NMap would silently report the PREVIOUS mesh's numbers.
+    t_e2n_fix = 0.0;
+    t_e2nC_loopA = 0.0;
+    t_e2nC_sort = 0.0;
+    t_e2nC_sortonly = 0.0;
+    t_e2nC_tail = 0.0;
+    t_e2n3_sortDG = 0.0;
+    t_e2n3_sortCG = 0.0;
+    t_e2nC_bc = 0.0;
+    t_e2nC_sm = 0.0;
+    t_e2n_map = 0.0;
+    t_e2n_sm = 0.0;
+    t_e2n_dginit = 0.0;
+    t_e2n_hang = 0.0;
+    t_e2n_sort = 0.0;
     m_uiCommGlobal     = comm;
     m_uiIsBlockSetup   = pBlockSetup;
     m_uiScatterMapType = smType;
@@ -527,7 +656,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
         MPI_Comm_rank(m_uiCommActive, &m_uiActiveRank);
         MPI_Comm_size(m_uiCommActive, &m_uiActiveNpes);
 
-        if (!m_uiActiveRank)
+        if (!m_uiGlobalRank)
             std::cout << " [MPI_COMM_SWITCH]: Selected comm.size: "
                       << m_uiActiveNpes << " inside second mesh option "
                       << std::endl;
@@ -649,6 +778,38 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                                  "mesh sm (DG type) ");
         par::computeOverallStats(&t_blk, t_blk_g, m_uiCommActive,
                                  "block setup ");
+        // e2n sub-split: how much of e2n is actually threadable. dginit is the
+        // only order-independent piece; hang is a cross-element RAW/WAW chain and
+        // sort is sequential by nature. If dginit is a small share of e2n, then
+        // threading e2n buys ~nothing and the mesh lever is the block loop alone.
+        par::computeOverallStats(&t_e2n_map, t_e2n_map_g, m_uiCommActive,
+                                 "  e2n.A buildE2NMap total ");
+        par::computeOverallStats(&t_e2n_sm, t_e2n_sm_g, m_uiCommActive,
+                                 "  e2n.B nodal scatter map (computeNodalScatterMap4) ");
+        par::computeOverallStats(&t_e2n_fix, t_e2n_fix_g, m_uiCommActive,
+                                 "  e2n.C element-order fixup (40 loops, no sorts) ");
+        par::computeOverallStats(&t_e2nC_loopA, t_e2nC_loopA_g, m_uiCommActive,
+                                 "    e2n.C1 loopA fixup (candidate) ");
+        par::computeOverallStats(&t_e2nC_sort, t_e2nC_sort_g, m_uiCommActive,
+                                 "    e2n.C2 std::sort+copies (serial) ");
+        par::computeOverallStats(&t_e2nC_sortonly, t_e2nC_sortonly_g, m_uiCommActive,
+                                 "      e2n.C2a std::sort ONLY (parallelizable) ");
+        par::computeOverallStats(&t_e2nC_tail, t_e2nC_tail_g, m_uiCommActive,
+                                 "      e2n.C2b unique+copies (memcpy-bound) ");
+        par::computeOverallStats(&t_e2nC_bc, t_e2nC_bc_g, m_uiCommActive,
+                                 "    e2n.C3 dg2cg+remap ");
+        par::computeOverallStats(&t_e2nC_sm, t_e2nC_sm_g, m_uiCommActive,
+                                 "    e2n.C4 scatter-map rebuild (NOT threadable) ");
+        par::computeOverallStats(&t_e2n3_sortDG, t_e2n3_sortDG_g, m_uiCommActive,
+                                 "    e2n.3a sort E2N_DG (plain uint) ");
+        par::computeOverallStats(&t_e2n3_sortCG, t_e2n3_sortCG_g, m_uiCommActive,
+                                 "    e2n.3b sort m_uiCG2DG (plain uint) ");
+        par::computeOverallStats(&t_e2n_dginit, t_e2n_dginit_g, m_uiCommActive,
+                                 "  e2n.1 dginit (THREADABLE) ");
+        par::computeOverallStats(&t_e2n_hang, t_e2n_hang_g, m_uiCommActive,
+                                 "  e2n.2 hangfix (not threadable) ");
+        par::computeOverallStats(&t_e2n_sort, t_e2n_sort_g, m_uiCommActive,
+                                 "  e2n.3 sort+numbering (not threadable) ");
 #endif
 
         if (m_uiActiveNpes > 1) {
@@ -4181,7 +4342,8 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in) {
         treeNodesTovtk(missedKeys,rank,"missedKeys");*/
 #endif
 
-    std::cout << "Seq: E2E mapping Ended" << std::endl;
+    if (!m_uiGlobalRank)
+        std::cout << "Seq: E2E mapping Ended" << std::endl;
 }
 
 void Mesh::buildE2NWithSM() {
@@ -4200,9 +4362,25 @@ void Mesh::buildE2NWithSM() {
     else if (m_uiDim == 3)
         m_uiNpE = (pp + 1) * (pp + 1) * (pp + 1);
 
+    // The ctor's t_e2n timer wraps this whole function, so "mesh e2n" is NOT
+    // buildE2NMap -- it is buildE2NMap + the FDM nodal scatter map + the
+    // element-order fixup below (hence the "+ sm for fdm type" in its label).
+    // Split it: the sub-timers inside buildE2NMap accounted for only ~18% of the
+    // reported e2n, so most of that 43% lives out here and had never been
+    // attributed to anything.
+    t_e2n_map = MPI_Wtime();
     buildE2NMap();
+    t_e2n_map = MPI_Wtime() - t_e2n_map;
 
+    t_e2n_sm  = MPI_Wtime();
     if (m_uiActiveNpes > 1) computeNodalScatterMap4(m_uiCommActive);
+    t_e2n_sm  = MPI_Wtime() - t_e2n_sm;
+
+    // e2n stage C: the element-order fixup. ~590 lines, 40 plain for-loops,
+    // ZERO SFC sorts/searches -- a very different animal from e2e's MPI
+    // pipeline. Never attributed to anything before; the aggregate 'mesh e2n'
+    // hid it inside what everyone read as 'the node mapping'.
+    t_e2n_fix = MPI_Wtime();
 
     // 2. Expand to full order and rebuild scatter maps
     buildE2NWithSMRepartitioned(eleOrder);
@@ -4258,6 +4436,16 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
 // idx for the element order p.
 #define IDXp(i, j, k) k *(eleOrder + 1) * (eleOrder + 1) + j *(eleOrder + 1) + i
 
+    t_e2nC_loopA = MPI_Wtime();  // the ~295-line face/edge/vertex fixup
+    // Threaded under DENDRO_MESH_OMP: every one of the 27 writes in this body targets
+    // e2n_dg[e*nPe_3d + off] (element e's own block, disjoint across e); the RHS reads a
+    // neighbour ownerID's index arithmetically but never WRITES a neighbour slot, and
+    // m_uiE2NMapping_DG / e2n_cg are read-only here. So a parallel-for over e is race-free
+    // once the above-loop scratch is made private (f1/f2 are declared in-body -> already
+    // thread-local). Flag OFF -> the pragma vanishes and this is the serial loop.
+#ifdef DENDRO_MESH_OMP
+#pragma omp parallel for private(ownerID, ii_x, jj_y, kk_z)
+#endif
     for (unsigned int e = m_uiElementPreGhostBegin; e < m_uiElementPostGhostEnd;
          e++) {
         for (unsigned int n = 0; n < nPe_3d; n++)
@@ -4558,7 +4746,13 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
                                           (kk_z * eleOrder) / pp);
     }
 
+    t_e2nC_loopA = MPI_Wtime() - t_e2nC_loopA;
+    // The sort my earlier grep MISSED: I searched SFC::seqSort/seqSearch and
+    // concluded 'no sorts'. std::sort over 125*numTotalElements uints is serial
+    // O(N log N) and is not a for-loop, so a loop census cannot see it.
+    t_e2nC_sort = MPI_Wtime();
     e2n_cg = e2n_dg;
+    t_e2nC_sortonly = MPI_Wtime();
     {
         // sorted unique dg indices: they are dense below nPe * elements, so
         // mark and read in order (DENDRO_E2N_SORT_UNIQUE=1 or any index out
@@ -4579,10 +4773,16 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
             for (size_t i = 0; i < dgN; i++)
                 if (used[i]) e2n_dg.push_back((unsigned int)i);
         } else {
+#ifdef DENDRO_MESH_OMP
+            omp_par::merge_sort(e2n_dg.begin(), e2n_dg.end());
+#else
             std::sort(e2n_dg.begin(), e2n_dg.end());
+#endif
             e2n_dg.erase(std::unique(e2n_dg.begin(), e2n_dg.end()), e2n_dg.end());
         }
     }
+    t_e2nC_sortonly = MPI_Wtime() - t_e2nC_sortonly;
+    t_e2nC_tail = MPI_Wtime();
 
     std::vector<unsigned int> cg2dg;
     cg2dg.resize(e2n_dg.size());
@@ -4594,6 +4794,9 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
     std::vector<unsigned int> dg2cg;
     dg2cg.resize(nPe_3d * m_uiNumTotalElements, LOOK_UP_TABLE_DEFAULT);
 
+    t_e2nC_tail = MPI_Wtime() - t_e2nC_tail;
+    t_e2nC_sort = MPI_Wtime() - t_e2nC_sort;
+    t_e2nC_bc = MPI_Wtime();   // B/C: dg2cg fill + e2n_cg remap
     for (unsigned int i = 0; i < cg2dg.size(); i++) dg2cg[cg2dg[i]] = i;
 
     for (unsigned int i = 0; i < e2n_cg.size(); i++)
@@ -4610,6 +4813,8 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
     unsigned int dir;
     unsigned int ib, ie, jb, je, kb, ke;
 
+    t_e2nC_bc = MPI_Wtime() - t_e2nC_bc;
+    t_e2nC_sm = MPI_Wtime();   // D/E scatter-map rebuild (NOT threadable)
     if (m_uiActiveNpes > 1) {
         std::vector<unsigned int> sendNodeCount;
         std::vector<unsigned int> recvNodeCount;
@@ -4787,6 +4992,7 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
     unsigned int localOwner = UINT_MAX;
     unsigned int postOwner  = UINT_MAX;
 
+    t_e2nC_sm = MPI_Wtime() - t_e2nC_sm;
     for (unsigned int e = m_uiElementPreGhostBegin; e < m_uiElementPostGhostEnd;
          e++) {
         unsigned int tmpIndex;
@@ -4850,6 +5056,7 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
 
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished building E2N map!");
+    t_e2n_fix = MPI_Wtime() - t_e2n_fix;
 
     // orphan fix: find local CGs with no local-element E2N_CG
     // reference, then redirect references (from ghost elements) to
@@ -5845,7 +6052,13 @@ void Mesh::buildE2NMap() {
     m_uiE2NMapping_CG.resize(m_uiNumTotalElements * m_uiNpE);
     m_uiE2NMapping_DG.resize(m_uiNumTotalElements * m_uiNpE);
 
+    // e2n stage 1: per-element DG index init. Every write is a pure function
+    // of (e,k,j,i) -- the one genuinely threadable loop in e2n.
+    t_e2n_dginit = MPI_Wtime();
     // initialize the DG mapping. // this order is mandotory.
+    // Deliberately NOT threaded: it is race-free (writes are disjoint per e), but
+    // measured 46 us serial -> 148 us at T=4 (3 reps, flat control) -- fork/join
+    // exceeds the work. Don't re-add the pragma without a bigger loop.
     for (unsigned int e = 0; e < (m_uiNumTotalElements); e++)
         for (unsigned int k = 0; k < (m_uiElementOrder + 1);
              k++)  // z coordinate
@@ -5860,6 +6073,7 @@ void Mesh::buildE2NMap() {
                         e * m_uiNpE +
                         k * (m_uiElementOrder + 1) * (m_uiElementOrder + 1) +
                         j * (m_uiElementOrder + 1) + i;
+    t_e2n_dginit = MPI_Wtime() - t_e2n_dginit;
 
 #ifdef DEBUG_E2N_MAPPING
     MPI_Barrier(MPI_COMM_WORLD);
@@ -5914,6 +6128,10 @@ void Mesh::buildE2NMap() {
     std::vector<unsigned int>
         edgeOwnerIndex;  // indices that are being used for updates. for an edge
 
+    // e2n stage 2: hanging-node fixup. Element e writes m_uiE2NMapping_CG
+    // slots belonging to NEIGHBOUR elements, with differing values -- a true
+    // cross-element RAW/WAW chain. NOT threadable; timed to size what is lost.
+    t_e2n_hang = MPI_Wtime();
     // Iterate in SFC (TreeNode) order so that CG-mapping chains
     // resolve deterministically. For an SFC-sorted m_uiAllElements
     // (the default after createMesh) this is identity; for a
@@ -6186,6 +6404,7 @@ void Mesh::buildE2NMap() {
 
         }*/
     }
+    t_e2n_hang = MPI_Wtime() - t_e2n_hang;
 
     /* for(unsigned int
      e=m_uiElementPreGhostBegin;e<m_uiElementPostGhostEnd;e++)
@@ -6244,6 +6463,9 @@ void Mesh::buildE2NMap() {
     // m_uiE2NMapping_CG,m_uiAllElements,m_uiNumDirections,m_uiElementOrder));
     std::vector<unsigned int> E2N_DG_Sorted;
     std::vector<unsigned int> dg2dg_p;  // dg to dg prime
+    // e2n stage 3: sort/unique/SFC-sort + CG numbering. Sequential by
+    // nature (std::sort, SFC_treeSort, a run-length collapse scan).
+    t_e2n_sort = MPI_Wtime();
     E2N_DG_Sorted.resize(m_uiE2NMapping_CG.size());
     E2N_DG_Sorted.assign(m_uiE2NMapping_CG.begin(), m_uiE2NMapping_CG.end());
 
@@ -6251,6 +6473,7 @@ void Mesh::buildE2NMap() {
     dg2dg_p.resize(m_uiAllElements.size() * m_uiNpE, LOOK_UP_TABLE_DEFAULT);
 
     // 3. Update DG indexing with CG indexing.
+    t_e2n3_sortDG = MPI_Wtime();
     {
         // sorted unique, by marking (see buildE2NWithSMRepartitioned)
         static const bool sortUnique = [] {
@@ -6269,12 +6492,17 @@ void Mesh::buildE2NMap() {
             for (size_t i = 0; i < dgN; i++)
                 if (used[i]) E2N_DG_Sorted.push_back((unsigned int)i);
         } else {
+#ifdef DENDRO_MESH_OMP
+            omp_par::merge_sort(E2N_DG_Sorted.begin(), E2N_DG_Sorted.end());
+#else
             std::sort(E2N_DG_Sorted.begin(), E2N_DG_Sorted.end());
+#endif
             E2N_DG_Sorted.erase(
                 std::unique(E2N_DG_Sorted.begin(), E2N_DG_Sorted.end()),
                 E2N_DG_Sorted.end());
         }
     }
+    t_e2n3_sortDG = MPI_Wtime() - t_e2n3_sortDG;
 
     unsigned int owner1, ii_x1, jj_y1, kk_z1;
     unsigned int owner2, ii_x2, jj_y2, kk_z2;
@@ -6348,7 +6576,14 @@ void Mesh::buildE2NMap() {
         e += (skip - 1);
     }
 
+    t_e2n3_sortCG = MPI_Wtime();
+    // Left as std::sort ON PURPOSE. This sorts m_uiCG2DG (~0.43 ms, 0.4% of the
+    // ctor) and the merge_sort swap MEASURED SLOWER here (0.49x on the one clean
+    // reading): the array is too small for the parallel path to amortise its
+    // full-length temp-buffer allocation. Kept as a note so nobody "completes the
+    // set" by swapping it -- the bigger sorts (C2a, e2n.3a DG) are where the win is.
     std::sort(m_uiCG2DG.begin(), m_uiCG2DG.end());
+    t_e2n3_sortCG = MPI_Wtime() - t_e2n3_sortCG;
 
     for (unsigned int i = 0; i < m_uiCG2DG.size(); i++)
         m_uiDG2CG[m_uiCG2DG[i]] = i;
@@ -6371,6 +6606,7 @@ void Mesh::buildE2NMap() {
         if (dg2dg_p[m_uiE2NMapping_CG[i]] != LOOK_UP_TABLE_DEFAULT)
             m_uiE2NMapping_CG[i] = dg2dg_p[m_uiE2NMapping_CG[i]];
 
+    t_e2n_sort = MPI_Wtime() - t_e2n_sort;
 #ifdef DEBUG_E2N_MAPPING
     // MPI_Barrier(MPI_COMM_WORLD);
     if (!m_uiActiveRank)
@@ -6533,30 +6769,30 @@ void Mesh::buildE2NMap() {
         std::cout << "[NODE] rank:  " << m_uiActiveRank << " pre ( "
                   << m_uiNodePreGhostBegin << ", " << m_uiNodePreGhostEnd
                   << ") local ( " << m_uiNodeLocalBegin << ", "
-                  << m_uiNodeLocalEnd << ")"
-                  << " post (" << m_uiNodePostGhostBegin << " , "
-                  << m_uiNodePostGhostEnd << ")" << std::endl;
+                  << m_uiNodeLocalEnd << ")" << " post ("
+                  << m_uiNodePostGhostBegin << " , " << m_uiNodePostGhostEnd
+                  << ")" << std::endl;
     if (!m_uiActiveRank)
         std::cout << "[ELEMENT] rank:  " << m_uiActiveRank << " pre ( "
                   << m_uiElementPreGhostBegin << ", " << m_uiElementPreGhostEnd
                   << ") local ( " << m_uiElementLocalBegin << ", "
-                  << m_uiElementLocalEnd << ")"
-                  << " post (" << m_uiElementPostGhostBegin << " , "
+                  << m_uiElementLocalEnd << ")" << " post ("
+                  << m_uiElementPostGhostBegin << " , "
                   << m_uiElementPostGhostEnd << ")" << std::endl;
 
     if (m_uiActiveRank)
         std::cout << "[NODE] rank:  " << m_uiActiveRank << " pre ( "
                   << m_uiNodePreGhostBegin << ", " << m_uiNodePreGhostEnd
                   << ") local ( " << m_uiNodeLocalBegin << ", "
-                  << m_uiNodeLocalEnd << ")"
-                  << " post (" << m_uiNodePostGhostBegin << " , "
-                  << m_uiNodePostGhostEnd << ")" << std::endl;
+                  << m_uiNodeLocalEnd << ")" << " post ("
+                  << m_uiNodePostGhostBegin << " , " << m_uiNodePostGhostEnd
+                  << ")" << std::endl;
     if (m_uiActiveRank)
         std::cout << "[ELEMENT] rank:  " << m_uiActiveRank << " pre ( "
                   << m_uiElementPreGhostBegin << ", " << m_uiElementPreGhostEnd
                   << ") local ( " << m_uiElementLocalBegin << ", "
-                  << m_uiElementLocalEnd << ")"
-                  << " post (" << m_uiElementPostGhostBegin << " , "
+                  << m_uiElementLocalEnd << ")" << " post ("
+                  << m_uiElementPostGhostBegin << " , "
                   << m_uiElementPostGhostEnd << ")" << std::endl;
 
 #endif
@@ -6745,11 +6981,11 @@ void Mesh::buildE2N_DG() {
     m_uiNodePostGhostEnd   = m_uiElementPostGhostEnd * m_uiNpE;
 
     m_uiNumActualNodes     = (m_uiNodePreGhostEnd - m_uiNodePreGhostBegin) +
-                         (m_uiNodeLocalEnd - m_uiNodeLocalBegin) +
-                         (m_uiNodeLocalEnd - m_uiNodeLocalBegin);
+                             (m_uiNodeLocalEnd - m_uiNodeLocalBegin) +
+                             (m_uiNodeLocalEnd - m_uiNodeLocalBegin);
 
-    m_uiE2NMapping_DG = m_uiE2NMapping_CG;
-    m_uiCG2DG         = m_uiE2NMapping_CG;
+    m_uiE2NMapping_DG      = m_uiE2NMapping_CG;
+    m_uiCG2DG              = m_uiE2NMapping_CG;
     // m_uiCG2DG.resize(m_uiE2NMapping_CG.size(),1);
 
     dendro::logger::info(dendro::logger::Scope{"MESH"},
@@ -7425,6 +7661,35 @@ void Mesh::buildE2BlockMap() {
             m_e2b_unzip_counts[elem]++;
         }
     }
+
+#ifdef DENDRO_UNZIP_OMP
+    // Cache the inverse (block->element) CSR map so unzip_scatter reuses it.
+    // Ascending element order (last-writer-wins at wavelet boundaries).
+    {
+        const size_t n_blocks = m_uiLocalBlockList.size();
+        m_b2e_unzip_count.assign(n_blocks, 0);
+        for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+            if (m_e2b_unzip_counts[ele] == 0) continue;
+            const unsigned int eo = m_e2b_unzip_offset[ele];
+            for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++)
+                m_b2e_unzip_count[m_e2b_unzip_map[eo + i]]++;
+        }
+        m_b2e_unzip_offset.assign(n_blocks + 1, 0);
+        for (size_t b = 0; b < n_blocks; b++)
+            m_b2e_unzip_offset[b + 1] =
+                m_b2e_unzip_offset[b] + m_b2e_unzip_count[b];
+        m_b2e_unzip_map.assign(m_b2e_unzip_offset[n_blocks], 0);
+        std::vector<unsigned int> b2e_cur(n_blocks, 0);
+        for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+            if (m_e2b_unzip_counts[ele] == 0) continue;
+            const unsigned int eo = m_e2b_unzip_offset[ele];
+            for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++) {
+                const unsigned int blk = m_e2b_unzip_map[eo + i];
+                m_b2e_unzip_map[m_b2e_unzip_offset[blk] + b2e_cur[blk]++] = ele;
+            }
+        }
+    }
+#endif
 
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished building the element to block map!");
@@ -9300,6 +9565,77 @@ void Mesh::buildZipPlan() {
     m_uiLocalNonPrimaryCg.erase(
         std::unique(m_uiLocalNonPrimaryCg.begin(), m_uiLocalNonPrimaryCg.end()),
         m_uiLocalNonPrimaryCg.end());
+}
+
+void Mesh::buildZipIndexPlan() {
+    if (m_uiZipIndexPlanBuilt) return;
+    m_uiZipIndexPlanBuilt = true;
+    m_uiZipPlanUzIdx.clear();
+    m_uiZipPlanCgIdx.clear();
+    if (!m_uiIsActive) return;
+
+    const ot::TreeNode* pNodes = m_uiAllElements.data();
+    const ot::Block* blkList   = m_uiLocalBlockList.data();
+    const size_t n_blocks      = m_uiLocalBlockList.size();
+    const unsigned int eO      = m_uiElementOrder;
+    const unsigned int npE     = m_uiNpE;
+    const unsigned int eOp1    = eO + 1;
+    const unsigned int eOp1Sq  = eOp1 * eOp1;
+    const unsigned int* const e2n_dg = m_uiE2NMapping_DG.data();
+    const unsigned int* const e2n_cg = m_uiE2NMapping_CG.data();
+
+    size_t n_pts = 0;
+    for (size_t blk = 0; blk < n_blocks; blk++)
+        n_pts += blkList[blk].numElements();
+    n_pts *= (size_t)npE;
+    m_uiZipPlanUzIdx.reserve(n_pts);
+    m_uiZipPlanCgIdx.reserve(n_pts);
+
+    for (size_t blk = 0; blk < n_blocks; blk++) {
+        const ot::TreeNode blkNode   = blkList[blk].getBlockNode();
+        const unsigned int regLev    = blkList[blk].getRegularGridLev();
+        const unsigned int lx        = blkList[blk].getAllocationSzX();
+        const unsigned int ly        = blkList[blk].getAllocationSzY();
+        const DendroIntL offset      = blkList[blk].getOffset();
+        const unsigned int paddWidth = blkList[blk].get1DPadWidth();
+        const unsigned int lxly      = lx * ly;
+        const unsigned int shift     = m_uiMaxDepth - regLev;
+
+        // block iterator, so non-SFC blocks (explicit element list) work too
+        for (unsigned int elem : blkList[blk]) {
+            const unsigned int ei =
+                (pNodes[elem].getX() - blkNode.getX()) >> shift;
+            const unsigned int ej =
+                (pNodes[elem].getY() - blkNode.getY()) >> shift;
+            const unsigned int ek =
+                (pNodes[elem].getZ() - blkNode.getZ()) >> shift;
+
+            const unsigned int e_base      = elem * npE;
+            const unsigned int* const dg_e = e2n_dg + e_base;
+            const unsigned int* const cg_e = e2n_cg + e_base;
+            const DendroIntL uz_e_base =
+                offset + (DendroIntL)(ek * eO + paddWidth) * lxly +
+                (ej * eO + paddWidth) * lx + (ei * eO + paddWidth);
+
+            for (unsigned int k = 0; k < eOp1; k++) {
+                const unsigned int nk = k * eOp1Sq;
+                const DendroIntL uk   = uz_e_base + (DendroIntL)k * lxly;
+                for (unsigned int j = 0; j < eOp1; j++) {
+                    const unsigned int nkj = nk + j * eOp1;
+                    const DendroIntL ukj   = uk + j * lx;
+                    for (unsigned int i = 0; i < eOp1; i++) {
+                        const unsigned int n = nkj + i;
+                        if ((unsigned int)(dg_e[n] - e_base) < npE) {
+                            m_uiZipPlanUzIdx.push_back(ukj + i);
+                            m_uiZipPlanCgIdx.push_back(cg_e[n]);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    m_uiZipPlanUzIdx.shrink_to_fit();
+    m_uiZipPlanCgIdx.shrink_to_fit();
 }
 
 void Mesh::buildZipPlanCore() {
@@ -12230,7 +12566,12 @@ void Mesh::computeNodeScatterMaps(MPI_Comm comm) {
                 tmpKey = ot::Key(tmpElement);
                 tmpKey.addOwner(p);
                 tmpKey.setFlag(tmpElement.getFlag());
+
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstringop-overflow"
+
                 ghostElementChained.push_back(tmpKey);
+#pragma GCC diagnostic pop
             }
         }
     }
@@ -12408,8 +12749,7 @@ void Mesh::computeNodeScatterMaps(MPI_Comm comm) {
 #endif
     if ((m_uiRecvNodeOffset[npes - 1] + m_uiRecvNodeCount[npes - 1]) !=
         allocatedGhostNodes.size()) {
-        std::cout << RED << "[Error]"
-                  << " m_uiActiveRank: " << m_uiActiveRank
+        std::cout << RED << "[Error]" << " m_uiActiveRank: " << m_uiActiveRank
                   << " Total Ghost Elements allocated: "
                   << allocatedGhostNodes.size()
                   << " Number of elements will get recieved: "
@@ -12437,10 +12777,11 @@ void Mesh::computeNodeScatterMaps(MPI_Comm comm) {
     assert(allocatedGhostNodes.size() == recvNodeKeys.size());
     for (unsigned int k = 0; k < allocatedGhostNodes.size(); k++) {
         if (allocatedGhostNodes[k] != recvNodeKeys[k]) {
-            std::cout << RED << "[ERROR]: "
-                      << "m_uiActiveRank : " << m_uiActiveRank << " allocated ["
-                      << k << "]: " << allocatedGhostNodes[k] << " recieved["
-                      << k << "]: " << recvNodeKeys[k] << std::endl;
+            std::cout << RED
+                      << "[ERROR]: " << "m_uiActiveRank : " << m_uiActiveRank
+                      << " allocated [" << k << "]: " << allocatedGhostNodes[k]
+                      << " recieved[" << k << "]: " << recvNodeKeys[k]
+                      << std::endl;
             assert(false);
         }
 
@@ -15884,6 +16225,13 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     m_uiCoarsetBlkLev = cLev;
     m_uiLocalBlockList.clear();
 
+    // blocks change here (LTS rebuilds in place), so drop the zip plan
+    m_uiZipIndexPlanBuilt = false;
+    m_uiZipPlanUzIdx.clear();
+    m_uiZipPlanUzIdx.shrink_to_fit();
+    m_uiZipPlanCgIdx.clear();
+    m_uiZipPlanCgIdx.shrink_to_fit();
+
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;
 
@@ -15942,7 +16290,42 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     std::vector<unsigned int> *directionList;
     unsigned int result;
 
+    // Per-block setup: threaded under DENDRO_MESH_OMP (default OFF -> the pragma
+    // vanishes and this is byte-for-byte the original serial loop).
+    //
+    // Why this loop is safe to thread, and the rest of the ctor is not:
+    //  - every write is indexed by the loop variable (m_uiLocalBlockList[e].*),
+    //  - m_uiE2BlkMap[m - m_uiElementLocalBegin] = e is disjoint across e because
+    //    blocks PARTITION the local elements (each element belongs to one block),
+    //  - SFC_treeSearch here reads m_uiAllElements read-only and mutates only the
+    //    thread-private blkKeys,
+    //  - no MPI in the body (MPI is FUNNELED; the collectives are outside).
+    // Contrast buildE2EMap, whose writes land at ownerList[w] -- an index carried
+    // in the key, not the loop variable -- and which is a true data-dependent
+    // scatter over a multi-round MPI pipeline.
+    //
+    // private(), NOT declarations moved into the body: blkKeys/blkSkeys are
+    // .clear()ed per iteration and REUSE their capacity, so constructing them
+    // per-iteration would add an allocation per block to the serial path too.
+    // private() gives each thread one vector that grows once and is then reused,
+    // and leaves the flag-off text untouched. All of these are assigned before
+    // first read inside the body, so private (not firstprivate) is correct.
+    // No num_threads(): dendrolib-layer loops leave the count to the runtime
+    // (mesh.tcc:744, dvec.h:368); only the BSSN layer pins, because only it
+    // indexes per-thread deriv slabs. schedule(dynamic,1) because per-block cost
+    // is irregular (block sizes and neighbour counts vary), matching mesh.tcc:4818.
+#ifdef DENDRO_MESH_OMP
+#pragma omp parallel for schedule(dynamic, 1) private( \
+    blkNode, blkKeys, blkSkeys, sz, regLev, ownerList, directionList, result)
+#endif
     for (unsigned int e = 0; e < m_uiLocalBlockList.size(); e++) {
+#ifdef DENDRO_MESH_OMP
+        // Threading canary: report what ACTUALLY ran, from inside the region.
+        // Thread 0 only, so the write is not a race (and repeat writes store the
+        // same value). Stays 0 if the loop body never executes -- which is the
+        // honest answer, since then nothing was threaded.
+        if (omp_get_thread_num() == 0) mesh_ctor_omp_threads = omp_get_num_threads();
+#endif
         blkNode = m_uiLocalBlockList[e].getBlockNode();
 
         // update the element to block map.
@@ -16353,6 +16736,13 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
                                            unsigned int tsz) {
     m_uiIsBlockSetup  = true;
     m_uiCoarsetBlkLev = cLev;
+
+    // blocks change here too, so drop the zip index plan
+    m_uiZipIndexPlanBuilt = false;
+    m_uiZipPlanUzIdx.clear();
+    m_uiZipPlanUzIdx.shrink_to_fit();
+    m_uiZipPlanCgIdx.clear();
+    m_uiZipPlanCgIdx.shrink_to_fit();
 
     if (!m_uiIsActive) return;
 
@@ -17404,19 +17794,8 @@ bool Mesh::isFaceHanging(unsigned int elementId, unsigned int faceId,
     return isHanging;
 }
 
-bool Mesh::isNodeHanging(unsigned int eleID, unsigned int ix, unsigned int jy,
-                         unsigned int kz) const {
-    // should not be called if the mesh is not active
-    if (!m_uiIsActive) return false;
-
-    return m_uiAllElements[(m_uiE2NMapping_DG[eleID * m_uiNpE +
-                                              kz * (m_uiElementOrder + 1) *
-                                                  (m_uiElementOrder + 1) +
-                                              jy * (m_uiElementOrder + 1) +
-                                              ix] /
-                            m_uiNpE)]
-               .getLevel() < m_uiAllElements[eleID].getLevel();
-}
+// isNodeHanging moved to mesh.h as inline — was 18% of unzip gather runtime
+// when out-of-line.
 
 ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                        unsigned int (*getWeight)(const ot::TreeNode *),

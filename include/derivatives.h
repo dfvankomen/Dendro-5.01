@@ -1,0 +1,1291 @@
+#pragma once
+
+#include <algorithm>
+#include <functional>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+
+#include "dendro.h"
+#include "filters.h"
+#include "libxsmm.h"
+
+#define IDX(i, j, k) ((i) + nx * ((j) + ny * (k)))
+
+namespace dendroderivs {
+
+enum DerivType {
+    // default, does nothing, should return an error if anything is
+    D_NONE = 0,
+    // Explicit Schemes
+    D_E4,
+    D_E6,
+    D_E8,
+    // Explicit Schemes with matrix multiplication
+    D_E4_MAT,
+    D_E6_MAT,
+    D_E8_MAT,
+    // Jonathan Tyler tridiagonal schemes (compact)
+    D_JTT4,
+    D_JTT6,
+    D_JTT8,
+    D_JTT10,
+    // Jonathan Tyler pentadiagonal schemes (compact)
+    D_JTP6,
+    D_JTP8,
+    D_JTP10,
+    // J.W. Kim 4th order derivatives
+    D_K4,
+    D_K4_07,
+    D_K4_16,
+    D_KB4,
+    D_KIMBYU_1,
+    D_KIMBYU_2,
+    D_KIMBYU_3,
+    D_KIMBYU_4,
+    D_KIMBYU_5,
+    D_KIMBYU_6,
+    D_KIMBYU_7,
+    D_KIMBYU_8,
+    D_KIMBYU_9,
+    D_KIMBYU_10,
+    D_KIMBYU_11,
+    D_KIMBYU_12,
+    D_KIMBYU_13,
+    D_KIMBYU_14,
+    D_KIMBYU_15,
+    D_KIMBYU_16,
+    D_KIMBYU_17,
+    D_KIMBYU_18,
+    D_KIMBYU_19,
+    D_A4_1,
+    D_A4_2,
+    D_A4_3,
+    D_A4_4,
+    D_A4_5,
+    D_A4_6,
+    D_A4_7,
+    D_A4_8,
+    D_A4_9,
+    D_A4_10,
+    D_A4_11,
+    D_A4_12,
+    D_A4_13,
+    D_A4_14,
+    D_A4_15,
+    D_A4_16,
+    D_A4_17,
+    D_A4_18,
+    D_A4_19,
+    D_A4_20,
+    D_B4_1,
+    D_B4_2,
+    D_C4_1,
+    D_C4_2,
+    D_C4_3,
+    D_C4_4,
+    D_C4_5,
+    D_A6_1,
+    D_A6_2,
+    D_A6_3,
+    D_A6_4,
+    D_A6_5,
+    D_A6_6,
+    D_A6_7,
+    D_A6_8,
+    D_BYU_A6_1ST_R060_OP1,
+    D_BYU_A6_1ST_R060_OP10,
+    D_BYU_A6_1ST_R060_OP11,
+    D_BYU_A6_1ST_R060_OP12,
+    D_BYU_A6_1ST_R060_OP15,
+    D_BYU_A6_1ST_R060_OP16,
+    D_BYU_A6_1ST_R060_OP17,
+    D_BYU_A6_1ST_R060_OP2,
+    D_BYU_A6_1ST_R060_OP22,
+    D_BYU_A6_1ST_R060_OP23,
+    D_BYU_A6_1ST_R060_OP24,
+    D_BYU_A6_1ST_R060_OP25,
+    D_BYU_A6_1ST_R060_OP26,
+    D_BYU_A6_1ST_R060_OP27,
+    D_BYU_A6_1ST_R060_OP28,
+    D_BYU_A6_1ST_R060_OP29,
+    D_BYU_A6_1ST_R060_OP3,
+    D_BYU_A6_1ST_R060_OP4,
+    D_BYU_A6_1ST_R060_OP5,
+    D_BYU_A6_1ST_R060_OP6,
+    D_BYU_A6_1ST_R060_OP7,
+    D_BYU_A6_1ST_R060_OP8,
+    D_BYU_A6_1ST_R060_OP9,
+    D_BYU_A6_1ST_R065_OP1,
+    D_BYU_A6_1ST_R065_OP10,
+    D_BYU_A6_1ST_R065_OP11,
+    D_BYU_A6_1ST_R065_OP12,
+    D_BYU_A6_1ST_R065_OP13,
+    D_BYU_A6_1ST_R065_OP14,
+    D_BYU_A6_1ST_R065_OP15,
+    D_BYU_A6_1ST_R065_OP16,
+    D_BYU_A6_1ST_R065_OP17,
+    D_BYU_A6_1ST_R065_OP18,
+    D_BYU_A6_1ST_R065_OP19,
+    D_BYU_A6_1ST_R065_OP2,
+    D_BYU_A6_1ST_R065_OP20,
+    D_BYU_A6_1ST_R065_OP21,
+    D_BYU_A6_1ST_R065_OP22,
+    D_BYU_A6_1ST_R065_OP23,
+    D_BYU_A6_1ST_R065_OP24,
+    D_BYU_A6_1ST_R065_OP3,
+    D_BYU_A6_1ST_R065_OP4,
+    D_BYU_A6_1ST_R065_OP5,
+    D_BYU_A6_1ST_R065_OP6,
+    D_BYU_A6_1ST_R065_OP7,
+    D_BYU_A6_1ST_R065_OP8,
+    D_BYU_A6_1ST_R065_OP9,
+    D_BYU_A6_1ST_R070_OP1,
+    D_BYU_A6_1ST_R070_OP10,
+    D_BYU_A6_1ST_R070_OP11,
+    D_BYU_A6_1ST_R070_OP12,
+    D_BYU_A6_1ST_R070_OP13,
+    D_BYU_A6_1ST_R070_OP14,
+    D_BYU_A6_1ST_R070_OP15,
+    D_BYU_A6_1ST_R070_OP16,
+    D_BYU_A6_1ST_R070_OP17,
+    D_BYU_A6_1ST_R070_OP18,
+    D_BYU_A6_1ST_R070_OP19,
+    D_BYU_A6_1ST_R070_OP2,
+    D_BYU_A6_1ST_R070_OP20,
+    D_BYU_A6_1ST_R070_OP21,
+    D_BYU_A6_1ST_R070_OP22,
+    D_BYU_A6_1ST_R070_OP23,
+    D_BYU_A6_1ST_R070_OP24,
+    D_BYU_A6_1ST_R070_OP25,
+    D_BYU_A6_1ST_R070_OP26,
+    D_BYU_A6_1ST_R070_OP27,
+    D_BYU_A6_1ST_R070_OP3,
+    D_BYU_A6_1ST_R070_OP4,
+    D_BYU_A6_1ST_R070_OP5,
+    D_BYU_A6_1ST_R070_OP6,
+    D_BYU_A6_1ST_R070_OP7,
+    D_BYU_A6_1ST_R070_OP8,
+    D_BYU_A6_1ST_R070_OP9,
+    D_BYU_A6_1ST_R075_OP1,
+    D_BYU_A6_1ST_R075_OP10,
+    D_BYU_A6_1ST_R075_OP11,
+    D_BYU_A6_1ST_R075_OP12,
+    D_BYU_A6_1ST_R075_OP13,
+    D_BYU_A6_1ST_R075_OP14,
+    D_BYU_A6_1ST_R075_OP15,
+    D_BYU_A6_1ST_R075_OP16,
+    D_BYU_A6_1ST_R075_OP17,
+    D_BYU_A6_1ST_R075_OP18,
+    D_BYU_A6_1ST_R075_OP19,
+    D_BYU_A6_1ST_R075_OP2,
+    D_BYU_A6_1ST_R075_OP20,
+    D_BYU_A6_1ST_R075_OP21,
+    D_BYU_A6_1ST_R075_OP22,
+    D_BYU_A6_1ST_R075_OP23,
+    D_BYU_A6_1ST_R075_OP24,
+    D_BYU_A6_1ST_R075_OP25,
+    D_BYU_A6_1ST_R075_OP26,
+    D_BYU_A6_1ST_R075_OP27,
+    D_BYU_A6_1ST_R075_OP28,
+    D_BYU_A6_1ST_R075_OP29,
+    D_BYU_A6_1ST_R075_OP3,
+    D_BYU_A6_1ST_R075_OP30,
+    D_BYU_A6_1ST_R075_OP4,
+    D_BYU_A6_1ST_R075_OP5,
+    D_BYU_A6_1ST_R075_OP6,
+    D_BYU_A6_1ST_R075_OP7,
+    D_BYU_A6_1ST_R075_OP8,
+    D_BYU_A6_1ST_R075_OP9,
+    D_BYU_A6_1ST_R080_OP1,
+    D_BYU_A6_1ST_R080_OP10,
+    D_BYU_A6_1ST_R080_OP11,
+    D_BYU_A6_1ST_R080_OP12,
+    D_BYU_A6_1ST_R080_OP13,
+    D_BYU_A6_1ST_R080_OP14,
+    D_BYU_A6_1ST_R080_OP15,
+    D_BYU_A6_1ST_R080_OP3,
+    D_BYU_A6_1ST_R080_OP4,
+    D_BYU_A6_1ST_R080_OP5,
+    D_BYU_A6_1ST_R080_OP6,
+    D_BYU_A6_1ST_R080_OP7,
+    D_BYU_A6_1ST_R080_OP9,
+    D_BYU_A6_1ST_R085_OP1,
+    D_BYU_A6_1ST_R085_OP11,
+    D_BYU_A6_1ST_R085_OP12,
+    D_BYU_A6_1ST_R085_OP13,
+    D_BYU_A6_1ST_R085_OP14,
+    D_BYU_A6_1ST_R085_OP15,
+    D_BYU_A6_1ST_R085_OP16,
+    D_BYU_A6_1ST_R085_OP17,
+    D_BYU_A6_1ST_R085_OP18,
+    D_BYU_A6_1ST_R085_OP19,
+    D_BYU_A6_1ST_R085_OP2,
+    D_BYU_A6_1ST_R085_OP20,
+    D_BYU_A6_1ST_R085_OP21,
+    D_BYU_A6_1ST_R085_OP22,
+    D_BYU_A6_1ST_R085_OP23,
+    D_BYU_A6_1ST_R085_OP25,
+    D_BYU_A6_1ST_R085_OP26,
+    D_BYU_A6_1ST_R085_OP27,
+    D_BYU_A6_1ST_R085_OP28,
+    D_BYU_A6_1ST_R085_OP29,
+    D_BYU_A6_1ST_R085_OP3,
+    D_BYU_A6_1ST_R085_OP30,
+    D_BYU_A6_1ST_R085_OP4,
+    D_BYU_A6_1ST_R085_OP5,
+    D_BYU_A6_1ST_R085_OP6,
+    D_BYU_A6_1ST_R085_OP7,
+    D_BYU_A6_1ST_R085_OP8,
+    D_BYU_A6_1ST_R085_OP9,
+    D_C6_1,
+    D_C6_2,
+    D_C6_3,
+    D_C6_4,
+    D_C6_5,
+    D_C6_6,
+    D_C6_7,
+    D_C6_8,
+    D_C6_9,
+    D_C6_10,
+    D_C6_11,
+    D_C6_12,
+    D_C6_13,
+    D_C6_14,
+    D_C6_15,
+    D_C6_16,
+    D_UC6_1,
+    D_UC6_2,
+    D_UC6_3,
+    D_UC6_4,
+    D_UA4_4,
+    D_UA4_5,
+    D_UA4_6,
+    // Brady Livescue Derivatives
+    D_BL6,
+    // BORIS derivatives
+    D_BORISO4,
+    D_BORISO6,
+    D_BORISO6_ETA,
+    // BYU TRIDIAGONAL FREE PARAMTERS
+    D_BYUT4,
+    D_BYUT4R1,
+    D_BYUT4R2,
+    D_BYUT4R4,
+    D_BYUT6,
+    D_BYUT6R1,
+    D_BYUT6R2,
+    D_BYUT6R4,
+    D_BYUT6R3,
+    D_BYUT64R3,
+    D_BYUT8,
+    // BYU PENTADIAGONAL FREE PARAMETERS (Nate and James)
+    D_BYUP6,
+    D_BYUP6R3,
+    D_BYUP6R2,
+    D_BYUP8,
+    D_BYUP8B7,
+    // TwoA and TwoUA Second-Order Derivatives
+   D_2A_1,
+   D_2A_2,
+   D_2A_3,
+   D_2A_4,
+   D_2A_5,
+   D_2A_6,
+   D_2A_7,
+   D_2A_8,
+   D_2A_9,
+   D_2A_10,
+   D_2A_11,
+   D_2A_12,
+   D_2UA_1,
+   D_2UA_2,    
+   D_2B4_1,
+   D_2B6_1,
+   D_2B6_2,
+   D_2B6_3,
+   D_2B6_4,
+   D_2B6_5,
+   D_2B6_6,
+   D_2B6_7,
+   D_2B6_8,
+   D_2B6_9,
+      // C4 family (10 total)
+    D_2C4_1,
+    D_2C4_2,
+    D_2C4_3,
+    D_2C4_4,
+    D_2C4_5,
+    D_2C4_6,
+    D_2C4_7,
+    D_2C4_8,
+    D_2C4_9,
+    D_2C4_10,
+
+    // C6 family (1..7, extended from 6)
+    D_2C6_1,
+    D_2C6_2,
+    D_2C6_3,
+    D_2C6_4,
+    D_2C6_5,
+    D_2C6_6,
+    D_2C6_7,
+
+    // A6 family (1..7, extended from 6)
+    D_2A6_1,
+    D_2A6_2,
+    D_2A6_3,
+    D_2A6_4,
+    D_2A6_5,
+    D_2A6_6,
+    D_2A6_7,
+    D_BYU_A6_2ND_R060_OP1,
+    D_BYU_A6_2ND_R060_OP2,
+    D_BYU_A6_2ND_R060_OP3,
+    D_BYU_A6_2ND_R065_OP1,
+    D_BYU_A6_2ND_R065_OP2,
+    D_BYU_A6_2ND_R065_OP3,
+    D_BYU_A6_2ND_R070_OP1,
+    D_BYU_A6_2ND_R070_OP2,
+    D_BYU_A6_2ND_R070_OP3,
+    D_BYU_A6_2ND_R075_OP1,
+    D_BYU_A6_2ND_R075_OP2,
+    D_BYU_A6_2ND_R075_OP3,
+    D_BYU_A6_2ND_R080_OP1,
+    D_BYU_A6_2ND_R080_OP2,
+    D_BYU_A6_2ND_R080_OP3,
+    D_BYU_A6_2ND_R085_OP1,
+    D_BYU_A6_2ND_R085_OP2,
+    D_BYU_A6_2ND_R085_OP3,
+    D_BYU_C6_2ND_R060_OP1,
+    D_BYU_C6_2ND_R060_OP2,
+    D_BYU_C6_2ND_R060_OP3,
+    D_BYU_C6_2ND_R060_OP5,
+    D_BYU_C6_2ND_R060_OP6,
+    D_BYU_C6_2ND_R065_OP1,
+    D_BYU_C6_2ND_R065_OP2,
+    D_BYU_C6_2ND_R065_OP3,
+    D_BYU_C6_2ND_R065_OP4,
+    D_BYU_C6_2ND_R065_OP5,
+    D_BYU_C6_2ND_R065_OP6,
+    D_BYU_C6_2ND_R070_OP1,
+    D_BYU_C6_2ND_R070_OP2,
+    D_BYU_C6_2ND_R070_OP3,
+    D_BYU_C6_2ND_R070_OP4,
+    D_BYU_C6_2ND_R070_OP5,
+    D_BYU_C6_2ND_R070_OP6,
+    D_BYU_C6_2ND_R075_OP1,
+    D_BYU_C6_2ND_R075_OP2,
+    D_BYU_C6_2ND_R075_OP3,
+    D_BYU_C6_2ND_R075_OP4,
+    D_BYU_C6_2ND_R075_OP5,
+    D_BYU_C6_2ND_R080_OP1,
+    D_BYU_C6_2ND_R080_OP2,
+    D_BYU_C6_2ND_R080_OP3,
+    D_BYU_C6_2ND_R080_OP4,
+    D_BYU_C6_2ND_R080_OP5,
+    D_BYU_C6_2ND_R085_OP1,
+    D_BYU_C6_2ND_R085_OP2,
+    D_BYU_C6_2ND_R085_OP3,
+    D_BYU_C6_2ND_R085_OP4,
+    D_BYU_C6_2ND_R085_OP5,
+
+    // combined compact finite difference (CCFD): one coupled system yields
+    // both f' and f'', so a single DerivType serves both registries.
+    D_CCFD6,
+
+
+};
+
+enum DerivOrder { D_FIRST_ORDER = 0, D_SECOND_ORDER };
+
+enum DerivFamily {
+    DF_NONE = 0,
+    DF_EXPLICIT,
+    DF_JTT,    // Jonathan Tyler tridiagonal
+    DF_JTP,    // Jonathan Tyler pentadiagonal
+    DF_KIM,    // Kim
+    DF_BL,     // Brady Livescue
+    DF_BORIS,  // Boris
+    DF_BYUT,   // BYU tridiagonal
+
+    DF_BYUP    // BYU Pentadiagonal
+};
+
+/**
+ * @class Derivs
+ * @brief An Abstract base class for all dendro derivative calculations
+ *
+ * This class serves as a base for various derivative calculation methods.
+ * This includes first and second order derivatives, explicit methods, and
+ * compact methods. It primarily is to provide a common interface for the
+ * different types and orders of derivatives.
+ *
+ * ## Thread safety
+ *
+ * A single Derivs instance is **not** safe to use concurrently from multiple
+ * threads — internal state (workspace buffers, the per-size D storage map,
+ * and the last-used-size memoization inside MatrixCompactDerivs) is mutated
+ * during `do_grad_*`. The intended model for multi-threaded callers is:
+ *
+ *   1. Build one "prototype" Derivs instance on the main thread.
+ *   2. Call `clone()` once per thread to get private copies. Clone cost is
+ *      small (copies only the already-built matrices; workspaces re-allocate
+ *      lazily on first call).
+ *   3. Each thread exclusively owns its clone for the duration of the work.
+ *
+ * The process-wide libxsmm kernel caches in `derivs_utils.h` *are*
+ * thread-safe (shared_mutex-protected). For best performance, call
+ * `dendroderivs::prewarm_kernel_cache(...)` on the main thread after mesh
+ * setup so the hot path only ever takes the shared read lock.
+ *
+ * ## Workspace sizing (matrix-based subclasses)
+ *
+ * `MatrixCompactDerivs<DerivOrder>` (the parent of every JTT/JTP/Kim/BORIS/
+ * BYUT/BYUP/etc. instantiation) keeps a per-instance scratch buffer used by
+ * `matmul_y_dim` / `matmul_z_dim` for the y/z direction transposes. The
+ * buffer must hold `2 * Nx * Ny * Nz` doubles for the largest block this
+ * instance will ever be called on.
+ *
+ * The recommended pattern is to call `set_maximum_block_size(max_cells)`
+ * once per instance (and once per clone) after mesh setup, with `max_cells`
+ * the largest `getAllocationSzX()*Y*Z` over all blocks on this rank. That
+ * gives one clean allocation up front and zero growth during timestepping.
+ *
+ * As a safety net, every `do_grad_y/z` (and the `_batch` variants) checks
+ * the workspace size and `resize()`s if a larger block ever arrives. The
+ * fast path is a single size_t compare; the slow path is a `std::vector`
+ * grow that happens at most a handful of times per run. Forgetting to call
+ * `set_maximum_block_size` no longer corrupts memory, but it does cost a
+ * heap reallocation on the first oversized block — prefer the explicit
+ * call where possible.
+ *
+ * Explicit/stencil-only Derivs subclasses don't use a workspace and
+ * implement `set_maximum_block_size` as a no-op.
+ */
+class Derivs {
+   protected:
+    unsigned int p_n;          ///< Size of the derivative calculation
+    unsigned int p_pw;         ///< Size of the padding width
+    unsigned int p_ele_order;  ///< Element order for the computations
+
+    /**
+     * @brief Protected constructor to initialize a Derivs object.
+     * @param dtype The type of derivative.
+     * @param dorder The order of derivative.
+     * @param n The size or dimension of the derivative calculation.
+     *
+     * Do note that in the case of pure explicit schemes, n does not need
+     * to implement anything. Additionally, do_grad should check the size of
+     * stored n vs incoming n to avoid any errors.
+     */
+    Derivs(unsigned int ele_order) : p_ele_order{ele_order} {
+        p_n  = p_ele_order * 2 + 1;
+        p_pw = p_ele_order / 2;
+    }
+
+    /**
+     * @brief Copy constructor. Copies base-class members (ele_order, n, pw).
+     * Derived classes must handle their own deep copy via clone() or their
+     * own copy constructors.
+     */
+    Derivs(const Derivs &obj)
+        : p_ele_order(obj.p_ele_order), p_n(obj.p_n), p_pw(obj.p_pw) {};
+
+   public:
+    /**
+     * @brief Destructor
+     */
+    virtual ~Derivs() {};
+
+    virtual std::unique_ptr<Derivs> clone() const    = 0;
+
+    /**
+     * @brief Pure virtual function to calculate the derivative.
+     * @param du Pointer to where calculated derivative will be stored.
+     * @param u Pointer to the input array.
+     * @param dx The step size or grid spacing.
+     * @param sz The number of points expected to be calculated in each dim
+     * @param bflag The boundary flag
+     */
+    virtual void do_grad_x(double *const du, const double *const u,
+                           const double dx, const unsigned int *sz,
+                           const unsigned int bflag) = 0;
+    virtual void do_grad_y(double *const du, const double *const u,
+                           const double dx, const unsigned int *sz,
+                           const unsigned int bflag) = 0;
+    virtual void do_grad_z(double *const du, const double *const u,
+                           const double dx, const unsigned int *sz,
+                           const unsigned int bflag) = 0;
+
+    /**
+     * "_last" variants: the caller asserts that the output of this
+     * derivative will NOT be further differentiated (i.e. this is the
+     * last operation in its derivative chain — a solo grad_*, or the
+     * last step of a mixed 2nd-order chain like
+     * d^2u/dxdy = grad_y(grad_x(u)) where grad_y is last). When that
+     * holds, the implementation may skip writing the padding cells of
+     * the output, recovering a ~3.4x speedup on x and ~1.9x on y vs
+     * the default safe path. Implementations that don't take advantage
+     * of this hint fall back to the safe do_grad_* path.
+     *
+     * IMPORTANT: do NOT use the _last variants for intermediate
+     * derivatives in mixed-2nd-order chains. The next operator in the
+     * chain reads padding cells that the _last path leaves untouched.
+     *
+     * _last is a performance hint, never required for correctness: interior
+     * output is bit-identical to plain do_grad_* on every engine (explicit
+     * falls back to the plain stencil; matrix/compact/banded apply the same
+     * operator, with any in-matrix filter already merged in, and only toggle
+     * whether padding cells are written). So plain grad_y on the final
+     * application of a mixed chain is correct; _last there is just a speedup,
+     * even for the compact/implicit schemes. The hard rule is the negative one
+     * above: never _last an intermediate derivative.
+     *
+     * (grad_z does not have a _last variant: the project convention is
+     * "z is always last in mixed chains", so do_grad_z already
+     * unconditionally skips the y-padding output cells.)
+     */
+    virtual void do_grad_x_last(double *const du, const double *const u,
+                                const double dx, const unsigned int *sz,
+                                const unsigned int bflag) {
+        do_grad_x(du, u, dx, sz, bflag);
+    }
+    virtual void do_grad_y_last(double *const du, const double *const u,
+                                const double dx, const unsigned int *sz,
+                                const unsigned int bflag) {
+        do_grad_y(du, u, dx, sz, bflag);
+    }
+
+    /**
+     * @brief Get the type of derivative.
+     * @return The derivative type.
+     */
+    virtual DerivType getDerivType() const           = 0;
+
+    /**
+     * @brief Get the order of derivative.
+     * @return The derivative order.
+     */
+    virtual DerivOrder getDerivOrder() const         = 0;
+
+    /**
+     * @brief Get the size or dimension of the derivative calculation.
+     * @return The size the derivative is expecting.
+     */
+    inline unsigned int getN() const { return p_n; }
+
+    /**
+     * @brief Get the padding width (half-stencil reach in cells) for this
+     * derivative. Callers that need to inflate a bounding box by the
+     * deriv's reach (e.g. BSSN's per-block puncture-fallback policy) read
+     * this to know how far the stencil reads outside the query region.
+     */
+    inline unsigned int getPaddingWidth() const { return p_pw; }
+
+    /**
+     * @brief Get the element order used to size the derivative.
+     */
+    inline unsigned int getEleOrder() const { return p_ele_order; }
+
+    /**
+     * @brief Get a string representation.
+     * @return A string describing the Derivs object.
+     */
+    virtual std::string toString() const                   = 0;
+
+    /**
+     * @brief Pre-size the per-instance scratch workspace for the largest
+     * block this Derivs will see. See the "Workspace sizing" section of the
+     * `Derivs` class docstring for the full contract.
+     *
+     * **NOTE:** Call this once per instance (and once per `clone()`) right
+     * after construction, with the max `Nx*Ny*Nz` over all blocks on this
+     * rank. The matrix-based subclasses will lazily grow the workspace if
+     * you skip this — but you'll pay a heap reallocation on the first
+     * oversized block, and (for OMP parallel-for-over-blocks) those
+     * reallocations land in the hot loop. Always cleaner to size up front.
+     */
+    virtual void set_maximum_block_size(size_t block_size) = 0;
+
+    /**
+     * Batch derivative computation for multiple variables.
+     * Default implementation just loops; matrix-based classes override
+     * to share the pre-scaled D matrix across all variables.
+     */
+    virtual void do_grad_x_batch(double **du_arr, const double **u_arr,
+                                 unsigned int n_vars, const double dx,
+                                 const unsigned int *sz,
+                                 const unsigned int bflag) {
+        for (unsigned int v = 0; v < n_vars; v++)
+            do_grad_x(du_arr[v], u_arr[v], dx, sz, bflag);
+    }
+    virtual void do_grad_y_batch(double **du_arr, const double **u_arr,
+                                 unsigned int n_vars, const double dx,
+                                 const unsigned int *sz,
+                                 const unsigned int bflag) {
+        for (unsigned int v = 0; v < n_vars; v++)
+            do_grad_y(du_arr[v], u_arr[v], dx, sz, bflag);
+    }
+    virtual void do_grad_z_batch(double **du_arr, const double **u_arr,
+                                 unsigned int n_vars, const double dx,
+                                 const unsigned int *sz,
+                                 const unsigned int bflag) {
+        for (unsigned int v = 0; v < n_vars; v++)
+            do_grad_z(du_arr[v], u_arr[v], dx, sz, bflag);
+    }
+
+    /**
+     * Single-pass fused mixed 2nd derivative (d^2/dab) for engines that
+     * provide one. The two spacings are the per-axis grid steps (e.g.
+     * (dx, dy) for xy); the operators are scaled independently, so this is
+     * correct for anisotropic blocks. Returns false if this engine has no
+     * fused path; the facade then composes two 1st-order passes instead.
+     * Only matrix engines override these; the default is "unsupported".
+     */
+    virtual bool try_fused_grad_xy_last(double *const, const double *const,
+                                        const double, const double,
+                                        const unsigned int *,
+                                        const unsigned int) {
+        return false;
+    }
+    virtual bool try_fused_grad_xz_last(double *const, const double *const,
+                                        const double, const double,
+                                        const unsigned int *,
+                                        const unsigned int) {
+        return false;
+    }
+    virtual bool try_fused_grad_yz_last(double *const, const double *const,
+                                        const double, const double,
+                                        const unsigned int *,
+                                        const unsigned int) {
+        return false;
+    }
+
+    /// Pre-create matrices for a specific grid dimension. Override in
+    /// matrix-based classes; default is a no-op for stencil types.
+    virtual void pre_create_for_size(unsigned int) {};
+
+    // raw function pointer type for bypassing virtual dispatch on stencils.
+    // explicit stencil classes override these to expose their cached function
+    // pointers, letting DendroDerivatives call them directly.
+    using RawStencilFn = void (*)(double *const, const double *const,
+                                  const double, const unsigned int *,
+                                  const unsigned int);
+
+    virtual RawStencilFn get_raw_grad_x() const { return nullptr; }
+    virtual RawStencilFn get_raw_grad_y() const { return nullptr; }
+    virtual RawStencilFn get_raw_grad_z() const { return nullptr; }
+};
+
+class DendroDerivatives {
+   private:
+    std::unique_ptr<Derivs> _first_deriv;
+    std::unique_ptr<Derivs> _second_deriv;
+    // NOTE: unique ptr will automatically delete the object once out of scope
+    // or if this object is deleted
+
+    std::unique_ptr<Filters> _filter;
+
+    std::unique_ptr<double[]> _derivative_space;
+
+    unsigned int _n_points_deriv_space;
+    unsigned int _n_vars_deriv_space;
+
+    // cached raw function pointers for bypassing virtual dispatch.
+    // extracted from the Derivs objects at construction time — nullptr
+    // means the implementation doesn't expose raw stencils (e.g. matrix
+    // methods) and we fall back to virtual dispatch.
+    Derivs::RawStencilFn _raw_1st_grad_x = nullptr;
+    Derivs::RawStencilFn _raw_1st_grad_y = nullptr;
+    Derivs::RawStencilFn _raw_1st_grad_z = nullptr;
+    Derivs::RawStencilFn _raw_2nd_grad_x = nullptr;
+    Derivs::RawStencilFn _raw_2nd_grad_y = nullptr;
+    Derivs::RawStencilFn _raw_2nd_grad_z = nullptr;
+
+    // Explicit-derivative fallback ops for puncture blocks, order-matched to
+    // the configured scheme at construction. Lightweight; raw stencils only.
+    std::unique_ptr<Derivs> _first_deriv_explicit;
+    std::unique_ptr<Derivs> _second_deriv_explicit;
+    Derivs::RawStencilFn _raw_exp_1st_grad_x = nullptr;
+    Derivs::RawStencilFn _raw_exp_1st_grad_y = nullptr;
+    Derivs::RawStencilFn _raw_exp_1st_grad_z = nullptr;
+    Derivs::RawStencilFn _raw_exp_2nd_grad_x = nullptr;
+    Derivs::RawStencilFn _raw_exp_2nd_grad_y = nullptr;
+    Derivs::RawStencilFn _raw_exp_2nd_grad_z = nullptr;
+
+    // pull raw pointers from a Derivs object into the cache slots
+    void _cache_raw_stencils() {
+        if (_first_deriv) {
+            _raw_1st_grad_x = _first_deriv->get_raw_grad_x();
+            _raw_1st_grad_y = _first_deriv->get_raw_grad_y();
+            _raw_1st_grad_z = _first_deriv->get_raw_grad_z();
+        }
+        if (_second_deriv) {
+            _raw_2nd_grad_x = _second_deriv->get_raw_grad_x();
+            _raw_2nd_grad_y = _second_deriv->get_raw_grad_y();
+            _raw_2nd_grad_z = _second_deriv->get_raw_grad_z();
+        }
+        if (_first_deriv_explicit) {
+            _raw_exp_1st_grad_x = _first_deriv_explicit->get_raw_grad_x();
+            _raw_exp_1st_grad_y = _first_deriv_explicit->get_raw_grad_y();
+            _raw_exp_1st_grad_z = _first_deriv_explicit->get_raw_grad_z();
+        }
+        if (_second_deriv_explicit) {
+            _raw_exp_2nd_grad_x = _second_deriv_explicit->get_raw_grad_x();
+            _raw_exp_2nd_grad_y = _second_deriv_explicit->get_raw_grad_y();
+            _raw_exp_2nd_grad_z = _second_deriv_explicit->get_raw_grad_z();
+        }
+    }
+
+   public:
+    DendroDerivatives(
+        const std::string derivType_1 = "E4",
+        const std::string derivType_2 = "E4", const unsigned int ele_order = 13,
+        const std::vector<double> &coeffs_in_1 = std::vector<double>(),
+        const std::vector<double> &coeffs_in_2 = std::vector<double>(),
+        const unsigned int deriv1_matrixID     = 0,
+        const unsigned int deriv2_matrixID     = 0,
+        const std::string inMatrixFilterType_1 = "none",
+        const std::string inMatrixFilterType_2 = "none",
+        const std::vector<double> &in_matrix_coeffs_in_1 =
+            std::vector<double>(),
+        const std::vector<double> &in_matrix_coeffs_in_2 =
+            std::vector<double>(),
+        const std::string postRHSFilterType = "default",
+        // puncture explicit-fallback schemes; "auto" = match configured order
+        const std::string fallback_1st      = "auto",
+        const std::string fallback_2nd      = "auto");
+
+    ~DendroDerivatives() = default;
+
+    // Copy constructor
+    DendroDerivatives(const DendroDerivatives &other)
+        : _first_deriv(other._first_deriv ? other._first_deriv->clone()
+                                          : nullptr),
+          _second_deriv(other._second_deriv ? other._second_deriv->clone()
+                                            : nullptr),
+          _filter(other._filter ? other._filter->clone() : nullptr),
+          _n_points_deriv_space(other._n_points_deriv_space),
+          _n_vars_deriv_space(other._n_vars_deriv_space),
+          _first_deriv_explicit(other._first_deriv_explicit
+                                    ? other._first_deriv_explicit->clone()
+                                    : nullptr),
+          _second_deriv_explicit(other._second_deriv_explicit
+                                     ? other._second_deriv_explicit->clone()
+                                     : nullptr) {
+        // if the incoming copy has data in derivative space, we need to copy it
+        if (other._derivative_space) {
+            _derivative_space = std::make_unique<double[]>(
+                _n_points_deriv_space * _n_vars_deriv_space);
+
+            std::copy(other._derivative_space.get(),
+                      other._derivative_space.get() +
+                          _n_points_deriv_space * _n_vars_deriv_space,
+                      _derivative_space.get());
+        }
+
+        _cache_raw_stencils();
+    }
+
+    // Copy assignment operator
+    DendroDerivatives &operator=(const DendroDerivatives &other) {
+        if (this != &other) {
+            _first_deriv =
+                other._first_deriv ? other._first_deriv->clone() : nullptr;
+            _second_deriv =
+                other._second_deriv ? other._second_deriv->clone() : nullptr;
+            _filter = other._filter ? other._filter->clone() : nullptr;
+            _first_deriv_explicit = other._first_deriv_explicit
+                                        ? other._first_deriv_explicit->clone()
+                                        : nullptr;
+            _second_deriv_explicit = other._second_deriv_explicit
+                                         ? other._second_deriv_explicit->clone()
+                                         : nullptr;
+
+            _n_points_deriv_space = other._n_points_deriv_space;
+            _n_vars_deriv_space   = other._n_vars_deriv_space;
+
+            if (other._derivative_space) {
+                _derivative_space = std::make_unique<double[]>(
+                    _n_points_deriv_space * _n_vars_deriv_space);
+
+                std::copy(
+                    other._derivative_space.get(),
+                    other._derivative_space.get() +
+                        other._n_points_deriv_space * other._n_vars_deriv_space,
+                    _derivative_space.get());
+            } else {
+                _derivative_space.reset();
+            }
+        }
+        _cache_raw_stencils();
+        return *this;
+    }
+
+    void allocate_derivative_space(const unsigned int n_points,
+                                   const unsigned int n_var) {
+        if (_derivative_space) {
+            // delete the data if we're already at size
+            _derivative_space.reset(new double[n_points * n_var]);
+        } else {
+            _derivative_space = std::make_unique<double[]>(n_points * n_var);
+        }
+
+        _n_points_deriv_space = n_points;
+        _n_vars_deriv_space   = n_var;
+    }
+
+    double *get_derivative_space(const unsigned int var_no) const {
+        return _derivative_space.get() + var_no * _n_points_deriv_space;
+    }
+
+    void grad_x(double *du, const double *u, double dx, const unsigned int *sz,
+                unsigned int bflag) {
+        if (_raw_1st_grad_x) _raw_1st_grad_x(du, u, dx, sz, bflag);
+        else _first_deriv->do_grad_x(du, u, dx, sz, bflag);
+    }
+    void grad_y(double *du, const double *u, double dx, const unsigned int *sz,
+                unsigned int bflag) {
+        if (_raw_1st_grad_y) _raw_1st_grad_y(du, u, dx, sz, bflag);
+        else _first_deriv->do_grad_y(du, u, dx, sz, bflag);
+    }
+    void grad_z(double *du, const double *u, double dx, const unsigned int *sz,
+                unsigned int bflag) {
+        if (_raw_1st_grad_z) _raw_1st_grad_z(du, u, dx, sz, bflag);
+        else _first_deriv->do_grad_z(du, u, dx, sz, bflag);
+    }
+    void grad_xx(double *du, const double *u, double dx, const unsigned int *sz,
+                 unsigned int bflag) {
+        if (_raw_2nd_grad_x) _raw_2nd_grad_x(du, u, dx, sz, bflag);
+        else _second_deriv->do_grad_x(du, u, dx, sz, bflag);
+    }
+    void grad_yy(double *du, const double *u, double dx, const unsigned int *sz,
+                 unsigned int bflag) {
+        if (_raw_2nd_grad_y) _raw_2nd_grad_y(du, u, dx, sz, bflag);
+        else _second_deriv->do_grad_y(du, u, dx, sz, bflag);
+    }
+    void grad_zz(double *du, const double *u, double dx, const unsigned int *sz,
+                 unsigned int bflag) {
+        if (_raw_2nd_grad_z) _raw_2nd_grad_z(du, u, dx, sz, bflag);
+        else _second_deriv->do_grad_z(du, u, dx, sz, bflag);
+    }
+
+    // Explicit-fallback API for puncture blocks (selected per block, not per
+    // call, so the common grad_* path stays branch-free).
+    void grad_x_explicit(double *du, const double *u, double dx,
+                         const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_1st_grad_x)
+            _raw_exp_1st_grad_x(du, u, dx, sz, bflag);
+        else
+            _first_deriv_explicit->do_grad_x(du, u, dx, sz, bflag);
+    }
+    void grad_y_explicit(double *du, const double *u, double dx,
+                         const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_1st_grad_y)
+            _raw_exp_1st_grad_y(du, u, dx, sz, bflag);
+        else
+            _first_deriv_explicit->do_grad_y(du, u, dx, sz, bflag);
+    }
+    void grad_z_explicit(double *du, const double *u, double dx,
+                         const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_1st_grad_z)
+            _raw_exp_1st_grad_z(du, u, dx, sz, bflag);
+        else
+            _first_deriv_explicit->do_grad_z(du, u, dx, sz, bflag);
+    }
+    void grad_xx_explicit(double *du, const double *u, double dx,
+                          const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_2nd_grad_x)
+            _raw_exp_2nd_grad_x(du, u, dx, sz, bflag);
+        else
+            _second_deriv_explicit->do_grad_x(du, u, dx, sz, bflag);
+    }
+    void grad_yy_explicit(double *du, const double *u, double dx,
+                          const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_2nd_grad_y)
+            _raw_exp_2nd_grad_y(du, u, dx, sz, bflag);
+        else
+            _second_deriv_explicit->do_grad_y(du, u, dx, sz, bflag);
+    }
+    void grad_zz_explicit(double *du, const double *u, double dx,
+                          const unsigned int *sz, unsigned int bflag) {
+        if (_raw_exp_2nd_grad_z)
+            _raw_exp_2nd_grad_z(du, u, dx, sz, bflag);
+        else
+            _second_deriv_explicit->do_grad_z(du, u, dx, sz, bflag);
+    }
+
+    // Output contract (all engines): a derivative is defined on the active
+    // region [pw, n-pw)^3, plus the full y/z extent for plain grad_x / grad_y
+    // so they can feed a mixed chain. Nothing may read a derivative output
+    // outside that; the matrix engines compute exactly that (derivs_utils.h).
+    //
+    // "_last" variants: caller asserts the output will NOT be further
+    // differentiated. Use only for solo 1st-derivatives or for the last
+    // step of a mixed 2nd-order chain (e.g. grad_y_last when computing
+    // d^2u/dxdy = grad_y(grad_x(u))). Skips the y/z padding of the output
+    // too. See Derivs::do_grad_x_last for the full contract.
+    //
+    // _last is an optimization, NOT a correctness requirement: interior
+    // output matches plain grad_* bit-for-bit on every engine (explicit,
+    // matrix, compact, banded). So plain grad_y on the final application
+    // of a mixed chain is correct; grad_y_last there just adds the
+    // padding-skip speedup. The only hard rule is the inverse — never use
+    // _last for the INTERMEDIATE derivative of a mixed chain, whose output
+    // is re-read (padding included) by the next operator.
+    //
+    // Code generators: emit one grad_set() per variable instead of these.
+    //
+    // grad_z has no _last variant because do_grad_z already
+    // unconditionally skips by project convention.
+    void grad_x_last(double *du, const double *u, double dx,
+                     const unsigned int *sz, unsigned int bflag) {
+        _first_deriv->do_grad_x_last(du, u, dx, sz, bflag);
+    }
+    void grad_y_last(double *du, const double *u, double dx,
+                     const unsigned int *sz, unsigned int bflag) {
+        _first_deriv->do_grad_y_last(du, u, dx, sz, bflag);
+    }
+    void grad_xx_last(double *du, const double *u, double dx,
+                      const unsigned int *sz, unsigned int bflag) {
+        _second_deriv->do_grad_x_last(du, u, dx, sz, bflag);
+    }
+    void grad_yy_last(double *du, const double *u, double dx,
+                      const unsigned int *sz, unsigned int bflag) {
+        _second_deriv->do_grad_y_last(du, u, dx, sz, bflag);
+    }
+
+    // deriv renaming of grad naming
+    void deriv_x(double *du, const double *u, double dx, const unsigned int *sz,
+                 unsigned int bflag) {
+        grad_x(du, u, dx, sz, bflag);
+    }
+    void deriv_y(double *du, const double *u, double dx, const unsigned int *sz,
+                 unsigned int bflag) {
+        grad_y(du, u, dx, sz, bflag);
+    }
+    void deriv_z(double *du, const double *u, double dx, const unsigned int *sz,
+                 unsigned int bflag) {
+        grad_z(du, u, dx, sz, bflag);
+    }
+    void deriv_xx(double *du, const double *u, double dx,
+                  const unsigned int *sz, unsigned int bflag) {
+        grad_xx(du, u, dx, sz, bflag);
+    }
+    void deriv_yy(double *du, const double *u, double dx,
+                  const unsigned int *sz, unsigned int bflag) {
+        grad_yy(du, u, dx, sz, bflag);
+    }
+    void deriv_zz(double *du, const double *u, double dx,
+                  const unsigned int *sz, unsigned int bflag) {
+        grad_zz(du, u, dx, sz, bflag);
+    }
+
+    void filter(const double *const input, double *const output,
+                double *const workspace_x, double *const workspace_y,
+                double *const workspace_z, const double dx, const double dy,
+                const double dz, const double coeff, const unsigned int *sz,
+                const unsigned int bflag) {
+        _filter->do_full_filter(input, output, workspace_x, workspace_y,
+                                workspace_z, dx, dy, dz, coeff, sz, bflag);
+    }
+
+    /**
+     * @brief CAKO variant of filter(): the dissipation strength is a per-point
+     * field (coeff_field, block-sized) rather than a scalar, so callers can
+     * apply spatially-varying dissipation (e.g. BSSN conformal-adaptive KO,
+     * sqrt(chi)*epsilon).
+     */
+    void filter_cako(const double *const input, double *const output,
+                     double *const workspace_x, double *const workspace_y,
+                     double *const workspace_z, const double dx, const double dy,
+                     const double dz, const double *const coeff_field,
+                     const unsigned int *sz, const unsigned int bflag) {
+        _filter->do_full_filter_field(input, output, workspace_x, workspace_y,
+                                      workspace_z, dx, dy, dz, coeff_field, sz,
+                                      bflag);
+    }
+
+    /// rhs += coeff * KO(u) on the active region in one pass (matrix-form KO
+    /// only); false means nothing was done and filter_cako is the path.
+    bool ko_accumulate(double *rhs, const double *u, double coeff, double dx,
+                       double dy, double dz, const unsigned int *sz,
+                       unsigned int bflag) {
+        return _filter->do_accumulate(rhs, u, coeff, dx, dy, dz, sz, bflag);
+    }
+
+    bool inline do_filter_before() { return _filter->do_filter_before(); }
+
+    void set_maximum_block_size(size_t block_size) {
+        _first_deriv->set_maximum_block_size(block_size);
+        _second_deriv->set_maximum_block_size(block_size);
+        if (_filter) _filter->set_maximum_block_size(block_size);
+    }
+
+    /// Pre-create derivative matrices for a specific grid dimension size.
+    /// Call at mesh setup to ensure no lazy allocation during timestepping.
+    void pre_create_for_size(unsigned int n) {
+        _first_deriv->pre_create_for_size(n);
+        _second_deriv->pre_create_for_size(n);
+    }
+
+    /**
+     * Compute first derivatives for multiple variables at once.
+     * Keeps the D matrix hot in L1 cache across all variables,
+     * significantly reducing cache pressure vs calling grad_x/y/z
+     * individually for each variable.
+     *
+     * @param du_arr Array of n_vars output pointers
+     * @param u_arr  Array of n_vars input pointers
+     * @param n_vars Number of variables to process
+     */
+    /**
+     * Batch derivative computation for multiple variables at once.
+     * For matrix-based methods, this shares the pre-scaled D matrix
+     * and kernel dispatch across all variables.
+     */
+    void grad_x_batch(double **du_arr, const double **u_arr,
+                      unsigned int n_vars, double dx,
+                      const unsigned int *sz, unsigned int bflag) {
+        // explicit schemes: loop the raw fn so batch keeps per-call's
+        // devirtualization. matrix/banded have no raw fn -> shared-operator path.
+        if (_raw_1st_grad_x) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_1st_grad_x(du_arr[v], u_arr[v], dx, sz, bflag);
+        } else {
+            _first_deriv->do_grad_x_batch(du_arr, u_arr, n_vars, dx, sz, bflag);
+        }
+    }
+    void grad_y_batch(double **du_arr, const double **u_arr,
+                      unsigned int n_vars, double dy,
+                      const unsigned int *sz, unsigned int bflag) {
+        if (_raw_1st_grad_y) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_1st_grad_y(du_arr[v], u_arr[v], dy, sz, bflag);
+        } else {
+            _first_deriv->do_grad_y_batch(du_arr, u_arr, n_vars, dy, sz, bflag);
+        }
+    }
+    void grad_z_batch(double **du_arr, const double **u_arr,
+                      unsigned int n_vars, double dz,
+                      const unsigned int *sz, unsigned int bflag) {
+        if (_raw_1st_grad_z) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_1st_grad_z(du_arr[v], u_arr[v], dz, sz, bflag);
+        } else {
+            _first_deriv->do_grad_z_batch(du_arr, u_arr, n_vars, dz, sz, bflag);
+        }
+    }
+
+    /**
+     * @brief Batch second derivatives (grad_xx/yy/zz) for n_vars variables.
+     *
+     * Routes through the second-derivative operator's do_grad_*_batch (second
+     * derivatives are first-order applications of the 2nd-order operator), so
+     * it reuses the same shared-operator batch the first-order path uses; no
+     * separate do_grad_xx_batch family is needed. Explicit stencils keep their
+     * raw-fn devirtualization.
+     */
+    void grad_xx_batch(double **du_arr, const double **u_arr,
+                       unsigned int n_vars, double dx,
+                       const unsigned int *sz, unsigned int bflag) {
+        if (_raw_2nd_grad_x) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_2nd_grad_x(du_arr[v], u_arr[v], dx, sz, bflag);
+        } else {
+            _second_deriv->do_grad_x_batch(du_arr, u_arr, n_vars, dx, sz, bflag);
+        }
+    }
+    void grad_yy_batch(double **du_arr, const double **u_arr,
+                       unsigned int n_vars, double dy,
+                       const unsigned int *sz, unsigned int bflag) {
+        if (_raw_2nd_grad_y) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_2nd_grad_y(du_arr[v], u_arr[v], dy, sz, bflag);
+        } else {
+            _second_deriv->do_grad_y_batch(du_arr, u_arr, n_vars, dy, sz, bflag);
+        }
+    }
+    void grad_zz_batch(double **du_arr, const double **u_arr,
+                       unsigned int n_vars, double dz,
+                       const unsigned int *sz, unsigned int bflag) {
+        if (_raw_2nd_grad_z) {
+            for (unsigned int v = 0; v < n_vars; v++)
+                _raw_2nd_grad_z(du_arr[v], u_arr[v], dz, sz, bflag);
+        } else {
+            _second_deriv->do_grad_z_batch(du_arr, u_arr, n_vars, dz, sz, bflag);
+        }
+    }
+
+    /**
+     * @brief Mixed 2nd derivatives d^2u/dadb in one call (a,b in {x,y,z}).
+     *
+     * Computed from the FIRST-derivative operator applied twice — this is a
+     * standalone entry for solvers that need the mixed second but not the
+     * standalone 1st derivatives. When the engine has a fused single-pass
+     * kernel it uses that (anisotropic-correct); otherwise it composes two
+     * 1st-order passes through the caller-provided workspace (block-sized
+     * scratch, same convention as filter()). The intermediate uses the
+     * non-_last pass (its padding is read by the second operator); the output
+     * is terminal, so its padding cells are not written.
+     *
+     * @param workspace block-sized scratch (>= product of sz); not aliased
+     *                  with du or u.
+     */
+    void grad_xy(double *du, const double *u, double *workspace, double dx,
+                 double dy, const unsigned int *sz, unsigned int bflag) {
+        if (_first_deriv->try_fused_grad_xy_last(du, u, dx, dy, sz, bflag))
+            return;
+        require_workspace(workspace, "grad_xy");
+        grad_x(workspace, u, dx, sz, bflag);
+        grad_y_last(du, workspace, dy, sz, bflag);
+    }
+    void grad_xz(double *du, const double *u, double *workspace, double dx,
+                 double dz, const unsigned int *sz, unsigned int bflag) {
+        if (_first_deriv->try_fused_grad_xz_last(du, u, dx, dz, sz, bflag))
+            return;
+        require_workspace(workspace, "grad_xz");
+        grad_x(workspace, u, dx, sz, bflag);
+        grad_z(du, workspace, dz, sz, bflag);  // grad_z is always last
+    }
+    void grad_yz(double *du, const double *u, double *workspace, double dy,
+                 double dz, const unsigned int *sz, unsigned int bflag) {
+        if (_first_deriv->try_fused_grad_yz_last(du, u, dy, dz, sz, bflag))
+            return;
+        require_workspace(workspace, "grad_yz");
+        grad_y(workspace, u, dy, sz, bflag);
+        grad_z(du, workspace, dz, sz, bflag);  // grad_z is always last
+    }
+
+    // Planned per-variable derivative set: the caller gives the mask of
+    // derivatives the RHS uses and where each goes; the engine picks
+    // intermediate vs terminal shapes and chains or fuses the mixed ones.
+    // Bit-identical to the individual grad_* calls (testDerivSet).
+    // workspace: block-sized scratch, needed only for a mixed derivative
+    // without its first derivative on an engine without fused kernels.
+    enum DerivMask : unsigned int {
+        DM_X      = 1u << 0,
+        DM_Y      = 1u << 1,
+        DM_Z      = 1u << 2,
+        DM_XX     = 1u << 3,
+        DM_YY     = 1u << 4,
+        DM_ZZ     = 1u << 5,
+        DM_XY     = 1u << 6,
+        DM_XZ     = 1u << 7,
+        DM_YZ     = 1u << 8,
+        DM_FIRST  = DM_X | DM_Y | DM_Z,
+        DM_SECOND = DM_XX | DM_YY | DM_ZZ,
+        DM_MIXED  = DM_XY | DM_XZ | DM_YZ,
+        DM_ALL    = DM_FIRST | DM_SECOND | DM_MIXED
+    };
+
+    struct DerivSet {
+        double *x  = nullptr;
+        double *y  = nullptr;
+        double *z  = nullptr;
+        double *xx = nullptr;
+        double *yy = nullptr;
+        double *zz = nullptr;
+        double *xy = nullptr;
+        double *xz = nullptr;
+        double *yz = nullptr;
+    };
+
+    void grad_set(const DerivSet &out, const double *u, unsigned int mask,
+                  double dx, double dy, double dz, const unsigned int *sz,
+                  unsigned int bflag, double *workspace = nullptr) {
+        auto need = [&](unsigned int bit, double *p, const char *name) {
+            if ((mask & bit) && !p)
+                throw std::invalid_argument(
+                    std::string("grad_set: mask requests ") + name +
+                    " but its output pointer is null");
+            return (mask & bit) != 0u;
+        };
+        const bool wx  = need(DM_X, out.x, "x");
+        const bool wy  = need(DM_Y, out.y, "y");
+        const bool wz  = need(DM_Z, out.z, "z");
+        const bool wxx = need(DM_XX, out.xx, "xx");
+        const bool wyy = need(DM_YY, out.yy, "yy");
+        const bool wzz = need(DM_ZZ, out.zz, "zz");
+        const bool wxy = need(DM_XY, out.xy, "xy");
+        const bool wxz = need(DM_XZ, out.xz, "xz");
+        const bool wyz = need(DM_YZ, out.yz, "yz");
+
+        // a first derivative that feeds a mixed one is an intermediate: full
+        // along the axes still to be differentiated. otherwise terminal.
+        const bool x_feeds = wx && (wxy || wxz);
+        const bool y_feeds = wy && wyz;
+
+        if (wx) {
+            if (x_feeds) grad_x(out.x, u, dx, sz, bflag);
+            else grad_x_last(out.x, u, dx, sz, bflag);
+        }
+        if (wy) {
+            if (y_feeds) grad_y(out.y, u, dy, sz, bflag);
+            else grad_y_last(out.y, u, dy, sz, bflag);
+        }
+        if (wz) grad_z(out.z, u, dz, sz, bflag);
+
+        if (wxx) grad_xx_last(out.xx, u, dx, sz, bflag);
+        if (wyy) grad_yy_last(out.yy, u, dy, sz, bflag);
+        if (wzz) grad_zz(out.zz, u, dz, sz, bflag);
+
+        // mixed: chain on the intermediate when we have it, fused otherwise
+        if (wxy) {
+            if (x_feeds) grad_y_last(out.xy, out.x, dy, sz, bflag);
+            else grad_xy(out.xy, u, workspace, dx, dy, sz, bflag);
+        }
+        if (wxz) {
+            if (x_feeds) grad_z(out.xz, out.x, dz, sz, bflag);
+            else grad_xz(out.xz, u, workspace, dx, dz, sz, bflag);
+        }
+        if (wyz) {
+            if (y_feeds) grad_z(out.yz, out.y, dz, sz, bflag);
+            else grad_yz(out.yz, u, workspace, dy, dz, sz, bflag);
+        }
+    }
+
+    void grad_set_batch(const DerivSet *outs, const double *const *us,
+                        unsigned int n_vars, unsigned int mask, double dx,
+                        double dy, double dz, const unsigned int *sz,
+                        unsigned int bflag, double *workspace = nullptr) {
+        for (unsigned int v = 0; v < n_vars; v++)
+            grad_set(outs[v], us[v], mask, dx, dy, dz, sz, bflag, workspace);
+    }
+
+   private:
+    static void require_workspace(const double *workspace, const char *who) {
+        if (!workspace)
+            throw std::invalid_argument(
+                std::string(who) +
+                ": this engine has no fused mixed kernel, a block-sized "
+                "workspace is required");
+    }
+
+   public:
+
+    std::string toString() {
+        return "DendroDerivs<" + _first_deriv->toString() + ", " +
+               _second_deriv->toString() + ", " + _filter->toString() + ">";
+    }
+
+    FilterFamily get_filter_family() { return _filter->get_filter_family(); }
+};
+
+void inline initialize_derivatives() { libxsmm_init(); }
+
+void inline finalize_derivatives() { libxsmm_finalize(); }
+
+class DendroDerivsNotImplemented : public std::exception {
+   private:
+    std::string message_;
+
+   public:
+    explicit DendroDerivsNotImplemented(const std::string &msg)
+        : message_(msg) {}
+    const char *what() { return message_.c_str(); }
+};
+
+}  // namespace dendroderivs

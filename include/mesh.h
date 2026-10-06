@@ -53,6 +53,7 @@
 #include "dendroProfileParams.h"  // only need to profile unzip_asyn for bssn. remove this header file later.
 #include "key.h"
 #include "logger.h"
+#include "mesh_unzip_scatter_kernels.h"
 #include "mpi.h"
 #include "node.h"
 #include "octUtils.h"
@@ -83,6 +84,37 @@ extern double t_sm_g[3];
 extern double t_blk_g[3];
 
 #define NUM_PTS_ELE 343
+
+// e2n sub-stage split -- see the definitions in mesh.cpp for why the aggregate
+// e2n number is not decision-grade on its own.
+extern double t_e2n_fix;
+extern double t_e2nC_loopA;
+extern double t_e2nC_sort;
+extern double t_e2nC_sortonly;
+extern double t_e2nC_tail;
+extern double t_e2n3_sortDG;
+extern double t_e2n3_sortCG;
+extern double t_e2nC_bc;
+extern double t_e2nC_sm;
+extern double t_e2n_map;
+extern double t_e2n_sm;
+extern double t_e2n_dginit;
+extern double t_e2n_hang;
+extern double t_e2n_sort;
+extern double t_e2n_fix_g[3];
+extern double t_e2nC_loopA_g[3];
+extern double t_e2nC_sort_g[3];
+extern double t_e2nC_sortonly_g[3];
+extern double t_e2nC_tail_g[3];
+extern double t_e2n3_sortDG_g[3];
+extern double t_e2n3_sortCG_g[3];
+extern double t_e2nC_bc_g[3];
+extern double t_e2nC_sm_g[3];
+extern double t_e2n_map_g[3];
+extern double t_e2n_sm_g[3];
+extern double t_e2n_dginit_g[3];
+extern double t_e2n_hang_g[3];
+extern double t_e2n_sort_g[3];
 
 #include "dendroProfileParams.h"
 #include "waveletRefEl.h"
@@ -422,6 +454,16 @@ inline void repartRound(long n = 1) {
     if (repartRoundCounter() >= 0) repartRoundCounter() += n;
 }
 
+/**@brief Threads OBSERVED INSIDE a threaded Mesh-ctor stage; 0 = none ran.
+ * Reset to 0 at ctor entry and written from inside the parallel region itself
+ * (omp_get_num_threads()), so it reports what actually executed rather than what
+ * the runtime could have supplied -- omp_get_max_threads() would read 4 at
+ * OMP_NUM_THREADS=4 even with zero pragmas, certifying nothing.
+ * Exists because the mesh digests cannot distinguish "threaded and correct" from
+ * "threading never happened": the latter matches at every T and reports PASS.
+ * Diagnostic only; never read by mesh logic.*/
+extern unsigned int mesh_ctor_omp_threads;
+
 /**@brief type of the scatter map, based on numerical computation method*/
 enum SM_TYPE {
     FDM = 0,  // Finite Difference Method
@@ -562,6 +604,11 @@ class Mesh {
     /** Element ot Node mapping data for continous Galerkin methods. Array size:
      * [m_uiAllNodes.size()*m_uiNpE];*/
     std::vector<unsigned int> m_uiE2NMapping_CG;
+
+    /** zip() plan: (unzip, CG) index of every locally owned node. */
+    std::vector<DendroIntL> m_uiZipPlanUzIdx;
+    std::vector<unsigned int> m_uiZipPlanCgIdx;
+    bool m_uiZipIndexPlanBuilt = false;
     /** Element to Node mapping with DG indexing after removing duplicates. This
      * is used for debugging. */
     std::vector<unsigned int> m_uiE2NMapping_DG;
@@ -1299,6 +1346,13 @@ class Mesh {
 
     PartitioningOptions m_partitionOption = PartitioningOptions::fastpart;
 
+    /**@brief inverse of m_e2b_unzip_map (block -> element CSR), cached in
+     * buildE2BlockMap so unzip_scatter doesn't rebuild it per call. Element order
+     * per block is ascending (order-sensitive at wavelet boundaries). */
+    std::vector<unsigned int> m_b2e_unzip_count;
+    std::vector<unsigned int> m_b2e_unzip_offset;
+    std::vector<unsigned int> m_b2e_unzip_map;
+
    private:
     /**@brief build E2N map for FEM computation*/
     void buildFEM_E2N();
@@ -1365,6 +1419,9 @@ class Mesh {
      * */
 
     void buildE2NMap();
+
+    /**@brief builds the flat zip() index plan (m_uiZipPlanUzIdx / m_uiZipPlanCgIdx) */
+    void buildZipIndexPlan();
 
     /**
      * @brief: Expands the order-2 E2N to the specified element order,
@@ -2612,8 +2669,10 @@ class Mesh {
     /**@brief returns the dof for a partition (grid points) */
     inline unsigned int getDegOfFreedom() const { return m_uiNumActualNodes; }
 
-    /**@brief returns the dof for a partition (grid points) */
-    inline unsigned int getDegOfFreedomUnZip() const {
+    /**@brief returns the dof for a partition (grid points). DendroIntL, not
+     * unsigned int: m_uiUnZippedVecSz is 64-bit and callers use it in index
+     * math (v * getDegOfFreedomUnZip() + ...) that must not overflow. */
+    inline DendroIntL getDegOfFreedomUnZip() const {
         return m_uiUnZippedVecSz;
     }
 
@@ -2622,8 +2681,8 @@ class Mesh {
     }
 
     /**@brief returns the dof DG for a partition. (grid points) */
-    inline unsigned int getDegOfFreedomDG() const {
-        return m_uiNumTotalElements * m_uiNpE;
+    inline DendroIntL getDegOfFreedomDG() const {
+        return (DendroIntL)m_uiNumTotalElements * m_uiNpE;
     }
 
     /**@brief returns the pointer to All elements array. */
@@ -3135,8 +3194,17 @@ class Mesh {
      * @param[in] jy: j-index of the node.
      * @param[in] kz: k-index of the node.
      * */
-    bool isNodeHanging(unsigned int eleID, unsigned int ix, unsigned int jy,
-                       unsigned int kz) const;
+    inline bool isNodeHanging(unsigned int eleID, unsigned int ix,
+                              unsigned int jy, unsigned int kz) const {
+        if (!m_uiIsActive) return false;
+        const unsigned int npe = m_uiNpE;
+        const unsigned int eo1 = m_uiElementOrder + 1;
+        const unsigned int dg_idx =
+            m_uiE2NMapping_DG[eleID * npe + kz * eo1 * eo1 + jy * eo1 + ix];
+        const unsigned int owner = dg_idx / npe;
+        return m_uiAllElements[owner].getLevel() <
+               m_uiAllElements[eleID].getLevel();
+    }
 
     /**
      * @brief: Returns true if the specified node (e,i,j,k) is local.
@@ -3505,6 +3573,23 @@ class Mesh {
      * @param[out] out: interpolated values.
      *
      * */
+    // Thread-safe variant: caller supplies scratch buffers (size m_uiNpE
+    // each). Use this from OpenMP-parallel regions where each thread needs
+    // its own scratch — the no-scratch overload uses RefElement's shared
+    // im_vec1/im_vec2 members.
+    inline void parent2ChildInterpolation(const double *in, double *out,
+                                          unsigned int cnum, unsigned int dim,
+                                          double *im1, double *im2) const {
+        if (dim == 3)
+            m_uiRefEl.I3D_Parent2Child(in, out, cnum, im1, im2);
+        else if (dim == 2)
+            m_uiRefEl.I2D_Parent2Child(in, out, cnum, im1, im2);
+        else if (dim == 1)
+            m_uiRefEl.I1D_Parent2Child(in, out, cnum);  // already
+                                                        // thread-safe (no
+                                                        // scratch used)
+    }
+
     inline void parent2ChildInterpolation(const double *in, double *out,
                                           unsigned int cnum,
                                           unsigned int dim = 3) const;
@@ -3547,8 +3632,15 @@ class Mesh {
      * @note this routine assumes that for both arrays memory has been
      * allocated. Routine is responsible only to fill up the unzipped entries.
      * */
+    /**
+     * @param blk_filter : if >= 0, restrict the unzip to blocks whose
+     * getBlockType() equals this value (ot::BlockType::UNZIP_INDEPENDENT or
+     * UNZIP_DEPENDENT). Default -1 = all blocks (unchanged behavior). Used by
+     * the DENDRO_UNZIP_OVERLAP comm/compute-overlap path to unzip interior
+     * (ghost-independent) blocks while the ghost exchange is in flight.
+     */
     template <typename T>
-    void unzip(const T *in, T *out, unsigned int dof = 1);
+    void unzip(const T *in, T *out, unsigned int dof = 1, int blk_filter = -1);
 
     /**
      * @brief performs unzip operation for a given block id.
@@ -3575,7 +3667,42 @@ class Mesh {
      * @param numblks: number of block ids specified.
      */
     template <typename T>
-    void unzip_scatter(const T *in, T *out, unsigned int dof = 1);
+    void unzip_scatter(const T *in, T *out, unsigned int dof = 1,
+                       int blk_filter = -1);
+
+    /**
+     * @brief Batched unzip — process n_vars dof=1 unzips inside ONE OpenMP
+     * parallel region. Functionally equivalent to calling
+     *   for v in n_vars: unzip_scatter(ins[v], outs[v], 1);
+     * but amortizes the OpenMP fork/join overhead across all variables.
+     * Only meaningful when DENDRO_UNZIP_OMP is defined; otherwise this
+     * just calls unzip_scatter in a serial loop.
+     *
+     * @param ins  array of n_vars input CG-vector pointers (each size cgSz)
+     * @param outs array of n_vars output unzip-vector pointers (each unSz)
+     * @param n_vars number of variables to unzip in this batch
+     */
+    template <typename T>
+    void unzip_scatter_batch(const T *const *ins, T *const *outs,
+                             unsigned int n_vars);
+
+    /** The labelled-mesh unzip_scatter: plan-aware, handles non-SFC blocks.
+     * unzip_scatter routes here when useLabelledUnzip() holds. */
+    template <typename T>
+    void unzip_scatter_labelled(const T *in, T *out, unsigned int dof = 1);
+
+    /** true when the mesh has a non-SFC block (a labelled mesh), or
+     * DENDRO_UNZIP_LABELLED_PATH=1 forces the labelled scatter everywhere */
+    inline bool useLabelledUnzip() const {
+        static const bool force = [] {
+            const char *e = std::getenv("DENDRO_UNZIP_LABELLED_PATH");
+            return e && e[0] == '1';
+        }();
+        if (force || m_uiIsLabelledRebuild) return true;
+        for (const ot::Block &b : m_uiLocalBlockList)
+            if (b.isNonSFC()) return true;
+        return false;
+    }
 
     /** Block-major form of unzip_scatter (DENDRO_UNZIP_BLOCK_MAJOR=1): walks
      *  the local blocks in order and, per block, its feeding elements in
@@ -3633,6 +3760,10 @@ class Mesh {
      * */
     template <typename T>
     void zip(const T *unzippedVec, T *zippedVec);
+
+    /**@brief reference zip for testZipExact; not used by the solver. */
+    template <typename T>
+    void zip_ref(const T *unzippedVec, T *zippedVec);
 
     /**
      * @brief perform block wise zip operation.
@@ -4128,6 +4259,15 @@ class Mesh {
     void getElementNodalValues(const T *vec, T *nodalValues,
                                unsigned int elementID,
                                bool isDGVec = false) const;
+
+    // Thread-safe overload: caller supplies scratch (size m_uiNpE each).
+    // Safe to call concurrently from OpenMP parallel regions because the
+    // face/edge interpolations use the thread-safe parent2ChildInterpolation
+    // overload (which doesn't touch RefElement's shared im_vec1/im_vec2).
+    template <typename T>
+    void getElementNodalValues(const T *vec, T *nodalValues,
+                               unsigned int elementID, bool isDGVec,
+                               double *im1, double *im2) const;
 
     /**
      * @assumption: input is the elemental nodal values.

@@ -1,0 +1,170 @@
+#pragma once
+
+#include <array>
+#include <cmath>
+#include <iostream>
+#include <vector>
+
+#include "derivatives/derivs_compact.h"
+#include "derivatives/derivs_utils.h"
+
+namespace dendroderivs {
+
+/*
+ * BandedCompactDerivs: implements compact FD via per-block LAPACK banded
+ * solve (dgbsvx) rather than the pre-inverted GEMM path.
+ *
+ * Four per-direction matrix variants are pre-factorized (interior /
+ * left / right / leftright); bflag selects among them at runtime, in
+ * exact parallel to the MatrixCompactDerivs path. Bandwidths kl/ku
+ * are auto-detected from the assembled dense matrices, so derived
+ * classes do not have to declare them explicitly (declarations may
+ * still be passed via kVals but are ignored).
+ *
+ * Note: P/Q are sized at p_n = 2*eleorder + 1, set at construction.
+ * Calls with sz[i] != p_n produce garbage at present. Fixing that is
+ * deferred; see findings/04_evidence_gaps.md.
+ */
+class BandedCompactDerivs : public CompactDerivs {
+   public:
+    // one per BoundaryType: {NO, LEFT, RIGHT, LEFTRIGHT}. Public so that
+    // the free-function build_variant in derivs_banded.cpp can construct it.
+    struct Variant {
+        int pkl = 0, pku = 0, qkl = 0, qku = 0;        // per-variant bandwidths
+        std::vector<double> Pb;                         // banded-stored P
+        std::vector<double> Qb;                         // banded-stored Q
+        BandedMatrixSolveVars *vars = nullptr;          // owns AFB, IPIV, etc.
+
+        // Plain (non-equilibrated) LU of P from dgbtrf, used by the dgbtrs
+        // solve path. Kept separate from vars->AFB because that one belongs
+        // to an equilibrated dgbsvx factorization: its factors are of the
+        // scaled matrix R*P*C, so dgbtrs against it would solve the wrong
+        // system unless the scalings were reapplied by hand.
+        std::vector<double> AFB_trs;                    // LDAFB x n, in place
+        std::vector<int>    IPIV_trs;                   // n pivots
+        int ldafb_trs = 0;
+        bool trs_ok = false;                            // factorization valid
+    };
+
+   protected:
+    std::array<Variant, 4> variants_;
+
+    double Q_parity_ = -1.0;                            // -1 for 1st, +1 for 2nd
+    bool use_trs_ = false;                              // see set_use_trs()
+
+    // workspace for matmul + solve (reused across directions, not thread-safe)
+    std::vector<double> workspace_;
+
+    // batched-solve scratch (grown on demand). separate from workspace_ and
+    // the per-variant FERR/BERR because the widened NRHS = p_n*n_vars overruns
+    // them. B/X hold p_n*(p_n*n_vars); ferr/berr hold p_n*n_vars.
+    std::vector<double> batch_B_;
+    std::vector<double> batch_X_;
+    std::vector<double> batch_ferr_;
+    std::vector<double> batch_berr_;
+
+    // ensure the batch scratch can hold n_vars stacked RHS for this p_n
+    inline void ensure_batch_scratch(unsigned int n_vars) {
+        const size_t ncols = (size_t)p_n * n_vars;
+        const size_t need  = (size_t)p_n * ncols;
+        if (batch_B_.size() < need) batch_B_.resize(need);
+        if (batch_X_.size() < need) batch_X_.resize(need);
+        if (batch_ferr_.size() < ncols) batch_ferr_.resize(ncols);
+        if (batch_berr_.size() < ncols) batch_berr_.resize(ncols);
+    }
+
+    // ignored: kept only because old derived classes still pass it in.
+    BandedMatrixDiagonalWidths *kVals = nullptr;
+
+
+   protected:
+    // build all four variants. Q_parity must be -1 for first-derivative
+    // schemes and +1 for second-derivative schemes; this multiplies the
+    // mirrored boundary rows of Q to enforce the correct symmetry.
+    void init(MatrixDiagonalEntries *entries, double Q_parity);
+
+    // legacy entry point: ignores kVals (bandwidths are auto-detected).
+    // Parity is now required from the caller because the original
+    // implementation hardcoded -1 and silently produced sign-flipped
+    // boundary rows for every second-derivative scheme.
+    void init(BandedMatrixDiagonalWidths *kVals,
+              MatrixDiagonalEntries *entries, double Q_parity) {
+        init(entries, Q_parity);
+    }
+
+    // pick the variant whose factorization matches the boundary state
+    // along the named axis
+    inline Variant &select_x(unsigned int bflag) {
+        const bool L = bflag & (1u << OCT_DIR_LEFT);
+        const bool R = bflag & (1u << OCT_DIR_RIGHT);
+        BoundaryType bt = BoundaryType::NO_BOUNDARY;
+        if (L && !R)      bt = BoundaryType::LEFT_BOUNDARY;
+        else if (!L && R) bt = BoundaryType::RIGHT_BOUNDARY;
+        else if (L && R)  bt = BoundaryType::LEFTRIGHT_BOUNDARY;
+        // fall back to NO_BOUNDARY for any variant that didn't factor
+        return variants_[bt].vars ? variants_[bt]
+                                  : variants_[BoundaryType::NO_BOUNDARY];
+    }
+    inline Variant &select_y(unsigned int bflag) {
+        const bool L = bflag & (1u << OCT_DIR_DOWN);
+        const bool R = bflag & (1u << OCT_DIR_UP);
+        BoundaryType bt = BoundaryType::NO_BOUNDARY;
+        if (L && !R)      bt = BoundaryType::LEFT_BOUNDARY;
+        else if (!L && R) bt = BoundaryType::RIGHT_BOUNDARY;
+        else if (L && R)  bt = BoundaryType::LEFTRIGHT_BOUNDARY;
+        // fall back to NO_BOUNDARY for any variant that didn't factor
+        return variants_[bt].vars ? variants_[bt]
+                                  : variants_[BoundaryType::NO_BOUNDARY];
+    }
+    inline Variant &select_z(unsigned int bflag) {
+        const bool L = bflag & (1u << OCT_DIR_BACK);
+        const bool R = bflag & (1u << OCT_DIR_FRONT);
+        BoundaryType bt = BoundaryType::NO_BOUNDARY;
+        if (L && !R)      bt = BoundaryType::LEFT_BOUNDARY;
+        else if (!L && R) bt = BoundaryType::RIGHT_BOUNDARY;
+        else if (L && R)  bt = BoundaryType::LEFTRIGHT_BOUNDARY;
+        // fall back to NO_BOUNDARY for any variant that didn't factor
+        return variants_[bt].vars ? variants_[bt]
+                                  : variants_[BoundaryType::NO_BOUNDARY];
+    }
+
+   public:
+    BandedCompactDerivs(unsigned int ele_order) : CompactDerivs{ele_order} {};
+    BandedCompactDerivs(const BandedCompactDerivs &obj) : CompactDerivs(obj) {};
+    virtual ~BandedCompactDerivs();
+
+    // Select the LAPACK routine used by do_grad_*. false (default) keeps the
+    // historical dgbsvx expert-driver path; true switches to dgbtrf/dgbtrs,
+    // which performs the same LU solve without equilibration, condition
+    // estimation, or iterative refinement. Provided so the two can be timed
+    // against each other in the same binary on identical data.
+    void set_use_trs(bool on) { use_trs_ = on; }
+    bool use_trs() const { return use_trs_; }
+
+
+    void do_grad_x(double *const du, const double *const u, const double dx,
+                   const unsigned int *sz, const unsigned int bflag) override;
+    void do_grad_y(double *const du, const double *const u, const double dx,
+                   const unsigned int *sz, const unsigned int bflag) override;
+    void do_grad_z(double *const du, const double *const u, const double dx,
+                   const unsigned int *sz, const unsigned int bflag) override;
+
+    // batched solve: factor is already shared, so the win is selecting the
+    // variant once and widening the per-slice dgbsvx to NRHS = p_n*n_vars.
+    // dgbsvx solves each column independently -> bit-identical to N singles.
+    void do_grad_x_batch(double **du_arr, const double **u_arr,
+                         unsigned int n_vars, const double dx,
+                         const unsigned int *sz,
+                         const unsigned int bflag) override;
+    void do_grad_y_batch(double **du_arr, const double **u_arr,
+                         unsigned int n_vars, const double dx,
+                         const unsigned int *sz,
+                         const unsigned int bflag) override;
+    void do_grad_z_batch(double **du_arr, const double **u_arr,
+                         unsigned int n_vars, const double dx,
+                         const unsigned int *sz,
+                         const unsigned int bflag) override;
+
+    void set_maximum_block_size(size_t block_size) override {};
+};
+}  // namespace dendroderivs

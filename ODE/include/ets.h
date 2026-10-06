@@ -11,11 +11,18 @@
  */
 
 #pragma once
+#ifdef ETS_CHECK_GHOSTS
+// verification scaffolding only; flag defaults OFF
+#include <cstdio>
+#include <set>
+#endif
+
 #include "ctx.h"
 #include "dendro.h"
 #include "dvec.h"
 #include "logger.h"
 #include "mesh.h"
+#include "rkTableau.h"
 #include "ts.h"
 
 #include <cstdio>
@@ -535,7 +542,30 @@ enum ETSFlags { FROM_T0 = 0, CHECKPT, CURR_STEP, CURR_TIME };
  */
 
 #ifdef __PROFILE_ETS__
-enum ETSPROFILE { EVOLVE = 0, ETS_LAST };
+// per-stage profiling slots (EVOLVE stays index 0 for dump_pt back-compat;
+// STAGE_6 covers the 7-stage RK6).
+enum ETSPROFILE {
+    EVOLVE = 0,
+    STAGE_0,
+    STAGE_1,
+    STAGE_2,
+    STAGE_3,
+    STAGE_4,
+    STAGE_5,
+    STAGE_6,
+    ETS_LAST
+};
+#endif
+
+// number of profiling slots; stages beyond this are just unprofiled.
+#ifndef ETS_MAX_PROFILED_STAGES
+#define ETS_MAX_PROFILED_STAGES 7
+#endif
+
+// hard cap on stage count; sizes the fused axpy scratch arrays (used whether or
+// not profiling is on). must be >= the largest scheme's stage count (RK6 = 7).
+#ifndef ETS_MAX_STAGES
+#define ETS_MAX_STAGES 8
 #endif
 
 template <typename T, typename Ctx>
@@ -545,7 +575,8 @@ class ETS {
     std::vector<profiler_t> m_uiCtxpt =
         std::vector<profiler_t>(static_cast<int>(ETSPROFILE::ETS_LAST));
     const char* ETSPROFILE_NAMES[static_cast<int>(ETSPROFILE::ETS_LAST)] = {
-        "evolve"};
+        "evolve", "stage_0", "stage_1", "stage_2", "stage_3",
+        "stage_4", "stage_5", "stage_6"};
 
     void init_pt() {
         for (unsigned int i = 0; i < m_uiCtxpt.size(); i++)
@@ -717,7 +748,7 @@ class ETS {
     /**@brief: state true if the internal variables are allocated. */
     bool m_uiIsInternalAlloc = false;
 
-   private:
+   protected:
     /**
      * @brief Allocates internal variables for the time stepper.
      * @return int
@@ -737,7 +768,7 @@ class ETS {
     /**
      * @brief Destroy the ETS object
      */
-    ~ETS();
+    virtual ~ETS();
 
     /**
      * @brief Set the ets coefficients
@@ -768,7 +799,7 @@ class ETS {
     int set_evolve_vars(DVec eVar);
 
     /**@brief: initialize the ETS solver*/
-    void init();
+    virtual void init();
 
     /**@brief: returns the current time step*/
     inline DendroIntL curr_step() { return m_uiTimeInfo._m_uiStep; };
@@ -811,10 +842,10 @@ class ETS {
 
     /**@brief: perform synchronizations with correct variable allocations for
      * the new mesh: should be called after remeshing.  */
-    int sync_with_mesh();
+    virtual int sync_with_mesh();
 
     /**@brief: advance to next time step*/
-    void evolve();
+    virtual void evolve();
 
     /**@brief: dump load statistics*/
     void dump_load_statistics(std::ostream& sout);
@@ -893,66 +924,16 @@ template <typename T, typename Ctx>
 int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
     m_uiType = type;
 
-    if (type == ETSType::RK3) {
-        m_uiNumStages                     = 3;
-
-        static const DendroScalar ETS_C[] = {1.0 / 6.0, 1.0 / 6.0, 2.0 / 3.0};
-        static const DendroScalar ETS_T[] = {0.0, 1.0, 1.0 / 2.0};
-        static const DendroScalar ETS_U[] = {
-            0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0 / 4.0, 1.0 / 4.0, 0.0};
-
-        m_uiCi  = (DendroScalar*)ETS_T;
-        m_uiBi  = (DendroScalar*)ETS_C;
-        m_uiAij = (DendroScalar*)ETS_U;
-
-        dendro::logger::debug(dendro::logger::Scope{"ETS"},
-                              "ETS Coefficients set for RK3");
-
-    } else if (type == ETSType::RK4) {
-        m_uiNumStages                     = 4;
-
-        static const DendroScalar ETS_C[] = {1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0,
-                                             1.0 / 6.0};
-        static const DendroScalar ETS_T[] = {0, 1.0 / 2.0, 1.0 / 2.0, 1.0};
-        static const DendroScalar ETS_U[] = {
-            0.0, 0.0,       0.0, 0.0, 1.0 / 2.0, 0.0, 0.0, 0.0,
-            0.0, 1.0 / 2.0, 0.0, 0.0, 0.0,       0.0, 1.0, 0.0};
-
-        m_uiCi  = (DendroScalar*)ETS_T;
-        m_uiBi  = (DendroScalar*)ETS_C;
-        m_uiAij = (DendroScalar*)ETS_U;
-
-        dendro::logger::debug(dendro::logger::Scope{"ETS"},
-                              "ETS Coefficients set for RK4");
-
-    } else if (type == ETSType::RK5) {
+    // tableaux live in rkTableau.h; pointers are function-static (persist).
+    const DendroScalar *nodes = nullptr, *weights = nullptr, *matrix = nullptr;
+    unsigned int nstages      = 0;
+    if (ts::get_rk_tableau(type, nstages, nodes, weights, matrix) != 0)
         return -1;
-        // these coefficients looks wrong. - Milinda. (need to fix those and
-        // enable the rk5 method. )
-        m_uiNumStages                     = 5;
-        static const DendroScalar ETS_C[] = {
-            7.0 / 90.0, 0, 32 / 90.0, 12.0 / 90.0, 32.0 / 90.0, 7.0 / 90.0};
-        static const DendroScalar ETS_T[] = {0,         1.0 / 4.0, 1.0 / 4.0,
-                                             1.0 / 2.0, 3.0 / 4.0, 1.0};
-        static const DendroScalar ETS_U[] = {
-            0.0,        0.0,        0.0,        0.0,         0.0,
-            1.0 / 8.0,  1.0 / 8.0,  0.0,        0.0,         0.0,
-            0.0,        -1.0 / 2.0, 1.0,        0.0,         0.0,
-            3.0 / 16.0, 0.0,        0.0,        9.0 / 16.0,  0.0,
-            -3.0 / 7.0, 2.0 / 7.0,  12.0 / 7.0, -12.0 / 7.0, 8.0 / 7.0};
 
-        m_uiCi  = (DendroScalar*)ETS_T;
-        m_uiBi  = (DendroScalar*)ETS_C;
-        m_uiAij = (DendroScalar*)ETS_U;
-
-        dendro::logger::debug(dendro::logger::Scope{"ETS"},
-                              "ETS Coefficients set for RK5");
-
-    } else {
-        dendro::logger::error(dendro::logger::Scope{"ETS"},
-                              "UNKNOWN ETS TYPE (supports RK3, RK4, and RK5)");
-        return -1;
-    }
+    m_uiNumStages = nstages;
+    m_uiCi        = (DendroScalar*)nodes;    // c_i abscissae
+    m_uiBi        = (DendroScalar*)weights;  // b_i weights
+    m_uiAij       = (DendroScalar*)matrix;   // a_ij matrix
 
     return 0;
 }
@@ -1019,6 +1000,57 @@ void ETS<T, Ctx>::evolve() {
     double current_t_adv   = current_t;
     const double dt        = m_uiTimeInfo._m_uiTh;
 
+#ifdef ETS_CHECK_GHOSTS
+    // ONE-SHOT PRECONDITION CHECK for the "fuse copy_data into axpy_multi" change.
+    //
+    // Dropping copy_data leaves tmp's GHOST nodes stale; the change is only safe if
+    // the ghost exchange overwrites every one of them before the RHS reads them.
+    // readFromGhostEnd writes exactly vec[recvNodeSM[k]] for k in each recv proc's
+    // [offset, offset+count) range (mesh.tcc:~857), and a comment there asserts
+    // "recvNodeSM is a permutation". This checks that claim instead of trusting it:
+    // it computes the WRITTEN index set and subtracts it from the actual ghost range.
+    // Any node in ghosts \ written would keep stale data => fusion changes results.
+    {
+        static bool _chk_done = false;
+        if (!_chk_done && pMesh->isActive()) {
+            _chk_done                  = true;
+            const auto& _recvNodeSM    = pMesh->getRecvNodeSM();
+            const auto& _recvCount     = pMesh->getNodalRecvCounts();
+            const auto& _recvOffset    = pMesh->getNodalRecvOffsets();
+            const auto& _recvProcList  = pMesh->getRecvProcList();
+
+            std::set<unsigned int> _W;
+            for (unsigned int _pi = 0; _pi < _recvProcList.size(); _pi++) {
+                const unsigned int _p = _recvProcList[_pi];
+                for (unsigned int _k = _recvOffset[_p];
+                     _k < _recvOffset[_p] + _recvCount[_p]; _k++)
+                    _W.insert(_recvNodeSM[_k]);
+            }
+            const unsigned int _preB  = pMesh->getNodePreGhostBegin();
+            const unsigned int _preE  = pMesh->getNodePreGhostEnd();
+            const unsigned int _postB = pMesh->getNodePostGhostBegin();
+            const unsigned int _postE = pMesh->getNodePostGhostEnd();
+            unsigned int _missing = 0, _outside = 0;
+            for (unsigned int _i = _preB; _i < _preE; _i++)
+                if (!_W.count(_i)) _missing++;
+            for (unsigned int _i = _postB; _i < _postE; _i++)
+                if (!_W.count(_i)) _missing++;
+            // written indices that are NOT ghosts would mean the exchange scribbles
+            // on local nodes -- also fatal to the reasoning, so count them too.
+            for (unsigned int _w : _W)
+                if (!((_w >= _preB && _w < _preE) || (_w >= _postB && _w < _postE)))
+                    _outside++;
+            const unsigned int _nghost = (_preE - _preB) + (_postE - _postB);
+            fprintf(stderr,
+                    "[ghostchk] rank=%d ghosts=%u written=%zu missing=%u "
+                    "written_outside_ghosts=%u  %s\n",
+                    pMesh->getMPIRank(), _nghost, _W.size(), _missing, _outside,
+                    (_missing == 0 && _outside == 0)
+                        ? "OK: recvNodeSM covers exactly the ghosts -> fusion SAFE"
+                        : "<<< PRECONDITION VIOLATED -> fusion UNSAFE");
+        }
+    }
+#endif
     ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                  "00_evolveEnter", (int)m_uiTimeInfo._m_uiStep, -1);
     _EV_TRACE("01_pre_timestep_start");
@@ -1029,9 +1061,6 @@ void ETS<T, Ctx>::evolve() {
     _EV_TRACE("02_pre_timestep_done");
     ets_nan_scan(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
                  "05_postPreTimestep", (int)m_uiTimeInfo._m_uiStep, -1);
-
-    const unsigned int DOF    = m_uiEVar.get_dof();
-    const unsigned int szPDof = pMesh->getDegOfFreedom();
 
     const int trace_step = (int)m_uiTimeInfo._m_uiStep;
     em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),
@@ -1100,22 +1129,15 @@ void ETS<T, Ctx>::evolve() {
     _EV_TRACE("03_pre_stages_loop");
 
     if (pMesh->isActive()) {
-        int rank                              = pMesh->getMPIRank();
-
-        const unsigned int nodeLocalBegin     = pMesh->getNodeLocalBegin();
-        const unsigned int nodeLocalEnd       = pMesh->getNodeLocalEnd();
-
-        const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
-        unsigned int offset;
-        double ptmin[3], ptmax[3];
-        unsigned int sz[3];
-        unsigned int bflag;
-        double dx, dy, dz;
-
-        for (int stage = 0; stage < m_uiNumStages; stage++) {
+        for (unsigned int stage = 0; stage < m_uiNumStages; stage++) {
             dendro::logger::debug(dendro::logger::Scope{"ETS"},
                                   "Now executing ETS Evolve stage {}/{}",
                                   stage + 1, m_uiNumStages);
+#ifdef __PROFILE_ETS__
+            if (stage < ETS_MAX_PROFILED_STAGES)
+                m_uiCtxpt[ETSPROFILE::STAGE_0 + stage].start();
+#endif
+
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
                 std::fprintf(stderr,
@@ -1141,10 +1163,20 @@ void ETS<T, Ctx>::evolve() {
 
             {
                 dendro::stepprof::Scope sp(dendro::stepprof::EV_AXPY_STAGE);
-                for (int p = 0; p < stage; p++)
-                    DVec::axpy(m_uiAppCtx->get_mesh(),
-                               m_uiAij[(stage)*m_uiNumStages + p] * dt,
-                               m_uiStVec[p], m_uiEVecTmp[0]);
+                // Fused: tmp += sum_p (aip*dt)*StVec[p] in one region (bit-identical).
+                DendroScalar a_cf[ETS_MAX_STAGES];
+                const DVec* a_sp[ETS_MAX_STAGES];
+                unsigned int a_n = 0;
+                for (unsigned int p = 0; p < stage; p++) {
+                    const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
+                    if (aip != 0.0) {
+                        a_cf[a_n] = aip * dt;
+                        a_sp[a_n] = &m_uiStVec[p];
+                        a_n++;
+                    }
+                }
+                if (a_n)
+                    DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
             }
             if (_ev_trace) {
                 int _r = -1; MPI_Comm_rank(MPI_COMM_WORLD, &_r);
@@ -1230,6 +1262,11 @@ void ETS<T, Ctx>::evolve() {
                     (unsigned long)m_uiTimeInfo._m_uiStep, stage);
                 std::fflush(stderr);
             }
+
+#ifdef __PROFILE_ETS__
+            if (stage < ETS_MAX_PROFILED_STAGES)
+                m_uiCtxpt[ETSPROFILE::STAGE_0 + stage].stop();
+#endif
         }
 
         dendro::logger::debug(dendro::logger::Scope{"ETS"},
@@ -1237,9 +1274,14 @@ void ETS<T, Ctx>::evolve() {
         _EV_TRACE("20_pre_final_axpy");
         {
             dendro::stepprof::Scope sp(dendro::stepprof::EV_FINAL_AXPY);
-            for (unsigned int k = 0; k < m_uiNumStages; k++)
-                DVec::axpy(m_uiAppCtx->get_mesh(), m_uiBi[k] * dt, m_uiStVec[k],
-                           m_uiEVar);
+            // Fused: EVar += sum_k (bi*dt)*StVec[k] in one region (all k; bit-identical).
+            DendroScalar b_cf[ETS_MAX_STAGES];
+            const DVec* b_sp[ETS_MAX_STAGES];
+            for (unsigned int k = 0; k < m_uiNumStages; k++) {
+                b_cf[k] = m_uiBi[k] * dt;
+                b_sp[k] = &m_uiStVec[k];
+            }
+            DVec::axpy_multi(pMesh, m_uiNumStages, b_cf, b_sp, m_uiEVar);
         }
         _EV_TRACE("21_post_final_axpy");
         em4_cg_trace(pMesh, m_uiEVar.get_vec_ptr(), m_uiEVar.get_dof(),

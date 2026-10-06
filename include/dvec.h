@@ -10,6 +10,8 @@
  */
 
 #pragma once
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
 
 #include "device.h"
@@ -138,6 +140,13 @@ class DVector {
     static void axpy(const ot::Mesh* const pMesh, T a, const DVector<T, I>& x,
                      DVector<T, I>& y, bool local_only = true);
 
+    // Fused y += sum_{j<n} coeffs[j]*srcs[j] in one parallel region (vs one per
+    // term). Order-j accumulation => bit-identical to sequential axpy; same
+    // local_only semantics. Cuts per-RK-stage fork/joins.
+    static void axpy_multi(const ot::Mesh* const pMesh, unsigned int n,
+                           const T* coeffs, const DVector<T, I>* const* srcs,
+                           DVector<T, I>& y);
+
     static void axpby(const ot::Mesh* const pMesh, T a, const DVector<T, I>& x,
                       T b, DVector<T, I>& y, bool local_only = true);
 
@@ -198,6 +207,90 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
         m_data_ptr = GPUDevice::host_malloc<T>(m_size);
 #else
 
+#if defined(DENDRO_HYBRID_OMP)
+        // NUMA first-touch: malloc + parallel zero so pages land on the using
+        // thread's node (matters on 2-socket nodes). Overwritten by init/unzip.
+        m_data_ptr = (T*)malloc(sizeof(T) * m_size);
+        if (m_data_ptr != nullptr) {
+            T* __restrict__ p = m_data_ptr;
+            bool block_ft     = false;
+#if defined(_OPENMP)
+            // Block-major first-touch for the unzip I/O buffers: place each
+            // thread's contiguous block range on its own NUMA node so the RHS,
+            // which consumes the SAME cost-balanced partition, streams local
+            // (see the RHS NUMA Tax). The buffer is var-major -- [dof][NN] with
+            // NN doubles per variable -- and within a variable region blocks are
+            // laid out contiguously by offset, so a block-index partition maps to
+            // contiguous byte stripes in every variable region. Only when the
+            // BSSN layer explicitly asks for it and the layout is consistent;
+            // otherwise fall back to the flat static fill below. Zeroing is
+            // complete either way (boundaries span [0,NN]), so the result is
+            // bit-identical to the flat fill.
+            if (ot::g_padded_numa_first_touch &&
+                m_vec_type == DVEC_TYPE::OCT_LOCAL_WITH_PADDING && m_dof > 0 &&
+                (m_size % m_dof) == 0) {
+                const std::vector<ot::Block>& blk = pMesh->getLocalBlockList();
+                const unsigned int nb             = (unsigned int)blk.size();
+                const int nt                      = omp_get_max_threads();
+                if (nb > 0 && nt > 1) {
+                    const size_t NN = m_size / m_dof;  // doubles per variable
+                    std::vector<unsigned int> part(nt + 1);
+                    ot::computeBalancedBlockPartition(blk.data(), nb,
+                                                      (unsigned int)nt,
+                                                      part.data());
+                    // Per-variable byte boundaries with FULL coverage: [0..NN].
+                    // Interior boundary t = the offset of the first block thread
+                    // t owns; the ends are pinned to 0 and NN so no page is left
+                    // unfaulted even if the block layout has leading/trailing
+                    // padding not owned by any block.
+                    std::vector<size_t> bnd(nt + 1);
+                    bnd[0]  = 0;
+                    bnd[nt] = NN;
+                    bool okb = true;
+                    for (int t = 1; t < nt; t++) {
+                        const unsigned int fb = part[t];
+                        bnd[t] = (fb < nb) ? (size_t)blk[fb].getOffset() : NN;
+                    }
+                    for (int t = 1; t <= nt; t++)
+                        if (bnd[t] < bnd[t - 1] || bnd[t] > NN) okb = false;
+                    if (okb) {
+                        block_ft = true;
+                        // Opt-in, one-time canary proving the block-major
+                        // first-touch ran (BSSN_RHS_NUMA_VERBOSE=1).
+                        static bool s_ft_canary = false;
+                        if (!s_ft_canary &&
+                            std::getenv("BSSN_RHS_NUMA_VERBOSE") != nullptr) {
+                            s_ft_canary = true;
+                            int r_ = 0;
+                            MPI_Comm_rank(MPI_COMM_WORLD, &r_);
+                            if (r_ == 0)
+                                std::fprintf(
+                                    stderr,
+                                    "[dvec-numa] block-major first-touch ACTIVE: "
+                                    "dof=%u NN=%zu nt=%d\n",
+                                    m_dof, NN, nt);
+                        }
+#pragma omp parallel num_threads(nt)
+                        {
+                            const int t    = omp_get_thread_num();
+                            const size_t a = bnd[t];
+                            const size_t b = bnd[t + 1];
+                            for (unsigned int v = 0; v < m_dof; v++) {
+                                T* __restrict__ pv = p + (size_t)v * NN;
+                                for (size_t i = a; i < b; i++) pv[i] = T{};
+                            }
+                        }
+                    }
+                }
+            }
+#endif
+            if (!block_ft) {
+                const size_t n_ = m_size;
+#pragma omp parallel for
+                for (size_t i = 0; i < n_; i++) p[i] = T{};
+            }
+        }
+#else
         // Always zero-initialize. If we leave the memory
         // uninitialized (plain malloc), any vec slot that isn't
         // written by init_grid / ghost exchange / etc. before first
@@ -206,6 +299,8 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
         // some orphan local cg slots aren't written by init_grid and
         // then propagate NaN via ghost exchange to other ranks.
         m_data_ptr = (T*)calloc(m_size, sizeof(T));
+#endif
+// end DENDRO_HYBRID_OMP
 #endif
         // end __CUDACC__ if
 
@@ -310,9 +405,19 @@ void DVector<T, I>::copy_data(const DVector<T, I>& v) {
 
     T* dptr           = v.m_data_ptr;
 
-    if (v.m_vec_loc == DVEC_LOC::HOST)
+    if (v.m_vec_loc == DVEC_LOC::HOST) {
+#ifdef DENDRO_HYBRID_OMP
+        // Threaded copy (was a serial memcpy): parallel bandwidth + NUMA
+        // first-touch, mirroring axpy. Bit-identical.
+        const size_t n            = m_size;
+        T* __restrict__ dst       = m_data_ptr;
+        const T* __restrict__ src = dptr;
+#pragma omp parallel for
+        for (size_t i = 0; i < n; i++) dst[i] = src[i];
+#else
         std::memcpy(m_data_ptr, dptr, sizeof(T) * m_size);
-    else if (v.m_vec_loc == DVEC_LOC::DEVICE) {
+#endif
+    } else if (v.m_vec_loc == DVEC_LOC::DEVICE) {
 #ifdef __CUDACC__
         GPUDevice::check_error(cudaMemcpy(m_data_ptr, v.m_data_ptr,
                                           sizeof(T) * m_size,
@@ -329,28 +434,44 @@ void DVector<T, I>::axpy(const ot::Mesh* const pMesh, T a,
                          bool local_only) {
     if (y.m_data_ptr == nullptr) return;
 
-    const T* const x_ptr = x.m_data_ptr;
-    T* const y_ptr       = y.m_data_ptr;
+    // __restrict__ tells the compiler that x_ptr and y_ptr do not alias,
+    // which removes the runtime alias check the compiler would otherwise
+    // emit (with -O3 it emits versioned vectorized + scalar fallback loops).
+    // Callers must not pass the same DVector as both x and y here — this is
+    // a contract, not enforced.
+    const T* __restrict__ x_ptr = x.m_data_ptr;
+    T* __restrict__ y_ptr       = y.m_data_ptr;
 
     if (x.m_vec_loc == DVEC_LOC::HOST) {
         if (!local_only) {
-            for (unsigned int i = 0; i < x.m_size; i++)
-                y_ptr[i] += a * x_ptr[i];
+            const unsigned int n = x.m_size;
+            // node-independent stream op; threaded under the hybrid-OMP umbrella
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for
+#endif
+            for (unsigned int i = 0; i < n; i++) y_ptr[i] += a * x_ptr[i];
 
         } else {
             const unsigned int sz_dof = x.m_size / x.m_dof;
             const unsigned int npe    = pMesh->getNumNodesPerElement();
             if (x.m_vec_type == DVEC_TYPE::OCT_SHARED_NODES) {
+                const unsigned int nb = pMesh->getNodeLocalBegin();
+                const unsigned int ne = pMesh->getNodeLocalEnd();
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
                 for (unsigned int v = 0; v < x.m_dof; v++)
-                    for (unsigned int node = pMesh->getNodeLocalBegin();
-                         node < pMesh->getNodeLocalEnd(); node++)
+                    for (unsigned int node = nb; node < ne; node++)
                         y_ptr[v * sz_dof + node] +=
                             a * x_ptr[v * sz_dof + node];
             } else if (x.m_vec_type == DVEC_TYPE::OCT_LOCAL_NODES) {
+                const unsigned int nb = pMesh->getElementLocalBegin() * npe;
+                const unsigned int ne = pMesh->getElementLocalEnd() * npe;
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
                 for (unsigned int v = 0; v < x.m_dof; v++)
-                    for (unsigned int node =
-                             pMesh->getElementLocalBegin() * npe;
-                         node < pMesh->getElementLocalEnd() * npe; node++)
+                    for (unsigned int node = nb; node < ne; node++)
                         y_ptr[v * sz_dof + node] +=
                             a * x_ptr[v * sz_dof + node];
             }
@@ -374,31 +495,95 @@ void DVector<T, I>::axpy(const ot::Mesh* const pMesh, T a,
 }
 
 template <typename T, typename I>
+void DVector<T, I>::axpy_multi(const ot::Mesh* const pMesh, unsigned int n,
+                               const T* coeffs,
+                               const DVector<T, I>* const* srcs,
+                               DVector<T, I>& y) {
+    // Per-node sum in order j (one thread per node) => bit-identical to the
+    // sequential axpy calls, one fork/join instead of n.
+    if (n == 0 || y.m_data_ptr == nullptr) return;
+
+    constexpr unsigned int MAXJ = 16;
+    if (y.m_vec_loc != DVEC_LOC::HOST || n > MAXJ) {
+        // Device path or unexpected term count: fall back to sequential axpy
+        // (identical math, just without the fused single-region optimization).
+        for (unsigned int j = 0; j < n; j++)
+            DVector<T, I>::axpy(pMesh, coeffs[j], *srcs[j], y, true);
+        return;
+    }
+
+    const unsigned int sz_dof = y.m_size / y.m_dof;
+    const unsigned int npe    = pMesh->getNumNodesPerElement();
+    unsigned int nb, ne;
+    if (y.m_vec_type == DVEC_TYPE::OCT_SHARED_NODES) {
+        nb = pMesh->getNodeLocalBegin();
+        ne = pMesh->getNodeLocalEnd();
+    } else if (y.m_vec_type == DVEC_TYPE::OCT_LOCAL_NODES) {
+        nb = pMesh->getElementLocalBegin() * npe;
+        ne = pMesh->getElementLocalEnd() * npe;
+    } else {
+        return;
+    }
+
+    T* __restrict__ y_ptr = y.m_data_ptr;
+    const T* sp[MAXJ];
+    T cf[MAXJ];
+    for (unsigned int j = 0; j < n; j++) {
+        sp[j] = srcs[j]->m_data_ptr;
+        cf[j] = coeffs[j];
+    }
+
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
+    for (unsigned int v = 0; v < y.m_dof; v++)
+        for (unsigned int node = nb; node < ne; node++) {
+            const unsigned int idx = v * sz_dof + node;
+            T acc                  = y_ptr[idx];
+            for (unsigned int j = 0; j < n; j++) acc += cf[j] * sp[j][idx];
+            y_ptr[idx] = acc;
+        }
+}
+
+template <typename T, typename I>
 void DVector<T, I>::axpby(const ot::Mesh* const pMesh, T a,
                           const DVector<T, I>& x, T b, DVector<T, I>& y,
                           bool local_only) {
     if (y.m_data_ptr == nullptr) return;
 
-    const T* const x_ptr = x.m_data_ptr;
-    T* const y_ptr       = y.m_data_ptr;
+    // See note on axpy() above — __restrict__ promises x and y don't alias.
+    const T* __restrict__ x_ptr = x.m_data_ptr;
+    T* __restrict__ y_ptr       = y.m_data_ptr;
 
     if (!local_only) {
-        for (unsigned int i = 0; i < x.m_size; i++)
+        const unsigned int n = x.m_size;
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for
+#endif
+        for (unsigned int i = 0; i < n; i++)
             y_ptr[i] = a * x_ptr[i] + b * y_ptr[i];
 
     } else {
         const unsigned int sz_dof = x.m_size / x.m_dof;
         const unsigned int npe    = pMesh->getNumNodesPerElement();
         if (x.m_vec_type == DVEC_TYPE::OCT_SHARED_NODES) {
+            const unsigned int nb = pMesh->getNodeLocalBegin();
+            const unsigned int ne = pMesh->getNodeLocalEnd();
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
             for (unsigned int v = 0; v < x.m_dof; v++)
-                for (unsigned int node = pMesh->getNodeLocalBegin();
-                     node < pMesh->getNodeLocalEnd(); node++)
+                for (unsigned int node = nb; node < ne; node++)
                     y_ptr[v * sz_dof + node] = a * x_ptr[v * sz_dof + node] +
                                                b * y_ptr[v * sz_dof + node];
         } else if (x.m_vec_type == DVEC_TYPE::OCT_LOCAL_NODES) {
+            const unsigned int nb = pMesh->getElementLocalBegin() * npe;
+            const unsigned int ne = pMesh->getElementLocalEnd() * npe;
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2)
+#endif
             for (unsigned int v = 0; v < x.m_dof; v++)
-                for (unsigned int node = pMesh->getElementLocalBegin() * npe;
-                     node < pMesh->getElementLocalEnd() * npe; node++)
+                for (unsigned int node = nb; node < ne; node++)
                     y_ptr[v * sz_dof + node] = a * x_ptr[v * sz_dof + node] +
                                                b * y_ptr[v * sz_dof + node];
         }

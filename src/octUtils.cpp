@@ -744,9 +744,9 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
         // bits for coarse parents (UBSan: shift exponent 33).
         blockVolume = ((DendroUInt_128)1) << ((maxDepth - parent.getLevel()) * 3);
         (m_uiDim == 3)
-                   ? numIdealRegGridOct =
+            ? numIdealRegGridOct =
                   numIdealRegGridOct* numIdealRegGridOct* numIdealRegGridOct
-                   : numIdealRegGridOct = numIdealRegGridOct * numIdealRegGridOct;
+            : numIdealRegGridOct = numIdealRegGridOct * numIdealRegGridOct;
         octVolume = 0;
 
         if (tag != NULL) {
@@ -832,11 +832,11 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                 index = HILBERT_TABLE[NUM_CHILDREN * rot_id + hindex];
 
                 x     = parent.getX() +
-                    (((int)((bool)(hindex & 1u))) << (pMaxDepthBit));
-                y = parent.getY() +
-                    (((int)((bool)(hindex & 2u))) << (pMaxDepthBit));
-                z = parent.getZ() +
-                    (((int)((bool)(hindex & 4u))) << (pMaxDepthBit));
+                        (((int)((bool)(hindex & 1u))) << (pMaxDepthBit));
+                y     = parent.getY() +
+                        (((int)((bool)(hindex & 2u))) << (pMaxDepthBit));
+                z     = parent.getZ() +
+                        (((int)((bool)(hindex & 4u))) << (pMaxDepthBit));
 
                 if (childHasRegLev[i] == 1) {
                     if ((parent.getLevel() + 1) <= currRegGridLev) {
@@ -884,7 +884,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
     unsigned int singleOctBlockCount = 0;
     for (unsigned int i = 0; i < blockList.size(); i++) {
         numIdealRegOcts  = 1u << (blockList[i].getRegularGridLev() -
-                                 blockList[i].getBlockNode().getLevel());
+                                  blockList[i].getBlockNode().getLevel());
         numIdealRegOcts  = numIdealRegOcts * numIdealRegOcts * numIdealRegOcts;
 
         numActualRegOcts = 0;

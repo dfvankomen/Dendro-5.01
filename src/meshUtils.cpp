@@ -132,18 +132,26 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
 
         // this one sorts and REMOVES DUPLICATES
         tp0 = MPI_Wtime();
+        // Stage timings pair with the ctor's e2e/e2n/sm/blk under
+        // __PROFILE_MESH__, so one build reports the whole createMesh cost.
+        double t_dup = 0, t_cons = 0, t_bal = 0, t_stage_begin = 0;
+
+        t_stage_begin = MPI_Wtime();
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_REMOVE_DUPLICATES, sf_k, commActive);
+        t_dup = MPI_Wtime() - t_stage_begin;
         std::swap(tmpNodes, tmpVec);
         tmpVec.clear();
         tp_dedup = MPI_Wtime() - tp0;
 
         // this one sorts and CONSTRUCTS THE OCTREE
         tp0 = MPI_Wtime();
+        t_stage_begin = MPI_Wtime();
         SFC::parSort::SFC_treeSort(tmpNodes, tmpVec, tmpVec, tmpVec, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_CONSTRUCT_OCTREE, sf_k, commActive);
+        t_cons = MPI_Wtime() - t_stage_begin;
         std::swap(tmpNodes, tmpVec);
         tmpVec.clear();
         tp_construct = MPI_Wtime() - tp0;
@@ -158,11 +166,27 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
 
         // finally we perform the balancing of the octree
         tp0 = MPI_Wtime();
+        t_stage_begin = MPI_Wtime();
         SFC::parSort::SFC_treeSort(tmpNodes, balOct, balOct, balOct, ld_tol,
                                    m_uiMaxDepth, root, ROOT_ROTATION, 1,
                                    TS_BALANCE_OCTREE, sf_k, commActive);
+        t_bal = MPI_Wtime() - t_stage_begin;
         tmpNodes.clear();
         tp_balance = MPI_Wtime() - tp0;
+
+#ifdef __PROFILE_MESH__
+        double t_dup_g[3], t_cons_g[3], t_bal_g[3];
+        par::computeOverallStats(&t_dup, t_dup_g, commActive,
+                                 "createMesh sfc remove_duplicates ");
+        par::computeOverallStats(&t_cons, t_cons_g, commActive,
+                                 "createMesh sfc construct_octree ");
+        par::computeOverallStats(&t_bal, t_bal_g, commActive,
+                                 "createMesh sfc balance_octree ");
+#else
+        (void)t_dup;
+        (void)t_cons;
+        (void)t_bal;
+#endif
 
         localSz = balOct.size();
     }
@@ -176,6 +200,7 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
                   << std::endl;
 
     // construct the mesh from the balanced tree
+    // Total ctor cost; its internal e2e/e2n/sm/blk split prints separately.
     tp0            = MPI_Wtime();
     ot::Mesh* mesh = new ot::Mesh(balOct, 1, eleOrder, comm, pBlockSetup,
                                   sm_type, grain_sz, ld_tol, sf_k, getWeight);
@@ -187,6 +212,11 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
             (int)sm_type, (long long)globalSz, tp_shrink * 1e3, tp_dedup * 1e3,
             tp_construct * 1e3, tp_balance * 1e3, tp_ctor * 1e3,
             (MPI_Wtime() - tp_start) * 1e3);
+#ifdef __PROFILE_MESH__
+    double t_ctor = tp_ctor;
+    double t_ctor_g[3];
+    par::computeOverallStats(&t_ctor, t_ctor_g, comm, "createMesh Mesh ctor ");
+#endif
     localSz        = mesh->getNumLocalMeshNodes();
     par::Mpi_Reduce(&localSz, &globalSz, 1, MPI_SUM, 0, comm);
     if (!rank)
@@ -306,11 +336,11 @@ void meshWAMRConvergence(
                                                << (m_uiMaxDepth -
                                                    pNodes[ownerID].getLevel()));
                                 x   = pNodes[ownerID].getX() +
-                                    ii_x * (len / (double)(eleOrder));
-                                y = pNodes[ownerID].getY() +
-                                    jj_y * (len / (double)(eleOrder));
-                                z = pNodes[ownerID].getZ() +
-                                    kk_z * (len / (double)(eleOrder));
+                                      ii_x * (len / (double)(eleOrder));
+                                y   = pNodes[ownerID].getY() +
+                                      jj_y * (len / (double)(eleOrder));
+                                z   = pNodes[ownerID].getZ() +
+                                      kk_z * (len / (double)(eleOrder));
 
                                 func((double)x, (double)y, (double)z, var);
                                 for (unsigned int v = 0; v < numVars; v++)

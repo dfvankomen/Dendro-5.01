@@ -33,6 +33,22 @@ extern profiler_t t_unzip_async_internal;
 extern profiler_t t_unzip_async_external;
 extern profiler_t t_unzip_async_comm;
 
+// Ghost exchange, split into its three costs. Ctx's UNZIP_WCOMM brackets the
+// WHOLE of Ctx::unzip with UNZIP nested inside it, so (unzip_wcomm - unzip)
+// lumps pack + post + wait + unpack together -- it cannot tell "the network got
+// slower" apart from "the gather lost parallelism", which are opposite
+// conclusions about hybrid. These three separate them:
+//   t_ghost_pack    gather into the send buffer (threaded over NEIGHBOUR RANKS,
+//                   so parallelism is capped by neighbour count, not by volume)
+//   t_ghost_wait    MPI_Waitall -- the only term containing actual wire time,
+//                   but it also absorbs rank load imbalance, so treat it as an
+//                   upper bound on comm, never as a measurement of it
+//   t_ghost_unpack  scatter out of the recv buffer (same neighbour-rank cap)
+// All three start outside any parallel region, so they are rank wall time.
+extern profiler_t t_ghost_pack;
+extern profiler_t t_ghost_wait;
+extern profiler_t t_ghost_unpack;
+
 }  // end of namespace timer.
 
 }  // end namespace dendro

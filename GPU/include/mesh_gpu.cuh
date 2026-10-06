@@ -409,15 +409,15 @@ DEVICE_FUNC DEVICE_BOOL is_face_hanging(DEVICE_UINT sx, DEVICE_UINT sy,
                 ownerID = lookup;
                 mid_bit = m_uiMaxDepth -
                           dptr_mesh->m_all_elements[ownerID].m_level - 1;
-                cnum = ((((((dptr_mesh->m_all_elements[elementId].m_z) -
-                            (dptr_mesh->m_all_elements[ownerID].m_z)) >>
-                           mid_bit) &
-                          1u)
-                         << 1u) |
-                        ((((dptr_mesh->m_all_elements[elementId].m_y) -
-                           (dptr_mesh->m_all_elements[ownerID].m_y)) >>
-                          mid_bit) &
-                         1u));
+                cnum    = ((((((dptr_mesh->m_all_elements[elementId].m_z) -
+                               (dptr_mesh->m_all_elements[ownerID].m_z)) >>
+                              mid_bit) &
+                             1u)
+                            << 1u) |
+                           ((((dptr_mesh->m_all_elements[elementId].m_y) -
+                              (dptr_mesh->m_all_elements[ownerID].m_y)) >>
+                             mid_bit) &
+                            1u));
 
                 break;
 
@@ -425,15 +425,15 @@ DEVICE_FUNC DEVICE_BOOL is_face_hanging(DEVICE_UINT sx, DEVICE_UINT sy,
                 ownerID = lookup;
                 mid_bit = m_uiMaxDepth -
                           dptr_mesh->m_all_elements[ownerID].m_level - 1;
-                cnum = ((((((dptr_mesh->m_all_elements[elementId].m_z) -
-                            (dptr_mesh->m_all_elements[ownerID].m_z)) >>
-                           mid_bit) &
-                          1u)
-                         << 1u) |
-                        ((((dptr_mesh->m_all_elements[elementId].m_y) -
-                           (dptr_mesh->m_all_elements[ownerID].m_y)) >>
-                          mid_bit) &
-                         1u));
+                cnum    = ((((((dptr_mesh->m_all_elements[elementId].m_z) -
+                               (dptr_mesh->m_all_elements[ownerID].m_z)) >>
+                              mid_bit) &
+                             1u)
+                            << 1u) |
+                           ((((dptr_mesh->m_all_elements[elementId].m_y) -
+                              (dptr_mesh->m_all_elements[ownerID].m_y)) >>
+                             mid_bit) &
+                            1u));
 
                 break;
 
@@ -441,60 +441,60 @@ DEVICE_FUNC DEVICE_BOOL is_face_hanging(DEVICE_UINT sx, DEVICE_UINT sy,
                 ownerID = lookup;
                 mid_bit = m_uiMaxDepth -
                           dptr_mesh->m_all_elements[ownerID].m_level - 1;
-                cnum = ((((((dptr_mesh->m_all_elements[elementId].m_z) -
-                            (dptr_mesh->m_all_elements[ownerID].m_z)) >>
-                           mid_bit) &
-                          1u)
-                         << 1u) |
-                        ((((dptr_mesh->m_all_elements[elementId].m_x) -
-                           (dptr_mesh->m_all_elements[ownerID].m_x)) >>
-                          mid_bit) &
-                         1u));
+                cnum    = ((((((dptr_mesh->m_all_elements[elementId].m_z) -
+                               (dptr_mesh->m_all_elements[ownerID].m_z)) >>
+                              mid_bit) &
+                             1u)
+                            << 1u) |
+                           ((((dptr_mesh->m_all_elements[elementId].m_x) -
+                              (dptr_mesh->m_all_elements[ownerID].m_x)) >>
+                             mid_bit) &
+                            1u));
                 break;
 
             case OCT_DIR_UP:
                 ownerID = lookup;
                 mid_bit = m_uiMaxDepth -
                           dptr_mesh->m_all_elements[ownerID].m_level - 1;
-                cnum = ((((((dptr_mesh->m_all_elements[elementId].m_z) -
-                            (dptr_mesh->m_all_elements[ownerID].m_z)) >>
-                           mid_bit) &
-                          1u)
-                         << 1u) |
-                        ((((dptr_mesh->m_all_elements[elementId].m_x) -
-                           (dptr_mesh->m_all_elements[ownerID].m_x)) >>
-                          mid_bit) &
-                         1u));
+                cnum    = ((((((dptr_mesh->m_all_elements[elementId].m_z) -
+                               (dptr_mesh->m_all_elements[ownerID].m_z)) >>
+                              mid_bit) &
+                             1u)
+                            << 1u) |
+                           ((((dptr_mesh->m_all_elements[elementId].m_x) -
+                              (dptr_mesh->m_all_elements[ownerID].m_x)) >>
+                             mid_bit) &
+                            1u));
                 break;
 
             case OCT_DIR_BACK:
                 ownerID = lookup;
                 mid_bit = m_uiMaxDepth -
                           dptr_mesh->m_all_elements[ownerID].m_level - 1;
-                cnum = ((((((dptr_mesh->m_all_elements[elementId].m_y) -
-                            (dptr_mesh->m_all_elements[ownerID].m_y)) >>
-                           mid_bit) &
-                          1u)
-                         << 1u) |
-                        ((((dptr_mesh->m_all_elements[elementId].m_x) -
-                           (dptr_mesh->m_all_elements[ownerID].m_x)) >>
-                          mid_bit) &
-                         1u));
+                cnum    = ((((((dptr_mesh->m_all_elements[elementId].m_y) -
+                               (dptr_mesh->m_all_elements[ownerID].m_y)) >>
+                              mid_bit) &
+                             1u)
+                            << 1u) |
+                           ((((dptr_mesh->m_all_elements[elementId].m_x) -
+                              (dptr_mesh->m_all_elements[ownerID].m_x)) >>
+                             mid_bit) &
+                            1u));
                 break;
 
             case OCT_DIR_FRONT:
                 ownerID = lookup;
                 mid_bit = m_uiMaxDepth -
                           dptr_mesh->m_all_elements[ownerID].m_level - 1;
-                cnum = ((((((dptr_mesh->m_all_elements[elementId].m_y) -
-                            (dptr_mesh->m_all_elements[ownerID].m_y)) >>
-                           mid_bit) &
-                          1u)
-                         << 1u) |
-                        ((((dptr_mesh->m_all_elements[elementId].m_x) -
-                           (dptr_mesh->m_all_elements[ownerID].m_x)) >>
-                          mid_bit) &
-                         1u));
+                cnum    = ((((((dptr_mesh->m_all_elements[elementId].m_y) -
+                               (dptr_mesh->m_all_elements[ownerID].m_y)) >>
+                              mid_bit) &
+                             1u)
+                            << 1u) |
+                           ((((dptr_mesh->m_all_elements[elementId].m_x) -
+                              (dptr_mesh->m_all_elements[ownerID].m_x)) >>
+                             mid_bit) &
+                            1u));
                 break;
         }
     }
@@ -851,7 +851,7 @@ GLOBAL_FUNC __launch_bounds__(64) void __block_internal_unzip_dg__2(
 }
 
 template <typename T, DEVICE_UINT p, DEVICE_UINT PW>
-GLOBAL_FUNC __launch_bounds__(64) void __unzip_dg__2(
+GLOBAL_FUNC __launch_bounds__(128) void __unzip_dg__2(
     const MeshGPU* const dptr_mesh, const T* const dptr_in, T* const dptr_out) {
     const DEVICE_UINT ele    = GPUDevice::block_id_x();
     const DEVICE_UINT blk_id = GPUDevice::block_id_y();
@@ -1585,8 +1585,8 @@ GLOBAL_FUNC void __unzip_cg1__2(const MeshGPU* const dptr_mesh,
         GPUDevice::sync_threads();
         DEVICE_UINT mid_bit = max_depth - elem_node.m_level;
         DEVICE_UINT cnum    = ((((elem_node.m_z >> mid_bit) & 1u) << 2u) |
-                            (((elem_node.m_y >> mid_bit) & 1u) << 1u) |
-                            ((elem_node.m_x >> mid_bit) & 1u));
+                               (((elem_node.m_y >> mid_bit) & 1u) << 1u) |
+                               ((elem_node.m_x >> mid_bit) & 1u));
         __p2c_3d__<DEVICE_REAL, p>(refEL, cnum, v3[0], v3[1], v1, v2);
 
         if (tx < nx && ty < nx) {
@@ -2123,7 +2123,7 @@ GLOBAL_FUNC __launch_bounds__(64) void __zip_dg_enforce_c0__(
 }
 
 template <typename T, DEVICE_UINT p, DEVICE_UINT PW>
-GLOBAL_FUNC __launch_bounds__(64) void __zip_dg__(
+GLOBAL_FUNC __launch_bounds__(128) void __zip_dg__(
     const MeshGPU* const dptr_mesh, const T* const dptr_in, T* const dptr_out) {
     const DEVICE_UINT ele_id        = GPUDevice::block_id_x();
     const DEVICE_UINT blk           = GPUDevice::block_id_y();
@@ -2174,7 +2174,7 @@ GLOBAL_FUNC __launch_bounds__(64) void __zip_dg__(
 }
 
 template <typename T, DEVICE_UINT p, DEVICE_UINT PW>
-GLOBAL_FUNC __launch_bounds__(64) void __zip_cg__(
+GLOBAL_FUNC __launch_bounds__(128) void __zip_cg__(
     const MeshGPU* const dptr_mesh, const T* const dptr_in, T* const dptr_out) {
     const DEVICE_UINT ele_id        = GPUDevice::block_id_x();
     const DEVICE_UINT blk           = GPUDevice::block_id_y();
@@ -2242,22 +2242,24 @@ GLOBAL_FUNC __launch_bounds__(64) void __write_sb_dg__(
     const DEVICE_UINT tx = GPUDevice::thread_id_x();
     const DEVICE_UINT ty = GPUDevice::thread_id_y();
     // const DEVICE_UINT tz   = GPUDevice::thread_id_z();
-    const DEVICE_UINT nx = dptr_mesh->m_ele_order + 1;
-    if (tx < nx && ty < nx) {
-        const DEVICE_UINT nPe    = nx * nx * nx;
+    const DEVICE_UINT nx     = dptr_mesh->m_ele_order + 1;
+    const DEVICE_UINT sx     = GPUDevice::block_dim_x();
+    const DEVICE_UINT sy     = GPUDevice::block_dim_y();
 
-        const DEVICE_UINT dg_sz  = dptr_mesh->m_oct_local_sz;
-        const DEVICE_UINT lb     = dptr_mesh->m_num_pre_ghost_elements;
+    const DEVICE_UINT nPe    = nx * nx * nx;
+    const DEVICE_UINT dg_sz  = dptr_mesh->m_oct_local_sz;
+    const DEVICE_UINT lb     = dptr_mesh->m_num_pre_ghost_elements;
+    const DEVICE_UINT sf     = dptr_mesh->m_elem_send_f[proc_id];
+    const DEVICE_UINT sc     = dptr_mesh->m_elem_send_c[proc_id];
+    const DEVICE_UINT sm_ele = dptr_mesh->m_elem_send_sm[sf + ele_id] + lb;
 
-        const DEVICE_UINT sf     = dptr_mesh->m_elem_send_f[proc_id];
-        const DEVICE_UINT sc     = dptr_mesh->m_elem_send_c[proc_id];
-        const DEVICE_UINT sm_ele = dptr_mesh->m_elem_send_sm[sf + ele_id] + lb;
-
-        for (DEVICE_UINT tz = 0; tz < nx; tz++)
-            dptr_out[dof * nPe * sf + var * nPe * sc + ele_id * nPe +
-                     IDX_DG(tx, ty, tz)] =
-                dptr_in[var * dg_sz + sm_ele * nPe + IDX_DG(tx, ty, tz)];
-    }
+    // the launch tile is smaller than (p+1)^2 for p >= 8, so stride over it
+    for (DEVICE_UINT jy = ty; jy < nx; jy += sy)
+        for (DEVICE_UINT jx = tx; jx < nx; jx += sx)
+            for (DEVICE_UINT tz = 0; tz < nx; tz++)
+                dptr_out[dof * nPe * sf + var * nPe * sc + ele_id * nPe +
+                         IDX_DG(jx, jy, tz)] =
+                    dptr_in[var * dg_sz + sm_ele * nPe + IDX_DG(jx, jy, tz)];
 
     return;
 }
@@ -2278,21 +2280,22 @@ GLOBAL_FUNC __launch_bounds__(64) void __read_rb_dg__(
     const DEVICE_UINT ty = GPUDevice::thread_id_y();
     const DEVICE_UINT nx = dptr_mesh->m_ele_order + 1;
 
-    if (tx < nx && ty < nx) {
-        const DEVICE_UINT nPe    = nx * nx * nx;
+    const DEVICE_UINT sx     = GPUDevice::block_dim_x();
+    const DEVICE_UINT sy     = GPUDevice::block_dim_y();
 
-        const DEVICE_UINT dg_sz  = dptr_mesh->m_oct_local_sz;
-        const DEVICE_UINT lb     = dptr_mesh->m_num_pre_ghost_elements;
+    const DEVICE_UINT nPe    = nx * nx * nx;
+    const DEVICE_UINT dg_sz  = dptr_mesh->m_oct_local_sz;
+    const DEVICE_UINT rf     = dptr_mesh->m_elem_recv_f[proc_id];
+    const DEVICE_UINT rc     = dptr_mesh->m_elem_recv_c[proc_id];
+    const DEVICE_UINT rm_ele = dptr_mesh->m_elem_recv_sm[rf + ele_id];
 
-        const DEVICE_UINT rf     = dptr_mesh->m_elem_recv_f[proc_id];
-        const DEVICE_UINT rc     = dptr_mesh->m_elem_recv_c[proc_id];
-        const DEVICE_UINT rm_ele = dptr_mesh->m_elem_recv_sm[rf + ele_id];
-
-        for (DEVICE_UINT tz = 0; tz < nx; tz++)
-            dptr_out[var * dg_sz + rm_ele * nPe + IDX_DG(tx, ty, tz)] =
-                dptr_in[dof * rf * nPe + var * nPe * rc + ele_id * nPe +
-                        IDX_DG(tx, ty, tz)];
-    }
+    // the launch tile is smaller than (p+1)^2 for p >= 8, so stride over it
+    for (DEVICE_UINT jy = ty; jy < nx; jy += sy)
+        for (DEVICE_UINT jx = tx; jx < nx; jx += sx)
+            for (DEVICE_UINT tz = 0; tz < nx; tz++)
+                dptr_out[var * dg_sz + rm_ele * nPe + IDX_DG(jx, jy, tz)] =
+                    dptr_in[dof * rf * nPe + var * nPe * rc + ele_id * nPe +
+                            IDX_DG(jx, jy, tz)];
     return;
 }
 
@@ -2432,6 +2435,37 @@ void MeshGPU::destroyVec(T* vec_ptr) {
     return;
 }
 
+// the zip/unzip kernels are templated on <element order p, pad width PW>, and
+// ot::Block always sets PW = p/2. dispatch on the mesh's real element order --
+// these launches used to hard-code <T,6,3>, which faulted on any other order.
+// the launch tile is (p+1)^2, so these kernels carry __launch_bounds__(128) to
+// admit order 8's 81 threads. Anything not listed aborts rather than leaving the
+// unzip buffer untouched.
+#define DENDRO_GPU_ZIP_DISPATCH(porder, KERNEL, gb, tb, s, ...)          \
+    do {                                                                 \
+        switch (porder) {                                                \
+            case 2:                                                      \
+                KERNEL<T, 2, 1><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
+                break;                                                   \
+            case 4:                                                      \
+                KERNEL<T, 4, 2><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
+                break;                                                   \
+            case 6:                                                      \
+                KERNEL<T, 6, 3><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
+                break;                                                   \
+            case 8:                                                      \
+                KERNEL<T, 8, 4><<<gb, tb, 0, s>>>(__VA_ARGS__);          \
+                break;                                                   \
+            default:                                                     \
+                std::cerr << "[MeshGPU]: element order " << (porder)      \
+                          << " is not supported by " #KERNEL              \
+                          << "; zip/unzip would silently no-op"           \
+                          << std::endl;                                   \
+                MPI_Abort(MPI_COMM_WORLD, 1);                             \
+                break;                                                   \
+        }                                                                \
+    } while (0)
+
 template <typename T, typename stream>
 void MeshGPU::unzip_dg(const ot::Mesh* const pMesh,
                        const MeshGPU* const dptr_mesh, const T* const dptr_in,
@@ -2442,14 +2476,15 @@ void MeshGPU::unzip_dg(const ot::Mesh* const pMesh,
            pMesh->getLocalBlockList().size());
     dim3 gb  = dim3(m_unzip_grid[0], m_unzip_grid[1], dof);
     dim3 gb1 = dim3(m_num_local_elements, 1, dof);
-    dim3 tb  = dim3(8, 8, 1);
+    dim3 tb  = dim3(m_ele_order + 1, m_ele_order + 1, 1);
 
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
     //__unzip_dg__3<T,6,3> <<<gb,tb,0,s>>> (dptr_mesh, dptr_in,dptr_out);
     //__block_internal_unzip_dg__2<T,6,3> <<<gb1,tb,0,s>>> (dptr_mesh,
     // dptr_in,dptr_out);
-    __unzip_dg__2<T, 6, 3><<<gb, tb, 0, s>>>(dptr_mesh, dptr_in, dptr_out);
+    DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __unzip_dg__2, gb, tb, s, dptr_mesh,
+                            dptr_in, dptr_out);
     //__unzip_dg__1<T,6,3> <<<gb,tb,0,s>>> (dptr_mesh, dptr_in,dptr_out);
     return;
 }
@@ -2465,11 +2500,12 @@ void MeshGPU::unzip_cg(const ot::Mesh* const pMesh,
     // dim3 gb  = dim3(m_unzip_grid[0],m_unzip_grid[1],dof);
     dim3 gb = dim3(m_unzip_grid[0], 1, dof);
     // dim3 gb1 = dim3(m_num_local_elements,1,dof);
-    dim3 tb = dim3(7, 7, 1);
+    dim3 tb = dim3(m_ele_order + 1, m_ele_order + 1, 1);
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
     //__unzip_cg__2<T,6,3> <<<gb,tb,0,s>>> (dptr_mesh, dptr_in,dptr_out);
-    __unzip_cg1__2<T, 6, 3><<<gb, tb, 0, s>>>(dptr_mesh, dptr_in, dptr_out);
+    DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __unzip_cg1__2, gb, tb, s, dptr_mesh,
+                            dptr_in, dptr_out);
 }
 
 template <typename T, typename stream>
@@ -2477,10 +2513,11 @@ void MeshGPU::zip_dg(const ot::Mesh* const pMesh,
                      const MeshGPU* const dptr_mesh, const T* const dptr_in,
                      T* const dptr_out, unsigned int dof, stream s) {
     dim3 gb = dim3(m_zip_grid[0], m_zip_grid[1], dof);
-    dim3 tb = dim3(8, 8, 1);
+    dim3 tb = dim3(m_ele_order + 1, m_ele_order + 1, 1);
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
-    __zip_dg__<T, 6, 3><<<gb, tb, 0, s>>>(dptr_mesh, dptr_in, dptr_out);
+    DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __zip_dg__, gb, tb, s, dptr_mesh,
+                            dptr_in, dptr_out);
     // the __zip_dg_enforce_c0__ does not work. The hanging node remove
     // duplicates is complicated.
     //__zip_dg_enforce_c0__<T,6,3> <<<gb,tb,0,s>>> (dptr_mesh,dptr_in,dptr_out);
@@ -2492,10 +2529,11 @@ void MeshGPU::zip_cg(const ot::Mesh* const pMesh,
                      const MeshGPU* const dptr_mesh, const T* const dptr_in,
                      T* const dptr_out, unsigned int dof, stream s) {
     dim3 gb = dim3(m_zip_grid[0], m_zip_grid[1], dof);
-    dim3 tb = dim3(8, 8, 1);
+    dim3 tb = dim3(m_ele_order + 1, m_ele_order + 1, 1);
     // printf("Grid : {%d, %d, %d} blocks. Blocks : {%d, %d, %d} threads.\n",
     // gb.x, gb.y, gb.z, tb.x, tb.y, tb.z);
-    __zip_cg__<T, 6, 3><<<gb, tb, 0, s>>>(dptr_mesh, dptr_in, dptr_out);
+    DENDRO_GPU_ZIP_DISPATCH(m_ele_order, __zip_cg__, gb, tb, s, dptr_mesh,
+                            dptr_in, dptr_out);
     return;
 }
 

@@ -1,0 +1,76 @@
+#pragma once
+
+#include <memory>
+#include <stdexcept>
+#include <string>
+
+namespace dendroderivs {
+
+enum FilterType { F_NONE = 0, F_KO4, F_KO6, F_KO8 };
+
+enum FilterFamily { FF_NONE = 0, FF_KO };
+
+class Filters {
+   protected:
+    unsigned int p_n;
+    unsigned int p_pw;
+    unsigned int p_ele_order;
+
+    Filters(unsigned int ele_order) : p_ele_order{ele_order} {
+        p_n  = p_ele_order * 2 + 1;
+        p_pw = p_ele_order / 2;
+    }
+
+    Filters(const Filters &obj)
+        : p_n{obj.p_n}, p_pw{obj.p_pw}, p_ele_order{obj.p_ele_order} {};
+
+   public:
+    virtual ~Filters() {};
+
+    virtual std::unique_ptr<Filters> clone() const         = 0;
+
+    virtual void do_full_filter(const double *const input, double *const output,
+                                double *const workspace_x,
+                                double *const workspace_y,
+                                double *const worksapce_z, const double dx,
+                                const double dy, const double dz,
+                                const double coeff, const unsigned int *sz,
+                                const unsigned int bflag)  = 0;
+
+    /**
+     * @brief CAKO variant of do_full_filter: the dissipation strength is a
+     * per-point field (coeff_field, block-sized) rather than a scalar, allowing
+     * spatially-varying dissipation (e.g. BSSN's sqrt(chi)*epsilon).
+     *
+     * The default implementation throws; filter families that support it (the
+     * KO families) override it.
+     */
+    virtual void do_full_filter_field(
+        const double *const input, double *const output,
+        double *const workspace_x, double *const workspace_y,
+        double *const workspace_z, const double dx, const double dy,
+        const double dz, const double *const coeff_field,
+        const unsigned int *sz, const unsigned int bflag) {
+        throw std::runtime_error(
+            "do_full_filter_field (per-point CAKO) is not implemented for this "
+            "filter family");
+    }
+
+    virtual std::string toString() const                   = 0;
+
+    virtual bool do_filter_before() const                  = 0;
+
+    // rhs += coeff * filter(u) on the active region in one pass, no output
+    // buffer; false if the engine cannot (caller uses do_full_filter)
+    virtual bool do_accumulate(double *const, const double *const, const double,
+                               const double, const double, const double,
+                               const unsigned int *, const unsigned int) {
+        return false;
+    }
+
+    virtual void set_maximum_block_size(size_t block_size) = 0;
+
+    virtual FilterFamily get_filter_family() const         = 0;
+};
+
+}  // namespace dendroderivs

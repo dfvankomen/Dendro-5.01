@@ -4,6 +4,73 @@
 #include "daUtils.h"
 
 namespace dendro_aeh {
+
+void AEH_BHaHAHA::reseed_common_horizon_geometric_() {
+    const int inspiral_bh1   = 0;
+    const int inspiral_bh2   = 1;
+    const int common_horizon = 2;
+
+    const double x1          = x_center_m1_[inspiral_bh1];
+    const double y1          = y_center_m1_[inspiral_bh1];
+    const double z1          = z_center_m1_[inspiral_bh1];
+    const double x2          = x_center_m1_[inspiral_bh2];
+    const double y2          = y_center_m1_[inspiral_bh2];
+    const double z2          = z_center_m1_[inspiral_bh2];
+    const double r1          = r_max_m1_[inspiral_bh1];
+    const double r2          = r_max_m1_[inspiral_bh2];
+
+    const double sep         = dist(x1, x2, y1, y2, z1, z2);
+    const double mid_x       = 0.5 * (x1 + x2);
+    const double mid_y       = 0.5 * (y1 + y2);
+    const double mid_z       = 0.5 * (z1 + z2);
+    const double r_geom =
+        std::min(0.5 * sep + std::max(r1, r2) + bah_ah3_radius_padding_,
+                 bah_max_search_radius_[common_horizon]);
+
+    x_center_m1_[common_horizon] = mid_x;
+    y_center_m1_[common_horizon] = mid_y;
+    z_center_m1_[common_horizon] = mid_z;
+    x_center_m2_[common_horizon] = 0.0;
+    y_center_m2_[common_horizon] = 0.0;
+    z_center_m2_[common_horizon] = 0.0;
+    x_center_m3_[common_horizon] = 0.0;
+    y_center_m3_[common_horizon] = 0.0;
+    z_center_m3_[common_horizon] = 0.0;
+    t_m1_[common_horizon]        = -1.0;
+    t_m2_[common_horizon]        = -1.0;
+    t_m3_[common_horizon]        = -1.0;
+    r_min_m1_[common_horizon]    = 0.0;
+    r_max_m1_[common_horizon]    = 0.0;
+    r_min_m2_[common_horizon]    = 0.0;
+    r_max_m2_[common_horizon]    = 0.0;
+    r_min_m3_[common_horizon]    = 0.0;
+    r_max_m3_[common_horizon]    = 0.0;
+
+    const size_t horizon_data_size =
+        static_cast<size_t>(max_ntheta_ * max_nphi_);
+    const size_t horizon_offset =
+        static_cast<size_t>(common_horizon) * horizon_data_size;
+    std::fill(prev_horizon_m1_.begin() + horizon_offset,
+              prev_horizon_m1_.begin() + horizon_offset + horizon_data_size,
+              0.0);
+    std::fill(prev_horizon_m2_.begin() + horizon_offset,
+              prev_horizon_m2_.begin() + horizon_offset + horizon_data_size,
+              0.0);
+    std::fill(prev_horizon_m3_.begin() + horizon_offset,
+              prev_horizon_m3_.begin() + horizon_offset + horizon_data_size,
+              0.0);
+
+    x_guess_[common_horizon]                                   = mid_x;
+    y_guess_[common_horizon]                                   = mid_y;
+    z_guess_[common_horizon]                                   = mid_z;
+    r_min_guess_[common_horizon]                               = 0.0;
+    r_max_guess_[common_horizon]                               = r_geom;
+
+    bah_use_fixed_radius_guess_on_full_sphere_[common_horizon] = 1;
+    failed_last_find_[common_horizon]                          = false;
+    failed_last_find_int_[common_horizon]                      = 0;
+}
+
 void AEH_BHaHAHA::find_horizons(
     const ot::Mesh* mesh, const double** var, const unsigned int current_step,
     const double current_time, const std::vector<Point> tracked_location_data) {
@@ -92,6 +159,41 @@ void AEH_BHaHAHA::find_horizons(
         bah_xyz_center_r_minmax(bah_params_and_data, &x_center, &y_center,
                                 &z_center, &r_min, &r_max);
 
+        // extrapolation can shoot off into nonsense during the plunge
+        // (closely-spaced finds + long extrapolation = polynomial blowup).
+        // if the new guess is non-finite or way off from the last known
+        // good center, fall back to that center.
+        {
+            constexpr double k_clamp = 5.0;
+            const double r_search    = bah_max_search_radius_[which_horizon];
+            const double dx          = x_center - x_center_m1_[which_horizon];
+            const double dy          = y_center - y_center_m1_[which_horizon];
+            const double dz          = z_center - z_center_m1_[which_horizon];
+            const double drift       = std::sqrt(dx * dx + dy * dy + dz * dz);
+            const bool nonfinite     = !std::isfinite(x_center) ||
+                                       !std::isfinite(y_center) ||
+                                       !std::isfinite(z_center);
+            const bool too_far =
+                (t_m1_[which_horizon] >= 0.0) && (drift > k_clamp * r_search);
+            if (nonfinite || too_far) {
+                if (bah_verbosity_level_ > 0 && rankActive == 0) {
+                    std::cout
+                        << GRN
+                        << "[BAH]: extrapolation clamp h=" << which_horizon
+                        << " guess=(" << x_center << "," << y_center << ","
+                        << z_center << ") drift=" << drift
+                        << " -> falling back to last-known ("
+                        << x_center_m1_[which_horizon] << ","
+                        << y_center_m1_[which_horizon] << ","
+                        << z_center_m1_[which_horizon] << ")" << NRM
+                        << std::endl;
+                }
+                x_center = x_center_m1_[which_horizon];
+                y_center = y_center_m1_[which_horizon];
+                z_center = z_center_m1_[which_horizon];
+            }
+        }
+
         // need to make sure that we force a full guess if the parameters
         // request (or enforce) it
         if (bah_params_and_data->use_fixed_radius_guess_on_full_sphere) {
@@ -119,9 +221,10 @@ void AEH_BHaHAHA::find_horizons(
     // 3: BH Mode Synchronization (if enabled) - sync horizon guess across ranks
     // - activate or deactivate indivisdual or common horizon searches based on
     // BBH criteria
-    if (is_bbh_) {
-        // time output for starting BBH mode
-
+    // not BBH-only: this is how every rank learns the owning rank's guess.
+    // Skipped, ranks disagree on Nr_external_input and the gather in
+    // interpolate_metric_data overruns the owner's buffer.
+    {
         // 3.a: only one rank keeps the "real" data, all others zero out
         for (int which_horizon = 0; which_horizon < num_horizons_;
              which_horizon++) {
@@ -169,13 +272,16 @@ void AEH_BHaHAHA::find_horizons(
                           prev_horizon_m3_.begin() + horizon_offset +
                               horizon_data_size,
                           0.0);
-
             }
         }
 
         // 3.b: MPI reduction to sum arrays across ranks which makes them
         // consistent
         bah_sum_shared_arrays(mesh);
+    }
+
+    // BBH-only from here: common-horizon activation and separation.
+    if (is_bbh_) {
 #if 0
         if (rankActive == 0) {
             for (int which_horizon = 0; which_horizon < num_horizons;
@@ -194,21 +300,32 @@ void AEH_BHaHAHA::find_horizons(
         }
 #endif
 
-        // if use_fixed_radius_guess_on_full_sphere=0 then we've found a common
-        // horizon
-        const bool found_common =
-            (bah_use_fixed_radius_guess_on_full_sphere_[common_horizon] == 0);
-
         // are the black holes active?
         const bool bh1_active    = (bah_horizon_active_[inspiral_bh1] != 0);
         const bool bh2_active    = (bah_horizon_active_[inspiral_bh2] != 0);
         const bool common_active = (bah_horizon_active_[common_horizon] != 0);
 
-        // step 3.c: deactivate individual BH horizons if common is found
-        if (common_active && found_common && bh1_active && bh2_active) {
-            bah_horizon_active_[inspiral_bh1] = 0;
-            bah_horizon_active_[inspiral_bh2] = 0;
-            // disabled the search!
+        // step 3.c: deactivate AH1/AH2 only when their separation collapses
+        // below the configured merger threshold. Finding AH3 alone is NOT
+        // proof of merger (it can falsely converge onto a single BH for large
+        // mass ratios), so AH1/AH2 stay active alongside AH3 until the BHs
+        // are essentially coincident.
+        if (bh1_active && bh2_active && t_m1_[inspiral_bh1] >= 0.0 &&
+            t_m1_[inspiral_bh2] >= 0.0) {
+            const double sep_bhbh =
+                dist(x_center_m1_[inspiral_bh1], x_center_m1_[inspiral_bh2],
+                     y_center_m1_[inspiral_bh1], y_center_m1_[inspiral_bh2],
+                     z_center_m1_[inspiral_bh1], z_center_m1_[inspiral_bh2]);
+            if (sep_bhbh < bah_bhbh_min_separation_) {
+                bah_horizon_active_[inspiral_bh1] = 0;
+                bah_horizon_active_[inspiral_bh2] = 0;
+                if (bah_verbosity_level_ > 0 && rankActive == 0) {
+                    std::cout << GRN << "BBH BHBH_MIN_SEPARATION reached (sep="
+                              << std::fixed << std::setprecision(6) << sep_bhbh
+                              << " < " << bah_bhbh_min_separation_
+                              << "): disabling AH1/AH2." << NRM << std::endl;
+                }
+            }
         }
 
         // 3.d: we activate common horizon based on proximity of last known good
@@ -233,15 +350,17 @@ void AEH_BHaHAHA::find_horizons(
             // check last found times
             if (!globalRank && bah_verbosity_level_ > 1) {
                 // BH1
-                std::cout << "[BAH]: last found BH1 time: " << time_bh1_last_found << std::endl;
-                std::cout << "[BAH]: last found BH1 position: (" 
-                  << x_bh1_last << ',' << y_bh1_last << ',' << z_bh1_last 
-                  << ')' << std::endl;
+                std::cout << "[BAH]: last found BH1 time: "
+                          << time_bh1_last_found << std::endl;
+                std::cout << "[BAH]: last found BH1 position: (" << x_bh1_last
+                          << ',' << y_bh1_last << ',' << z_bh1_last << ')'
+                          << std::endl;
                 // BH2
-                std::cout << "[BAH]: last found BH2 time: " << time_bh2_last_found << std::endl;
-                std::cout << "[BAH]: last found BH2 position: (" 
-                  << x_bh2_last << ',' << y_bh2_last << ',' << z_bh2_last 
-                  << ')' << std::endl;
+                std::cout << "[BAH]: last found BH2 time: "
+                          << time_bh2_last_found << std::endl;
+                std::cout << "[BAH]: last found BH2 position: (" << x_bh2_last
+                          << ',' << y_bh2_last << ',' << z_bh2_last << ')'
+                          << std::endl;
             }
 
             // if they've both been found, then we can check their centers
@@ -272,61 +391,96 @@ void AEH_BHaHAHA::find_horizons(
 
                 if (dist_between_centers + rmax_bh1_last + rmax_bh2_last <=
                     threshold_diameter) {
-                    // activate common horizon! hooray
                     bah_horizon_active_[common_horizon] = 1;
-
-                    // compute center of mass from last good centers
-                    const double m1 = bah_m_scale_[inspiral_bh1];
-                    const double m2 = bah_m_scale_[inspiral_bh2];
-
-                    double x_center_common =
-                        (m1 * x_bh1_last + m2 * x_bh2_last) / (m1 + m2);
-                    double y_center_common =
-                        (m1 * y_bh1_last + m2 * y_bh2_last) / (m1 + m2);
-                    double z_center_common =
-                        (m1 * z_bh1_last + m2 * z_bh2_last) / (m1 + m2);
-
-                    // update the common-horizon center
-                    x_center_m1_[common_horizon] = x_center_common;
-                    y_center_m1_[common_horizon] = y_center_common;
-                    z_center_m1_[common_horizon] = z_center_common;
-
-                    // force the next extrapolation to use full-sphere radius!
-                    t_m1_[common_horizon]        = t_m2_[common_horizon] =
-                        t_m3_[common_horizon]    = -1.0;
-
-                    // and working guesses for iteration
-                    x_guess_[common_horizon]     = x_center_common;
-                    y_guess_[common_horizon]     = y_center_common;
-                    z_guess_[common_horizon]     = z_center_common;
-
-                    // and a naive initial guess
-                    r_min_guess_[common_horizon] = 0.0;
-                    r_max_guess_[common_horizon] =
-                        bah_max_search_radius_[common_horizon];
-
-                    if (bah_verbosity_level_ > 0) {
-                        if (rankActive == 0) {
-                            std::cout
-                                << GRN
-                                << "BBH COMMON HORIZON ACTIVATED: center=("
-                                << std::fixed << std::setprecision(6)
-                                << x_center_common << "," << y_center_common
-                                << "," << z_center_common << ") r_max_guess="
-                                << r_max_guess_[common_horizon] << NRM
-                                << std::endl;
-                        }
+                    if (bah_verbosity_level_ > 0 && rankActive == 0) {
+                        std::cout << GRN
+                                  << "BBH COMMON HORIZON ACTIVATED (geometric "
+                                     "reseed in step 3.e)."
+                                  << NRM << std::endl;
                     }
+                    // Geometric reseed is performed unconditionally below in
+                    // step 3.e (since use_fixed_radius_guess_on_full_sphere_
+                    // is still 1 here for a never-found AH3).
                 }
             } else {
                 // sanity check: make sure horizons found when expected
                 if (rankActive == 0 && bah_verbosity_level_ > 1) {
-                    std::cout << "[BAH]: Horizon never found before!" << std::endl;
+                    std::cout << "[BAH]: Horizon never found before!"
+                              << std::endl;
                 }
+            }
+        }
+
+        // 3.e: AH3 sanity check + corrective geometric reseed.
+        // Runs after 3.b (synced inputs), 3.c (separation shutdown), and 3.d
+        // (activation). All inputs are synchronized across ranks so the
+        // decision is deterministic on every rank.
+        const bool common_active_now =
+            (bah_horizon_active_[common_horizon] != 0);
+        const bool ah3_ever_found =
+            (bah_use_fixed_radius_guess_on_full_sphere_[common_horizon] == 0);
+        const bool bh_centers_valid =
+            (t_m1_[inspiral_bh1] >= 0.0) && (t_m1_[inspiral_bh2] >= 0.0);
+
+        if (common_active_now && ah3_ever_found && bh_centers_valid) {
+            const double r3 = r_max_m1_[common_horizon];
+            const double d31 =
+                dist(x_center_m1_[common_horizon], x_center_m1_[inspiral_bh1],
+                     y_center_m1_[common_horizon], y_center_m1_[inspiral_bh1],
+                     z_center_m1_[common_horizon], z_center_m1_[inspiral_bh1]);
+            const double d32 =
+                dist(x_center_m1_[common_horizon], x_center_m1_[inspiral_bh2],
+                     y_center_m1_[common_horizon], y_center_m1_[inspiral_bh2],
+                     z_center_m1_[common_horizon], z_center_m1_[inspiral_bh2]);
+            const double k_r3 = bah_ah3_sanity_k_ * r3;
+
+            const bool insane = (r3 <= 0.0) || (d31 > k_r3) || (d32 > k_r3);
+            if (insane) {
+                if (bah_verbosity_level_ > 0 && rankActive == 0) {
+                    std::cout
+                        << GRN << "BBH AH3 SANITY FAIL: r3=" << std::fixed
+                        << std::setprecision(6) << r3 << ", d(c3,c1)=" << d31
+                        << ", d(c3,c2)=" << d32 << ", k*r3=" << k_r3
+                        << " -> wiping AH3 history, geometric reseed." << NRM
+                        << std::endl;
+                }
+                bah_use_fixed_radius_guess_on_full_sphere_[common_horizon] = 1;
+                failed_last_find_[common_horizon]     = true;
+                failed_last_find_int_[common_horizon] = 1;
+            }
+        }
+
+        const bool needs_reseed =
+            common_active_now && bh_centers_valid &&
+            ((bah_use_fixed_radius_guess_on_full_sphere_[common_horizon] ==
+              1) ||
+             failed_last_find_[common_horizon]);
+
+        if (needs_reseed) {
+            reseed_common_horizon_geometric_();
+            if (bah_verbosity_level_ > 1 && rankActive == 0) {
+                std::cout << "[BAH]: AH3 geometric reseed: center=("
+                          << x_guess_[common_horizon] << ","
+                          << y_guess_[common_horizon] << ","
+                          << z_guess_[common_horizon]
+                          << ") r_max=" << r_max_guess_[common_horizon]
+                          << std::endl;
             }
         }
     }
     // ------- END STEP 3 --------
+
+    // dump per-horizon guesses going into interpolation. handy when a
+    // downstream interp blows up - tells you whose sphere is at fault.
+    if (bah_verbosity_level_ > 1 && rankActive == 0) {
+        for (int h = 0; h < num_horizons_; h++) {
+            std::cout << "[BAH]: pre-interp h=" << h
+                      << " active=" << bah_horizon_active_[h] << " guess=("
+                      << x_guess_[h] << "," << y_guess_[h] << "," << z_guess_[h]
+                      << ")" << " r=[" << r_min_guess_[h] << ","
+                      << r_max_guess_[h] << "]" << std::endl;
+        }
+    }
 
     // 4: Metric interpolation
     // -- Allocate memory and interpolate metric data onto the BHaHAHA grid
@@ -359,9 +513,10 @@ void AEH_BHaHAHA::find_horizons(
         // that rank
         if (rankActive == which_MPI_rank) {
             bha_param_data_[which_horizon].input_metric_data =
-                (double*)malloc(NUM_EXT_INPUT_CARTESIAN_GFS *
-                                bah_params_and_data->Nr_external_input *
-                                max_ntheta_ * max_nphi_ * sizeof(double));
+                (double*)calloc(NUM_EXT_INPUT_CARTESIAN_GFS *
+                                    bah_params_and_data->Nr_external_input *
+                                    max_ntheta_ * max_nphi_,
+                                sizeof(double));
 
             if (!bha_param_data_[which_horizon].input_metric_data) {
                 std::cerr << "ERROR ALLOCATING MEMORY FOR INPUT METRIC DATA!"
@@ -428,8 +583,26 @@ void AEH_BHaHAHA::find_horizons(
                 transfer_to_persistent_from_bhahaha(
                     &bha_param_data_[which_horizon]);
 
-                // output horizon diagnostics to file
-                if (current_step % file_output_freq_ == 0) {
+                // capture the QoI snapshot every successful solve (independent
+                // of file output)
+                HorizonQoI q;
+                q.r_min      = bhahaha_diags.min_coord_radius_wrt_centroid;
+                q.r_mean     = bhahaha_diags.mean_coord_radius_wrt_centroid;
+                q.r_max      = bhahaha_diags.max_coord_radius_wrt_centroid;
+                q.area       = bhahaha_diags.area;
+                q.x_centroid = bhahaha_diags.x_centroid_wrt_coord_origin;
+                q.y_centroid = bhahaha_diags.y_centroid_wrt_coord_origin;
+                q.z_centroid = bhahaha_diags.z_centroid_wrt_coord_origin;
+                q.spin_x = bhahaha_diags.spin_a_x_from_xz_over_yz_prop_circumfs;
+                q.spin_y = bhahaha_diags.spin_a_y_from_yz_over_xz_prop_circumfs;
+                q.spin_z = bhahaha_diags.spin_a_z_from_xz_over_xy_prop_circumfs;
+                q.t      = current_time;
+                q.valid  = true;
+                qoi_[which_horizon] = q;
+
+                // output horizon diagnostics to file; 0 means disabled
+                if (file_output_freq_ > 0 &&
+                    current_step % file_output_freq_ == 0) {
                     bah_diagnostics_file_output(
                         &bhahaha_diags, &bha_param_data_[which_horizon],
                         num_horizons_, x_guess_[which_horizon],
@@ -455,26 +628,31 @@ void AEH_BHaHAHA::find_horizons(
 
                 // revert to full-sphere guess
                 bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] = 1;
-                r_min_guess_[which_horizon] = 0.0;
-                r_max_guess_[which_horizon] = bah_max_search_radius_[which_horizon];
+                r_min_guess_[which_horizon]                               = 0.0;
+                r_max_guess_[which_horizon] =
+                    bah_max_search_radius_[which_horizon];
 
                 // update the guess with the BH data for this horizon
                 // taken from the bh history if possible
                 if (!tracked_location_data.empty() &&
                     which_horizon != common_horizon) {
                     if (bah_verbosity_level_ > 0) {
-                        std::cout << "\tAH NOTICE rank " << std::setw(4)
-                                  << rankActive << " horizon " << std::setw(4)
-                                  << (which_horizon + 1)
-                                  << ": Last find failed, overwriting guess points "
-                                     "to tracked puncture location: "
-                                  << tracked_location_data[which_horizon]
-                                  << std::endl;
+                        std::cout
+                            << "\tAH NOTICE rank " << std::setw(4) << rankActive
+                            << " horizon " << std::setw(4)
+                            << (which_horizon + 1)
+                            << ": Last find failed, overwriting guess points "
+                               "to tracked puncture location: "
+                            << tracked_location_data[which_horizon]
+                            << std::endl;
                     }
                     // update center location
-                    x_guess_[which_horizon] = tracked_location_data[which_horizon].x();
-                    y_guess_[which_horizon] = tracked_location_data[which_horizon].y();
-                    z_guess_[which_horizon] = tracked_location_data[which_horizon].z();
+                    x_guess_[which_horizon] =
+                        tracked_location_data[which_horizon].x();
+                    y_guess_[which_horizon] =
+                        tracked_location_data[which_horizon].y();
+                    z_guess_[which_horizon] =
+                        tracked_location_data[which_horizon].z();
                 }
             }
         }
@@ -486,10 +664,60 @@ void AEH_BHaHAHA::find_horizons(
     // now that we're done we can delete the whole param_data
     bha_param_data_.clear();
 
+    // make the latest QoI snapshots coherent across all active ranks so any
+    // rank (e.g. the AMR refinement loop) can query them.
+    broadcast_qois_to_all(mesh);
+
     bhahaha_profiler_.stop();
     // TODO: print info
 
     MPI_Barrier(commActive);
+}
+
+void AEH_BHaHAHA::broadcast_qois_to_all(const ot::Mesh* mesh) {
+    if (!mesh->isActive()) return;
+
+    const unsigned int rankActive = mesh->getMPIRank();
+    const unsigned int npesActive = mesh->getMPICommSize();
+    MPI_Comm commActive           = mesh->getMPICommunicator();
+
+    // each owned horizon is packed as {horizon_idx, HorizonQoI::NUM_PACKED}
+    constexpr int stride          = 1 + HorizonQoI::NUM_PACKED;
+
+    // count + pack the horizons this rank owns (same round-robin as the solve)
+    size_t local_horizons         = 0;
+    for (unsigned int h = 0; h < num_horizons_; ++h)
+        if (h % npesActive == rankActive) local_horizons++;
+
+    std::vector<double> sendBuffer(local_horizons * stride);
+    size_t off = 0;
+    for (unsigned int h = 0; h < num_horizons_; ++h) {
+        if (h % npesActive != rankActive) continue;
+        sendBuffer[off] = static_cast<double>(h);
+        qoi_[h].pack(&sendBuffer[off + 1]);
+        off += stride;
+    }
+
+    // gather variable counts, then Allgatherv so every rank sees every horizon
+    const int send_count = static_cast<int>(sendBuffer.size());
+    std::vector<int> recv_counts(npesActive), displs(npesActive);
+    MPI_Allgather(&send_count, 1, MPI_INT, recv_counts.data(), 1, MPI_INT,
+                  commActive);
+
+    displs[0] = 0;
+    for (unsigned int i = 1; i < npesActive; ++i)
+        displs[i] = displs[i - 1] + recv_counts[i - 1];
+
+    std::vector<double> recv_buffer(displs.back() + recv_counts.back());
+    MPI_Allgatherv(sendBuffer.data(), send_count, MPI_DOUBLE,
+                   recv_buffer.data(), recv_counts.data(), displs.data(),
+                   MPI_DOUBLE, commActive);
+
+    // unpack everyone's contributions into qoi_
+    for (size_t read = 0; read + stride <= recv_buffer.size(); read += stride) {
+        const unsigned int h = static_cast<unsigned int>(recv_buffer[read]);
+        if (h < num_horizons_) qoi_[h].unpack(&recv_buffer[read + 1]);
+    }
 }
 
 void AEH_BHaHAHA::bah_sum_shared_arrays(const ot::Mesh* mesh) {
@@ -750,6 +978,20 @@ void AEH_BHaHAHA::interpolate_metric_data(
 
         receive_idxs.resize(total_elements);
 
+        // skipped points keep the calloc zero-fill, which is finite and so
+        // invisible to a NaN check, but is not a valid metric
+        int total_received = 0;
+        for (int i = 0; i < npesActive; ++i) total_received += recv_counts[i];
+        if (total_received != static_cast<int>(total_elements)) {
+            std::cerr << "WARNING[" << __func__ << "]: horizon "
+                      << which_horizon << " (0-based) got " << total_received
+                      << " of " << total_elements
+                      << " requested points; the rest are zero-filled and are "
+                         "NOT a valid metric. Is the search sphere inside the "
+                         "domain?"
+                      << std::endl;
+        }
+
 #if 0
         std::cout << "WHITCH RANK: " << which_rank << std::endl;
         print_vec(recv_counts, "RECV_COUNTS");
@@ -813,10 +1055,8 @@ void AEH_BHaHAHA::synchronize_to_root(const ot::Mesh* mesh,
     MPI_Comm commActive        = mesh->getMPICommunicator();
     unsigned int globalRank    = mesh->getMPIRankGlobal();
 
-    // need to synchronize the x/y/z center arrays, the t arrays, the r
-    // min/max arrays, and the prev_horizon arrays (as well as the active
-    // arrays), that's 18 arrays
-    constexpr int num_standard = 20;
+    // in-memory gather width only; the on-disk checkpoint keys are unchanged
+    constexpr int num_standard = 21;
 
     const size_t data_to_send_per_horizon =
         1 + num_standard + 3 * max_nphi_ * max_ntheta_;
@@ -870,6 +1110,9 @@ void AEH_BHaHAHA::synchronize_to_root(const ot::Mesh* mesh,
         sendBuffer[curr_offset++] = bah_horizon_active_[which_horizon];
         sendBuffer[curr_offset++] =
             failed_last_find_[which_horizon] ? 1.0 : 0.0;
+        // the collecting rank solves no horizon, so its own copy is stale
+        sendBuffer[curr_offset++] =
+            bah_use_fixed_radius_guess_on_full_sphere_[which_horizon];
 
         // make sure curr_offset is updated
         // curr_offset += num_standard;
@@ -943,6 +1186,8 @@ void AEH_BHaHAHA::synchronize_to_root(const ot::Mesh* mesh,
                 (recv_buffer[read_offset + 19] == 1.0);
             failed_last_find_int_[which_horizon] =
                 failed_last_find_[which_horizon] ? 1 : 0;
+            bah_use_fixed_radius_guess_on_full_sphere_[which_horizon] =
+                static_cast<int>(recv_buffer[read_offset + 20]);
 
             // make sure curr_offset is updated
             read_offset += num_standard;
@@ -981,7 +1226,7 @@ void AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
     unsigned int globalRank    = mesh->getMPIRankGlobal();
 
     // use rank 3 to try and free up other procs?
-    const unsigned int procUse = npesActive < 3 ? 0 : 3;
+    const unsigned int procUse = checkpoint_root_rank(npesActive);
 
     // for (unsigned int i = 0; i < num_horizons_; ++i) {
     //     transfer_to_persistent_from_bhahaha(&bha_param_data_[i]);
@@ -1023,6 +1268,13 @@ void AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
         checkPoint["FAILED_LAST_FIND"] = failed_last_find_;
         checkPoint["USE_FIXED_RADIUS_GUESS"] =
             bah_use_fixed_radius_guess_on_full_sphere_;
+
+        // latest QoI per horizon, flattened (qoi_ is coherent on every rank
+        // after the find_horizons broadcast)
+        std::vector<double> qoi_flat(num_horizons_ * HorizonQoI::NUM_PACKED);
+        for (unsigned int h = 0; h < num_horizons_; ++h)
+            qoi_[h].pack(&qoi_flat[h * HorizonQoI::NUM_PACKED]);
+        checkPoint["QOI_M1"] = b91_encode(qoi_flat);
 
         std::ofstream outfile(checkpoint_output);
         if (!outfile) {
@@ -1156,6 +1408,19 @@ void AEH_BHaHAHA::restore_checkpoint(const ot::Mesh* mesh,
             checkPoint["USE_FIXED_RADIUS_GUESS"];
         restore_vector(bah_use_fixed_radius_guess_on_full_sphere_,
                        temp_fixed_guess, num_horizons_);
+    }
+
+    // optional: pre-QoI checkpoints leave qoi_ default (repopulates next solve)
+    if (checkPoint.contains("QOI_M1")) {
+        temp                  = checkPoint["QOI_M1"];
+        temp_vec              = b91_decode<double>(temp);
+        const size_t expected = num_horizons_ * HorizonQoI::NUM_PACKED;
+        if (temp_vec.size() != expected) {
+            throw std::runtime_error(
+                "ERROR restoring AEH QoI: unexpected QOI_M1 size!");
+        }
+        for (unsigned int h = 0; h < num_horizons_; ++h)
+            qoi_[h].unpack(&temp_vec[h * HorizonQoI::NUM_PACKED]);
     }
 
     // unpack back into the bah struct to ensure we're all on the same page
