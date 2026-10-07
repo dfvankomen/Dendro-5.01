@@ -165,7 +165,6 @@ class ETS_TSRK : public ETS<T, Ctx> {
             const DVec* sp[16];
             // fresh stages: StVec[i] = f(Y_i)
             for (unsigned int i = 0; i < S; i++) {
-                m_uiEVecTmp[0].copy_data(m_uiEVar);
                 unsigned int n = 0;
                 for (unsigned int j = 0; j < S; j++) {
                     if (m_A1[i * S + j] != 0.0) {
@@ -179,8 +178,7 @@ class ETS_TSRK : public ETS<T, Ctx> {
                     if (m_r[i * S + j] != 0.0) {
                         cf[n] = m_r[i * S + j] * dt; sp[n++] = &m_uiStVec[j];
                     }
-                if (n) DVec::axpy_multi(pMesh, n, cf, sp, m_uiEVecTmp[0]);
-                m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
+                m_uiAppCtx->rk_stage_input(m_uiEVar, n, cf, sp, m_uiEVecTmp[0]);
                 m_uiAppCtx->pre_stage(m_uiStVec[i]);
                 m_uiAppCtx->rhs(&m_uiEVecTmp[0], &m_uiStVec[i], 1, t + m_c[i] * dt);
                 m_uiAppCtx->post_stage(m_uiStVec[i]);
@@ -192,9 +190,10 @@ class ETS_TSRK : public ETS<T, Ctx> {
                 if (m_v1[i] != 0.0) { cf[n] = m_v1[i] * dt; sp[n++] = &m_hist[i]; }
                 if (m_v2[i] != 0.0) { cf[n] = m_v2[i] * dt; sp[n++] = &m_hist[S + i]; }
             }
-            if (n) DVec::axpy_multi(pMesh, n, cf, sp, m_uiEVar);
+            m_uiAppCtx->rk_combine(n, cf, sp, m_uiEVar);
+        } else {
+            m_uiAppCtx->post_timestep(m_uiEVar);
         }
-        m_uiAppCtx->post_timestep(m_uiEVar);
 
         // rotate: hist2 <- hist1 ; hist1 <- this step's fresh stage derivs
         for (unsigned int j = 0; j < S; j++)
