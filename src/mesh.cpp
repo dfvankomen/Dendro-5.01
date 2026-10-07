@@ -4749,6 +4749,243 @@ void Mesh::buildE2NMap() {
     // if(!m_uiActiveRank) std::cout<<"E2N Mapping ended"<<std::endl;
 }
 
+void Mesh::buildUnzipPlan() {
+    if (m_uiUnzipPlanBuilt) return;
+    m_uiUnzipPlanBuilt = true;
+    m_uiUnzipOpOffset.assign(m_uiNumTotalElements + 1, 0);
+    m_uiUnzipOps.clear();
+    m_uiUnzipSlots.clear();
+    if (!m_uiIsActive) return;
+
+    const unsigned int eO  = m_uiElementOrder;
+    const unsigned int eo1 = eO + 1;
+    // slot lists in getElementNodalValues' interpolation order: 6 faces
+    // (L,R,D,U,B,F; slow = higher free axis) then 12 edges (LD..UF)
+    static const unsigned int faceAx[6] = {0, 0, 1, 1, 2, 2};
+    static const unsigned int faceHi[6] = {0, 1, 0, 1, 0, 1};
+    static const unsigned int faceDir[6] = {OCT_DIR_LEFT, OCT_DIR_RIGHT,
+                                            OCT_DIR_DOWN, OCT_DIR_UP,
+                                            OCT_DIR_BACK, OCT_DIR_FRONT};
+    // edge: free axis, then (axis,hi) of its two faces
+    static const unsigned int edgeFree[12] = {2, 2, 1, 1, 2, 2,
+                                              1, 1, 0, 0, 0, 0};
+    static const unsigned int edgeF[12][2] = {
+        {0, 2}, {0, 3}, {0, 4}, {0, 5}, {1, 2}, {1, 3},
+        {1, 4}, {1, 5}, {2, 4}, {2, 5}, {3, 4}, {3, 5}};
+    static const unsigned int edgeDir[12] = {
+        OCT_DIR_LEFT_DOWN,  OCT_DIR_LEFT_UP,    OCT_DIR_LEFT_BACK,
+        OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
+        OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
+        OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK,    OCT_DIR_UP_FRONT};
+
+    auto slot = [eo1](const unsigned int* x) {
+        return x[2] * eo1 * eo1 + x[1] * eo1 + x[0];
+    };
+    for (unsigned int f = 0; f < 6; f++) {
+        const unsigned int a = faceAx[f];
+        const unsigned int lo = (a == 0) ? 1 : 0, hi = (a == 2) ? 1 : 2;
+        unsigned int x[3];
+        x[a] = faceHi[f] * eO;
+        for (x[hi] = 0; x[hi] < eo1; x[hi]++)
+            for (x[lo] = 0; x[lo] < eo1; x[lo]++)
+                m_uiUnzipSlots.push_back(slot(x));
+    }
+    for (unsigned int e = 0; e < 12; e++) {
+        unsigned int x[3];
+        for (unsigned int s = 0; s < 2; s++)
+            x[faceAx[edgeF[e][s]]] = faceHi[edgeF[e][s]] * eO;
+        const unsigned int a = edgeFree[e];
+        for (x[a] = 0; x[a] < eo1; x[a]++) m_uiUnzipSlots.push_back(slot(x));
+    }
+
+    unsigned int cnum;
+    for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
+        m_uiUnzipOpOffset[ele] = (unsigned int)m_uiUnzipOps.size();
+        if (m_e2b_unzip_counts[ele] == 0) continue;
+        bool faceHang[6];
+        unsigned char cornerSet = 0;  // bit c = corner (i,j,k) = c's bits
+        for (unsigned int f = 0; f < 6; f++) {
+            faceHang[f] = isFaceHanging(ele, faceDir[f], cnum);
+            if (!faceHang[f]) continue;
+            m_uiUnzipOps.push_back((unsigned char)(f | (cnum << 5)));
+            for (unsigned int c = 0; c < 8; c++)
+                if (((c >> faceAx[f]) & 1u) == faceHi[f]) cornerSet |= 1u << c;
+        }
+        for (unsigned int e = 0; e < 12; e++) {
+            if (faceHang[edgeF[e][0]] || faceHang[edgeF[e][1]]) continue;
+            if (!isEdgeHanging(ele, edgeDir[e], cnum)) continue;
+            m_uiUnzipOps.push_back((unsigned char)((6 + e) | (cnum << 5)));
+            for (unsigned int c = 0; c < 8; c++) {
+                bool on = true;
+                for (unsigned int s = 0; s < 2; s++)
+                    on = on && (((c >> faceAx[edgeF[e][s]]) & 1u) ==
+                                faceHi[edgeF[e][s]]);
+                if (on) cornerSet |= 1u << c;
+            }
+        }
+        // an interpolated corner that is not hanging is re-gathered last
+        for (unsigned int c = 0; c < 8; c++)
+            if (((cornerSet >> c) & 1u) &&
+                !isNodeHanging(ele, (c & 1u) * eO, ((c >> 1) & 1u) * eO,
+                               ((c >> 2) & 1u) * eO))
+                m_uiUnzipOps.push_back((unsigned char)(18 + c));
+    }
+    m_uiUnzipOpOffset[m_uiNumTotalElements] = (unsigned int)m_uiUnzipOps.size();
+    m_uiUnzipOps.shrink_to_fit();
+    buildUnzipCopyPlan();
+}
+
+void Mesh::buildUnzipCopyPlan() {
+    m_uiUnzipCopyPlanOk = false;
+    const unsigned int nPe     = m_uiNpE;
+    const unsigned int eOrder  = m_uiElementOrder;
+    const unsigned int nTot    = m_uiNumTotalElements;
+    const std::size_t cgSz     = getDegOfFreedom();
+    const std::size_t unSz     = getDegOfFreedomUnZip();
+    const ot::TreeNode* pNodes = m_uiAllElements.data();
+    const ot::Block* blkList   = m_uiLocalBlockList.data();
+    const std::size_t n_blocks = m_uiLocalBlockList.size();
+    if ((uint64_t)cgSz + (uint64_t)nTot * nPe >= (uint64_t)UINT_MAX - 1) return;
+
+    // slots each element fills by interpolation rather than by e2n gather
+    std::vector<unsigned char> interp((std::size_t)nTot * nPe, 0);
+    const unsigned int eo1 = eOrder + 1;
+    for (unsigned int ele = 0; ele < nTot; ele++) {
+        unsigned char* const m = interp.data() + (std::size_t)ele * nPe;
+        for (unsigned int o = m_uiUnzipOpOffset[ele];
+             o < m_uiUnzipOpOffset[ele + 1]; o++) {
+            const unsigned int id = m_uiUnzipOps[o] & 31u;
+            if (id >= 18) {
+                const unsigned int c = id - 18;
+                m[(c >> 2) * eOrder * eo1 * eo1 +
+                  ((c >> 1) & 1u) * eOrder * eo1 + (c & 1u) * eOrder] = 0;
+                continue;
+            }
+            const unsigned int len = (id < 6) ? eo1 * eo1 : eo1;
+            const unsigned int* const sl =
+                m_uiUnzipSlots.data() +
+                ((id < 6) ? id * eo1 * eo1 : 6 * eo1 * eo1 + (id - 6) * eo1);
+            for (unsigned int t = 0; t < len; t++) m[sl[t]] = 1;
+        }
+    }
+
+    std::vector<unsigned int> b2e_offset(n_blocks + 1, 0);
+    for (unsigned int ele = 0; ele < nTot; ele++)
+        for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++)
+            b2e_offset[m_e2b_unzip_map[m_e2b_unzip_offset[ele] + i] + 1]++;
+    for (std::size_t b = 0; b < n_blocks; b++)
+        b2e_offset[b + 1] += b2e_offset[b];
+    std::vector<unsigned int> b2e_map(b2e_offset[n_blocks]);
+    {
+        std::vector<unsigned int> cur(b2e_offset.begin(), b2e_offset.end() - 1);
+        for (unsigned int ele = 0; ele < nTot; ele++)
+            for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++)
+                b2e_map[cur[m_e2b_unzip_map[m_e2b_unzip_offset[ele] + i]]++] =
+                    ele;
+    }
+
+    // replay unzip_scatter_batch's writes with (ele*nPe + slot) ids as data,
+    // then decode in place; kC2F marks cells last written by a prolongation
+    const unsigned int kC2F = UINT_MAX - 1;
+    std::vector<unsigned int>& prov = m_uiUnzipCopySrc;
+    prov.assign(unSz, UINT_MAX);
+    std::vector<unsigned int> ids(nPe), sentinel(nPe, kC2F);
+    std::vector<ot::TreeNode> childOct;
+    m_uiUnzipC2FOffset.assign(n_blocks + 1, 0);
+    m_uiUnzipC2FEle.clear();
+    for (std::size_t blk = 0; blk < n_blocks; blk++) {
+        m_uiUnzipC2FOffset[blk]    = (unsigned int)m_uiUnzipC2FEle.size();
+        const ot::TreeNode blkNode = blkList[blk].getBlockNode();
+        const unsigned int PW      = blkList[blk].get1DPadWidth();
+        const unsigned int lx      = blkList[blk].getAllocationSzX();
+        const unsigned int ly      = blkList[blk].getAllocationSzY();
+        const unsigned int lz      = blkList[blk].getAllocationSzZ();
+        const std::size_t offset   = (std::size_t)blkList[blk].getOffset();
+        const unsigned int bLev =
+            pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+        // block-array start of octant o, `step` cells per octant width
+        int s[3];
+        auto start = [&](const ot::TreeNode& o, int step) {
+            const int64_t sz = (int64_t)1 << (m_uiMaxDepth - o.getLevel());
+            s[0] = (int)(((int64_t)o.getX() - (int64_t)blkNode.getX()) / sz) *
+                       step + (int)PW;
+            s[1] = (int)(((int64_t)o.getY() - (int64_t)blkNode.getY()) / sz) *
+                       step + (int)PW;
+            s[2] = (int)(((int64_t)o.getZ() - (int64_t)blkNode.getZ()) / sz) *
+                       step + (int)PW;
+        };
+        for (unsigned int idx = b2e_offset[blk]; idx < b2e_offset[blk + 1];
+             idx++) {
+            const unsigned int ele = b2e_map[idx];
+            for (unsigned int n = 0; n < nPe; n++) ids[n] = ele * nPe + n;
+            if (pNodes[ele].getLevel() == bLev) {
+                start(pNodes[ele], (int)eOrder);
+                dendro::unzip::scatter_same_level_dispatch<unsigned int>(
+                    ids.data(), prov.data(), eOrder, 1u, unSz, nPe, offset, lx,
+                    ly, lz, s[0], s[1], s[2]);
+            } else if (pNodes[ele].getLevel() > bLev) {
+                if ((eOrder % 2u) != 0) continue;
+                start(pNodes[ele], (int)eOrder / 2);
+                dendro::unzip::scatter_fine_to_coarse_dispatch<unsigned int>(
+                    ids.data(), prov.data(), eOrder, 1u, unSz, nPe, offset, lx,
+                    ly, lz, s[0], s[1], s[2]);
+            } else {
+                m_uiUnzipC2FEle.push_back(ele);
+                childOct.clear();
+                pNodes[ele].addChildren(childOct);
+                const double hx =
+                    (1u << (m_uiMaxDepth - bLev)) / (double)eOrder;
+                const double xmin = blkNode.minX() - PW * hx;
+                const double xmax = blkNode.maxX() + PW * hx;
+                const double ymin = blkNode.minY() - PW * hx;
+                const double ymax = blkNode.maxY() + PW * hx;
+                const double zmin = blkNode.minZ() - PW * hx;
+                const double zmax = blkNode.maxZ() + PW * hx;
+                for (unsigned int child = 0; child < NUM_CHILDREN; child++) {
+                    if ((childOct[child].maxX() < xmin ||
+                         childOct[child].minX() >= xmax) ||
+                        (childOct[child].maxY() < ymin ||
+                         childOct[child].minY() >= ymax) ||
+                        (childOct[child].maxZ() < zmin ||
+                         childOct[child].minZ() >= zmax))
+                        continue;
+                    start(childOct[child], (int)eOrder);
+                    dendro::unzip::scatter_same_level_dispatch<unsigned int>(
+                        sentinel.data(), prov.data(), eOrder, 1u, unSz, nPe,
+                        offset, lx, ly, lz, s[0], s[1], s[2]);
+                }
+            }
+        }
+    }
+    m_uiUnzipC2FOffset[n_blocks] = (unsigned int)m_uiUnzipC2FEle.size();
+
+    // elements still needing nodal values: prolonged ones, and last writers
+    // of an interpolated slot
+    std::vector<unsigned char> need(nTot, 0);
+    for (unsigned int e : m_uiUnzipC2FEle) need[e] = 1;
+    for (std::size_t i = 0; i < unSz; i++)
+        if (prov[i] < kC2F && interp[prov[i]]) need[prov[i] / nPe] = 1;
+    m_uiUnzipDgEle.clear();
+    m_uiUnzipDgSlot.assign(nTot, UINT_MAX);
+    for (unsigned int e = 0; e < nTot; e++)
+        if (need[e]) {
+            m_uiUnzipDgSlot[e] = (unsigned int)m_uiUnzipDgEle.size();
+            m_uiUnzipDgEle.push_back(e);
+        }
+
+    const unsigned int* const e2n_cg = m_uiE2NMapping_CG.data();
+    for (std::size_t i = 0; i < unSz; i++) {
+        const unsigned int d = prov[i];
+        if (d >= kC2F)
+            prov[i] = UINT_MAX;
+        else
+            prov[i] = interp[d] ? (unsigned int)cgSz +
+                                      m_uiUnzipDgSlot[d / nPe] * nPe + d % nPe
+                                : e2n_cg[d];
+    }
+    m_uiUnzipCopyPlanOk = true;
+}
+
 void Mesh::buildZipPlan() {
     if (m_uiZipPlanBuilt) return;
     m_uiZipPlanBuilt = true;
@@ -9882,12 +10119,23 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     m_uiCoarsetBlkLev = cLev;
     m_uiLocalBlockList.clear();
 
-    // blocks change here (LTS rebuilds in place), so drop the zip plan
+    // blocks change here (LTS rebuilds in place), so drop the zip/unzip plans
     m_uiZipPlanBuilt = false;
     m_uiZipPlanUzIdx.clear();
     m_uiZipPlanUzIdx.shrink_to_fit();
     m_uiZipPlanCgIdx.clear();
     m_uiZipPlanCgIdx.shrink_to_fit();
+    m_uiUnzipPlanBuilt = false;
+    m_uiUnzipOpOffset.clear();
+    m_uiUnzipOpOffset.shrink_to_fit();
+    m_uiUnzipOps.clear();
+    m_uiUnzipOps.shrink_to_fit();
+    m_uiUnzipCopyPlanOk = false;
+    for (auto* v : {&m_uiUnzipCopySrc, &m_uiUnzipDgEle, &m_uiUnzipDgSlot,
+                    &m_uiUnzipC2FOffset, &m_uiUnzipC2FEle}) {
+        v->clear();
+        v->shrink_to_fit();
+    }
 
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;

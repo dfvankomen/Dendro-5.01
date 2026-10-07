@@ -11930,8 +11930,204 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 }
 
 template <typename T>
+void Mesh::getElementNodalValuesPlanned(const T* vec, T* nodalValues,
+                                        unsigned int ele, T* pin, T* pout,
+                                        double* im1, double* im2) const {
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+    dendro::timer::t_unzip_sync_nodalval.start();
+#endif
+    const unsigned int nPe = m_uiNpE;
+    const unsigned int eo1 = m_uiElementOrder + 1;
+    const unsigned int* const cg_e =
+        m_uiE2NMapping_CG.data() + (std::size_t)ele * nPe;
+    for (unsigned int n = 0; n < nPe; n++) nodalValues[n] = vec[cg_e[n]];
+
+    const unsigned int* const slots = m_uiUnzipSlots.data();
+    for (unsigned int o = m_uiUnzipOpOffset[ele];
+         o < m_uiUnzipOpOffset[ele + 1]; o++) {
+        const unsigned int id = m_uiUnzipOps[o] & 31u;
+        if (id >= 18) {
+            const unsigned int c = id - 18;
+            const unsigned int n = (c >> 2) * m_uiElementOrder * eo1 * eo1 +
+                                   ((c >> 1) & 1u) * m_uiElementOrder * eo1 +
+                                   (c & 1u) * m_uiElementOrder;
+            nodalValues[n] = vec[cg_e[n]];
+            continue;
+        }
+        const bool face             = id < 6;
+        const unsigned int len      = face ? eo1 * eo1 : eo1;
+        const unsigned int* const s =
+            slots + (face ? id * eo1 * eo1 : 6 * eo1 * eo1 + (id - 6) * eo1);
+        for (unsigned int t = 0; t < len; t++) pin[t] = vec[cg_e[s[t]]];
+        this->parent2ChildInterpolation(pin, pout, m_uiUnzipOps[o] >> 5,
+                                        face ? 2 : 1, im1, im2);
+        for (unsigned int t = 0; t < len; t++) nodalValues[s[t]] = pout[t];
+    }
+#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+    dendro::timer::t_unzip_sync_nodalval.stop();
+#endif
+}
+
+template <typename T>
 void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
                                unsigned int n_vars) {
+    // Same guard as Mesh::unzip: callers use these interchangeably, and with an
+    // empty block list the scatter has nothing to do but the DG precompute would
+    // still allocate all_dg and walk every element.
+    if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
+#if !defined(DENDRO_UNZIP_OMP)
+    // Non-OMP build: just loop. No win to amortize.
+    for (unsigned int v = 0; v < n_vars; v++)
+        this->unzip_scatter(ins[v], outs[v], 1);
+    return;
+#else
+    // The OMP path has no odd-eOrder fall-back: the fine->coarse branch below
+    // would write nothing rather than interpolate. Fail instead of returning a
+    // silently incomplete unzip.
+    if ((m_uiElementOrder % 2u) != 0) {
+        std::cout << "Error: " << __func__ << " line: " << __LINE__
+                  << " DENDRO_UNZIP_OMP does not support odd element order "
+                  << m_uiElementOrder << "; rebuild with DENDRO_UNZIP_OMP=OFF"
+                  << std::endl;
+        MPI_Abort(m_uiCommGlobal, 0);
+    }
+
+    if (!m_uiUnzipPlanBuilt) buildUnzipPlan();
+    if (!m_uiUnzipCopyPlanOk) {
+        this->unzip_scatter_batch_ref(ins, outs, n_vars);
+        return;
+    }
+    const ot::TreeNode* pNodes = m_uiAllElements.data();
+    const ot::Block* blkList   = m_uiLocalBlockList.data();
+    const unsigned int eOrder  = m_uiElementOrder;
+    const unsigned int nPe     = m_uiNpE;
+    const std::size_t cgSz     = this->getDegOfFreedom();
+    const std::size_t unSz     = this->getDegOfFreedomUnZip();
+    const size_t n_blocks      = m_uiLocalBlockList.size();
+    const unsigned int* const src    = m_uiUnzipCopySrc.data();
+    const unsigned int* const dgEle  = m_uiUnzipDgEle.data();
+    const unsigned int* const dgSlot = m_uiUnzipDgSlot.data();
+    const unsigned int nDg           = (unsigned int)m_uiUnzipDgEle.size();
+    const unsigned int* const c2fOff = m_uiUnzipC2FOffset.data();
+    const unsigned int* const c2fEle = m_uiUnzipC2FEle.data();
+
+    // nodal values only for elements the copy plan cannot read from CG
+    std::vector<T> all_dg((std::size_t)nDg * nPe);
+
+    std::vector<unsigned int> lptOrder;
+    const bool useLpt =
+        ot::g_lpt_block_order &&
+        ot::computeLptBlockOrder(blkList, (unsigned int)n_blocks, lptOrder);
+#pragma omp parallel
+    {
+        std::vector<T> p2cI_all_tls(NUM_CHILDREN * nPe);
+        std::vector<double> im1_tls(nPe), im2_tls(nPe);
+        std::vector<ot::TreeNode> childOct_tls;
+        childOct_tls.reserve(NUM_CHILDREN);
+        bool p2c_interp_valid_tls[NUM_CHILDREN];
+        T* p2cI_base_t      = p2cI_all_tls.data();
+        double* const im1_t = im1_tls.data();
+        double* const im2_t = im2_tls.data();
+        std::vector<T> pin_tls((eOrder + 1) * (eOrder + 1)),
+            pout_tls((eOrder + 1) * (eOrder + 1));
+
+        for (unsigned int v = 0; v < n_vars; v++) {
+            const T* in_v = ins[v];
+            T* uzWVec     = outs[v];
+            const T* dg   = all_dg.data();
+
+#pragma omp for schedule(static)
+            for (unsigned int k = 0; k < nDg; k++)
+                this->getElementNodalValuesPlanned(
+                    in_v, all_dg.data() + (std::size_t)k * nPe, dgEle[k],
+                    pin_tls.data(), pout_tls.data(), im1_t, im2_t);
+
+#pragma omp for schedule(dynamic, 1)
+            for (size_t blk_idx = 0; blk_idx < n_blocks; blk_idx++) {
+                const unsigned int blk =
+                    useLpt ? lptOrder[blk_idx] : (unsigned int)blk_idx;
+                const ot::TreeNode blkNode = blkList[blk].getBlockNode();
+                const unsigned int PW      = blkList[blk].get1DPadWidth();
+                const unsigned int lx      = blkList[blk].getAllocationSzX();
+                const unsigned int ly      = blkList[blk].getAllocationSzY();
+                const unsigned int lz      = blkList[blk].getAllocationSzZ();
+                const DendroIntL offset    = blkList[blk].getOffset();
+                const unsigned int bLev =
+                    pNodes[blkList[blk].getLocalElementBegin()].getLevel();
+
+                // coarse->fine prolongation first; the copy plan below holds
+                // exactly the cells whose last writer was a copy
+                for (unsigned int idx = c2fOff[blk]; idx < c2fOff[blk + 1];
+                     idx++) {
+                    const unsigned int ele = c2fEle[idx];
+                    const T* dgWVec_t = dg + (std::size_t)dgSlot[ele] * nPe;
+                    for (int c = 0; c < NUM_CHILDREN; c++)
+                        p2c_interp_valid_tls[c] = false;
+                    childOct_tls.clear();
+                    pNodes[ele].addChildren(childOct_tls);
+                    const double hx =
+                        (1u << (m_uiMaxDepth - bLev)) / (double)eOrder;
+                    const double xmin = blkNode.minX() - PW * hx;
+                    const double xmax = blkNode.maxX() + PW * hx;
+                    const double ymin = blkNode.minY() - PW * hx;
+                    const double ymax = blkNode.maxY() + PW * hx;
+                    const double zmin = blkNode.minZ() - PW * hx;
+                    const double zmax = blkNode.maxZ() + PW * hx;
+                    for (unsigned int child = 0; child < NUM_CHILDREN;
+                         child++) {
+                        if ((childOct_tls[child].maxX() < xmin ||
+                             childOct_tls[child].minX() >= xmax) ||
+                            (childOct_tls[child].maxY() < ymin ||
+                             childOct_tls[child].minY() >= ymax) ||
+                            (childOct_tls[child].maxZ() < zmin ||
+                             childOct_tls[child].minZ() >= zmax))
+                            continue;
+                        const unsigned int cnum =
+                            childOct_tls[child].getMortonIndex();
+                        if (!p2c_interp_valid_tls[cnum]) {
+                            this->parent2ChildInterpolation(
+                                dgWVec_t, p2cI_base_t + cnum * nPe, cnum,
+                                m_uiDim, im1_t, im2_t);
+                            p2c_interp_valid_tls[cnum] = true;
+                        }
+                        const ot::TreeNode& co = childOct_tls[child];
+                        const int64_t sz =
+                            (int64_t)1 << (m_uiMaxDepth - co.getLevel());
+                        const int ei =
+                            (int)(((int64_t)co.getX() - blkNode.getX()) / sz);
+                        const int ej =
+                            (int)(((int64_t)co.getY() - blkNode.getY()) / sz);
+                        const int ek =
+                            (int)(((int64_t)co.getZ() - blkNode.getZ()) / sz);
+                        dendro::unzip::scatter_same_level_dispatch<T>(
+                            p2cI_base_t + cnum * nPe, uzWVec, eOrder, 1u, unSz,
+                            (std::size_t)nPe, (std::size_t)offset, lx, ly, lz,
+                            ei * (int)eOrder + (int)PW,
+                            ej * (int)eOrder + (int)PW,
+                            ek * (int)eOrder + (int)PW);
+                    }
+                }
+
+                const std::size_t b_end =
+                    (std::size_t)offset + (std::size_t)lx * ly * lz;
+                for (std::size_t i = (std::size_t)offset; i < b_end; i++) {
+                    const unsigned int s = src[i];
+                    if (s < cgSz)
+                        uzWVec[i] = in_v[s];
+                    else if (s != UINT_MAX)
+                        uzWVec[i] = dg[s - cgSz];
+                }
+            }
+        }
+    }  // omp parallel
+#endif
+}
+
+// Pre-plan unzip_scatter_batch: the testUnzipPlanExact reference and the fallback
+// when the copy plan cannot index the mesh in 32 bits.
+template <typename T>
+void Mesh::unzip_scatter_batch_ref(const T* const* ins, T* const* outs,
+                                   unsigned int n_vars) {
     // Same guard as Mesh::unzip: callers use these interchangeably, and with an
     // empty block list the scatter has nothing to do but the DG precompute would
     // still allocate all_dg and walk every element.
