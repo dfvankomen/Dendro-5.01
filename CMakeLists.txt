@@ -621,6 +621,11 @@ if(BUILD_DENDRO_EXAMPLES)
     set_tests_properties(testZipExact_sabotage${SAB}
                          PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
   endforeach()
+  dendro_add_example(testGhostPackExact test/src/testGhostPackExact.cpp)
+  foreach(SAB 1 2 3)
+    dendro_add_example(testGhostPackExact_sabotage${SAB} test/src/testGhostPackExact.cpp)
+    target_compile_definitions(testGhostPackExact_sabotage${SAB} PRIVATE GHOST_GATE_SABOTAGE=${SAB})
+  endforeach()
   dendro_add_example(testStabilityEvolution test/src/testStabilityEvolution.cpp)
   # Smoke test: reports a checksum but does not assert on it. The TIMEOUT is the
   # point -- a broken eO=8 interpolation shows up as runaway refinement, not a
