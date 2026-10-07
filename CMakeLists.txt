@@ -644,10 +644,35 @@ if(BUILD_DENDRO_EXAMPLES)
     dendro_add_example(testGhostPackExact_sabotage${SAB} test/src/testGhostPackExact.cpp)
     target_compile_definitions(testGhostPackExact_sabotage${SAB} PRIVATE GHOST_GATE_SABOTAGE=${SAB})
   endforeach()
+  # two ranks: one rank has no ghost exchange to compare
+  add_test(NAME testGhostPackExact_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGhostPackExact>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3 0.1 6)
+  set_tests_properties(testGhostPackExact_2rank PROPERTIES TIMEOUT 600)
+  foreach(SAB 1 2 3)
+    add_test(NAME testGhostPackExact_sabotage${SAB}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGhostPackExact_sabotage${SAB}>
+                     ${MPIEXEC_POSTFLAGS} 6 1e-3 0.1 6)
+    set_tests_properties(testGhostPackExact_sabotage${SAB}
+                         PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
+  endforeach()
   dendro_add_example(testUnzipPlanExact test/src/testUnzipPlanExact.cpp)
   foreach(SAB 1 2 3)
     dendro_add_example(testUnzipPlanExact_sabotage${SAB} test/src/testUnzipPlanExact.cpp)
     target_compile_definitions(testUnzipPlanExact_sabotage${SAB} PRIVATE UNZIP_GATE_SABOTAGE=${SAB})
+  endforeach()
+  foreach(EO 4 6 8)
+    add_test(NAME testUnzipPlanExact_eO${EO}
+             COMMAND testUnzipPlanExact 6 1e-3 0.1 ${EO})
+    set_tests_properties(testUnzipPlanExact_eO${EO} PROPERTIES TIMEOUT 600)
+  endforeach()
+  foreach(SAB 1 2 3)
+    add_test(NAME testUnzipPlanExact_sabotage${SAB}
+             COMMAND testUnzipPlanExact_sabotage${SAB} 6 1e-3 0.1 6)
+    set_tests_properties(testUnzipPlanExact_sabotage${SAB}
+                         PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
   endforeach()
   dendro_add_example(testStabilityEvolution test/src/testStabilityEvolution.cpp)
   # Smoke test: reports a checksum but does not assert on it. The TIMEOUT is the
@@ -717,6 +742,8 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testExplicitSimd test/src/testExplicitSimd.cpp)
   dendro_add_deriv_test(testKOSimd test/src/testKOSimd.cpp)
   dendro_add_deriv_test(testMixedSetTrim test/src/testMixedSetTrim.cpp)
+  add_test(NAME testMixedSetTrim COMMAND testMixedSetTrim)
+  set_tests_properties(testMixedSetTrim PROPERTIES TIMEOUT 300)
   dendro_add_deriv_test(testKOSign test/src/testKOSign.cpp)
   dendro_add_deriv_test(testCloneNewSize test/src/testCloneNewSize.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
