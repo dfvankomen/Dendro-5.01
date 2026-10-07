@@ -2605,6 +2605,8 @@ bool ExplicitNUTS<T, Ctx>::prepare_scoped_exchange(ot::Mesh* pMesh) {
     m_uiScopedPlan = ot::EleDGScopedPlan();
     m_uiScopedDTs.clear();
     if (!pMesh->isActive()) return false;
+    // one active rank: no element ghost scatter maps exist, nothing to scope
+    if (pMesh->getMPICommSize() < 2) return false;
 
     // ascending distinct timestep factors; they must form a divisibility chain
     // so the elements firing at pt (DT | pt) are a prefix of the sorted segment

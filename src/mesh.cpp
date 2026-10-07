@@ -26281,6 +26281,10 @@ void Mesh::buildEleDGScopedPlan(const std::vector<unsigned int>& dtOfElem,
                                 EleDGScopedPlan& plan) const {
     plan = EleDGScopedPlan();
     if (!m_uiIsActive || m_uiActiveNpes == 0) return;
+    // the element scatter maps are not built on a one-rank active comm
+    if (m_uiSendEleOffset.size() < m_uiActiveNpes ||
+        m_uiRecvEleOffset.size() < m_uiActiveNpes)
+        return;
     const unsigned int P  = m_uiActiveNpes;
     const unsigned int nd = distinctDT.size();
     plan.npes             = P;
