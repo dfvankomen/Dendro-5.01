@@ -3,6 +3,7 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
 #include "derivatives.h"
 #include "derivatives/derivs_explicit.h"
@@ -43,34 +44,68 @@ class ExplicitSimdDerivs : public Derivs {
         }
     }
 
-    // one simd loop of `len` points starting at `off` in every slice k in
+    // one simd loop of `len` points from ur/orow, stencil stride s
+    static inline void line(double *__restrict__ orow, const double *__restrict__ ur,
+                            long s, long len, double c0, double c1, double c2,
+                            double c3, double c4) {
+        if constexpr (DerivOrder == 1) {
+#pragma omp simd
+            for (long i = 0; i < len; i++) {
+                double v = c1 * (ur[i + s] - ur[i - s]) + c2 * (ur[i + 2 * s] - ur[i - 2 * s]);
+                if constexpr (H >= 3) v += c3 * (ur[i + 3 * s] - ur[i - 3 * s]);
+                if constexpr (H >= 4) v += c4 * (ur[i + 4 * s] - ur[i - 4 * s]);
+                orow[i] = v;
+            }
+        } else {
+#pragma omp simd
+            for (long i = 0; i < len; i++) {
+                double v = c0 * ur[i] + c1 * (ur[i + s] + ur[i - s]) + c2 * (ur[i + 2 * s] + ur[i - 2 * s]);
+                if constexpr (H >= 3) v += c3 * (ur[i + 3 * s] + ur[i - 3 * s]);
+                if constexpr (H >= 4) v += c4 * (ur[i + 4 * s] + ur[i - 4 * s]);
+                orow[i] = v;
+            }
+        }
+    }
+
+    // one line of `len` points starting at `off` in every slice k in
     // [k0, k1), stencil stride s along the derivative axis
     static void apply(double *__restrict__ o, const double *__restrict__ u,
                       const double *c, double scale, long s, long off, long len,
                       unsigned int k0, unsigned int k1, size_t slice) {
         const double c0 = c[0] * scale, c1 = c[1] * scale, c2 = c[2] * scale;
         const double c3 = (H >= 3) ? c[3] * scale : 0.0, c4 = (H >= 4) ? c[4] * scale : 0.0;
-        for (unsigned int k = k0; k < k1; k++) {
-            const double *__restrict__ ur = u + slice * k + off;
-            double *__restrict__ orow     = o + slice * k + off;
-            if constexpr (DerivOrder == 1) {
-#pragma omp simd
-                for (long i = 0; i < len; i++) {
-                    double v = c1 * (ur[i + s] - ur[i - s]) + c2 * (ur[i + 2 * s] - ur[i - 2 * s]);
-                    if constexpr (H >= 3) v += c3 * (ur[i + 3 * s] - ur[i - 3 * s]);
-                    if constexpr (H >= 4) v += c4 * (ur[i + 4 * s] - ur[i - 4 * s]);
-                    orow[i] = v;
+        for (unsigned int k = k0; k < k1; k++)
+            line(o + slice * k + off, u + slice * k + off, s, len, c0, c1, c2, c3, c4);
+    }
+
+    // active x only, rows j in [j0, j1) of slices k in [k0, k1)
+    void box(double *o, const double *u, int axis, double dx,
+             const unsigned int *sz, unsigned int j0, unsigned int j1,
+             unsigned int k0, unsigned int k1) const {
+        const long nx = sz[0], ny = sz[1], pw = p_pw;
+        const long s  = axis == 0 ? 1 : axis == 1 ? nx : nx * ny;
+        double c[5] = {0, 0, 0, 0, 0};
+        weights(c);
+        const double scale = (DerivOrder == 1) ? 1.0 / dx : 1.0 / (dx * dx);
+        const double c0 = c[0] * scale, c1 = c[1] * scale, c2 = c[2] * scale;
+        const double c3 = (H >= 3) ? c[3] * scale : 0.0, c4 = (H >= 4) ? c[4] * scale : 0.0;
+        auto rows = [&](auto L) {
+            for (unsigned int k = k0; k < k1; k++)
+                for (unsigned int j = j0; j < j1; j++) {
+                    const long off = pw + nx * (j + ny * (long)k);
+                    line(o + off, u + off, s, L(), c0, c1, c2, c3, c4);
                 }
-            } else {
-#pragma omp simd
-                for (long i = 0; i < len; i++) {
-                    double v = c0 * ur[i] + c1 * (ur[i + s] + ur[i - s]) + c2 * (ur[i + 2 * s] + ur[i - 2 * s]);
-                    if constexpr (H >= 3) v += c3 * (ur[i + 3 * s] + ur[i - 3 * s]);
-                    if constexpr (H >= 4) v += c4 * (ur[i + 4 * s] + ur[i - 4 * s]);
-                    orow[i] = v;
-                }
-            }
+        };
+        // compile-time row widths for the common blocks; one span per slice otherwise
+        switch (nx - 2 * pw) {
+            case 7: return rows(std::integral_constant<long, 7>{});
+            case 13: return rows(std::integral_constant<long, 13>{});
+            case 19: return rows(std::integral_constant<long, 19>{});
+            case 25: return rows(std::integral_constant<long, 25>{});
         }
+        const long off = pw + nx * (long)j0, len = nx * (long)(j1 - j0) - 2 * pw;
+        for (unsigned int k = k0; k < k1; k++)
+            line(o + (size_t)nx * ny * k + off, u + (size_t)nx * ny * k + off, s, len, c0, c1, c2, c3, c4);
     }
 
     // axis 0/1/2; all_j: span covers every y row (x intermediate), else the
@@ -140,6 +175,23 @@ class ExplicitSimdDerivs : public Derivs {
                         const unsigned int bflag) override {
         if (bflag) return fallback_->do_grad_y_last(du, u, dx, sz, bflag);
         run(du, u, 1, dx, sz, false, p_pw, sz[2] - p_pw);
+    }
+
+    // x/y feeders only where the xy/xz/yz chains read them
+    bool try_grad_mixed_set(double *const xy, double *const xz, double *const yz,
+                            double *const ux, double *const uy, const double *const u,
+                            const double dx, const double dy, const double dz,
+                            const unsigned int *sz, const unsigned int bflag) override {
+        if (DerivOrder != 1 || bflag) return false;
+        const unsigned int P = p_pw, a = p_pw - H, ny = sz[1], nz = sz[2];
+        box(ux, u, 0, dx, sz, a, ny - a, P, nz - P);
+        box(ux, u, 0, dx, sz, P, ny - P, a, P);
+        box(ux, u, 0, dx, sz, P, ny - P, nz - P, nz - a);
+        box(uy, u, 1, dy, sz, P, ny - P, a, nz - a);
+        box(xy, ux, 1, dy, sz, P, ny - P, P, nz - P);
+        box(xz, ux, 2, dz, sz, P, ny - P, P, nz - P);
+        box(yz, uy, 2, dz, sz, P, ny - P, P, nz - P);
+        return true;
     }
 
     DerivType getDerivType() const override {

@@ -383,6 +383,24 @@ class Ctx {
         return asLeaf().post_timestep(sIn);
     }
 
+    /**@brief: RK stage input out = base + sum_j cf[j]*src[j], then
+     * post_timestep(out). Override to fuse into one pass (bit-identical).*/
+    int rk_stage_input(const ot::DVector<T, I>& base, unsigned int n,
+                       const T* cf, const ot::DVector<T, I>* const* src,
+                       ot::DVector<T, I>& out) {
+        out.copy_data(base);
+        if (n) ot::DVector<T, I>::axpy_multi(m_uiMesh, n, cf, src, out);
+        return asLeaf().post_timestep(out);
+    }
+
+    /**@brief: RK final combine y += sum_j cf[j]*src[j], then
+     * post_timestep(y). Override to fuse into one pass (bit-identical).*/
+    int rk_combine(unsigned int n, const T* cf,
+                   const ot::DVector<T, I>* const* src, ot::DVector<T, I>& y) {
+        if (n) ot::DVector<T, I>::axpy_multi(m_uiMesh, n, cf, src, y);
+        return asLeaf().post_timestep(y);
+    }
+
     /**@brief: function execute after each step*/
     bool is_remesh() { return asLeaf().is_remesh(); };
 

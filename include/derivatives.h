@@ -663,6 +663,16 @@ class Derivs {
         return false;
     }
 
+    // All three mixed 2nds of an interior block, with the x/y feeders written
+    // only where those chains read them. False: the facade composes them.
+    virtual bool try_grad_mixed_set(double *const, double *const, double *const,
+                                    double *const, double *const,
+                                    const double *const, const double,
+                                    const double, const double,
+                                    const unsigned int *, const unsigned int) {
+        return false;
+    }
+
     /// Pre-create matrices for a specific grid dimension. Override in
     /// matrix-based classes; default is a no-op for stencil types.
     virtual void pre_create_for_size(unsigned int) {};
@@ -1157,6 +1167,21 @@ class DendroDerivatives {
         require_workspace(workspace, "grad_yz");
         grad_y(workspace, u, dy, sz, bflag);
         grad_z(du, workspace, dz, sz, bflag);  // grad_z is always last
+    }
+
+    // xy/xz/yz on the active region; ux/uy are the grad_x/grad_y feeders and
+    // are defined only where the chains read them. Same values as the chain.
+    void grad_mixed_set(double *xy, double *xz, double *yz, double *ux,
+                        double *uy, const double *u, double dx, double dy,
+                        double dz, const unsigned int *sz, unsigned int bflag) {
+        if (_first_deriv->try_grad_mixed_set(xy, xz, yz, ux, uy, u, dx, dy, dz,
+                                             sz, bflag))
+            return;
+        grad_x(ux, u, dx, sz, bflag);
+        grad_y(uy, u, dy, sz, bflag);
+        grad_y(xy, ux, dy, sz, bflag);
+        grad_z(xz, ux, dz, sz, bflag);
+        grad_z(yz, uy, dz, sz, bflag);
     }
 
     // Planned per-variable derivative set: the caller gives the mask of

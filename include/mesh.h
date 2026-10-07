@@ -609,6 +609,23 @@ class Mesh {
     std::vector<DendroIntL> m_uiZipPlanUzIdx;
     std::vector<unsigned int> m_uiZipPlanCgIdx;
     bool m_uiZipIndexPlanBuilt = false;
+
+    /** unzip plan: per-element hanging face/edge interpolations
+     * (id | cnum<<5) and corner re-gathers applied after an e2n gather. */
+    std::vector<unsigned int> m_uiUnzipOpOffset;
+    std::vector<unsigned char> m_uiUnzipOps;
+    std::vector<unsigned int> m_uiUnzipSlots;
+    /** unzip copy plan: per unzip cell its last writer's CG index (< cgSz),
+     * cgSz + compact DG index, or UINT_MAX (coarse->fine or never written). */
+    std::vector<unsigned int> m_uiUnzipCopySrc;
+    /** elements whose nodal values the copy plan / prolongation still read */
+    std::vector<unsigned int> m_uiUnzipDgEle;
+    std::vector<unsigned int> m_uiUnzipDgSlot;
+    /** per block, coarser elements (prolonged) in scatter order */
+    std::vector<unsigned int> m_uiUnzipC2FOffset;
+    std::vector<unsigned int> m_uiUnzipC2FEle;
+    bool m_uiUnzipCopyPlanOk = false;
+    bool m_uiUnzipPlanBuilt = false;
     /** Element to Node mapping with DG indexing after removing duplicates. This
      * is used for debugging. */
     std::vector<unsigned int> m_uiE2NMapping_DG;
@@ -1432,6 +1449,10 @@ class Mesh {
      * @param eleOrder: the target element order
      */
     void buildE2NWithSMRepartitioned(unsigned int eleOrder);
+
+    void buildUnzipPlan();
+
+    void buildUnzipCopyPlan();
 
     /**
      * @brief: Builds the Element to nodal mapping for DG computations.
@@ -3789,6 +3810,17 @@ class Mesh {
      *  Elements feeding more than one block are gathered once per call. */
     template <typename T>
     void unzip_scatter_bm(const T *in, T *out, unsigned int dof = 1);
+
+    /**@brief getElementNodalValues via the unzip plan (identical output). */
+    template <typename T>
+    void getElementNodalValuesPlanned(const T *vec, T *nodalValues,
+                                      unsigned int ele, T *pin, T *pout,
+                                      double *im1, double *im2) const;
+
+    /**@brief pre-plan unzip_scatter_batch (DENDRO_UNZIP_PLAN=OFF path, testUnzipPlanExact reference). */
+    template <typename T>
+    void unzip_scatter_batch_ref(const T *const *ins, T *const *outs,
+                                 unsigned int n_vars);
 
     /**
      * @brief performs unzip operation for a given block id.
