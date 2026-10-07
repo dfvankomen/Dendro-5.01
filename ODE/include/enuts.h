@@ -102,6 +102,17 @@ struct EnutsProf {
         }();
         return v;
     }
+    /** DENDRO_ENUTS_OWNER_SYNC=1: before a block takes its stage data, give
+     *  every shared or hanging node of the block's elements and of its unzip
+     *  dependents the value of the node's owner (what zip + unzip does in ETS).
+     *  2: also poison the scratch cg vector and count unwritten reads. */
+    static int ownerSync() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_OWNER_SYNC");
+            return e ? std::atoi(e) : 0;
+        }();
+        return v;
+    }
     static bool syncFast() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_SYNC_FAST");
@@ -374,6 +385,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     const ot::Mesh* m_uiCgOwnerMesh = nullptr;
     /**@brief per local block, its unzip dependent elements (SFC order); rebuilt per mesh */
     std::vector<std::vector<unsigned int>> m_uiBlkDepEid;
+    /** per block: m_uiBlkDepEid plus the owners of the nodes of the block's
+     * elements and of its dependents (DENDRO_ENUTS_OWNER_SYNC) */
+    std::vector<std::vector<unsigned int>> m_uiBlkOwnEid;
 
     /**@brief level-scoped element-DG exchange plan (DENDRO_ENUTS_SCOPED_EXCH);
      * rebuilt per mesh, cleared with m_uiBlkDepEid. m_uiScopedOk false =
@@ -929,6 +943,7 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
                                ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
     m_uiCgOwnerMesh = nullptr;
     m_uiBlkDepEid.clear();
+    m_uiBlkOwnEid.clear();
     m_uiSyncPlan.clear();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
@@ -992,6 +1007,7 @@ int ExplicitNUTS<T, Ctx>::deallocate_internal_vars() {
 
     m_uiBVec.clear();
     m_uiBlkDepEid.clear();
+    m_uiBlkOwnEid.clear();
     m_uiSyncPlan.clear();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
@@ -1644,7 +1660,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     unsigned int echild[2];
 
     const unsigned int dof = m_uiEVar.get_dof();
-    const bool syncFast = ts::EnutsProf::syncFast();
+    const int ownSync   = (rk_s >= 1 && !isIGTSync) ? ts::EnutsProf::ownerSync() : 0;
+    const bool syncFast = ts::EnutsProf::syncFast() && !ownSync;
     const bool ifxEq  = (ts::EnutsProf::ifaceFix() & 1) && rk_s >= 1 && !isIGTSync;
     const bool ifxAll = (ts::EnutsProf::ifaceFix() & 2) && rk_s >= 1 && !isIGTSync;
     std::vector<T> cVecLocal;
@@ -1676,6 +1693,33 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     }
     const std::vector<unsigned int>& eid = m_uiBlkDepEid[blk];
     if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_EID] += eid.size();
+    if (ownSync && m_uiBlkOwnEid.size() != m_uiBlkDepEid.size()) {
+        const unsigned int* e2n_dg = pMesh->getE2NMapping_DG().data();
+        m_uiBlkOwnEid.assign(m_uiBlkDepEid.size(), {});
+        std::vector<unsigned char> seen(pMesh->getAllElements().size(), 0);
+        for (unsigned int b = 0; b < m_uiBlkOwnEid.size(); b++) {
+            std::vector<unsigned int>& oe = m_uiBlkOwnEid[b];
+            oe = m_uiBlkDepEid[b];
+            for (const unsigned int e : oe) seen[e] = 1;
+            for (const unsigned int e : blkList[b]) seen[e] = 1;
+            const size_t nd = oe.size();
+            auto addOwners = [&](unsigned int e) {
+                for (unsigned int q = 0; q < nPe; q++) {
+                    const unsigned int o = e2n_dg[e * nPe + q] / nPe;
+                    if (!seen[o]) {
+                        seen[o] = 1;
+                        oe.push_back(o);
+                    }
+                }
+            };
+            for (size_t m = 0; m < nd; m++) addOwners(oe[m]);
+            for (const unsigned int e : blkList[b]) addOwners(e);
+            for (const unsigned int e : oe) seen[e] = 0;
+            for (const unsigned int e : blkList[b]) seen[e] = 0;
+        }
+    }
+    // elements whose stage is brought to this block's time frame
+    const std::vector<unsigned int>& cel = ownSync ? m_uiBlkOwnEid[blk] : eid;
 
     if (rk_s == 0) {  // Sync operation for U(t,.)
 
@@ -1796,8 +1840,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         assert(PW > 0);
 
         // apply time interpolation correction operators.
-        for (unsigned int m = 0; m < eid.size(); m++) {
-            const unsigned int elem = eid[m];
+        for (unsigned int m = 0; m < cel.size(); m++) {
+            const unsigned int elem = cel[m];
             tl  = etVec[elem];   // this is the current time the block is at, in
                                  // the block loop time.
             dtl = dtELev[elem];  // this is time step size level used to get to
@@ -2009,6 +2053,41 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         //     sizeof(T)*(lx*ly*lz));
 
         // return;
+    }
+
+    if (ownSync) {
+        // dgWVec holds the stage of the dependents and of the owners of their
+        // nodes in this block's time frame; add the block's own elements, give
+        // every cg node its owner's value and read each element back through
+        // the cg vector (what zip + unzip does for a stage in ETS)
+        const unsigned int* e2n_dg = pMesh->getE2NMapping_DG().data();
+        T* cgW                     = m_uiEVecTmp[0].get_vec_ptr();
+        std::vector<unsigned int> es(eid.begin(), eid.end());
+        for (const unsigned int elem : blkList[blk]) {
+            es.push_back(elem);
+            for (unsigned int v = 0; v < dof; v++)
+                std::memcpy(dgWVec + v * dgSz + elem * nPe,
+                            dgStages[rk_s - 1] + v * dgSz + elem * nPe,
+                            sizeof(T) * nPe);
+        }
+        if (ownSync > 1) {
+            for (size_t q = 0; q < (size_t)dof * cgSz; q++)
+                cgW[q] = std::numeric_limits<T>::quiet_NaN();
+            // nan left by the rhs itself (padding outside the domain) is not ours
+            for (size_t q = 0; q < (size_t)dof * lx * ly * lz; q++)
+                if (std::isnan(m_uiVec[q])) m_uiVec[q] = 0;
+        }
+        for (const unsigned int ele : es)
+            for (unsigned int q = 0; q < nPe; q++) {
+                const unsigned int cg = e2n[ele * nPe + q];
+                const unsigned int dg = e2n_dg[ele * nPe + q];
+                for (unsigned int v = 0; v < dof; v++)
+                    cgW[v * cgSz + cg] = dgWVec[v * dgSz + dg];
+            }
+        for (const unsigned int ele : es)
+            for (unsigned int v = 0; v < dof; v++)
+                pMesh->getElementNodalValues(cgW + v * cgSz,
+                                             dgWVec + v * dgSz + ele * nPe, ele);
     }
 
     double tun0 = 0;
@@ -2473,13 +2552,24 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                                     (ek * eOrder + k + PW) * (ly * lx) +
                                     (ej * eOrder + j + PW) * (lx) +
                                     (ei * eOrder + i + PW)] =
-                                dgStages[rk_s - 1]
+                                (ownSync ? dgWVec : dgStages[rk_s - 1])
                                         [v * dgSz + elem * nPe +
                                          k * (eOrder + 1) * (eOrder + 1) +
                                          j * (eOrder + 1) + i];
         }
     }
 
+    if (ownSync > 1) {
+        static unsigned long long nanTot = 0, calls = 0;
+        unsigned long long nn = 0;
+        for (size_t q = 0; q < (size_t)dof * lx * ly * lz; q++)
+            nn += std::isnan(m_uiVec[q]);
+        nanTot += nn;
+        if (nn && calls++ < 20)
+            std::cout << "[owner-sync] blk " << blk << " rk " << rk_s << " lev " << bLev
+                      << " nan " << nn << " of " << (size_t)dof * lx * ly * lz
+                      << " total " << nanTot << std::endl;
+    }
     if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_OWN] += ts::EnutsProf::now() - town0;
 #ifdef __PROFILE_ENUTS__
     m_uiPt[ENUTSPROFILE::BLK_SYNC].stop();
