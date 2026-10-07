@@ -554,8 +554,15 @@ void ETS<T, Ctx>::evolve() {
                         a_n++;
                     }
                 }
+#if defined(DENDRO_RK_FUSE)
                 m_uiAppCtx->rk_stage_input(m_uiEVar, a_n, a_cf, a_sp,
                                            m_uiEVecTmp[0]);
+#else
+                m_uiEVecTmp[0].copy_data(m_uiEVar);
+                if (a_n)
+                    DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
+                m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
+#endif
             }
 
             current_t_adv = current_t + m_uiCi[stage] * dt;
@@ -578,7 +585,12 @@ void ETS<T, Ctx>::evolve() {
                 b_cf[k] = m_uiBi[k] * dt;
                 b_sp[k] = &m_uiStVec[k];
             }
+#if defined(DENDRO_RK_FUSE)
             m_uiAppCtx->rk_combine(m_uiNumStages, b_cf, b_sp, m_uiEVar);
+#else
+            DVec::axpy_multi(pMesh, m_uiNumStages, b_cf, b_sp, m_uiEVar);
+            m_uiAppCtx->post_timestep(m_uiEVar);
+#endif
         }
     } else {
         m_uiAppCtx->post_timestep(m_uiEVar);

@@ -2235,7 +2235,7 @@ class Mesh {
                                       unsigned int ele, T *pin, T *pout,
                                       double *im1, double *im2) const;
 
-    /**@brief pre-plan unzip_scatter_batch (testUnzipPlanExact reference). */
+    /**@brief pre-plan unzip_scatter_batch (DENDRO_UNZIP_PLAN=OFF path, testUnzipPlanExact reference). */
     template <typename T>
     void unzip_scatter_batch_ref(const T *const *ins, T *const *outs,
                                  unsigned int n_vars);

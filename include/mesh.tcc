@@ -741,6 +741,7 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
             sendB = (T*)ctx.getSendBuffer();
 
+#if defined(DENDRO_GHOST_PACK_FLAT)
             // threaded gather over (proc, var) pairs -- disjoint writes
             const unsigned int sendWork = sendProcList.size() * dof;
 #ifdef DENDRO_HYBRID_OMP
@@ -759,6 +760,27 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
                         (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
                 }
             }
+#else
+            // threaded gather into the send buffer (disjoint writes per proc)
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for private(proc_id)
+#endif
+            for (unsigned int send_p = 0; send_p < sendProcList.size();
+                 send_p++) {
+                proc_id = sendProcList[send_p];
+
+                for (unsigned int var = 0; var < dof; var++) {
+                    for (unsigned int k = nodeSendOffset[proc_id];
+                         k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
+                         k++) {
+                        sendB[dof * (nodeSendOffset[proc_id]) +
+                              (var * nodeSendCount[proc_id]) +
+                              (k - nodeSendOffset[proc_id])] =
+                            (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
+                    }
+                }
+            }
+#endif
 
             // active send procs -- post into the context's by-value request
             // vector (no per-exchange heap alloc; waited via MPI_Waitall).
@@ -841,6 +863,7 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             // copy the recv data to the vec
             recvB = (T*)cctx.getRecvBuffer();
 
+#if defined(DENDRO_GHOST_PACK_FLAT)
             // threaded scatter over (proc, var) pairs (recvNodeSM is a permutation)
             const unsigned int recvWork = recvProcList.size() * dof;
 #ifdef DENDRO_HYBRID_OMP
@@ -859,6 +882,27 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
                               (k - nodeRecvOffset[proc_id])];
                 }
             }
+#else
+            // threaded scatter from recv buffer (recvNodeSM is a permutation)
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for private(proc_id)
+#endif
+            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
+                 recv_p++) {
+                proc_id = recvProcList[recv_p];
+
+                for (unsigned int var = 0; var < dof; var++) {
+                    for (unsigned int k = nodeRecvOffset[proc_id];
+                         k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
+                         k++) {
+                        (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
+                            recvB[dof * (nodeRecvOffset[proc_id]) +
+                                  (var * nodeRecvCount[proc_id]) +
+                                  (k - nodeRecvOffset[proc_id])];
+                    }
+                }
+            }
+#endif
         }
 
         cctx.deAllocateSendBuffer();
@@ -928,6 +972,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
             dendro::timer::t_ghost_pack.start();
 #endif
+#if defined(DENDRO_GHOST_PACK_FLAT)
             // threaded gather over (proc, var) pairs -- disjoint writes
             const unsigned int sendWork = sendProcList.size() * dof;
 #ifdef DENDRO_HYBRID_OMP
@@ -946,6 +991,27 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                         (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
                 }
             }
+#else
+            // threaded gather into the send buffer (disjoint writes per proc)
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for private(proc_id)
+#endif
+            for (unsigned int send_p = 0; send_p < sendProcList.size();
+                 send_p++) {
+                proc_id = sendProcList[send_p];
+
+                for (unsigned int var = 0; var < dof; var++) {
+                    for (unsigned int k = nodeSendOffset[proc_id];
+                         k < (nodeSendOffset[proc_id] + nodeSendCount[proc_id]);
+                         k++) {
+                        sendB[dof * (nodeSendOffset[proc_id]) +
+                              (var * nodeSendCount[proc_id]) +
+                              (k - nodeSendOffset[proc_id])] =
+                            (vec + var * m_uiNumActualNodes)[sendNodeSM[k]];
+                    }
+                }
+            }
+#endif
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
             dendro::timer::t_ghost_pack.stop();
 #endif
@@ -1025,6 +1091,7 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
             dendro::timer::t_ghost_unpack.start();
 #endif
+#if defined(DENDRO_GHOST_PACK_FLAT)
             // threaded scatter over (proc, var) pairs (recvNodeSM is a permutation)
             const unsigned int recvWork = recvProcList.size() * dof;
 #ifdef DENDRO_HYBRID_OMP
@@ -1043,6 +1110,27 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
                               (k - nodeRecvOffset[proc_id])];
                 }
             }
+#else
+            // threaded scatter from recv buffer (recvNodeSM is a permutation)
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for private(proc_id)
+#endif
+            for (unsigned int recv_p = 0; recv_p < recvProcList.size();
+                 recv_p++) {
+                proc_id = recvProcList[recv_p];
+
+                for (unsigned int var = 0; var < dof; var++) {
+                    for (unsigned int k = nodeRecvOffset[proc_id];
+                         k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
+                         k++) {
+                        (vec + var * m_uiNumActualNodes)[recvNodeSM[k]] =
+                            recvB[dof * (nodeRecvOffset[proc_id]) +
+                                  (var * nodeRecvCount[proc_id]) +
+                                  (k - nodeRecvOffset[proc_id])];
+                    }
+                }
+            }
+#endif
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
             dendro::timer::t_ghost_unpack.stop();
 #endif
@@ -11980,6 +12068,8 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
     for (unsigned int v = 0; v < n_vars; v++)
         this->unzip_scatter(ins[v], outs[v], 1);
     return;
+#elif !defined(DENDRO_UNZIP_PLAN)
+    this->unzip_scatter_batch_ref(ins, outs, n_vars);
 #else
     // The OMP path has no odd-eOrder fall-back: the fine->coarse branch below
     // would write nothing rather than interpolate. Fail instead of returning a

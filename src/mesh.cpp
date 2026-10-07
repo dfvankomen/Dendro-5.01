@@ -4749,6 +4749,7 @@ void Mesh::buildE2NMap() {
     // if(!m_uiActiveRank) std::cout<<"E2N Mapping ended"<<std::endl;
 }
 
+#if defined(DENDRO_UNZIP_PLAN)
 void Mesh::buildUnzipPlan() {
     if (m_uiUnzipPlanBuilt) return;
     m_uiUnzipPlanBuilt = true;
@@ -4985,7 +4986,9 @@ void Mesh::buildUnzipCopyPlan() {
     }
     m_uiUnzipCopyPlanOk = true;
 }
+#endif
 
+#if defined(DENDRO_ZIP_PLAN)
 void Mesh::buildZipPlan() {
     if (m_uiZipPlanBuilt) return;
     m_uiZipPlanBuilt = true;
@@ -5057,6 +5060,7 @@ void Mesh::buildZipPlan() {
     m_uiZipPlanUzIdx.shrink_to_fit();
     m_uiZipPlanCgIdx.shrink_to_fit();
 }
+#endif
 
 void Mesh::buildFEM_E2N() {
     // todo we don't need to build the full e2n mapping only for the partition
@@ -10120,11 +10124,14 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     m_uiLocalBlockList.clear();
 
     // blocks change here (LTS rebuilds in place), so drop the zip/unzip plans
+#if defined(DENDRO_ZIP_PLAN)
     m_uiZipPlanBuilt = false;
     m_uiZipPlanUzIdx.clear();
     m_uiZipPlanUzIdx.shrink_to_fit();
     m_uiZipPlanCgIdx.clear();
     m_uiZipPlanCgIdx.shrink_to_fit();
+#endif
+#if defined(DENDRO_UNZIP_PLAN)
     m_uiUnzipPlanBuilt = false;
     m_uiUnzipOpOffset.clear();
     m_uiUnzipOpOffset.shrink_to_fit();
@@ -10136,6 +10143,7 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
         v->clear();
         v->shrink_to_fit();
     }
+#endif
 
     // should not be called if the mesh is not active
     if (!m_uiIsActive) return;

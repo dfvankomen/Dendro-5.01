@@ -100,6 +100,15 @@ option(DENDRO_UNZIP_SCATTER_FAST
 option(DENDRO_ZIP_PLAN
        "Precompute zip()'s ownership filter into a flat index plan (~12 bytes per owned node)"
        ON)
+option(DENDRO_UNZIP_PLAN
+       "Replay unzip_scatter_batch through a per-element interpolation and per-cell copy plan"
+       ON)
+option(DENDRO_GHOST_PACK_FLAT
+       "Thread ghost pack/unpack over (neighbour, variable) pairs instead of neighbours only"
+       ON)
+option(DENDRO_RK_FUSE
+       "Build RK stage inputs and the final combine through the Ctx rk_stage_input/rk_combine hooks"
+       ON)
 
 option(DENDRO_UNZIP_OMP
        "Enable OpenMP block-parallel unzip path (reserved hook; implementation lives on a separate hybrid branch). Implies the unzip/zip speedups."
@@ -380,6 +389,10 @@ message(STATUS
         "scatter_fast=${DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE} "
         "tensor_simd=${DENDRO_TENSOR_SIMD_EFFECTIVE} omp=${DENDRO_UNZIP_OMP_EFFECTIVE}")
 message(STATUS "Dendro hybrid OpenMP/MPI path: ${DENDRO_HYBRID_OMP} (implies unzip OMP)")
+message(STATUS "Dendro zip() plan: ${DENDRO_ZIP_PLAN}")
+message(STATUS "Dendro unzip plan: ${DENDRO_UNZIP_PLAN}")
+message(STATUS "Dendro ghost pack flat (proc,var) threading: ${DENDRO_GHOST_PACK_FLAT}")
+message(STATUS "Dendro RK fusable ctx hooks: ${DENDRO_RK_FUSE}")
 
 # DENDRO_UNZIP_SPEEDUP is also emitted as a single umbrella compile def so
 # downstream code can `#ifdef DENDRO_UNZIP_SPEEDUP` instead of testing both
@@ -391,6 +404,9 @@ dendro_add_def(DENDRO_UNZIP_OMP_EFFECTIVE DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
 dendro_add_def(DENDRO_ZIP_PLAN DENDRO_ZIP_PLAN)
+dendro_add_def(DENDRO_UNZIP_PLAN DENDRO_UNZIP_PLAN)
+dendro_add_def(DENDRO_GHOST_PACK_FLAT DENDRO_GHOST_PACK_FLAT)
+dendro_add_def(DENDRO_RK_FUSE DENDRO_RK_FUSE)
 dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
 dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
 dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
