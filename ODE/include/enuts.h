@@ -89,6 +89,19 @@ struct EnutsProf {
     /** DENDRO_ENUTS_SYNC_FAST=1: bit-identical sync_blk_timestep shortcuts
      *  (no same-time DG copy, per-stage correction reuse across blocks,
      *  persistent scratch) */
+    /** DENDRO_ENUTS_IFACE_FIX (bit mask, default 0 = unchanged): stage data a
+     *  block takes from a neighbour that steps with a different dt.
+     *  1: same time -> convert the neighbour's stages to this block's dt
+     *     (the plain copy is first order in dt).
+     *  2: neighbour ahead -> use all of its completed stages for the time
+     *     shift instead of the first rk_s. */
+    static int ifaceFix() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_IFACE_FIX");
+            return e ? std::atoi(e) : 0;
+        }();
+        return v;
+    }
     static bool syncFast() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_SYNC_FAST");
@@ -1632,6 +1645,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
     const unsigned int dof = m_uiEVar.get_dof();
     const bool syncFast = ts::EnutsProf::syncFast();
+    const bool ifxEq  = (ts::EnutsProf::ifaceFix() & 1) && rk_s >= 1 && !isIGTSync;
+    const bool ifxAll = (ts::EnutsProf::ifaceFix() & 2) && rk_s >= 1 && !isIGTSync;
     std::vector<T> cVecLocal;
     std::vector<T>& cVec = syncFast ? m_uiSyncCVec : cVecLocal;
     if (cVec.size() < (size_t)dof * nPe * (m_uiNumStages + 1))
@@ -1886,7 +1901,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                 }
 
             } else {
-                if (bTime == tl) {
+                if (bTime == tl && !(ifxEq && dtl != bDT)) {
                     // fast: the padding fill below reads the stage vector directly
                     if (!syncFast) {
 #pragma unroll
@@ -1898,14 +1913,22 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
                 } else {
                     // tl > bTime: elem is in the future (Ccf), else blk is (Cfc)
-                    const bool eleFut = tl > bTime;
-                    assert(eleFut || tl < bTime);
+                    // eqT (ifxEq only): same time but a different step, so the
+                    // element's stage k_s was built with its own dt; convert it
+                    // with a zero time shift (Ccf from a coarser element)
+                    const bool eqT    = (tl == bTime);
+                    const bool eleFut = eqT ? (dtl > bDT) : (tl > bTime);
+                    assert(eqT || eleFut || tl < bTime);
+                    // ifxAll: an element ahead of the block has finished its
+                    // step, so all of its stages enter the time shift
+                    const unsigned int nsIn =
+                        (ifxAll && eleFut && !eqT) ? m_uiNumStages : rk_s;
                     T dt_c = (eleFut ? dtl : bDT) * (m_uiTimeInfo._m_uiTh);
                     T dt_f = (eleFut ? bDT : dtl) * (m_uiTimeInfo._m_uiTh);
 
                     if (dt_c < dt_f) std::swap(dt_c, dt_f);
 
-                    dt = eleFut ? (t_ele - t_blk) : (t_blk - t_ele);
+                    dt = eqT ? 0 : (eleFut ? (t_ele - t_blk) : (t_blk - t_ele));
 
                     if (syncFast && m_uiSyncPassOpen &&
                         m_uiSyncTag[elem].pass == m_uiSyncPass &&
@@ -1919,11 +1942,11 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                         if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_HIT] += 1;
                     } else {
                         for (unsigned int v = 0; v < dof; v++)
-                            for (unsigned int s = 1; s <= rk_s; s++) {
-                                cVin[v * rk_s + (s - 1)] =
+                            for (unsigned int s = 1; s <= nsIn; s++) {
+                                cVin[v * nsIn + (s - 1)] =
                                     dgStages[s - 1] + v * dgSz + elem * nPe;
-                                cVout[v * rk_s + (s - 1)] =
-                                    cVec.data() + v * rk_s * nPe + (s - 1) * nPe;
+                                cVout[v * nsIn + (s - 1)] =
+                                    cVec.data() + v * nsIn * nPe + (s - 1) * nPe;
                             }
 
                         if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_CORR] += 1;
@@ -1931,17 +1954,17 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                             const double tc0_ = sprof ? ts::EnutsProf::now() : 0.0;
                             if (eleFut)
                                 m_uiECOp->Ccf(cVout, (const T**)cVin, cSz, rk_s,
-                                              dt_c, dt_f, dt, dof);
+                                              dt_c, dt_f, dt, dof, nsIn);
                             else
                                 m_uiECOp->Cfc(cVout, (const T**)cVin, cSz, rk_s,
-                                              dt_c, dt_f, dt, dof);
+                                              dt_c, dt_f, dt, dof, nsIn);
                             if (sprof) (eleFut ? tcorrCf : tcorrFc) += ts::EnutsProf::now() - tc0_;
                         }
 
 #pragma unroll
                         for (unsigned int v = 0; v < dof; v++)
                             std::memcpy(dgWVec + v * dgSz + elem * nPe,
-                                        cVout[v * rk_s + (rk_s - 1)],
+                                        cVout[v * nsIn + (rk_s - 1)],
                                         sizeof(T) * nPe);
                         if (syncFast && m_uiSyncPassOpen)
                             m_uiSyncTag[elem] = {m_uiSyncPass, rk_s,
@@ -2035,7 +2058,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         }
         for (const typename SyncPlan::Ent& en : pl.ents) {
             const T* srcBase = dgWVec;
-            const bool sameTime = !isIGTSync && etVec[en.ele] == bTime;
+            const bool sameTime = !isIGTSync && etVec[en.ele] == bTime &&
+                                  !(ifxEq && dtELev[en.ele] != bDT);
             if (sameTime)
                 srcBase = (rk_s == 0) ? (const T*)dgEVar : (const T*)dgStages[rk_s - 1];
             const unsigned int* sp = pl.src.data();
@@ -2086,7 +2110,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     for (unsigned int m = 0; m < eid.size(); m++) {
         const unsigned int ele = eid[m];
         const T* srcv          = dgWVec;
-        if (syncFast && !isIGTSync && etVec[ele] == bTime)
+        if (syncFast && !isIGTSync && etVec[ele] == bTime &&
+            !(ifxEq && dtELev[ele] != bDT))
             srcv = (rk_s == 0) ? (const T*)dgEVar : (const T*)dgStages[rk_s - 1];
 
         // no interpolation needed just copy.

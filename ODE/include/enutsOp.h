@@ -104,7 +104,8 @@ class ENUTSOp {
      */
     void Cfc(DendroScalar** out, const DendroScalar** in,
              const unsigned int* sz, unsigned int rk_s, DendroScalar dt_c,
-             DendroScalar dt_f, DendroScalar dt, unsigned int dof = 1);
+             DendroScalar dt_f, DendroScalar dt, unsigned int dof = 1,
+             unsigned int nav = 0);
 
     /**
      * @brief perform the coarser to finer time stage corrections.
@@ -119,7 +120,8 @@ class ENUTSOp {
      */
     void Ccf(DendroScalar** out, const DendroScalar** in,
              const unsigned int* sz, unsigned int rk_s, DendroScalar dt_c,
-             DendroScalar dt_f, DendroScalar dt, unsigned int dof = 1);
+             DendroScalar dt_f, DendroScalar dt, unsigned int dof = 1,
+             unsigned int nav = 0);
 
     // stage correction routines end
 

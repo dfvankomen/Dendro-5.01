@@ -147,7 +147,11 @@ void ENUTSOp::Bdt(DendroScalar dt, unsigned int rk_s) {
 
 void ENUTSOp::Cfc(DendroScalar** out, const DendroScalar** in,
                   const unsigned int* sz, unsigned int rk_s, DendroScalar dt_c,
-                  DendroScalar dt_f, DendroScalar dt, unsigned int dof) {
+                  DendroScalar dt_f, DendroScalar dt, unsigned int dof,
+                  unsigned int nav) {
+    // nav source stages are available (and set the in/out stride); 0 = rk_s,
+    // the original form, which truncates the time shift to rk_s stages
+    const unsigned int ns = nav ? nav : rk_s;
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
     const unsigned int nz = sz[2];
@@ -199,11 +203,11 @@ void ENUTSOp::Cfc(DendroScalar** out, const DendroScalar** in,
 
     for (unsigned int v = 0; v < dof; v++) {
         for (unsigned int n = 0; n < NN; n++) {
-            for (unsigned int s = 0; s < rk_s; s++)
-                m_uiVin[s] = in[v * rk_s + (s)][n];
+            for (unsigned int s = 0; s < ns; s++)
+                m_uiVin[s] = in[v * ns + (s)][n];
 
             m_uiVout[(rk_s - 1)] = 0;
-            for (unsigned int k = 0; k < rk_s; k++)
+            for (unsigned int k = 0; k < ns; k++)
                 m_uiVout[rk_s - 1] += m_uiMij[(rk_s - 1) * d + k] * m_uiVin[k];
 
             // m_uiVout[rk_s-1] *=dtc_s;
@@ -220,7 +224,7 @@ void ENUTSOp::Cfc(DendroScalar** out, const DendroScalar** in,
             //     "<<dt_c<<std::endl; exit(0);
 
             // }
-            out[v * rk_s + rk_s - 1][n] = m_uiVout[rk_s - 1];
+            out[v * ns + rk_s - 1][n] = m_uiVout[rk_s - 1];
             // printf("out s %d n %d  val %f \n", rk_s-1,n, out[v*rk_s +
             // rk_s-1][n]);
         }
@@ -229,7 +233,11 @@ void ENUTSOp::Cfc(DendroScalar** out, const DendroScalar** in,
 
 void ENUTSOp::Ccf(DendroScalar** out, const DendroScalar** in,
                   const unsigned int* sz, unsigned int rk_s, DendroScalar dt_c,
-                  DendroScalar dt_f, DendroScalar dt, unsigned int dof) {
+                  DendroScalar dt_f, DendroScalar dt, unsigned int dof,
+                  unsigned int nav) {
+    // nav source stages are available (and set the in/out stride); 0 = rk_s,
+    // the original form, which truncates the time shift to rk_s stages
+    const unsigned int ns = nav ? nav : rk_s;
     const unsigned int nx = sz[0];
     const unsigned int ny = sz[1];
     const unsigned int nz = sz[2];
@@ -291,11 +299,11 @@ void ENUTSOp::Ccf(DendroScalar** out, const DendroScalar** in,
 
     for (unsigned int v = 0; v < dof; v++) {
         for (unsigned int n = 0; n < NN; n++) {
-            for (unsigned int s = 0; s < rk_s; s++)
-                m_uiVin[s] = in[v * rk_s + s][n];
+            for (unsigned int s = 0; s < ns; s++)
+                m_uiVin[s] = in[v * ns + s][n];
 
             m_uiVout[(rk_s - 1)] = 0;
-            for (unsigned int k = 0; k < rk_s; k++)
+            for (unsigned int k = 0; k < ns; k++)
                 m_uiVout[rk_s - 1] += m_uiMij[(rk_s - 1) * d + k] * m_uiVin[k];
 
             // if(m_uiVout[rk_s-1]>3)
@@ -312,7 +320,7 @@ void ENUTSOp::Ccf(DendroScalar** out, const DendroScalar** in,
 
             // out[v*rk_s + rk_s-1][n] = in[v*rk_s + (rk_s-1)][n]; //
             // m_uiVout[rk_s-1];
-            out[v * rk_s + rk_s - 1][n] = m_uiVout[rk_s - 1];
+            out[v * ns + rk_s - 1][n] = m_uiVout[rk_s - 1];
         }
     }
 }
