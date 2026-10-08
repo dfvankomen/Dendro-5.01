@@ -61,6 +61,23 @@ class ENUTSOp {
     /**@brief: time stepper type*/
     ETSType m_uiType;
 
+    /**@brief: recently built stage-correction operators (Ccf / Cfc) */
+    enum { OP_CACHE = 8 };
+    struct OpCache {
+        bool valid = false, cf = false;
+        unsigned int rk = 0;
+        DendroScalar dt_c = 0, dt_f = 0, dt = 0;
+        DendroScalar M[25];
+    };
+    OpCache m_uiOpCache[OP_CACHE];
+    unsigned int m_uiOpCacheNext = 0;
+
+    /**@brief: C x P x B x P^{-1} x C^{-1} of Ccf (cf) or Cfc into M (d x d) */
+    void buildM(bool cf, DendroScalar* M, unsigned int rk_s, DendroScalar dt_c,
+                DendroScalar dt_f, DendroScalar dt);
+    const DendroScalar* cachedM(bool cf, unsigned int rk_s, DendroScalar dt_c,
+                                DendroScalar dt_f, DendroScalar dt);
+
    public:
     /**
      * @brief Construct a new ENUTSOp object
@@ -124,6 +141,30 @@ class ENUTSOp {
              unsigned int nav = 0);
 
     // stage correction routines end
+
+    /**
+     * @brief row rk_s of the Ccf (cf) or Cfc operator: stage rk_s in the
+     * target frame = sum_k row[k] * source stage k (k < number of source
+     * stages used), the per-node form of Ccf / Cfc.
+     */
+    void stageRow(bool cf, DendroScalar* row, unsigned int rk_s,
+                  DendroScalar dt_c, DendroScalar dt_f, DendroScalar dt);
+
+    /**
+     * @brief out[n] = sum_{k<ns} m[k] * in[k][n], n < NN (out must not
+     * overlap in); the node loop of Ccf / Cfc.
+     */
+    void applyRow(DendroScalar* out, const DendroScalar* const* in,
+                  const DendroScalar* m, unsigned int ns, unsigned int NN) const;
+
+    /**
+     * @brief blk[dst[q]] = sum_{k<ns} m[k] * in[k][src[q]], q < n; same
+     * summation order as Ccf / Cfc.
+     */
+    void gatherRow(DendroScalar* blk, const unsigned int* dst,
+                   const unsigned int* src, unsigned int n,
+                   const DendroScalar* const* in, const DendroScalar* m,
+                   unsigned int ns) const;
 
     // below routines are for coarser to finer and finer to coarser time
     // corrections, which is needed resuming LTS time stepper after intergrid

@@ -86,9 +86,11 @@ struct EnutsProf {
         return v == 1;
     }
     unsigned long long chk_cmp = 0, chk_bad = 0;
-    /** DENDRO_ENUTS_SYNC_FAST=1: bit-identical sync_blk_timestep shortcuts
-     *  (no same-time DG copy, per-stage correction reuse across blocks,
-     *  persistent scratch) */
+    /** DENDRO_ENUTS_SYNC_FAST=1 (default off = the original loops, until the
+     *  gate covers labelled meshes, NLSM and BSSN):
+     *  bit-identical sync_blk_timestep shortcuts (no same-time DG copy,
+     *  per-stage correction reuse across blocks, padding-fill plan, per-pass
+     *  store and shared sweeps of the parent-to-child interpolations) */
     /** DENDRO_ENUTS_IFACE_FIX (bit mask, default 0 = unchanged): stage data a
      *  block takes from a neighbour that steps with a different dt.
      *  1: same time -> convert the neighbour's stages to this block's dt
@@ -105,7 +107,10 @@ struct EnutsProf {
     /** DENDRO_ENUTS_OWNER_SYNC=1: before a block takes its stage data, give
      *  every shared or hanging node of the block's elements and of its unzip
      *  dependents the value of the node's owner (what zip + unzip does in ETS).
-     *  2: also poison the scratch cg vector and count unwritten reads. */
+     *  1: per-block plan (OwnPlan), owner values exchanged per node on more
+     *     than one rank.
+     *  3: the original per-element zip + gather (one rank only).
+     *  2: as 3, also poison the scratch cg vector and count unwritten reads. */
     static int ownerSync() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_OWNER_SYNC");
@@ -119,6 +124,24 @@ struct EnutsProf {
             return (e && e[0] == '1') ? 1 : 0;
         }();
         return v == 1;
+    }
+    /** DENDRO_ENUTS_OWNER_SYNC_CHECK=1: verify the hanging-node recipes of the
+     *  owner-sync plan against Mesh::getElementNodalValues once per mesh */
+    static bool ownerSyncCheck() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_OWNER_SYNC_CHECK");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    /** DENDRO_ENUTS_P2C_STORE_MB (default 128): cap of the per-stage-pass
+     *  store of parent-to-child interpolations */
+    static size_t p2cStoreBytes() {
+        static const size_t v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_P2C_STORE_MB");
+            return (size_t)(e ? std::max(0, std::atoi(e)) : 128) << 20;
+        }();
+        return v;
     }
 };
 }  // namespace ts
@@ -184,6 +207,61 @@ struct BlockTimeStep {
         _vec.clear();
     }
 };
+
+/**@brief out[i] = (..((out[i] + c[0] * st[0][i]) + c[1] * st[1][i]) ..), one
+ * pass over the block instead of one per stage, same order per entry. */
+template <typename T>
+static inline void enuts_axpy_stages(T* __restrict__ out, const T* const* st,
+                                     const T* c, unsigned int ns, size_t n) {
+    switch (ns) {
+        case 0:
+            break;
+        case 1: {
+            const T c0 = c[0];
+            const T* a = st[0];
+            for (size_t i = 0; i < n; i++) out[i] += (c0 * a[i]);
+        } break;
+        case 2: {
+            const T c0 = c[0], c1 = c[1];
+            const T *a = st[0], *b = st[1];
+            for (size_t i = 0; i < n; i++) {
+                T t = out[i];
+                t += (c0 * a[i]);
+                t += (c1 * b[i]);
+                out[i] = t;
+            }
+        } break;
+        case 3: {
+            const T c0 = c[0], c1 = c[1], c2 = c[2];
+            const T *a = st[0], *b = st[1], *d = st[2];
+            for (size_t i = 0; i < n; i++) {
+                T t = out[i];
+                t += (c0 * a[i]);
+                t += (c1 * b[i]);
+                t += (c2 * d[i]);
+                out[i] = t;
+            }
+        } break;
+        case 4: {
+            const T c0 = c[0], c1 = c[1], c2 = c[2], c3 = c[3];
+            const T *a = st[0], *b = st[1], *d = st[2], *e = st[3];
+            for (size_t i = 0; i < n; i++) {
+                T t = out[i];
+                t += (c0 * a[i]);
+                t += (c1 * b[i]);
+                t += (c2 * d[i]);
+                t += (c3 * e[i]);
+                out[i] = t;
+            }
+        } break;
+        default:
+            for (unsigned int s = 0; s < ns; s++) {
+                const T cs = c[s];
+                const T* a = st[s];
+                for (size_t i = 0; i < n; i++) out[i] += (cs * a[i]);
+            }
+    }
+}
 
 /**
  * @brief Basic: class for performing non-uniform time stepping. (explicit time
@@ -416,15 +494,20 @@ class ExplicitNUTS : public ETS<T, Ctx> {
                    dt_c == o.dt_c && dt_f == o.dt_f && dt == o.dt;
         }
     };
-    /** direct-mapped cache of parent-to-child interpolations of the padding
-     *  fill, valid within one stage pass (source identified by its SyncTag) */
-    struct P2cSlot {
-        unsigned int ele  = ~0u;
-        unsigned int cnum = 0;
-        SyncTag tag;
-    };
-    std::vector<P2cSlot> m_uiP2cMeta;
-    std::vector<T> m_uiP2cData;
+    /** per-stage-pass store of parent-to-child interpolations: every (coarse
+     *  dependent, child) of a plan has a dense index (m_uiP2cIdx, assigned as
+     *  plans are built), its slot in the pool is handed out on first use in a
+     *  pass. No hashing, no collisions; the pool is as large as one pass needs
+     *  (capped, DENDRO_ENUTS_P2C_STORE_MB). */
+    std::vector<int> m_uiP2cIdx;
+    std::vector<unsigned long long> m_uiP2cPassOf;
+    std::vector<unsigned int> m_uiP2cSlotOf;
+    std::vector<SyncTag> m_uiP2cTagOf;
+    std::vector<T> m_uiP2cPool;
+    size_t m_uiP2cUsed                = 0;
+    unsigned long long m_uiP2cPoolPass = 0;
+    unsigned int p2c_index(unsigned int ele, unsigned int cnum);
+    T* p2c_slot(unsigned int idx, const SyncTag& key, size_t stride, bool& hit);
     std::vector<SyncTag> m_uiSyncTag;
     unsigned long long m_uiSyncPass = 0;
     bool m_uiSyncPassOpen           = false;
@@ -439,6 +522,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
             unsigned int ele;
             int cnum;
             unsigned int b, e;
+            unsigned int store;  // p2c store index (cnum >= 0)
         };
         bool built = false;
         std::vector<Ent> ents;
@@ -447,6 +531,141 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<SyncPlan> m_uiSyncPlan;
     void build_sync_plan(unsigned int blk, const std::vector<unsigned int>& eid,
                          SyncPlan& pl);
+
+    /** per local block, the owner-sync fill (DENDRO_ENUTS_OWNER_SYNC=1): every
+     *  block slot the padding fill and the interior copy write, with the one
+     *  source that survives (their last writer), read through the owner of
+     *  the source node. Three kinds of source:
+     *   - a node: the owner's DG slot, grouped by the owner's time-step class
+     *     (one stage-conversion row per class and stage pass). Owner elements
+     *     that feed many slots are converted whole into m_uiDGTmp0, once per
+     *     pass (m_uiSyncTag), and copied in runs; the rest is converted per
+     *     node;
+     *   - a hanging face / edge of an element: its 2D / 1D parent-to-child
+     *     interpolation of owner values;
+     *   - a child of a coarser dependent: the 3D interpolation of the
+     *     dependent's reconciled row (m_uiOwnRow*). */
+    struct OwnPlan {
+        bool built = false;
+        // per class: runs (rdst, rsrc, rlen) reading the elements cele
+        std::vector<unsigned int> runOff, celeOff;
+        std::vector<unsigned int> rdst, rsrc, cele;
+        std::vector<unsigned short> rlen;
+        // per class: single nodes
+        std::vector<unsigned int> clsOff;
+        std::vector<unsigned int> pdst, psrc;
+        struct Op {
+            unsigned int inB, segB, segE, outB, outE;
+            unsigned char dim, cnum;
+        };
+        std::vector<Op> ops;
+        // op inputs sorted by class: (input index, owner DG slot); segments
+        // (class, end offset relative to inB)
+        std::vector<unsigned int> opSrc, opT;
+        std::vector<unsigned short> opSegEnd;
+        std::vector<unsigned char> opSegCls;
+        std::vector<unsigned int> oDst;
+        std::vector<unsigned short> oT;
+        struct Child {
+            unsigned int row, store, outB, outE;
+            unsigned char cnum;
+        };
+        std::vector<Child> ch;  // outputs: runs (child node, block slot, length)
+        std::vector<unsigned int> cDst;
+        std::vector<unsigned short> cT, cLen;
+    };
+    std::vector<OwnPlan> m_uiOwnPlan;
+    /** stage-conversion of one owner class into a block's time frame */
+    struct OwnConv {
+        unsigned char same = 1, ns = 0;
+        T m[8] = {};
+    };
+    const ot::Mesh* m_uiOwnMesh = nullptr;
+    bool m_uiOwnOk              = false;
+    unsigned int m_uiOwnPt      = 0;
+    /** ascending distinct time-step factors (the owner classes) */
+    std::vector<unsigned int> m_uiOwnDTs;
+    bool m_uiOwnChain = false;
+    /** per cg node, the class of its owner element (ghost nodes: as sent by
+     *  the owning rank) */
+    std::vector<unsigned char> m_uiNodeCls;
+    /** per element, its hanging face / edge interpolations and corner
+     *  re-gathers in the order of Mesh::getElementNodalValues: id | cnum << 5,
+     *  id < 6 face, < 18 edge, else corner 18 + c */
+    std::vector<unsigned int> m_uiOwnOpOff;
+    std::vector<unsigned char> m_uiOwnOps;
+    std::vector<unsigned int> m_uiOwnSlots;
+    /** rows of the coarser dependents: the nodes another element owns, per
+     *  class (m_uiOwnRowOff, nCls + 1 offsets per row), and their owner DG
+     *  slots; the rest is the element's own DG row (class m_uiOwnRowPc) */
+    std::vector<unsigned char> m_uiOwnRowPc;
+    std::vector<int> m_uiOwnRowOf;
+    std::vector<unsigned int> m_uiOwnRowEle;
+    std::vector<unsigned int> m_uiOwnRowOff;
+    std::vector<unsigned int> m_uiOwnRowSrc, m_uiOwnRowN;
+    /** the reconciled row computed last (all dof) */
+    std::vector<T> m_uiOwnRowBuf;
+    unsigned int m_uiOwnRowBufRow           = ~0u;
+    unsigned long long m_uiOwnRowBufPass    = 0;
+    /** x and x-y sweeps of one row's 3D interpolation, per variable and
+     *  child parity (6 * nPe each): children of one parent share them */
+    std::vector<T> m_uiOwnSweep;
+    std::vector<unsigned char> m_uiOwnSweepOk;
+    /** RefElement::I3D_Parent2Child of one variable sweep by sweep (x, y, z,
+     *  each with the operator of the child's parity): the x sweep serves the
+     *  four children of one x parity, the x-y sweep two. Same kernels, same
+     *  operands, same result. */
+    static inline void p2c3_shared(const ot::Mesh* pMesh, const T* row, T* out,
+                                   unsigned int cnum, T* sw, unsigned char* ok) {
+        const unsigned int n1  = pMesh->getElementOrder() + 1;
+        const size_t nPe       = pMesh->getNumNodesPerElement();
+        const double* ipc[2]   = {pMesh->getReferenceElement()->getIMChild0(),
+                                  pMesh->getReferenceElement()->getIMChild1()};
+        const unsigned int cx = cnum & 1u, cy = (cnum >> 1) & 1u, cz = (cnum >> 2) & 1u;
+        T* xs = sw + (size_t)cx * nPe;
+        T* ys = sw + (size_t)(2 + 2 * cx + cy) * nPe;
+        if (!ok[cx]) {
+            DENDRO_TENSOR_IIAX_APPLY_ELEM(n1, ipc[cx], row, xs);
+            ok[cx] = 1;
+        }
+        if (!ok[2 + 2 * cx + cy]) {
+            DENDRO_TENSOR_IAIX_APPLY_ELEM(n1, ipc[cy], xs, ys);
+            ok[2 + 2 * cx + cy] = 1;
+        }
+        DENDRO_TENSOR_AIIX_APPLY_ELEM(n1, ipc[cz], ys, out);
+    }
+    std::vector<OwnConv> m_uiOwnConv;
+    std::vector<unsigned long long> m_uiOwnConvPass;
+    std::vector<T> m_uiOwnScr;
+    /** owner-node exchange (more than one rank): per neighbor the owner DG
+     *  slots of the shared nodes sorted by class, cumulative counts per class */
+    std::vector<unsigned char> m_uiOwnNodeRecv;
+    std::vector<unsigned int> m_uiOwnSendSlot, m_uiOwnRecvSlot;
+    std::vector<unsigned int> m_uiOwnSendOff, m_uiOwnRecvOff;
+    std::vector<unsigned int> m_uiOwnSendCum, m_uiOwnRecvCum;
+    std::vector<T> m_uiOwnSendBuf, m_uiOwnRecvBuf;
+    std::vector<MPI_Request> m_uiOwnReq;
+    bool prepare_owner_sync(ot::Mesh* pMesh);
+    void build_own_plan(unsigned int blk, const std::vector<unsigned int>& eid,
+                        OwnPlan& op);
+    void own_sync_fill(unsigned int blk, unsigned int rk_s,
+                       const std::vector<unsigned int>& eid);
+    void own_row_ops(unsigned int ele, const T* g, T* out, T* pin, T* pout,
+                     double* im1, double* im2) const;
+    void own_node_exchange_begin(T* stv, unsigned int dof, unsigned int pt);
+    void own_node_exchange_end(T* stv, unsigned int dof, unsigned int pt);
+    /** with m_uiSyncPlan / m_uiBlkDepEid: the plans hold p2c store indices */
+    void own_reset() {
+        m_uiOwnMesh = nullptr;
+        m_uiOwnOk   = false;
+        m_uiOwnPlan.clear();
+        m_uiP2cIdx.clear();
+        m_uiP2cPassOf.clear();
+        m_uiP2cSlotOf.clear();
+        m_uiP2cTagOf.clear();
+        m_uiP2cPoolPass  = 0;
+        m_uiOwnRowBufRow = ~0u;
+    }
 
     /**@brief: List of block async vector. */
     std::vector<ts::BlockTimeStep<T>> m_uiBVec;
@@ -510,8 +729,8 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     void sync_blk_timestep(unsigned int blk, unsigned int rk_s,
                            bool isIGTSync = false);
 
-    /**@brief: update the element timestep*/
-    void update_ele_timestep();
+    /**@brief: update the element timestep (all blocks, or the given ones)*/
+    void update_ele_timestep(const std::vector<unsigned int>* blks = nullptr);
 
    public:
     /**@brief: constructor
@@ -705,7 +924,9 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
             static const char* nm[ts::EnutsProf::NT] = {
                 "rhs+zipDG",  "eledg_begin", "eledg_end", "sync_blk_ts+post",
                 "axpy+ele_ts", "elevec_xch",  "waitActive", "partial_total",
-                "  sync:same_copy", "  sync:corr_coarse_fut", "  sync:corr_fine_past", "  sync:unzip_pad", "  sync:own_interior",
+                // owner-sync plan reuses the first four: plan + conversions,
+                // node copies, hanging faces / edges, children of coarser dependents
+                "  sync:same_copy|own:prep", "  sync:corr_coarse_fut|own:copy", "  sync:corr_fine_past|own:hang", "  sync:unzip_pad|own:child", "  sync:own_interior",
                 "  sync:post_stage_blk", "  sync:  of unzip: p2c interp",
                 "  count: sync calls", "  count: dep elems", "  count: copy entries", "  count: copy pairs",
                 "  count: p2c children", "  count: corrections", "  count: corr cache hits", "  count: p2c cache hits"};
@@ -945,6 +1166,7 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
     m_uiBlkDepEid.clear();
     m_uiBlkOwnEid.clear();
     m_uiSyncPlan.clear();
+    own_reset();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
     m_uiEvarDG.create_vector(m_uiAppCtx->get_mesh(),
@@ -1009,6 +1231,7 @@ int ExplicitNUTS<T, Ctx>::deallocate_internal_vars() {
     m_uiBlkDepEid.clear();
     m_uiBlkOwnEid.clear();
     m_uiSyncPlan.clear();
+    own_reset();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
 
@@ -1567,7 +1790,7 @@ void ExplicitNUTS<T, Ctx>::build_sync_plan(unsigned int blk,
                 }
             }
             if (pl.src.size() > b0)
-                pl.ents.push_back({ele, -1, b0, (unsigned int)pl.src.size()});
+                pl.ents.push_back({ele, -1, b0, (unsigned int)pl.src.size(), 0u});
         } else {
             childOct.clear();
             pNodes[ele].addChildren(childOct);
@@ -1594,12 +1817,992 @@ void ExplicitNUTS<T, Ctx>::build_sync_plan(unsigned int blk,
                     }
                 }
                 if (pl.src.size() > b0)
-                    pl.ents.push_back({ele, (int)childOct[child].getMortonIndex(), b0,
-                                       (unsigned int)pl.src.size()});
+                    pl.ents.push_back(
+                        {ele, (int)childOct[child].getMortonIndex(), b0,
+                         (unsigned int)pl.src.size(),
+                         p2c_index(ele, childOct[child].getMortonIndex())});
             }
         }
     }
     pl.built = true;
+}
+
+template <typename T, typename Ctx>
+unsigned int ExplicitNUTS<T, Ctx>::p2c_index(unsigned int ele,
+                                             unsigned int cnum) {
+    const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+    const size_t n        = (size_t)pMesh->getAllElements().size() * NUM_CHILDREN;
+    if (m_uiP2cIdx.size() != n) {
+        m_uiP2cIdx.assign(n, -1);
+        m_uiP2cPassOf.clear();
+        m_uiP2cSlotOf.clear();
+        m_uiP2cTagOf.clear();
+    }
+    int& i = m_uiP2cIdx[(size_t)ele * NUM_CHILDREN + cnum];
+    if (i < 0) {
+        i = (int)m_uiP2cPassOf.size();
+        m_uiP2cPassOf.push_back(0);
+        m_uiP2cSlotOf.push_back(0);
+        m_uiP2cTagOf.push_back(SyncTag());
+    }
+    return (unsigned int)i;
+}
+
+template <typename T, typename Ctx>
+T* ExplicitNUTS<T, Ctx>::p2c_slot(unsigned int idx, const SyncTag& key,
+                                  size_t stride, bool& hit) {
+    hit = false;
+    if (m_uiP2cPoolPass != m_uiSyncPass) {
+        m_uiP2cPoolPass = m_uiSyncPass;
+        m_uiP2cUsed     = 0;
+    }
+    if (m_uiP2cPassOf[idx] == m_uiSyncPass) {
+        // same (element, child) seen in this pass: same data unless the
+        // source differs (its tag)
+        if (m_uiP2cTagOf[idx] == key)
+            hit = true;
+        else
+            m_uiP2cTagOf[idx] = key;
+        return m_uiP2cPool.data() + (size_t)m_uiP2cSlotOf[idx] * stride;
+    }
+    const size_t cap =
+        std::max<size_t>(64, ts::EnutsProf::p2cStoreBytes() / (stride * sizeof(T)));
+    if (m_uiP2cUsed >= cap) return nullptr;
+    if ((m_uiP2cUsed + 1) * stride > m_uiP2cPool.size())
+        m_uiP2cPool.resize(std::min(
+            cap * stride,
+            std::max<size_t>(2 * m_uiP2cPool.size(), 64 * stride)));
+    m_uiP2cSlotOf[idx] = (unsigned int)m_uiP2cUsed++;
+    m_uiP2cPassOf[idx] = m_uiSyncPass;
+    m_uiP2cTagOf[idx]  = key;
+    return m_uiP2cPool.data() + (size_t)m_uiP2cSlotOf[idx] * stride;
+}
+
+template <typename T, typename Ctx>
+bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
+    if (m_uiOwnMesh == pMesh) return m_uiOwnOk;
+    m_uiOwnPlan.clear();
+    m_uiOwnRowBufRow = ~0u;
+    m_uiOwnOk        = false;
+    m_uiOwnMesh      = pMesh;
+    if (!pMesh->isActive()) return false;
+
+    const unsigned int nPe  = pMesh->getNumNodesPerElement();
+    const unsigned int eO   = pMesh->getElementOrder();
+    const unsigned int eo1  = eO + 1;
+    const unsigned int nEle = pMesh->getAllElements().size();
+    const unsigned int cgSz = pMesh->getDegOfFreedom();
+    const int npes          = pMesh->getMPICommSize();
+    const ot::TreeNode* pNodes          = pMesh->getAllElements().data();
+    const unsigned int* e2n             = pMesh->getE2NMapping().data();
+    const unsigned int* e2nDG           = pMesh->getE2NMapping_DG().data();
+    const std::vector<unsigned int>& c2d = pMesh->getCG2DGMap();
+
+    // one rank: fall back to the per-element form; more: there is no fallback
+    auto fail = [&](const char* why, size_t n) -> bool {
+        std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
+                  << "] plan unavailable: " << why << " (" << n << ")"
+                  << (npes > 1 ? "; aborting" : "; per-element owner sync")
+                  << std::endl;
+        if (npes > 1) MPI_Abort(pMesh->getMPICommunicator(), 11);
+        return false;
+    };
+    if (pMesh->useLabelledUnzip()) return fail("labelled mesh", 0);
+    if (c2d.size() < cgSz) return fail("cg2dg map smaller than the cg vector", c2d.size());
+    if (eo1 * eo1 > 65535u) return fail("element order", eO);
+
+    // the plan reads a node through cg2dg; it must be the owner slot the
+    // element-wise zip uses (e2n_dg), for every element
+    {
+        size_t bad = 0;
+        for (size_t i = 0; i < (size_t)nEle * nPe; i++)
+            if (e2n[i] >= cgSz || c2d[e2n[i]] != e2nDG[i]) bad++;
+        if (bad) return fail("e2n_dg is not cg2dg o e2n", bad);
+    }
+
+    m_uiOwnDTs.clear();
+    for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
+        m_uiOwnDTs.push_back(
+            m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax));
+    std::sort(m_uiOwnDTs.begin(), m_uiOwnDTs.end());
+    m_uiOwnDTs.erase(std::unique(m_uiOwnDTs.begin(), m_uiOwnDTs.end()),
+                     m_uiOwnDTs.end());
+    const unsigned int nCls = m_uiOwnDTs.size();
+    if (nCls == 0 || nCls > 250 || m_uiOwnDTs[0] < 1)
+        return fail("time-step classes", nCls);
+    m_uiOwnChain = true;
+    for (unsigned int i = 1; i < nCls; i++)
+        if (m_uiOwnDTs[i] % m_uiOwnDTs[i - 1] != 0) m_uiOwnChain = false;
+
+    auto clsOfEle = [&](unsigned int e) -> unsigned int {
+        const unsigned int l = pNodes[e].getLevel();
+        if (e >= nEle || l < m_uiLevMin || l > m_uiLevMax) return 255u;
+        const unsigned int dt =
+            m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax);
+        return (unsigned int)(std::lower_bound(m_uiOwnDTs.begin(),
+                                               m_uiOwnDTs.end(), dt) -
+                              m_uiOwnDTs.begin());
+    };
+    m_uiNodeCls.assign(cgSz, 255);
+    for (unsigned int n = 0; n < cgSz; n++)
+        if (c2d[n] / nPe < nEle) m_uiNodeCls[n] = (unsigned char)clsOfEle(c2d[n] / nPe);
+
+    m_uiOwnNodeRecv.clear();
+    m_uiOwnSendSlot.clear();
+    m_uiOwnRecvSlot.clear();
+    m_uiOwnSendOff.clear();
+    m_uiOwnRecvOff.clear();
+    m_uiOwnSendCum.clear();
+    m_uiOwnRecvCum.clear();
+    if (npes > 1) {
+        const unsigned int nb = pMesh->getNodeLocalBegin();
+        const unsigned int ne = pMesh->getNodeLocalEnd();
+        const unsigned int eb = pMesh->getElementLocalBegin();
+        const unsigned int ee = pMesh->getElementLocalEnd();
+        // a node owned by this rank has its owner element here: its stage
+        // value is local data, sent to the ranks that hold it as a ghost
+        size_t badOwn = 0;
+        std::vector<T> tmp(cgSz, (T)-1);
+        for (unsigned int n = nb; n < ne; n++) {
+            const unsigned int oe = c2d[n] / nPe;
+            if (oe < eb || oe >= ee || m_uiNodeCls[n] == 255) badOwn++;
+            tmp[n] = (T)m_uiNodeCls[n];
+        }
+        pMesh->readFromGhostBegin(tmp.data(), 1);
+        pMesh->readFromGhostEnd(tmp.data(), 1);
+
+        const std::vector<unsigned int>& sOff = pMesh->getNodalSendOffsets();
+        const std::vector<unsigned int>& sCnt = pMesh->getNodalSendCounts();
+        const std::vector<unsigned int>& rOff = pMesh->getNodalRecvOffsets();
+        const std::vector<unsigned int>& rCnt = pMesh->getNodalRecvCounts();
+        const std::vector<unsigned int>& sPr  = pMesh->getSendProcList();
+        const std::vector<unsigned int>& rPr  = pMesh->getRecvProcList();
+        const std::vector<unsigned int>& sSM  = pMesh->getSendNodeSM();
+        const std::vector<unsigned int>& rSM  = pMesh->getRecvNodeSM();
+
+        m_uiOwnNodeRecv.assign(cgSz, 0);
+        size_t badSend = 0, badRecv = 0, badCls = 0, clsDiff = 0;
+        std::vector<unsigned int> ord;
+        // per neighbor: nodes in scatter-map order, stably sorted by class
+        // (both sides sort the same sequence of classes)
+        auto build = [&](const std::vector<unsigned int>& pr,
+                         const std::vector<unsigned int>& off,
+                         const std::vector<unsigned int>& cnt,
+                         const std::vector<unsigned int>& sm, bool recv,
+                         std::vector<unsigned int>& slot,
+                         std::vector<unsigned int>& poff,
+                         std::vector<unsigned int>& cum) {
+            poff.assign(pr.size() + 1, 0);
+            cum.assign(pr.size() * nCls, 0);
+            for (size_t pi = 0; pi < pr.size(); pi++) {
+                const unsigned int p = pr[pi];
+                ord.resize(cnt[p]);
+                for (unsigned int k = 0; k < cnt[p]; k++) ord[k] = sm[off[p] + k];
+                for (unsigned int k = 0; k < cnt[p]; k++) {
+                    const unsigned int n = ord[k];
+                    if (recv) {
+                        if (n >= cgSz || (n >= nb && n < ne)) {
+                            badRecv++;
+                            continue;
+                        }
+                        const T c = tmp[n];
+                        if (!(c >= 0 && c < (T)nCls)) {
+                            badCls++;
+                            continue;
+                        }
+                        if (m_uiNodeCls[n] != (unsigned char)c) clsDiff++;
+                        m_uiNodeCls[n]     = (unsigned char)c;
+                        m_uiOwnNodeRecv[n] = 1;
+                        const unsigned int oe = c2d[n] / nPe;
+                        // the slot that keeps the owner's value must not be
+                        // one a local block writes
+                        if (oe >= eb && oe < ee) badRecv++;
+                    } else if (n < nb || n >= ne) {
+                        badSend++;
+                    }
+                }
+                if (badRecv || badSend || badCls) continue;
+                std::stable_sort(ord.begin(), ord.end(),
+                                 [&](unsigned int a, unsigned int b) {
+                                     return m_uiNodeCls[a] < m_uiNodeCls[b];
+                                 });
+                for (unsigned int k = 0; k < cnt[p]; k++) {
+                    slot.push_back(c2d[ord[k]]);
+                    cum[pi * nCls + m_uiNodeCls[ord[k]]]++;
+                }
+                for (unsigned int c = 1; c < nCls; c++)
+                    cum[pi * nCls + c] += cum[pi * nCls + c - 1];
+                poff[pi + 1] = (unsigned int)slot.size();
+            }
+        };
+        build(sPr, sOff, sCnt, sSM, false, m_uiOwnSendSlot, m_uiOwnSendOff,
+              m_uiOwnSendCum);
+        build(rPr, rOff, rCnt, rSM, true, m_uiOwnRecvSlot, m_uiOwnRecvOff,
+              m_uiOwnRecvCum);
+        if (badOwn) return fail("local nodes whose owner element is not local", badOwn);
+        if (badSend) return fail("send-map entries that are not local cg nodes", badSend);
+        if (badRecv) return fail("ghost nodes kept in a local element's slot", badRecv);
+        if (badCls) return fail("ghost nodes without an owner class", badCls);
+        if (std::getenv("DENDRO_ENUTS_OWNER_SYNC_INFO"))
+            std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
+                      << "] classes " << nCls << " chain " << m_uiOwnChain
+                      << " send nodes " << m_uiOwnSendSlot.size()
+                      << " recv nodes " << m_uiOwnRecvSlot.size()
+                      << " ghost nodes whose local owner had another class "
+                      << clsDiff << std::endl;
+    }
+
+    // hanging face / edge interpolations per element, in the order of
+    // Mesh::getElementNodalValues (same construction as Mesh::buildUnzipPlan)
+    static const unsigned int faceAx[6] = {0, 0, 1, 1, 2, 2};
+    static const unsigned int faceHi[6] = {0, 1, 0, 1, 0, 1};
+    static const unsigned int faceDir[6] = {OCT_DIR_LEFT, OCT_DIR_RIGHT,
+                                            OCT_DIR_DOWN, OCT_DIR_UP,
+                                            OCT_DIR_BACK, OCT_DIR_FRONT};
+    static const unsigned int edgeFree[12] = {2, 2, 1, 1, 2, 2, 1, 1, 0, 0, 0, 0};
+    static const unsigned int edgeF[12][2] = {
+        {0, 2}, {0, 3}, {0, 4}, {0, 5}, {1, 2}, {1, 3},
+        {1, 4}, {1, 5}, {2, 4}, {2, 5}, {3, 4}, {3, 5}};
+    static const unsigned int edgeDir[12] = {
+        OCT_DIR_LEFT_DOWN,  OCT_DIR_LEFT_UP,     OCT_DIR_LEFT_BACK,
+        OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN,  OCT_DIR_RIGHT_UP,
+        OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
+        OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK,     OCT_DIR_UP_FRONT};
+    m_uiOwnSlots.clear();
+    auto slot = [eo1](const unsigned int* x) {
+        return x[2] * eo1 * eo1 + x[1] * eo1 + x[0];
+    };
+    for (unsigned int f = 0; f < 6; f++) {
+        const unsigned int a  = faceAx[f];
+        const unsigned int lo = (a == 0) ? 1 : 0, hi = (a == 2) ? 1 : 2;
+        unsigned int x[3];
+        x[a] = faceHi[f] * eO;
+        for (x[hi] = 0; x[hi] < eo1; x[hi]++)
+            for (x[lo] = 0; x[lo] < eo1; x[lo]++) m_uiOwnSlots.push_back(slot(x));
+    }
+    for (unsigned int e = 0; e < 12; e++) {
+        unsigned int x[3];
+        for (unsigned int s = 0; s < 2; s++)
+            x[faceAx[edgeF[e][s]]] = faceHi[edgeF[e][s]] * eO;
+        const unsigned int a = edgeFree[e];
+        for (x[a] = 0; x[a] < eo1; x[a]++) m_uiOwnSlots.push_back(slot(x));
+    }
+    m_uiOwnOpOff.assign(nEle + 1, 0);
+    m_uiOwnOps.clear();
+    unsigned int cnum;
+    for (unsigned int ele = 0; ele < nEle; ele++) {
+        m_uiOwnOpOff[ele] = (unsigned int)m_uiOwnOps.size();
+        bool faceHang[6];
+        unsigned char cornerSet = 0;
+        for (unsigned int f = 0; f < 6; f++) {
+            faceHang[f] = pMesh->isFaceHanging(ele, faceDir[f], cnum);
+            if (!faceHang[f]) continue;
+            m_uiOwnOps.push_back((unsigned char)(f | (cnum << 5)));
+            for (unsigned int c = 0; c < 8; c++)
+                if (((c >> faceAx[f]) & 1u) == faceHi[f]) cornerSet |= 1u << c;
+        }
+        for (unsigned int e = 0; e < 12; e++) {
+            if (faceHang[edgeF[e][0]] || faceHang[edgeF[e][1]]) continue;
+            if (!pMesh->isEdgeHanging(ele, edgeDir[e], cnum)) continue;
+            m_uiOwnOps.push_back((unsigned char)((6 + e) | (cnum << 5)));
+            for (unsigned int c = 0; c < 8; c++) {
+                bool on = true;
+                for (unsigned int s = 0; s < 2; s++)
+                    on = on && (((c >> faceAx[edgeF[e][s]]) & 1u) ==
+                                faceHi[edgeF[e][s]]);
+                if (on) cornerSet |= 1u << c;
+            }
+        }
+        // an interpolated corner that is not hanging is gathered again
+        for (unsigned int c = 0; c < 8; c++)
+            if (((cornerSet >> c) & 1u) &&
+                !pMesh->isNodeHanging(ele, (c & 1u) * eO, ((c >> 1) & 1u) * eO,
+                                      ((c >> 2) & 1u) * eO))
+                m_uiOwnOps.push_back((unsigned char)(18 + c));
+    }
+    m_uiOwnOpOff[nEle] = (unsigned int)m_uiOwnOps.size();
+
+    m_uiOwnRowOf.assign(nEle, -1);
+    m_uiOwnRowEle.clear();
+    m_uiOwnRowSrc.clear();
+    m_uiOwnRowN.clear();
+    m_uiOwnRowOff.clear();
+    m_uiOwnRowPc.clear();
+    m_uiOwnConv.assign((size_t)nCls * nCls, OwnConv());
+    m_uiOwnConvPass.assign(nCls, 0);
+    m_uiOwnScr.assign((size_t)5 * nPe, 0);
+
+    if (ts::EnutsProf::ownerSyncCheck()) {
+        // recipe == Mesh::getElementNodalValues, bit for bit, on arbitrary data
+        std::vector<T> cg(cgSz), g(nPe), a(nPe), b(nPe), pin(eo1 * eo1), pout(eo1 * eo1);
+        std::vector<double> im1(nPe), im2(nPe);
+        unsigned long long x = 88172645463325252ull;
+        for (unsigned int n = 0; n < cgSz; n++) {
+            x ^= x << 13; x ^= x >> 7; x ^= x << 17;
+            cg[n] = (T)((double)(x >> 11) / 9007199254740992.0 - 0.5);
+        }
+        size_t bad = 0, hang = 0;
+        for (unsigned int ele = 0; ele < nEle; ele++) {
+            for (unsigned int n = 0; n < nPe; n++) g[n] = cg[e2n[(size_t)ele * nPe + n]];
+            own_row_ops(ele, g.data(), a.data(), pin.data(), pout.data(), im1.data(), im2.data());
+            pMesh->getElementNodalValues(cg.data(), b.data(), ele);
+            hang += (m_uiOwnOpOff[ele + 1] > m_uiOwnOpOff[ele]);
+            if (std::memcmp(a.data(), b.data(), sizeof(T) * nPe) != 0) bad++;
+        }
+        std::cout << "[enuts-owner-sync-check r" << pMesh->getMPIRankGlobal()
+                  << "] elements " << nEle << " with hanging ops " << hang
+                  << " recipe mismatches " << bad << std::endl;
+        if (bad) MPI_Abort(pMesh->getMPICommunicator(), 12);
+    }
+    m_uiOwnOk = true;
+    return true;
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::own_row_ops(unsigned int ele, const T* g, T* out,
+                                       T* pin, T* pout, double* im1,
+                                       double* im2) const {
+    const ot::Mesh* pMesh  = m_uiAppCtx->get_mesh();
+    const unsigned int nPe = pMesh->getNumNodesPerElement();
+    const unsigned int eO  = pMesh->getElementOrder();
+    const unsigned int eo1 = eO + 1;
+    if (out != g) std::memcpy(out, g, sizeof(T) * nPe);
+    for (unsigned int o = m_uiOwnOpOff[ele]; o < m_uiOwnOpOff[ele + 1]; o++) {
+        const unsigned int id = m_uiOwnOps[o] & 31u;
+        if (id >= 18) {
+            const unsigned int c = id - 18;
+            const unsigned int n = (c >> 2) * eO * eo1 * eo1 +
+                                   ((c >> 1) & 1u) * eO * eo1 + (c & 1u) * eO;
+            out[n] = g[n];
+            continue;
+        }
+        const bool face        = id < 6;
+        const unsigned int len = face ? eo1 * eo1 : eo1;
+        const unsigned int* s  = m_uiOwnSlots.data() +
+                                (face ? id * eo1 * eo1 : 6 * eo1 * eo1 + (id - 6) * eo1);
+        for (unsigned int t = 0; t < len; t++) pin[t] = g[s[t]];
+        pMesh->parent2ChildInterpolation(pin, pout, m_uiOwnOps[o] >> 5,
+                                         face ? 2 : 1, im1, im2);
+        for (unsigned int t = 0; t < len; t++) out[s[t]] = pout[t];
+    }
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
+                                          const std::vector<unsigned int>& eid,
+                                          OwnPlan& op) {
+    ot::Mesh* pMesh            = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    const ot::TreeNode* pNodes = pMesh->getAllElements().data();
+    const ot::Block* blkList   = pMesh->getLocalBlockList().data();
+    const ot::TreeNode blkNode = blkList[blk].getBlockNode();
+    const unsigned int regLevel = blkList[blk].getRegularGridLev();
+    const unsigned int PW      = blkList[blk].get1DPadWidth();
+    const unsigned int eOrder  = pMesh->getElementOrder();
+    const unsigned int n1      = eOrder + 1;
+    const unsigned int nPe     = pMesh->getNumNodesPerElement();
+    const unsigned int lx      = blkList[blk].getAllocationSzX();
+    const unsigned int ly      = blkList[blk].getAllocationSzY();
+    const unsigned int lz      = blkList[blk].getAllocationSzZ();
+    const size_t lxyz          = (size_t)lx * ly * lz;
+    const unsigned int cgSz    = pMesh->getDegOfFreedom();
+    const unsigned int nCls    = m_uiOwnDTs.size();
+    const unsigned int* e2n    = pMesh->getE2NMapping().data();
+    const std::vector<unsigned int>& c2d = pMesh->getCG2DGMap();
+    const bool par             = pMesh->getMPICommSize() > 1;
+    const unsigned int nb      = pMesh->getNodeLocalBegin();
+    const unsigned int ne      = pMesh->getNodeLocalEnd();
+
+    if (m_uiSyncPlan.size() != pMesh->getLocalBlockList().size())
+        m_uiSyncPlan.assign(pMesh->getLocalBlockList().size(), SyncPlan());
+    SyncPlan& pl = m_uiSyncPlan[blk];
+    if (!pl.built) build_sync_plan(blk, eid, pl);
+
+    // last writer of every block slot: the padding fill in plan order, then
+    // the block's own elements
+    const unsigned int NONE = ~0u;
+    std::vector<unsigned int> wEle(lxyz, NONE), wNode(lxyz, 0);
+    std::vector<signed char> wC(lxyz, -1);
+    for (const typename SyncPlan::Ent& en : pl.ents)
+        for (unsigned int q = en.b; q < en.e; q++) {
+            const unsigned int d = pl.dst[q];
+            wEle[d]  = en.ele;
+            wC[d]    = (signed char)en.cnum;
+            wNode[d] = pl.src[q];
+        }
+    for (const unsigned int elem : blkList[blk]) {
+        const unsigned int ei = (pNodes[elem].getX() - blkNode.getX()) >> (m_uiMaxDepth - regLevel);
+        const unsigned int ej = (pNodes[elem].getY() - blkNode.getY()) >> (m_uiMaxDepth - regLevel);
+        const unsigned int ek = (pNodes[elem].getZ() - blkNode.getZ()) >> (m_uiMaxDepth - regLevel);
+        for (unsigned int k = 0; k < n1; k++)
+            for (unsigned int j = 0; j < n1; j++)
+                for (unsigned int i = 0; i < n1; i++) {
+                    const size_t d = (size_t)(ek * eOrder + k + PW) * (ly * lx) +
+                                     (size_t)(ej * eOrder + j + PW) * lx +
+                                     (ei * eOrder + i + PW);
+                    wEle[d]  = elem;
+                    wC[d]    = -1;
+                    wNode[d] = k * n1 * n1 + j * n1 + i;
+                }
+    }
+
+    size_t uncovered = 0, badNode = 0;
+    // class of a source node; it must be a value this rank has
+    auto need = [&](unsigned int cg) -> unsigned int {
+        if (cg >= cgSz || m_uiNodeCls[cg] >= nCls) {
+            badNode++;
+            return 0;
+        }
+        if (par && (cg < nb || cg >= ne) && !m_uiOwnNodeRecv[cg]) uncovered++;
+        return m_uiNodeCls[cg];
+    };
+
+    std::vector<std::vector<unsigned int>> bd(nCls), bs(nCls);
+    struct Inst {
+        unsigned int ele, o;
+        std::vector<std::pair<unsigned short, unsigned int>> out;
+    };
+    std::vector<Inst> opI, chI;
+    std::unordered_map<unsigned long long, unsigned int> opMap, chMap;
+    // per element with hanging ops: for each node the op that writes it last
+    // (-1: the gathered value) and its index in that op's slot list
+    std::unordered_map<unsigned int, std::vector<int>> lastOp;
+    auto lastOpOf = [&](unsigned int e) -> const std::vector<int>& {
+        auto it = lastOp.find(e);
+        if (it != lastOp.end()) return it->second;
+        std::vector<int>& lo = lastOp[e];
+        lo.assign(2 * nPe, -1);
+        for (unsigned int o = m_uiOwnOpOff[e]; o < m_uiOwnOpOff[e + 1]; o++) {
+            const unsigned int id = m_uiOwnOps[o] & 31u;
+            if (id >= 18) {
+                const unsigned int c = id - 18;
+                lo[2 * ((c >> 2) * eOrder * n1 * n1 + ((c >> 1) & 1u) * eOrder * n1 +
+                        (c & 1u) * eOrder)] = -1;
+                continue;
+            }
+            const unsigned int len = (id < 6) ? n1 * n1 : n1;
+            const unsigned int* s  = m_uiOwnSlots.data() +
+                                    ((id < 6) ? id * n1 * n1 : 6 * n1 * n1 + (id - 6) * n1);
+            for (unsigned int t = 0; t < len; t++) {
+                lo[2 * s[t]]     = (int)(o - m_uiOwnOpOff[e]);
+                lo[2 * s[t] + 1] = (int)t;
+            }
+        }
+        return lo;
+    };
+
+    for (size_t d = 0; d < lxyz; d++) {
+        const unsigned int e = wEle[d];
+        if (e == NONE) continue;
+        const unsigned int n = wNode[d];
+        if (wC[d] >= 0) {
+            const unsigned long long key = (unsigned long long)e * NUM_CHILDREN + wC[d];
+            auto it = chMap.find(key);
+            if (it == chMap.end()) {
+                it = chMap.emplace(key, (unsigned int)chI.size()).first;
+                chI.push_back({e, (unsigned int)wC[d], {}});
+            }
+            chI[it->second].out.emplace_back((unsigned short)n, (unsigned int)d);
+            continue;
+        }
+        int o = -1, t = 0;
+        if (m_uiOwnOpOff[e + 1] > m_uiOwnOpOff[e]) {
+            const std::vector<int>& lo = lastOpOf(e);
+            o = lo[2 * n];
+            t = lo[2 * n + 1];
+        }
+        if (o < 0) {
+            const unsigned int cg = e2n[(size_t)e * nPe + n];
+            const unsigned int c  = need(cg);
+            bd[c].push_back((unsigned int)d);
+            bs[c].push_back(cg < cgSz ? c2d[cg] : 0);
+        } else {
+            const unsigned long long key = (unsigned long long)e * 32 + o;
+            auto it = opMap.find(key);
+            if (it == opMap.end()) {
+                it = opMap.emplace(key, (unsigned int)opI.size()).first;
+                opI.push_back({e, (unsigned int)o, {}});
+            }
+            opI[it->second].out.emplace_back((unsigned short)t, (unsigned int)d);
+        }
+    }
+
+    op = OwnPlan();
+    op.clsOff.assign(nCls + 1, 0);
+    op.runOff.assign(nCls + 1, 0);
+    op.celeOff.assign(nCls + 1, 0);
+    // an owner element that feeds at least this many slots of the block is
+    // converted whole (shared between blocks of a pass), fewer: per node
+    const unsigned int wholeMin = std::max(8u, nPe / 6);
+    std::unordered_map<unsigned int, unsigned int> cnt;
+    for (unsigned int c = 0; c < nCls; c++) {
+        cnt.clear();
+        for (const unsigned int sl : bs[c]) cnt[sl / nPe]++;
+        for (const auto& kv : cnt)
+            if (kv.second >= wholeMin) op.cele.push_back(kv.first);
+        std::sort(op.cele.begin() + op.celeOff[c], op.cele.end());
+        op.celeOff[c + 1] = (unsigned int)op.cele.size();
+        bool open = false;
+        for (size_t q = 0; q < bd[c].size(); q++) {
+            if (cnt[bs[c][q] / nPe] < wholeMin) {
+                op.pdst.push_back(bd[c][q]);
+                op.psrc.push_back(bs[c][q]);
+                continue;
+            }
+            if (open && op.rlen.back() < 65535 &&
+                op.rdst.back() + op.rlen.back() == bd[c][q] &&
+                op.rsrc.back() + op.rlen.back() == bs[c][q] &&
+                op.rsrc.back() / nPe == bs[c][q] / nPe) {
+                op.rlen.back()++;
+            } else {
+                op.rdst.push_back(bd[c][q]);
+                op.rsrc.push_back(bs[c][q]);
+                op.rlen.push_back(1);
+                open = true;
+            }
+        }
+        op.clsOff[c + 1] = (unsigned int)op.pdst.size();
+        op.runOff[c + 1] = (unsigned int)op.rdst.size();
+    }
+    for (const Inst& in : opI) {
+        const unsigned char code = m_uiOwnOps[m_uiOwnOpOff[in.ele] + in.o];
+        const unsigned int id    = code & 31u;
+        const unsigned int len   = (id < 6) ? n1 * n1 : n1;
+        const unsigned int* s    = m_uiOwnSlots.data() +
+                                  ((id < 6) ? id * n1 * n1 : 6 * n1 * n1 + (id - 6) * n1);
+        typename OwnPlan::Op w;
+        w.inB  = (unsigned int)op.opSrc.size();
+        w.outB = (unsigned int)op.oDst.size();
+        w.dim  = (id < 6) ? 2 : 1;
+        w.cnum = code >> 5;
+        w.segB = (unsigned int)op.opSegCls.size();
+        {
+            std::vector<unsigned char> ic(len);
+            for (unsigned int t = 0; t < len; t++)
+                ic[t] = (unsigned char)need(e2n[(size_t)in.ele * nPe + s[t]]);
+            for (unsigned int c = 0; c < nCls; c++) {
+                unsigned int k = 0;
+                for (unsigned int t = 0; t < len; t++) {
+                    if (ic[t] != c) continue;
+                    const unsigned int cg = e2n[(size_t)in.ele * nPe + s[t]];
+                    op.opT.push_back(t);
+                    op.opSrc.push_back(cg < cgSz ? c2d[cg] : 0);
+                    k++;
+                }
+                if (!k) continue;
+                op.opSegCls.push_back((unsigned char)c);
+                op.opSegEnd.push_back((unsigned short)(op.opSrc.size() - w.inB));
+            }
+        }
+        w.segE = (unsigned int)op.opSegCls.size();
+        for (const auto& pr : in.out) {
+            op.oT.push_back(pr.first);
+            op.oDst.push_back(pr.second);
+        }
+        w.outE = (unsigned int)op.oDst.size();
+        op.ops.push_back(w);
+    }
+    // children of one parent together: its reconciled row is built once
+    std::sort(chI.begin(), chI.end(), [](const Inst& a, const Inst& b) {
+        return a.ele != b.ele ? a.ele < b.ele : a.o < b.o;
+    });
+    for (const Inst& in : chI) {
+        if (m_uiOwnRowOf[in.ele] < 0) {
+            m_uiOwnRowOf[in.ele] = (int)m_uiOwnRowEle.size();
+            m_uiOwnRowEle.push_back(in.ele);
+            std::vector<unsigned char> rc(nPe);
+            for (unsigned int n = 0; n < nPe; n++)
+                rc[n] = (unsigned char)need(e2n[(size_t)in.ele * nPe + n]);
+            {
+                const unsigned int dt = m_uiAppCtx->getBlkTimestepFac(
+                    pNodes[in.ele].getLevel(), m_uiLevMin, m_uiLevMax);
+                m_uiOwnRowPc.push_back((unsigned char)(
+                    std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(), dt) -
+                    m_uiOwnDTs.begin()));
+            }
+            for (unsigned int c = 0; c < nCls; c++) {
+                m_uiOwnRowOff.push_back((unsigned int)m_uiOwnRowN.size());
+                for (unsigned int n = 0; n < nPe; n++) {
+                    if (rc[n] != c) continue;
+                    const unsigned int cg = e2n[(size_t)in.ele * nPe + n];
+                    // its own node: part of the element's DG row
+                    if (cg < cgSz && c2d[cg] == in.ele * nPe + n &&
+                        c == m_uiOwnRowPc.back())
+                        continue;
+                    m_uiOwnRowN.push_back(n);
+                    m_uiOwnRowSrc.push_back(cg < cgSz ? c2d[cg] : 0);
+                }
+            }
+            m_uiOwnRowOff.push_back((unsigned int)m_uiOwnRowN.size());
+        }
+        typename OwnPlan::Child w;
+        w.row   = (unsigned int)m_uiOwnRowOf[in.ele];
+        w.store = p2c_index(in.ele, in.o);
+        w.cnum  = (unsigned char)in.o;
+        w.outB  = (unsigned int)op.cDst.size();
+        for (const auto& pr : in.out) {
+            if (op.cDst.size() > w.outB && op.cLen.back() < 65535 &&
+                op.cT.back() + op.cLen.back() == pr.first &&
+                op.cDst.back() + op.cLen.back() == pr.second) {
+                op.cLen.back()++;
+            } else {
+                op.cT.push_back(pr.first);
+                op.cDst.push_back(pr.second);
+                op.cLen.push_back(1);
+            }
+        }
+        w.outE = (unsigned int)op.cDst.size();
+        op.ch.push_back(w);
+    }
+    if (badNode || uncovered) {
+        std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
+                  << "] blk " << blk << ": source nodes without a cg index or "
+                  << "class " << badNode << ", ghost nodes no rank sends "
+                  << uncovered << "; aborting" << std::endl;
+        MPI_Abort(pMesh->getMPICommunicator(), 13);
+    }
+    op.built = true;
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
+                                         const std::vector<unsigned int>& eid) {
+    ot::Mesh* pMesh          = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    const ot::Block* blkList = pMesh->getLocalBlockList().data();
+    const unsigned int nPe   = pMesh->getNumNodesPerElement();
+    const unsigned int n1    = pMesh->getElementOrder() + 1;
+    const size_t dgSz        = (size_t)pMesh->getAllElements().size() * nPe;
+    const size_t lxyz        = (size_t)blkList[blk].getAllocationSzX() *
+                               blkList[blk].getAllocationSzY() *
+                               blkList[blk].getAllocationSzZ();
+    const unsigned int dof   = m_uiEVar.get_dof();
+    const unsigned int nCls  = m_uiOwnDTs.size();
+    const bool sprof         = ts::EnutsProf::on();
+    const double t0          = sprof ? ts::EnutsProf::now() : 0.0;
+    double tp2c              = 0;
+
+    if (m_uiOwnPlan.size() != pMesh->getLocalBlockList().size())
+        m_uiOwnPlan.assign(pMesh->getLocalBlockList().size(), OwnPlan());
+    OwnPlan& op = m_uiOwnPlan[blk];
+    if (!op.built) build_own_plan(blk, eid, op);
+
+    const unsigned int bTime = m_uiEleTime[blkList[blk].firstElementID()];
+    const unsigned int bDT   = m_uiEleDT[blkList[blk].firstElementID()];
+    const unsigned int bc    = (unsigned int)(
+        std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(), bDT) - m_uiOwnDTs.begin());
+    assert(bc < nCls && m_uiOwnDTs[bc] == bDT);
+
+    // one conversion row per owner class for this block class and stage pass:
+    // what the per-element loop decides from (element time, element dt)
+    OwnConv* cv = m_uiOwnConv.data() + (size_t)bc * nCls;
+    if (m_uiOwnConvPass[bc] != m_uiSyncPass) {
+        const bool ifxEq  = (ts::EnutsProf::ifaceFix() & 1);
+        const bool ifxAll = (ts::EnutsProf::ifaceFix() & 2);
+        for (unsigned int c = 0; c < nCls; c++) {
+            const unsigned int dtl = m_uiOwnDTs[c];
+            // every level steps at the multiples of its dt
+            const unsigned int tl = ((m_uiOwnPt + dtl - 1) / dtl) * dtl;
+            OwnConv& w            = cv[c];
+            w                     = OwnConv();
+            if (bTime == tl && !(ifxEq && dtl != bDT)) continue;
+            const T t_blk     = m_uiTimeInfo._m_uiT + bTime * m_uiTimeInfo._m_uiTh;
+            const T t_ele     = m_uiTimeInfo._m_uiT + tl * m_uiTimeInfo._m_uiTh;
+            const bool eqT    = (tl == bTime);
+            const bool eleFut = eqT ? (dtl > bDT) : (tl > bTime);
+            const unsigned int nsIn =
+                (ifxAll && eleFut && !eqT) ? m_uiNumStages : rk_s;
+            T dt_c = (eleFut ? dtl : bDT) * (m_uiTimeInfo._m_uiTh);
+            T dt_f = (eleFut ? bDT : dtl) * (m_uiTimeInfo._m_uiTh);
+            if (dt_c < dt_f) std::swap(dt_c, dt_f);
+            const T dt = eqT ? 0 : (eleFut ? (t_ele - t_blk) : (t_blk - t_ele));
+            w.same     = 0;
+            w.ns       = (unsigned char)nsIn;
+            m_uiECOp->stageRow(eleFut, w.m, rk_s, dt_c, dt_f, dt);
+        }
+        m_uiOwnConvPass[bc] = m_uiSyncPass;
+    }
+
+    T* blkVec = (T*)m_uiBVec[blk]._vec[rk_s].data();
+    const T* S[8];
+    T* scr      = m_uiOwnScr.data();  // g, pin, pout | im1, im2
+    T* g        = scr;
+    T* pin      = scr + nPe;
+    T* pout     = scr + 2 * nPe;
+    double* im1 = (double*)(scr + 3 * nPe);
+    double* im2 = (double*)(scr + 4 * nPe);
+
+    // owner elements of a converted class that feed many slots: the whole
+    // element into m_uiDGTmp0, unless a block of this pass and class did it
+    T* dgW = m_uiDGTmp0.get_vec_ptr();
+    if (m_uiSyncTag.size() != pMesh->getAllElements().size())
+        m_uiSyncTag.assign(pMesh->getAllElements().size(), SyncTag());
+    SyncTag etag;
+    etag.pass = m_uiSyncPass;
+    etag.rk   = rk_s;
+    etag.fut  = 4;
+    etag.dt_c = (T)bc;
+    unsigned int nconv = 0, nreuse = 0;
+    for (unsigned int c = 0; c < nCls; c++) {
+        if (cv[c].same) continue;
+        for (unsigned int i = op.celeOff[c]; i < op.celeOff[c + 1]; i++) {
+            const unsigned int ele = op.cele[i];
+            if (m_uiSyncPassOpen && m_uiSyncTag[ele] == etag) {
+                nreuse++;
+                continue;
+            }
+            nconv++;
+            for (unsigned int v = 0; v < dof; v++) {
+                for (unsigned int k = 0; k < m_uiNumStages; k++)
+                    S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz + (size_t)ele * nPe;
+                m_uiECOp->applyRow(dgW + (size_t)v * dgSz + (size_t)ele * nPe, S,
+                                   cv[c].m, cv[c].ns, nPe);
+            }
+            m_uiSyncTag[ele] = m_uiSyncPassOpen ? etag : SyncTag();
+        }
+    }
+    const double t1 = sprof ? ts::EnutsProf::now() : 0.0;
+    double tops     = 0;
+
+    for (unsigned int v = 0; v < dof; v++) {
+        for (unsigned int k = 0; k < m_uiNumStages; k++)
+            S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz;
+        T* dv = blkVec + (size_t)v * lxyz;
+        for (unsigned int c = 0; c < nCls; c++) {
+            if (op.runOff[c + 1] > op.runOff[c]) {
+                const T* base = cv[c].same ? S[rk_s - 1]
+                                           : (const T*)(dgW + (size_t)v * dgSz);
+                const unsigned int* rd   = op.rdst.data();
+                const unsigned int* rs   = op.rsrc.data();
+                const unsigned short* rl = op.rlen.data();
+                for (unsigned int r = op.runOff[c]; r < op.runOff[c + 1]; r++) {
+                    const T* sp = base + rs[r];
+                    T* dp       = dv + rd[r];
+                    for (unsigned int i = 0; i < rl[r]; i++) dp[i] = sp[i];
+                }
+            }
+            const unsigned int b = op.clsOff[c], n = op.clsOff[c + 1] - b;
+            if (!n) continue;
+            const unsigned int* dp = op.pdst.data() + b;
+            const unsigned int* sp = op.psrc.data() + b;
+            if (cv[c].same) {
+                const T* sv = S[rk_s - 1];
+                for (unsigned int q = 0; q < n; q++) dv[dp[q]] = sv[sp[q]];
+            } else {
+                m_uiECOp->gatherRow(dv, dp, sp, n, S, cv[c].m, cv[c].ns);
+            }
+        }
+        const double to0 = sprof ? ts::EnutsProf::now() : 0.0;
+        for (const typename OwnPlan::Op& w : op.ops) {
+            const unsigned int len    = (w.dim == 2) ? n1 * n1 : n1;
+            const unsigned int* src = op.opSrc.data() + w.inB;
+            const unsigned int* ti  = op.opT.data() + w.inB;
+            unsigned int b          = 0;
+            for (unsigned int sg = w.segB; sg < w.segE; sg++) {
+                const OwnConv& c     = cv[op.opSegCls[sg]];
+                const unsigned int e = op.opSegEnd[sg];
+                if (c.same) {
+                    const T* sv = S[rk_s - 1];
+                    for (unsigned int t = b; t < e; t++) pin[ti[t]] = sv[src[t]];
+                } else {
+                    m_uiECOp->gatherRow(pin, ti + b, src + b, e - b, S, c.m, c.ns);
+                }
+                b = e;
+            }
+            pMesh->parent2ChildInterpolation(pin, pout, w.cnum, w.dim, im1, im2);
+            for (unsigned int q = w.outB; q < w.outE; q++)
+                dv[op.oDst[q]] = pout[op.oT[q]];
+        }
+        if (sprof) tops += ts::EnutsProf::now() - to0;
+    }
+    const double t2 = sprof ? ts::EnutsProf::now() : 0.0;
+
+    const size_t stride = (size_t)dof * nPe;
+    if (m_uiOwnSweep.size() < 6 * stride) m_uiOwnSweep.resize(6 * stride);
+    if (m_uiOwnSweepOk.size() != (size_t)6 * dof) m_uiOwnSweepOk.assign((size_t)6 * dof, 0);
+    SyncTag key;
+    key.pass = m_uiSyncPass;
+    key.rk   = rk_s;
+    key.fut  = 3;
+    unsigned int nhit = 0;
+    for (const typename OwnPlan::Child& w : op.ch) {
+        bool hit = false;
+        T* sd    = m_uiSyncPassOpen ? p2c_slot(w.store, key, stride, hit) : nullptr;
+        nhit += hit;
+        if (!hit && !(m_uiOwnRowBufRow == w.row && m_uiOwnRowBufPass == m_uiSyncPass &&
+                      m_uiSyncPassOpen)) {
+            // the dependent's row as its zip + gather gives it: owner values,
+            // then its own hanging faces and edges
+            if (m_uiOwnRowBuf.size() < stride) m_uiOwnRowBuf.resize(stride);
+            const unsigned int ele  = m_uiOwnRowEle[w.row];
+            const unsigned int* ro  = m_uiOwnRowOff.data() + (size_t)w.row * (nCls + 1);
+            const bool hasOps       = m_uiOwnOpOff[ele + 1] > m_uiOwnOpOff[ele];
+            for (unsigned int v = 0; v < dof; v++) {
+                for (unsigned int k = 0; k < m_uiNumStages; k++)
+                    S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz;
+                T* row = m_uiOwnRowBuf.data() + (size_t)v * nPe;
+                T* gg  = hasOps ? g : row;
+                {
+                    // the element's own DG row in the block's frame, then the
+                    // nodes other elements own
+                    const OwnConv& pc = cv[m_uiOwnRowPc[w.row]];
+                    if (pc.same) {
+                        std::memcpy(gg, S[rk_s - 1] + (size_t)ele * nPe, sizeof(T) * nPe);
+                    } else {
+                        const T* Se[8];
+                        for (unsigned int k = 0; k < m_uiNumStages; k++)
+                            Se[k] = S[k] + (size_t)ele * nPe;
+                        m_uiECOp->applyRow(gg, Se, pc.m, pc.ns, nPe);
+                    }
+                }
+                for (unsigned int c = 0; c < nCls; c++) {
+                    const unsigned int n = ro[c + 1] - ro[c];
+                    if (!n) continue;
+                    const unsigned int* rn = m_uiOwnRowN.data() + ro[c];
+                    const unsigned int* rs = m_uiOwnRowSrc.data() + ro[c];
+                    if (cv[c].same) {
+                        const T* sv = S[rk_s - 1];
+                        for (unsigned int q = 0; q < n; q++) gg[rn[q]] = sv[rs[q]];
+                    } else {
+                        m_uiECOp->gatherRow(gg, rn, rs, n, S, cv[c].m, cv[c].ns);
+                    }
+                }
+                if (hasOps) own_row_ops(ele, g, row, pin, pout, im1, im2);
+            }
+            m_uiOwnRowBufRow  = w.row;
+            m_uiOwnRowBufPass = m_uiSyncPass;
+            std::fill(m_uiOwnSweepOk.begin(), m_uiOwnSweepOk.end(), 0);
+        }
+        if (!hit) {
+            const double tp = sprof ? ts::EnutsProf::now() : 0.0;
+            for (unsigned int v = 0; v < dof; v++) {
+                T* dv = blkVec + (size_t)v * lxyz;
+                T* pv = sd ? sd + (size_t)v * nPe : pout;
+                p2c3_shared(pMesh, m_uiOwnRowBuf.data() + (size_t)v * nPe, pv, w.cnum,
+                            m_uiOwnSweep.data() + (size_t)v * 6 * nPe,
+                            m_uiOwnSweepOk.data() + (size_t)v * 6);
+                if (!sd)
+                    for (unsigned int q = w.outB; q < w.outE; q++) {
+                        const T* sp = pv + op.cT[q];
+                        T* dp       = dv + op.cDst[q];
+                        for (unsigned int i = 0; i < op.cLen[q]; i++) dp[i] = sp[i];
+                    }
+            }
+            if (sprof) tp2c += ts::EnutsProf::now() - tp;
+            if (!sd) continue;
+        }
+        for (unsigned int v = 0; v < dof; v++) {
+            T* dv       = blkVec + (size_t)v * lxyz;
+            const T* pv = sd + (size_t)v * nPe;
+            for (unsigned int q = w.outB; q < w.outE; q++) {
+                const T* sp = pv + op.cT[q];
+                T* dp       = dv + op.cDst[q];
+                for (unsigned int i = 0; i < op.cLen[q]; i++) dp[i] = sp[i];
+            }
+        }
+    }
+
+    if (sprof) {
+        ts::EnutsProf& P = ts::EnutsProf::get();
+        const double t3 = ts::EnutsProf::now();
+        // plan path: same_copy = plan + rows + whole-element conversions,
+        // corr_coarse_fut = node copies, corr_fine_past = hanging faces/edges,
+        // unzip_pad = children of coarser dependents (p2c inside)
+        P.t[ts::EnutsProf::SY_SAME] += t1 - t0;
+        P.t[ts::EnutsProf::SY_CORR] += (t2 - t1) - tops;
+        P.t[ts::EnutsProf::SY_CORR_FC] += tops;
+        P.t[ts::EnutsProf::SY_UNZIP] += t3 - t2;
+        P.t[ts::EnutsProf::SY_P2C] += tp2c;
+        P.t[ts::EnutsProf::CN_ENT] += op.ops.size();
+        P.t[ts::EnutsProf::CN_CORR] += nconv;
+        P.t[ts::EnutsProf::CN_HIT] += nreuse;
+        size_t nrun = 0;
+        for (const unsigned short l : op.rlen) nrun += l;
+        size_t ncr = 0;
+        for (const unsigned short l : op.cLen) ncr += l;
+        P.t[ts::EnutsProf::CN_PAIRS] += nrun + op.pdst.size() + op.oDst.size() + ncr;
+        P.t[ts::EnutsProf::CN_P2C] += op.ch.size();
+        P.t[ts::EnutsProf::CN_P2C_HIT] += nhit;
+    }
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
+                                                   unsigned int pt) {
+    ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    if (!pMesh->isActive() || pMesh->getMPICommSize() < 2) return;
+    const unsigned int nCls = m_uiOwnDTs.size();
+    const size_t dgSz = (size_t)pMesh->getAllElements().size() * pMesh->getNumNodesPerElement();
+    // the owners that computed this stage are the classes whose dt divides pt:
+    // a prefix of the ascending classes when the dts form a divisibility chain
+    int j = -1;
+    if (!m_uiOwnChain)
+        j = (int)nCls - 1;
+    else
+        for (unsigned int i = 0; i < nCls; i++)
+            if (pt % m_uiOwnDTs[i] == 0) j = (int)i;
+    const std::vector<unsigned int>& sPr = pMesh->getSendProcList();
+    const std::vector<unsigned int>& rPr = pMesh->getRecvProcList();
+    MPI_Comm comm = pMesh->getMPICommunicator();
+    const int tag = 7153;
+    m_uiOwnReq.assign(sPr.size() + rPr.size(), MPI_REQUEST_NULL);
+    if (j < 0) return;
+    size_t rTot = 0, sTot = 0;
+    for (size_t i = 0; i < rPr.size(); i++) rTot += m_uiOwnRecvCum[i * nCls + j];
+    for (size_t i = 0; i < sPr.size(); i++) sTot += m_uiOwnSendCum[i * nCls + j];
+    if (m_uiOwnRecvBuf.size() < rTot * dof) m_uiOwnRecvBuf.resize(rTot * dof);
+    if (m_uiOwnSendBuf.size() < sTot * dof) m_uiOwnSendBuf.resize(sTot * dof);
+    size_t off = 0;
+    for (size_t i = 0; i < rPr.size(); i++) {
+        const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
+        if (!cnt) continue;
+        par::Mpi_Irecv(m_uiOwnRecvBuf.data() + off, (int)(cnt * dof), rPr[i], tag,
+                       comm, &m_uiOwnReq[i]);
+        off += (size_t)cnt * dof;
+    }
+    off = 0;
+    for (size_t i = 0; i < sPr.size(); i++) {
+        const unsigned int cnt = m_uiOwnSendCum[i * nCls + j];
+        if (!cnt) continue;
+        const unsigned int* sl = m_uiOwnSendSlot.data() + m_uiOwnSendOff[i];
+        T* b                   = m_uiOwnSendBuf.data() + off;
+        for (unsigned int v = 0; v < dof; v++) {
+            const T* sv = stv + (size_t)v * dgSz;
+            for (unsigned int q = 0; q < cnt; q++) b[(size_t)v * cnt + q] = sv[sl[q]];
+        }
+        par::Mpi_Isend(b, (int)(cnt * dof), sPr[i], tag, comm,
+                       &m_uiOwnReq[rPr.size() + i]);
+        off += (size_t)cnt * dof;
+    }
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
+                                                 unsigned int pt) {
+    ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    if (!pMesh->isActive() || pMesh->getMPICommSize() < 2) return;
+    const unsigned int nCls = m_uiOwnDTs.size();
+    const size_t dgSz = (size_t)pMesh->getAllElements().size() * pMesh->getNumNodesPerElement();
+    int j = -1;
+    if (!m_uiOwnChain)
+        j = (int)nCls - 1;
+    else
+        for (unsigned int i = 0; i < nCls; i++)
+            if (pt % m_uiOwnDTs[i] == 0) j = (int)i;
+    if (j < 0) return;
+    if (!m_uiOwnReq.empty())
+        MPI_Waitall((int)m_uiOwnReq.size(), m_uiOwnReq.data(), MPI_STATUSES_IGNORE);
+    const std::vector<unsigned int>& rPr = pMesh->getRecvProcList();
+    size_t off = 0;
+    for (size_t i = 0; i < rPr.size(); i++) {
+        const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
+        if (!cnt) continue;
+        const unsigned int* sl = m_uiOwnRecvSlot.data() + m_uiOwnRecvOff[i];
+        const T* b             = m_uiOwnRecvBuf.data() + off;
+        for (unsigned int v = 0; v < dof; v++) {
+            T* sv = stv + (size_t)v * dgSz;
+            for (unsigned int q = 0; q < cnt; q++) sv[sl[q]] = b[(size_t)v * cnt + q];
+        }
+        off += (size_t)cnt * dof;
+    }
 }
 
 template <typename T, typename Ctx>
@@ -1661,6 +2864,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
     const unsigned int dof = m_uiEVar.get_dof();
     const int ownSync   = (rk_s >= 1 && !isIGTSync) ? ts::EnutsProf::ownerSync() : 0;
+    // ownSync 1 runs the plan (below, once the dependents are known); here it
+    // is the per-element form: modes 2 / 3, or 1 where the plan is unavailable
     const bool syncFast = ts::EnutsProf::syncFast() && !ownSync;
     const bool ifxEq  = (ts::EnutsProf::ifaceFix() & 1) && rk_s >= 1 && !isIGTSync;
     const bool ifxAll = (ts::EnutsProf::ifaceFix() & 2) && rk_s >= 1 && !isIGTSync;
@@ -1693,6 +2898,13 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     }
     const std::vector<unsigned int>& eid = m_uiBlkDepEid[blk];
     if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_EID] += eid.size();
+    if (ownSync == 1 && m_uiSyncPassOpen && prepare_owner_sync(pMesh)) {
+        own_sync_fill(blk, rk_s, eid);
+#ifdef __PROFILE_ENUTS__
+        m_uiPt[ENUTSPROFILE::BLK_SYNC].stop();
+#endif
+        return;
+    }
     if (ownSync && m_uiBlkOwnEid.size() != m_uiBlkDepEid.size()) {
         const unsigned int* e2n_dg = pMesh->getE2NMapping_DG().data();
         m_uiBlkOwnEid.assign(m_uiBlkDepEid.size(), {});
@@ -2070,7 +3282,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                             dgStages[rk_s - 1] + v * dgSz + elem * nPe,
                             sizeof(T) * nPe);
         }
-        if (ownSync > 1) {
+        if (ownSync == 2) {
             for (size_t q = 0; q < (size_t)dof * cgSz; q++)
                 cgW[q] = std::numeric_limits<T>::quiet_NaN();
             // nan left by the rhs itself (padding outside the domain) is not ours
@@ -2130,11 +3342,11 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         }
         const size_t p2cStride = (size_t)dof * nPe;
         const bool useP2cCache = m_uiSyncPassOpen && !isIGTSync && p2cStride > 0;
-        if (useP2cCache && m_uiP2cMeta.empty()) {
-            size_t slots = std::max<size_t>(64, std::min<size_t>(4096, (64u << 20) / (p2cStride * sizeof(T))));
-            m_uiP2cMeta.assign(slots, P2cSlot());
-            m_uiP2cData.resize(slots * p2cStride);
-        }
+        // sweeps of the 3D interpolation shared by the children of one source row
+        if (m_uiOwnSweep.size() < 6 * p2cStride) m_uiOwnSweep.resize(6 * p2cStride);
+        if (m_uiOwnSweepOk.size() != (size_t)6 * dof) m_uiOwnSweepOk.assign((size_t)6 * dof, 0);
+        unsigned int swEle = ~0u;
+        const T* swBase    = nullptr;
         for (const typename SyncPlan::Ent& en : pl.ents) {
             const T* srcBase = dgWVec;
             const bool sameTime = !isIGTSync && etVec[en.ele] == bTime &&
@@ -2162,24 +3374,28 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                 } else {
                     key = m_uiSyncTag[en.ele];
                 }
-                const size_t slot = ((size_t)en.ele * 8 + en.cnum) % m_uiP2cMeta.size();
-                P2cSlot& ps       = m_uiP2cMeta[slot];
-                slotData          = m_uiP2cData.data() + slot * p2cStride;
-                hit = (ps.ele == en.ele && ps.cnum == (unsigned int)en.cnum && ps.tag == key);
-                if (!hit) {
-                    ps.ele  = en.ele;
-                    ps.cnum = en.cnum;
-                    ps.tag  = key;
-                }
+                // nullptr: the pass store is full, interpolate into scratch
+                slotData = p2c_slot(en.store, key, p2cStride, hit);
             }
             if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_HIT] += hit;
             for (unsigned int v = 0; v < dof; v++) {
                 T* dv       = m_uiVec + v * lxyz;
                 const T* sv = srcBase + (size_t)v * dgSz + (size_t)en.ele * nPe;
-                T* pv       = useP2cCache ? slotData + (size_t)v * nPe : p2cI.data();
+                T* pv       = slotData ? slotData + (size_t)v * nPe : p2cI.data();
                 if (!hit) {
                     const double tp2 = sprof ? ts::EnutsProf::now() : 0.0;
-                    pMesh->parent2ChildInterpolation(sv, pv, en.cnum, m_uiDim);
+                    if (m_uiDim == 3) {
+                        if (v == 0 && (swEle != en.ele || swBase != srcBase)) {
+                            std::fill(m_uiOwnSweepOk.begin(), m_uiOwnSweepOk.end(), 0);
+                            swEle  = en.ele;
+                            swBase = srcBase;
+                        }
+                        p2c3_shared(pMesh, sv, pv, en.cnum,
+                                    m_uiOwnSweep.data() + (size_t)v * 6 * nPe,
+                                    m_uiOwnSweepOk.data() + (size_t)v * 6);
+                    } else {
+                        pMesh->parent2ChildInterpolation(sv, pv, en.cnum, m_uiDim);
+                    }
                     if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_P2C] += ts::EnutsProf::now() - tp2;
                 }
                 for (unsigned int q = en.b; q < en.e; q++) dv[dp[q]] = pv[sp[q]];
@@ -2559,7 +3775,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         }
     }
 
-    if (ownSync > 1) {
+    if (ownSync == 2) {
         static unsigned long long nanTot = 0, calls = 0;
         unsigned long long nn = 0;
         for (size_t q = 0; q < (size_t)dof * lx * ly * lz; q++)
@@ -2577,14 +3793,19 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 }
 
 template <typename T, typename Ctx>
-void ExplicitNUTS<T, Ctx>::update_ele_timestep() {
+void ExplicitNUTS<T, Ctx>::update_ele_timestep(
+    const std::vector<unsigned int>* blks) {
     ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
 
     if (!(pMesh->isActive())) return;
 
     const ot::TreeNode* pNodes            = pMesh->getAllElements().data();
     const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
-    for (unsigned int blk = 0; blk < blkList.size(); blk++) {
+    // only the given blocks moved: the others keep their time, and dt is a
+    // function of the level
+    const unsigned int nb = blks ? blks->size() : blkList.size();
+    for (unsigned int bi = 0; bi < nb; bi++) {
+        const unsigned int blk = blks ? (*blks)[bi] : bi;
         const unsigned int bLev =
             pNodes[blkList[blk].firstElementID()].getLevel();
         const unsigned int BLK_DT =
@@ -2841,7 +4062,30 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
     // level-scoped element-DG exchange: the elements whose level fires at pt
     // (DT | pt) are the plan's prefix; row d = largest distinct DT dividing pt
-    const bool scopedOn = ts::EnutsProf::scoped() && prepare_scoped_exchange(pMesh);
+    // owner-sync plan: a block reads owner values only, so the exchange is
+    // per node (the owner's rank sends), not per ghost element
+    const bool ownPlan =
+        ts::EnutsProf::ownerSync() == 1 && prepare_owner_sync(pMesh);
+    m_uiOwnPt = pt;
+    if (ownPlan) {
+        // the plan takes an owner's time from its dt: every block must sit at
+        // the next multiple of its dt (true inside evolve())
+        for (unsigned int blk = 0; blk < blkList.size(); blk++) {
+            const unsigned int bdt = m_uiAppCtx->getBlkTimestepFac(
+                pNodes[blkList[blk].firstElementID()].getLevel(), m_uiLevMin,
+                m_uiLevMax);
+            if (m_uiBVec[blk]._time != ((pt + bdt - 1) / bdt) * bdt) {
+                std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
+                          << "] blk " << blk << " time " << m_uiBVec[blk]._time
+                          << " dt " << bdt << " at partial step " << pt
+                          << ": block times are not level-uniform; aborting"
+                          << std::endl;
+                MPI_Abort(pMesh->getMPICommunicator(), 14);
+            }
+        }
+    }
+    const bool scopedOn = !ownPlan && ts::EnutsProf::scoped() &&
+                          prepare_scoped_exchange(pMesh);
     const bool scopedChk = scopedOn && ts::EnutsProf::scopedCheck();
     const unsigned int* scSend = nullptr;
     const unsigned int* scRecv = nullptr;
@@ -2879,16 +4123,16 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                 m_uiBVec[blk]._vec[0]);  // copy the in vector.
             T* out_ptr = (T*)m_uiBVec[blk]._vec[m_uiNumStages + 1].data();
 
-            for (unsigned int s = 1; s < BLK_S; s++) {
-                const T* stage_ptr = m_uiBVec[blk]._vec[s].data();
-                for (unsigned int n = 0; n < DOF * NN; n++) {
-                    out_ptr[n] +=
-                        (blk_dt *
-                         m_uiAij[(BLK_S - 1) * m_uiNumStages + (s - 1)] *
-                         stage_ptr[n]);
-                    // printf("s[%d]: %f\n", n, out_ptr[n]);
-                    // printf("s: %d : stage[%d]: %f\n", s,  n, stage_ptr[n]);
+            {
+                // all stage terms in one pass (same order per entry)
+                const T* stp[16];
+                T stc[16];
+                for (unsigned int s = 1; s < BLK_S; s++) {
+                    stp[s - 1] = m_uiBVec[blk]._vec[s].data();
+                    stc[s - 1] = blk_dt *
+                                 m_uiAij[(BLK_S - 1) * m_uiNumStages + (s - 1)];
                 }
+                enuts_axpy_stages(out_ptr, stp, stc, BLK_S - 1, (size_t)DOF * NN);
             }
 
             m_uiAppCtx->pre_stage_blk(
@@ -2920,7 +4164,14 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
         ENUTS_TOC(RHS);
         ENUTS_TIC();
-        if (scopedOn) {
+        if (ownPlan) {
+            T* stv = m_uiStVec[BLK_S - 1].get_vec_ptr();
+            own_node_exchange_begin(stv, DOF, pt);
+            ENUTS_TOC(EDG_BEGIN);
+            ENUTS_TIC();
+            own_node_exchange_end(stv, DOF, pt);
+            ENUTS_TOC(EDG_END);
+        } else if (scopedOn) {
             T* stv = m_uiStVec[BLK_S - 1].get_vec_ptr();
             if (scopedChk) {
                 // shadow: what the full exchange would leave in every ghost slot
@@ -3038,11 +4289,15 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         const T blk_dt = m_uiTimeInfo._m_uiTh * BLK_DT;
 
         T* out_ptr     = (T*)m_uiBVec[blk]._vec[0].data();
-        for (unsigned int s = 1; s <= m_uiNumStages; s++) {
-            assert(m_uiBVec[blk]._vec[s].isSynced());
-            const T* stage_ptr = m_uiBVec[blk]._vec[s].data();
-            for (unsigned int n = 0; n < DOF * NN; n++)
-                out_ptr[n] += (blk_dt * m_uiBi[(s - 1)] * stage_ptr[n]);
+        {
+            const T* stp[16];
+            T stc[16];
+            for (unsigned int s = 1; s <= m_uiNumStages; s++) {
+                assert(m_uiBVec[blk]._vec[s].isSynced());
+                stp[s - 1] = m_uiBVec[blk]._vec[s].data();
+                stc[s - 1] = blk_dt * m_uiBi[(s - 1)];
+            }
+            enuts_axpy_stages(out_ptr, stp, stc, m_uiNumStages, (size_t)DOF * NN);
         }
 
         m_uiBVec[blk]._time += BLK_DT;
@@ -3058,15 +4313,14 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             m_uiBVec[blk]._vec[s].mark_unsynced();
     }
 
-    update_ele_timestep();
+    update_ele_timestep(&m_uiActiveBlkIDs);
     ENUTS_TOC(AXPY_ELETS);
     ENUTS_TIC();
 
     pMesh->readFromGhostBeginElementVec(m_uiEleTime.data(), 1);
     pMesh->readFromGhostEndElementVec(m_uiEleTime.data(), 1);
-
-    pMesh->readFromGhostBeginElementVec(m_uiEleDT.data(), 1);
-    pMesh->readFromGhostEndElementVec(m_uiEleDT.data(), 1);
+    // m_uiEleDT is not exchanged here: it depends on the level only and
+    // evolve() exchanged it at the start of the step
     ENUTS_TOC(EVEC_XCH);
     ENUTS_TIC();
 
