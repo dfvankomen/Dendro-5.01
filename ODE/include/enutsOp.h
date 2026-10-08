@@ -151,6 +151,20 @@ class ENUTSOp {
                   DendroScalar dt_c, DendroScalar dt_f, DendroScalar dt);
 
     /**
+     * @brief stageRow for a nonlinear right-hand side (RK4 only): the fourth
+     * Taylor variable is dt^2 f_yy(f,f) = 4 g, g = k4 - 2 k3 + k1, instead of
+     * dt^3 d^4y/dt^4 (which assumes a linear right-hand side).
+     * row[0..3] multiply the source stages k1..k4, row[4] multiplies g.
+     * nav = 4: all source stages exist, g is folded into row[0..3] and
+     * row[4] = 0. nav < 4 (same-time conversion, dt = 0): row[k] = 0 for
+     * k >= nav and g has to come from the source's previous step.
+     * @return true when row[4] != 0 (the caller has to supply g).
+     */
+    bool stageRowNL(bool cf, DendroScalar* row, unsigned int rk_s,
+                    DendroScalar dt_c, DendroScalar dt_f, DendroScalar dt,
+                    unsigned int nav) const;
+
+    /**
      * @brief out[n] = sum_{k<ns} m[k] * in[k][n], n < NN (out must not
      * overlap in); the node loop of Ccf / Cfc.
      */

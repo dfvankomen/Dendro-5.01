@@ -156,7 +156,17 @@ struct EnutsProf {
      *  1: same time -> convert the neighbour's stages to this block's dt
      *     (the plain copy is first order in dt).
      *  2: neighbour ahead -> use all of its completed stages for the time
-     *     shift instead of the first rk_s. */
+     *     shift instead of the first rk_s.
+     *  4: (with 1 and 2, RK4) conversion that stays fourth order for a
+     *     nonlinear right-hand side (ENUTSOp::stageRowNL); the same-time
+     *     conversion of stages 2 and 3 takes g = k4 - 2 k3 + k1 from the
+     *     neighbour's previous step (m_uiStG).
+     *  8: neighbour ahead -> time shift measured from the start of the
+     *     neighbour's step (block time - (element time - element dt)). The
+     *     original shift, element time - block time, is the same number only
+     *     when the block sits at the midpoint of the element's step: true
+     *     between 2:1 neighbours, not for an owner two time levels away
+     *     (reached through a hanging node of a dependent). */
     static int ifaceFix() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_IFACE_FIX");
@@ -164,6 +174,8 @@ struct EnutsProf {
         }();
         return v;
     }
+    static bool ifaceNL() { return (ifaceFix() & 7) == 7; }
+    static bool ifaceShift() { return (ifaceFix() & 8) != 0; }
     /** DENDRO_ENUTS_OWNER_SYNC=1: before a block takes its stage data, give
      *  every shared or hanging node of the block's elements and of its unzip
      *  dependents the value of the node's owner (what zip + unzip does in ETS).
@@ -543,6 +555,13 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief: temp vector of the DG scheme*/
     DVec m_uiDGTmp0;
 
+    /** DENDRO_ENUTS_IFACE_FIX bit 4: g = k4 - 2 k3 + k1 of every element's
+     *  latest completed step (DG, like the stage vectors); zero after every
+     *  (re)allocation */
+    DVec m_uiStG;
+    bool m_uiStGOn = false;
+    void update_stage_g(unsigned int pt);
+
     /** per-element tag of the correction currently held in m_uiDGTmp0 */
     struct SyncTag {
         unsigned long long pass = 0;
@@ -637,7 +656,8 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<OwnPlan> m_uiOwnPlan;
     /** stage-conversion of one owner class into a block's time frame */
     struct OwnConv {
-        unsigned char same = 1, ns = 0;
+        // g: the last of the ns inputs is m_uiStG
+        unsigned char same = 1, ns = 0, g = 0;
         T m[8] = {};
     };
     const ot::Mesh* m_uiOwnMesh = nullptr;
@@ -1265,6 +1285,15 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
                              ot::DVEC_TYPE::OCT_LOCAL_NODES, ot::DVEC_LOC::HOST,
                              m_uiEVar.get_dof(), true);
 
+    m_uiStGOn = ts::EnutsProf::ifaceNL() && m_uiType == ETSType::RK4;
+    if (m_uiStGOn) {
+        m_uiStG.create_vector(m_uiAppCtx->get_mesh(),
+                              ot::DVEC_TYPE::OCT_LOCAL_NODES, ot::DVEC_LOC::HOST,
+                              m_uiEVar.get_dof(), true);
+        std::fill(m_uiStG.get_vec_ptr(),
+                  m_uiStG.get_vec_ptr() + m_uiStG.get_size(), (T)0);
+    }
+
     m_uiEvarUzip.create_vector(m_uiAppCtx->get_mesh(),
                                ot::DVEC_TYPE::OCT_LOCAL_WITH_PADDING,
                                ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
@@ -1320,6 +1349,10 @@ int ExplicitNUTS<T, Ctx>::deallocate_internal_vars() {
 
     // deallocate DG tmp.
     m_uiDGTmp0.destroy_vector();
+    if (m_uiStGOn) {
+        m_uiStG.destroy_vector();
+        m_uiStGOn = false;
+    }
 
     m_uiEvarUzip.destroy_vector();
     m_uiEvarDG.destroy_vector();
@@ -2647,16 +2680,30 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
             T dt_c = (eleFut ? dtl : bDT) * (m_uiTimeInfo._m_uiTh);
             T dt_f = (eleFut ? bDT : dtl) * (m_uiTimeInfo._m_uiTh);
             if (dt_c < dt_f) std::swap(dt_c, dt_f);
-            const T dt = eqT ? 0 : (eleFut ? (t_ele - t_blk) : (t_blk - t_ele));
+            T dt = eqT ? 0 : (eleFut ? (t_ele - t_blk) : (t_blk - t_ele));
+            if (ts::EnutsProf::ifaceShift() && eleFut && !eqT)
+                dt = (T)(bTime + dtl - tl) * m_uiTimeInfo._m_uiTh;
             w.same     = 0;
             w.ns       = (unsigned char)nsIn;
+            if (m_uiStGOn && (eqT || nsIn == m_uiNumStages)) {
+                T row[5];
+                if (m_uiECOp->stageRowNL(eleFut, row, rk_s, dt_c, dt_f, dt, nsIn)) {
+                    w.g       = 1;
+                    row[nsIn] = row[4];
+                    w.ns      = (unsigned char)(nsIn + 1);
+                }
+                for (unsigned int k = 0; k < w.ns; k++) w.m[k] = row[k];
+            } else
             m_uiECOp->stageRow(eleFut, w.m, rk_s, dt_c, dt_f, dt);
         }
         m_uiOwnConvPass[bc] = m_uiSyncPass;
     }
 
     T* blkVec = (T*)m_uiBVec[blk]._vec[rk_s].data();
+    // SG: the inputs of a class that reads g (k1 .. k_rk_s, g)
     const T* S[8];
+    const T* SG[8];
+    const T* stG = m_uiStGOn ? m_uiStG.get_vec_ptr() : nullptr;
     T* scr      = m_uiOwnScr.data();  // g, pin, pout | im1, im2
     T* g        = scr;
     T* pin      = scr + nPe;
@@ -2688,6 +2735,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
             for (unsigned int v = 0; v < dof; v++) {
                 for (unsigned int k = 0; k < m_uiNumStages; k++)
                     S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz + (size_t)ele * nPe;
+                if (cv[c].g) S[cv[c].ns - 1] = stG + (size_t)v * dgSz + (size_t)ele * nPe;
                 m_uiECOp->applyRow(dgW + (size_t)v * dgSz + (size_t)ele * nPe, S,
                                    cv[c].m, cv[c].ns, nPe);
             }
@@ -2699,7 +2747,8 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
 
     for (unsigned int v = 0; v < dof; v++) {
         for (unsigned int k = 0; k < m_uiNumStages; k++)
-            S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz;
+            SG[k] = S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz;
+        if (stG) SG[rk_s] = stG + (size_t)v * dgSz;
         T* dv = blkVec + (size_t)v * lxyz;
         for (unsigned int c = 0; c < nCls; c++) {
             if (op.runOff[c + 1] > op.runOff[c]) {
@@ -2722,7 +2771,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                 const T* sv = S[rk_s - 1];
                 for (unsigned int q = 0; q < n; q++) dv[dp[q]] = sv[sp[q]];
             } else {
-                m_uiECOp->gatherRow(dv, dp, sp, n, S, cv[c].m, cv[c].ns);
+                m_uiECOp->gatherRow(dv, dp, sp, n, cv[c].g ? SG : S, cv[c].m, cv[c].ns);
             }
         }
         const double to0 = sprof ? ts::EnutsProf::now() : 0.0;
@@ -2738,7 +2787,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                     const T* sv = S[rk_s - 1];
                     for (unsigned int t = b; t < e; t++) pin[ti[t]] = sv[src[t]];
                 } else {
-                    m_uiECOp->gatherRow(pin, ti + b, src + b, e - b, S, c.m, c.ns);
+                    m_uiECOp->gatherRow(pin, ti + b, src + b, e - b, c.g ? SG : S, c.m, c.ns);
                 }
                 b = e;
             }
@@ -2772,7 +2821,8 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
             const bool hasOps       = m_uiOwnOpOff[ele + 1] > m_uiOwnOpOff[ele];
             for (unsigned int v = 0; v < dof; v++) {
                 for (unsigned int k = 0; k < m_uiNumStages; k++)
-                    S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz;
+                    SG[k] = S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz;
+                if (stG) SG[rk_s] = stG + (size_t)v * dgSz;
                 T* row = m_uiOwnRowBuf.data() + (size_t)v * nPe;
                 T* gg  = hasOps ? g : row;
                 {
@@ -2785,6 +2835,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                         const T* Se[8];
                         for (unsigned int k = 0; k < m_uiNumStages; k++)
                             Se[k] = S[k] + (size_t)ele * nPe;
+                        if (pc.g) Se[pc.ns - 1] = stG + (size_t)v * dgSz + (size_t)ele * nPe;
                         m_uiECOp->applyRow(gg, Se, pc.m, pc.ns, nPe);
                     }
                 }
@@ -2797,7 +2848,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                         const T* sv = S[rk_s - 1];
                         for (unsigned int q = 0; q < n; q++) gg[rn[q]] = sv[rs[q]];
                     } else {
-                        m_uiECOp->gatherRow(gg, rn, rs, n, S, cv[c].m, cv[c].ns);
+                        m_uiECOp->gatherRow(gg, rn, rs, n, cv[c].g ? SG : S, cv[c].m, cv[c].ns);
                     }
                 }
                 if (hasOps) own_row_ops(ele, g, row, pin, pout, im1, im2);
@@ -3413,6 +3464,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                     if (dt_c < dt_f) std::swap(dt_c, dt_f);
 
                     dt = eqT ? 0 : (eleFut ? (t_ele - t_blk) : (t_blk - t_ele));
+                    if (ts::EnutsProf::ifaceShift() && eleFut && !eqT)
+                        dt = (T)(bTime + dtl - tl) * m_uiTimeInfo._m_uiTh;
 
                     if (syncFast && m_uiSyncPassOpen &&
                         m_uiSyncTag[elem].pass == m_uiSyncPass &&
@@ -3436,7 +3489,25 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                         if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_CORR] += 1;
                         {
                             const double tc0_ = sprof ? ts::EnutsProf::now() : 0.0;
-                            if (eleFut)
+                            if (m_uiStGOn && (eqT || nsIn == m_uiNumStages)) {
+                                // nonlinear form; g of an element's previous
+                                // step where its k3, k4 do not exist yet
+                                T row[5], m5[5];
+                                const T* in5[5];
+                                const bool useG = m_uiECOp->stageRowNL(
+                                    eleFut, row, rk_s, dt_c, dt_f, dt, nsIn);
+                                for (unsigned int k = 0; k < nsIn; k++) m5[k] = row[k];
+                                if (useG) m5[nsIn] = row[4];
+                                for (unsigned int v = 0; v < dof; v++) {
+                                    for (unsigned int k = 0; k < nsIn; k++)
+                                        in5[k] = cVin[v * nsIn + k];
+                                    if (useG)
+                                        in5[nsIn] = m_uiStG.get_vec_ptr() +
+                                                    (size_t)v * dgSz + (size_t)elem * nPe;
+                                    m_uiECOp->applyRow(cVout[v * nsIn + (rk_s - 1)], in5,
+                                                       m5, nsIn + (useG ? 1 : 0), nPe);
+                                }
+                            } else if (eleFut)
                                 m_uiECOp->Ccf(cVout, (const T**)cVin, cSz, rk_s,
                                               dt_c, dt_f, dt, dof, nsIn);
                             else
@@ -4159,6 +4230,31 @@ void ExplicitNUTS<T, Ctx>::scoped_check_compare(ot::Mesh* pMesh, const T* real,
 }
 
 template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::update_stage_g(unsigned int pt) {
+    // the elements that finished a step in this partial step (dt | pt), local
+    // and ghost: their stage rows are current (with the owner-node exchange,
+    // the owner slots a block reads)
+    ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+    if (!pMesh->isActive()) return;
+    const unsigned int nPe = pMesh->getNumNodesPerElement();
+    const unsigned int dof = m_uiEVar.get_dof();
+    const size_t nEle      = pMesh->getAllElements().size();
+    const size_t dgSz      = nEle * nPe;
+    const T* k1            = m_uiStVec[0].get_vec_ptr();
+    const T* k3            = m_uiStVec[2].get_vec_ptr();
+    const T* k4            = m_uiStVec[3].get_vec_ptr();
+    T* g                   = m_uiStG.get_vec_ptr();
+    for (size_t e = 0; e < nEle; e++) {
+        if (!m_uiEleDT[e] || (pt % m_uiEleDT[e])) continue;
+        for (unsigned int v = 0; v < dof; v++) {
+            const size_t o = v * dgSz + e * nPe;
+            for (unsigned int q = 0; q < nPe; q++)
+                g[o + q] = (k4[o + q] - 2 * k3[o + q]) + k1[o + q];
+        }
+    }
+}
+
+template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
 
@@ -4585,6 +4681,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             m_uiBVec[blk]._vec[s].mark_unsynced();
     }
 
+    if (m_uiStGOn) update_stage_g(pt);
     update_ele_timestep(&m_uiActiveBlkIDs);
     ENUTS_TOC(AXPY_ELETS);
     ENUTS_TIC();

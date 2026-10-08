@@ -209,6 +209,40 @@ void ENUTSOp::stageRow(bool cf, DendroScalar* row, unsigned int rk_s,
         row[k] = M[(rk_s - 1) * m_uiNumStages + k];
 }
 
+bool ENUTSOp::stageRowNL(bool cf, DendroScalar* row, unsigned int rk_s,
+                         DendroScalar dt_c, DendroScalar dt_f, DendroScalar dt,
+                         unsigned int nav) const {
+    // source step h, target step rho * h, target time sg * h after the start
+    // of the source step. basis (k1, k2, k3, k4, g):
+    //   d1 = k1, d2 = 2 (k2 - k1) - g, d3 = 4 (k3 - k2), d4 = 4 g
+    //   e1 = d1 + sg d2 + sg^2/2 (d3 + d4), e2 = d2 + sg (d3 + d4)
+    const double h   = cf ? dt_c : dt_f;
+    const double rho = (cf ? dt_f : dt_c) / h;
+    const double sg  = dt / h;
+    const double d2[5] = {-2.0, 2.0, 0.0, 0.0, -1.0};
+    const double d3[5] = {0.0, -4.0, 4.0, 0.0, 0.0};
+    const double d4[5] = {0.0, 0.0, 0.0, 0.0, 4.0};
+    for (unsigned int i = 0; i < 5; i++) {
+        const double d1 = (i == 0) ? 1.0 : 0.0;
+        const double e1 = d1 + sg * d2[i] + 0.5 * sg * sg * (d3[i] + d4[i]);
+        const double e2 = d2[i] + sg * (d3[i] + d4[i]);
+        double r        = e1;
+        if (rk_s == 2 || rk_s == 3) r += 0.5 * rho * e2 + 0.125 * rho * rho * d4[i];
+        if (rk_s == 3) r += 0.25 * rho * rho * d3[i];
+        if (rk_s == 4) r += rho * e2 + 0.5 * rho * rho * (d3[i] + d4[i]);
+        row[i] = r;
+    }
+    if (nav >= 4) {
+        // g of the source step itself
+        row[0] += row[4];
+        row[2] -= 2.0 * row[4];
+        row[3] += row[4];
+        row[4] = 0.0;
+        return false;
+    }
+    return row[4] != 0.0;
+}
+
 // out[n] = sum_k m[k] * in[k][n], accumulated from 0 in the order k = 0, 1, ..
 // (the summation order of the original per-node loop)
 static void enuts_apply_row(DendroScalar* __restrict__ o,
