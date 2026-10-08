@@ -518,6 +518,11 @@ inline void computeBalancedBlockPartition(const ot::Block* blkList,
 // Visit blocks largest-first in dynamic block loops; set by the application.
 inline bool g_lpt_block_order = false;
 
+// Thread the element-DG ghost exchange pack/unpack over (proc, var) pairs
+// (DENDRO_GHOST_PACK_FLAT + DENDRO_HYBRID_OMP builds). Set by the ENUTS driver
+// around its stage exchange when DENDRO_ENUTS_OMP=1; false = the serial loops.
+inline bool g_eledg_pack_omp = false;
+
 // Largest-first order by padded volume; false when all blocks are the same
 // size.
 inline bool computeLptBlockOrder(const ot::Block* blkList,

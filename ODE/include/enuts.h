@@ -16,6 +16,8 @@
 #include <iomanip>
 #include <functional>
 #include <iostream>
+#include <atomic>
+#include <memory>
 #include <unordered_map>
 
 #include "blkAsync.h"
@@ -29,6 +31,12 @@
 #include "subSM.h"
 #include "ts.h"
 #include "waveletAMR.h"
+
+// DENDRO_ENUTS_OMP=1 threads the block loops of partial_evolve; hybrid builds only
+#if defined(DENDRO_HYBRID_OMP) && defined(_OPENMP)
+#include <omp.h>
+#define DENDRO_ENUTS_HAS_OMP 1
+#endif
 
 #define __LTS_BLK_SYNC_TIME_COMP_TOL__ 1e-6
 
@@ -51,9 +59,61 @@ struct EnutsProf {
         }();
         return v == 1;
     }
-    static EnutsProf& get() {
+    /** the process-wide accumulators */
+    static EnutsProf& global() {
         static EnutsProf p;
         return p;
+    }
+    /** inside an active parallel region every thread accumulates into its own
+     *  copy (folded into global() by mergeThreads()); global() otherwise */
+    static EnutsProf& get() {
+#ifdef DENDRO_ENUTS_HAS_OMP
+        if (omp_in_parallel()) {
+            static thread_local EnutsProf tp;
+            return tp;
+        }
+#endif
+        return global();
+    }
+    /** add the per-thread accumulators to global() and zero them; call outside
+     *  a parallel region. the folded sync:* rows are thread-seconds. */
+    static void mergeThreads() {
+#ifdef DENDRO_ENUTS_HAS_OMP
+        EnutsProf& g = global();
+#pragma omp parallel
+        {
+            EnutsProf& tp = get();
+#pragma omp critical(dendro_enuts_prof)
+            if (&tp != &g)
+                for (int i = 0; i < NT; i++) {
+                    g.t[i] += tp.t[i];
+                    tp.t[i] = 0;
+                }
+        }
+#endif
+    }
+    /** DENDRO_ENUTS_OMP=1 (default off; needs a DENDRO_HYBRID_OMP build):
+     *  thread the per-block loops of partial_evolve (stage input + rhs_blk +
+     *  zipDG, sync_blk_timestep + post_stage_blk, final update) over the
+     *  active blocks, largest first, and the element-DG exchange pack/unpack */
+    static bool ompOn() {
+#ifdef DENDRO_ENUTS_HAS_OMP
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_OMP");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+#else
+        return false;
+#endif
+    }
+    /** thread id inside an active parallel region, 0 otherwise */
+    static int tid() {
+#ifdef DENDRO_ENUTS_HAS_OMP
+        return omp_in_parallel() ? omp_get_thread_num() : 0;
+#else
+        return 0;
+#endif
     }
     /** wall clock, or thread CPU time with DENDRO_ENUTS_PROF_CPU=1 (for timing on an oversubscribed box) */
     static double now() {
@@ -667,6 +727,44 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         m_uiOwnRowBufRow = ~0u;
     }
 
+    /** DENDRO_ENUTS_OMP: the scratch and per-pass caches of worker thread
+     *  t >= 1 in sync_blk_timestep / own_sync_fill / p2c_slot (thread 0 keeps
+     *  the shared members). dgW / cgW stand in for m_uiDGTmp0 / m_uiEVecTmp[0]
+     *  and are left uninitialised: every row read was written by the same
+     *  thread (in the block call, or under this thread's tags). The caches
+     *  only skip recomputing identical values, so per-thread copies give the
+     *  same result. */
+    struct SyncThr {
+        ENUTSOp* op = nullptr;
+        std::unique_ptr<T[]> dgW, cgW;
+        std::vector<T> cVec;
+        std::vector<SyncTag> tag;
+        // p2c pass store (p2c_slot)
+        std::vector<unsigned long long> p2cPassOf;
+        std::vector<unsigned int> p2cSlotOf;
+        std::vector<SyncTag> p2cTagOf;
+        std::vector<T> p2cPool;
+        size_t p2cUsed                = 0;
+        unsigned long long p2cPoolPass = 0;
+        // owner-sync plan (own_sync_fill) and the shared p2c sweeps
+        std::vector<OwnConv> ownConv;
+        std::vector<unsigned long long> ownConvPass;
+        std::vector<T> ownScr, ownRowBuf, ownSweep;
+        std::vector<unsigned char> ownSweepOk;
+        unsigned int ownRowBufRow        = ~0u;
+        unsigned long long ownRowBufPass = 0;
+    };
+    std::vector<SyncThr> m_uiSyncThr;
+    /** active blocks of the partial step, largest first (DENDRO_ENUTS_OMP) */
+    std::vector<unsigned int> m_uiActiveOrder;
+    /** the per-mesh tables sync_blk_timestep builds on first use */
+    void sync_lazy_build(bool ownEid);
+    /** threads: everything a block call would build on first use (tables and
+     *  the plans of all blocks), before the parallel region */
+    void sync_prebuild(bool ownPlan, bool ownEid, bool syncFast);
+    void sync_thread_setup(bool cgScratch);
+    void free_sync_threads();
+
     /**@brief: List of block async vector. */
     std::vector<ts::BlockTimeStep<T>> m_uiBVec;
 
@@ -939,6 +1037,14 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                       << sm[ts::EnutsProf::NT + 2] /
                              std::max(1.0, sm[ts::EnutsProf::NT + 3])
                       << std::endl;
+#ifdef DENDRO_ENUTS_HAS_OMP
+            std::cout << "[enuts-prof] enuts_omp=" << ts::EnutsProf::ompOn()
+                      << " omp_max_threads=" << omp_get_max_threads()
+                      << (ts::EnutsProf::ompOn()
+                              ? " (sync:* rows and counts are summed over threads)"
+                              : "")
+                      << std::endl;
+#endif
             std::cout << "[enuts-prof] phase min mean max (s over ranks)"
                       << std::endl;
             for (int i = 0; i < ts::EnutsProf::NT; i++)
@@ -1167,6 +1273,7 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
     m_uiBlkOwnEid.clear();
     m_uiSyncPlan.clear();
     own_reset();
+    free_sync_threads();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
     m_uiEvarDG.create_vector(m_uiAppCtx->get_mesh(),
@@ -1232,6 +1339,7 @@ int ExplicitNUTS<T, Ctx>::deallocate_internal_vars() {
     m_uiBlkOwnEid.clear();
     m_uiSyncPlan.clear();
     own_reset();
+    free_sync_threads();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
 
@@ -1851,6 +1959,15 @@ unsigned int ExplicitNUTS<T, Ctx>::p2c_index(unsigned int ele,
 template <typename T, typename Ctx>
 T* ExplicitNUTS<T, Ctx>::p2c_slot(unsigned int idx, const SyncTag& key,
                                   size_t stride, bool& hit) {
+    // [ENUTS_OMP] worker threads keep their own pass store (see SyncThr)
+    SyncThr* const thr_ =
+        ts::EnutsProf::tid() ? &m_uiSyncThr[ts::EnutsProf::tid()] : nullptr;
+    unsigned long long& m_uiP2cPoolPass = thr_ ? thr_->p2cPoolPass : this->m_uiP2cPoolPass;
+    size_t& m_uiP2cUsed                 = thr_ ? thr_->p2cUsed : this->m_uiP2cUsed;
+    std::vector<unsigned long long>& m_uiP2cPassOf = thr_ ? thr_->p2cPassOf : this->m_uiP2cPassOf;
+    std::vector<unsigned int>& m_uiP2cSlotOf       = thr_ ? thr_->p2cSlotOf : this->m_uiP2cSlotOf;
+    std::vector<SyncTag>& m_uiP2cTagOf             = thr_ ? thr_->p2cTagOf : this->m_uiP2cTagOf;
+    std::vector<T>& m_uiP2cPool                    = thr_ ? thr_->p2cPool : this->m_uiP2cPool;
     hit = false;
     if (m_uiP2cPoolPass != m_uiSyncPass) {
         m_uiP2cPoolPass = m_uiSyncPass;
@@ -2466,6 +2583,23 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
 template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                                          const std::vector<unsigned int>& eid) {
+    // [ENUTS_OMP begin] worker threads (tid >= 1) of the threaded sync loop:
+    // the locals below shadow the shared scratch / per-pass caches for the
+    // rest of this function (see SyncThr). the plans were built by
+    // sync_prebuild(). thr_ == nullptr = serial / thread 0.
+    SyncThr* const thr_ =
+        ts::EnutsProf::tid() ? &m_uiSyncThr[ts::EnutsProf::tid()] : nullptr;
+    ENUTSOp* const m_uiECOp           = thr_ ? thr_->op : this->m_uiECOp;
+    std::vector<OwnConv>& m_uiOwnConv = thr_ ? thr_->ownConv : this->m_uiOwnConv;
+    std::vector<unsigned long long>& m_uiOwnConvPass = thr_ ? thr_->ownConvPass : this->m_uiOwnConvPass;
+    std::vector<T>& m_uiOwnScr        = thr_ ? thr_->ownScr : this->m_uiOwnScr;
+    std::vector<SyncTag>& m_uiSyncTag = thr_ ? thr_->tag : this->m_uiSyncTag;
+    std::vector<T>& m_uiOwnSweep      = thr_ ? thr_->ownSweep : this->m_uiOwnSweep;
+    std::vector<unsigned char>& m_uiOwnSweepOk = thr_ ? thr_->ownSweepOk : this->m_uiOwnSweepOk;
+    std::vector<T>& m_uiOwnRowBuf     = thr_ ? thr_->ownRowBuf : this->m_uiOwnRowBuf;
+    unsigned int& m_uiOwnRowBufRow    = thr_ ? thr_->ownRowBufRow : this->m_uiOwnRowBufRow;
+    unsigned long long& m_uiOwnRowBufPass = thr_ ? thr_->ownRowBufPass : this->m_uiOwnRowBufPass;
+    // [ENUTS_OMP end]
     ot::Mesh* pMesh          = (ot::Mesh*)m_uiAppCtx->get_mesh();
     const ot::Block* blkList = pMesh->getLocalBlockList().data();
     const unsigned int nPe   = pMesh->getNumNodesPerElement();
@@ -2532,7 +2666,8 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
 
     // owner elements of a converted class that feed many slots: the whole
     // element into m_uiDGTmp0, unless a block of this pass and class did it
-    T* dgW = m_uiDGTmp0.get_vec_ptr();
+    // [ENUTS_OMP] per-thread stand-in for the shared work vector
+    T* dgW = thr_ ? thr_->dgW.get() : m_uiDGTmp0.get_vec_ptr();
     if (m_uiSyncTag.size() != pMesh->getAllElements().size())
         m_uiSyncTag.assign(pMesh->getAllElements().size(), SyncTag());
     SyncTag etag;
@@ -2806,6 +2941,109 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
 }
 
 template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sync_lazy_build(bool ownEid) {
+    ot::Mesh* pMesh          = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    const ot::Block* blkList = pMesh->getLocalBlockList().data();
+    const unsigned int nPe   = pMesh->getNumNodesPerElement();
+    if (m_uiBlkDepEid.size() != pMesh->getLocalBlockList().size()) {
+        m_uiBlkDepEid.assign(pMesh->getLocalBlockList().size(), {});
+        for (unsigned int b = 0; b < m_uiBlkDepEid.size(); b++)
+            computeBlockUnzipDepElements(pMesh, b, m_uiBlkDepEid[b]);
+    }
+    if (ownEid && m_uiBlkOwnEid.size() != m_uiBlkDepEid.size()) {
+        const unsigned int* e2n_dg = pMesh->getE2NMapping_DG().data();
+        m_uiBlkOwnEid.assign(m_uiBlkDepEid.size(), {});
+        std::vector<unsigned char> seen(pMesh->getAllElements().size(), 0);
+        for (unsigned int b = 0; b < m_uiBlkOwnEid.size(); b++) {
+            std::vector<unsigned int>& oe = m_uiBlkOwnEid[b];
+            oe = m_uiBlkDepEid[b];
+            for (const unsigned int e : oe) seen[e] = 1;
+            for (const unsigned int e : blkList[b]) seen[e] = 1;
+            const size_t nd = oe.size();
+            auto addOwners = [&](unsigned int e) {
+                for (unsigned int q = 0; q < nPe; q++) {
+                    const unsigned int o = e2n_dg[e * nPe + q] / nPe;
+                    if (!seen[o]) {
+                        seen[o] = 1;
+                        oe.push_back(o);
+                    }
+                }
+            };
+            for (size_t m = 0; m < nd; m++) addOwners(oe[m]);
+            for (const unsigned int e : blkList[b]) addOwners(e);
+            for (const unsigned int e : oe) seen[e] = 0;
+            for (const unsigned int e : blkList[b]) seen[e] = 0;
+        }
+    }
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sync_prebuild(bool ownPlan, bool ownEid,
+                                         bool syncFast) {
+    ot::Mesh* pMesh         = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    const unsigned int nBlk = pMesh->getLocalBlockList().size();
+    sync_lazy_build(ownEid);
+    // building a plan appends to tables all blocks share (p2c store indices,
+    // rows of the coarser dependents): all blocks here, once per mesh, so a
+    // block call inside the parallel region only reads them
+    if (ownPlan) {
+        if (m_uiOwnPlan.size() != nBlk) m_uiOwnPlan.assign(nBlk, OwnPlan());
+        for (unsigned int b = 0; b < nBlk; b++)
+            if (!m_uiOwnPlan[b].built)
+                build_own_plan(b, m_uiBlkDepEid[b], m_uiOwnPlan[b]);
+    } else if (syncFast) {
+        if (m_uiSyncPlan.size() != nBlk) m_uiSyncPlan.assign(nBlk, SyncPlan());
+        for (unsigned int b = 0; b < nBlk; b++)
+            if (!m_uiSyncPlan[b].built)
+                build_sync_plan(b, m_uiBlkDepEid[b], m_uiSyncPlan[b]);
+    }
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::free_sync_threads() {
+    for (SyncThr& st : m_uiSyncThr) delete st.op;
+    m_uiSyncThr.clear();
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sync_thread_setup(bool cgScratch) {
+#ifdef DENDRO_ENUTS_HAS_OMP
+    ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    const size_t nt = (size_t)omp_get_max_threads();
+    const size_t dof = m_uiEVar.get_dof();
+    const size_t nPe = pMesh->getNumNodesPerElement();
+    const size_t dgN = dof * pMesh->getAllElements().size() * nPe;
+    const size_t cgN = dof * pMesh->getDegOfFreedom();
+    if (m_uiSyncThr.size() != nt) {
+        free_sync_threads();
+        m_uiSyncThr.resize(nt);
+    }
+    // slot 0 stays empty: thread 0 uses the shared members
+    for (size_t t = 1; t < nt; t++) {
+        SyncThr& st = m_uiSyncThr[t];
+        if (!st.op) st.op = new ENUTSOp(m_uiType);
+        if (!st.dgW) st.dgW.reset(new T[dgN]);
+        if (cgScratch && !st.cgW) st.cgW.reset(new T[cgN]);
+        // mirrors of the shared per-pass caches, sized like them
+        if (st.p2cPassOf.size() != m_uiP2cPassOf.size()) {
+            st.p2cPassOf.assign(m_uiP2cPassOf.size(), 0);
+            st.p2cSlotOf.assign(m_uiP2cPassOf.size(), 0);
+            st.p2cTagOf.assign(m_uiP2cPassOf.size(), SyncTag());
+            st.p2cUsed     = 0;
+            st.p2cPoolPass = 0;
+        }
+        if (st.ownConv.size() != m_uiOwnConv.size()) {
+            st.ownConv.assign(m_uiOwnConv.size(), OwnConv());
+            st.ownConvPass.assign(m_uiOwnConvPass.size(), 0);
+            st.ownRowBufRow = ~0u;
+        }
+        if (st.ownScr.size() != m_uiOwnScr.size())
+            st.ownScr.assign(m_uiOwnScr.size(), 0);
+    }
+#endif
+}
+
+template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                                              unsigned int rk_s,
                                              bool isIGTSync) {
@@ -2869,6 +3107,18 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     const bool syncFast = ts::EnutsProf::syncFast() && !ownSync;
     const bool ifxEq  = (ts::EnutsProf::ifaceFix() & 1) && rk_s >= 1 && !isIGTSync;
     const bool ifxAll = (ts::EnutsProf::ifaceFix() & 2) && rk_s >= 1 && !isIGTSync;
+    // [ENUTS_OMP edit 1/5 begin] worker threads (tid >= 1) of the threaded sync
+    // loop get their own scratch: the locals below shadow the shared members
+    // for the rest of this function (p2c_slot and own_sync_fill do the same).
+    // thr_ == nullptr = serial / thread 0.
+    SyncThr* const thr_ =
+        ts::EnutsProf::tid() ? &m_uiSyncThr[ts::EnutsProf::tid()] : nullptr;
+    ENUTSOp* const m_uiECOp           = thr_ ? thr_->op : this->m_uiECOp;
+    std::vector<T>& m_uiSyncCVec      = thr_ ? thr_->cVec : this->m_uiSyncCVec;
+    std::vector<SyncTag>& m_uiSyncTag = thr_ ? thr_->tag : this->m_uiSyncTag;
+    std::vector<T>& m_uiOwnSweep      = thr_ ? thr_->ownSweep : this->m_uiOwnSweep;
+    std::vector<unsigned char>& m_uiOwnSweepOk = thr_ ? thr_->ownSweepOk : this->m_uiOwnSweepOk;
+    // [ENUTS_OMP edit 1/5 end]
     std::vector<T> cVecLocal;
     std::vector<T>& cVec = syncFast ? m_uiSyncCVec : cVecLocal;
     if (cVec.size() < (size_t)dof * nPe * (m_uiNumStages + 1))
@@ -2879,7 +3129,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     T* cVin[(m_uiNumStages + 1) * dof];   // correction vec. pointer in,
     T* cVout[(m_uiNumStages + 1) * dof];  // correction vec. pointer out,
 
-    T* dgWVec  = m_uiDGTmp0.get_vec_ptr();
+    // [ENUTS_OMP edit 2/5] per-thread stand-in for the shared work vector
+    T* dgWVec  = thr_ ? thr_->dgW.get() : m_uiDGTmp0.get_vec_ptr();
     // T * cgWVec = m_uiEVecTmp[0].get_vec_ptr();
     T* uzWVec  = m_uiEvarUzip.get_vec_ptr();
 
@@ -2891,11 +3142,12 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
     T* dgEVar = m_uiEvarDG.get_vec_ptr();
 
-    if (m_uiBlkDepEid.size() != pMesh->getLocalBlockList().size()) {
-        m_uiBlkDepEid.assign(pMesh->getLocalBlockList().size(), {});
-        for (unsigned int b = 0; b < m_uiBlkDepEid.size(); b++)
-            computeBlockUnzipDepElements(pMesh, b, m_uiBlkDepEid[b]);
-    }
+    // [ENUTS_OMP edit 3/5] the m_uiBlkDepEid build (here) and the
+    // m_uiBlkOwnEid build (below) moved verbatim to sync_lazy_build(); the
+    // threaded sync loop runs sync_prebuild() before the parallel region, so
+    // in a worker these are read-only size checks. any new table or plan
+    // built on first use belongs in sync_prebuild().
+    sync_lazy_build(false);
     const std::vector<unsigned int>& eid = m_uiBlkDepEid[blk];
     if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_EID] += eid.size();
     if (ownSync == 1 && m_uiSyncPassOpen && prepare_owner_sync(pMesh)) {
@@ -2905,31 +3157,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 #endif
         return;
     }
-    if (ownSync && m_uiBlkOwnEid.size() != m_uiBlkDepEid.size()) {
-        const unsigned int* e2n_dg = pMesh->getE2NMapping_DG().data();
-        m_uiBlkOwnEid.assign(m_uiBlkDepEid.size(), {});
-        std::vector<unsigned char> seen(pMesh->getAllElements().size(), 0);
-        for (unsigned int b = 0; b < m_uiBlkOwnEid.size(); b++) {
-            std::vector<unsigned int>& oe = m_uiBlkOwnEid[b];
-            oe = m_uiBlkDepEid[b];
-            for (const unsigned int e : oe) seen[e] = 1;
-            for (const unsigned int e : blkList[b]) seen[e] = 1;
-            const size_t nd = oe.size();
-            auto addOwners = [&](unsigned int e) {
-                for (unsigned int q = 0; q < nPe; q++) {
-                    const unsigned int o = e2n_dg[e * nPe + q] / nPe;
-                    if (!seen[o]) {
-                        seen[o] = 1;
-                        oe.push_back(o);
-                    }
-                }
-            };
-            for (size_t m = 0; m < nd; m++) addOwners(oe[m]);
-            for (const unsigned int e : blkList[b]) addOwners(e);
-            for (const unsigned int e : oe) seen[e] = 0;
-            for (const unsigned int e : blkList[b]) seen[e] = 0;
-        }
-    }
+    if (ownSync) sync_lazy_build(true);  // [ENUTS_OMP edit 3/5, second part]
     // elements whose stage is brought to this block's time frame
     const std::vector<unsigned int>& cel = ownSync ? m_uiBlkOwnEid[blk] : eid;
 
@@ -3273,7 +3501,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         // every cg node its owner's value and read each element back through
         // the cg vector (what zip + unzip does for a stage in ETS)
         const unsigned int* e2n_dg = pMesh->getE2NMapping_DG().data();
-        T* cgW                     = m_uiEVecTmp[0].get_vec_ptr();
+        // [ENUTS_OMP edit 4/5] per-thread stand-in for the shared cg scratch
+        T* cgW = thr_ ? thr_->cgW.get() : m_uiEVecTmp[0].get_vec_ptr();
         std::vector<unsigned int> es(eid.begin(), eid.end());
         for (const unsigned int elem : blkList[blk]) {
             es.push_back(elem);
@@ -3776,7 +4005,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     }
 
     if (ownSync == 2) {
-        static unsigned long long nanTot = 0, calls = 0;
+        // [ENUTS_OMP edit 5/5] atomic: blocks may run concurrently
+        static std::atomic<unsigned long long> nanTot{0}, calls{0};
         unsigned long long nn = 0;
         for (size_t q = 0; q < (size_t)dof * lx * ly * lz; q++)
             nn += std::isnan(m_uiVec[q]);
@@ -4101,11 +4331,44 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         }
     }
 
+    // DENDRO_ENUTS_OMP: the three block loops below run threaded over the
+    // active list, largest block first (schedule(dynamic,1)); every block
+    // writes only its own block vectors and its own elements' DG rows. off =
+    // the original order on one thread.
+    bool thr                   = ts::EnutsProf::ompOn();
+    const unsigned int* actIds = m_uiActiveBlkIDs.data();
+    const unsigned int nAct    = m_uiActiveBlkIDs.size();
+#ifdef DENDRO_ENUTS_HAS_OMP
+    if (thr) {
+        // the per-block debug probes share static state
+        static const bool dbg = std::getenv("DENDRO_ENUTS_BLKHASH") ||
+                                std::getenv("DENDRO_ENUTS_NANCHK");
+        if (dbg || omp_in_parallel()) thr = false;
+    }
+    if (thr) {
+        m_uiActiveOrder.assign(m_uiActiveBlkIDs.begin(), m_uiActiveBlkIDs.end());
+        std::stable_sort(m_uiActiveOrder.begin(), m_uiActiveOrder.end(),
+                         [this](unsigned int a, unsigned int b) {
+                             return m_uiBVec[a]._vec[0].getSz() >
+                                    m_uiBVec[b]._vec[0].getSz();
+                         });
+        actIds = m_uiActiveOrder.data();
+        // everything sync_blk_timestep builds on first use, and the scratch
+        // of the worker threads, before any parallel region
+        const int own = ts::EnutsProf::ownerSync();
+        sync_prebuild(ownPlan, own && !ownPlan, ts::EnutsProf::syncFast() && !own);
+        sync_thread_setup(own && !ownPlan);
+    }
+#endif
+
     for (unsigned int rk = 1; rk <= m_uiNumStages; rk++) {
         const unsigned int BLK_S = rk;
         ENUTS_TIC();
-        for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {
-            const unsigned int blk   = m_uiActiveBlkIDs[bb];
+#ifdef DENDRO_ENUTS_HAS_OMP
+#pragma omp parallel for schedule(dynamic, 1) if (thr)
+#endif
+        for (unsigned int bb = 0; bb < nAct; bb++) {
+            const unsigned int blk   = actIds[bb];
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
@@ -4164,6 +4427,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
         ENUTS_TOC(RHS);
         ENUTS_TIC();
+        ot::g_eledg_pack_omp = thr;
         if (ownPlan) {
             T* stv = m_uiStVec[BLK_S - 1].get_vec_ptr();
             own_node_exchange_begin(stv, DOF, pt);
@@ -4200,12 +4464,16 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                                         DOF);
         ENUTS_TOC(EDG_END);
         }
+        ot::g_eledg_pack_omp = false;
         ENUTS_TIC();
         m_uiSyncPass++;
         m_uiSyncPassOpen = true;
 
-        for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {
-            const unsigned int blk   = m_uiActiveBlkIDs[bb];
+#ifdef DENDRO_ENUTS_HAS_OMP
+#pragma omp parallel for schedule(dynamic, 1) if (thr)
+#endif
+        for (unsigned int bb = 0; bb < nAct; bb++) {
+            const unsigned int blk   = actIds[bb];
             const unsigned int BLK_T = m_uiBVec[blk]._time;
             const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
@@ -4226,6 +4494,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             // "<<m_uiBVec[blk]._vec[BLK_S].isSynced()<<std::endl;
         }
         m_uiSyncPassOpen = false;
+        if (thr && prof) ts::EnutsProf::mergeThreads();
         ENUTS_TOC(SYNC_BLK);
 
         // 02/12/2021 : The overlapped ghost exchange has a bug. - look at line
@@ -4278,8 +4547,11 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
     ENUTS_TIC();
     // compute the time step vector and increment time.
-    for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {
-        const unsigned int blk   = m_uiActiveBlkIDs[bb];
+#ifdef DENDRO_ENUTS_HAS_OMP
+#pragma omp parallel for schedule(dynamic, 1) if (thr)
+#endif
+    for (unsigned int bb = 0; bb < nAct; bb++) {
+        const unsigned int blk   = actIds[bb];
         const unsigned int BLK_T = m_uiBVec[blk]._time;
         const unsigned int NN    = m_uiBVec[blk]._vec[0].getSz();
         const unsigned int bLev =

@@ -2684,6 +2684,31 @@ void Mesh::readFromGhostBeginEleDGVec(T* vec, unsigned int dof) {
             ctx.allocateSendBuffer(sizeof(T) * dof * sendBSz);
             sendB = (T*)ctx.getSendBuffer();
 
+#if defined(DENDRO_GHOST_PACK_FLAT) && defined(DENDRO_HYBRID_OMP)
+            if (ot::g_eledg_pack_omp) {
+                // threaded gather over (proc, var) pairs -- disjoint writes
+                const unsigned int sendWork =
+                    m_uiElementSendProcList.size() * dof;
+#pragma omp parallel for schedule(dynamic)
+                for (unsigned int idx = 0; idx < sendWork; idx++) {
+                    const unsigned int p   = m_uiElementSendProcList[idx / dof];
+                    const unsigned int var = idx % dof;
+                    const T* src =
+                        vec + (size_t)var * m_uiNumTotalElements * m_uiNpE;
+                    T* dst = sendB +
+                             (size_t)dof * m_uiNpE * m_uiSendEleOffset[p] +
+                             (size_t)var * m_uiNpE * m_uiSendEleCount[p];
+                    for (unsigned int i = 0; i < m_uiSendEleCount[p]; i++)
+                        std::memcpy(
+                            dst + (size_t)i * m_uiNpE,
+                            src + (size_t)(m_uiElementLocalBegin +
+                                           m_uiScatterMapElementRound1
+                                               [m_uiSendEleOffset[p] + i]) *
+                                      m_uiNpE,
+                            sizeof(T) * m_uiNpE);
+                }
+            } else
+#endif
             for (unsigned int send_p = 0;
                  send_p < m_uiElementSendProcList.size(); send_p++) {
                 proc_id = m_uiElementSendProcList[send_p];
@@ -2774,6 +2799,29 @@ void Mesh::readFromGhostEndEleDGVec(T* vec, unsigned int dof) {
             // copy the recv data to the vec
             recvB = (T*)m_uiMPIContexts[ctxIndex].getRecvBuffer();
 
+#if defined(DENDRO_GHOST_PACK_FLAT) && defined(DENDRO_HYBRID_OMP)
+            if (ot::g_eledg_pack_omp) {
+                // threaded scatter over (proc, var) pairs: every ghost element
+                // is received once, so the writes are disjoint
+                const unsigned int recvWork =
+                    m_uiElementRecvProcList.size() * dof;
+#pragma omp parallel for schedule(dynamic)
+                for (unsigned int idx = 0; idx < recvWork; idx++) {
+                    const unsigned int p   = m_uiElementRecvProcList[idx / dof];
+                    const unsigned int var = idx % dof;
+                    T* dst = vec + (size_t)var * m_uiNumTotalElements * m_uiNpE;
+                    const T* src =
+                        recvB + (size_t)dof * m_uiNpE * m_uiRecvEleOffset[p] +
+                        (size_t)var * m_uiNpE * m_uiRecvEleCount[p];
+                    for (unsigned int i = 0; i < m_uiRecvEleCount[p]; i++)
+                        std::memcpy(
+                            dst + (size_t)m_uiGhostElementRound1Index
+                                          [m_uiRecvEleOffset[p] + i] *
+                                      m_uiNpE,
+                            src + (size_t)i * m_uiNpE, sizeof(T) * m_uiNpE);
+                }
+            } else
+#endif
             for (unsigned int recv_p = 0;
                  recv_p < m_uiElementRecvProcList.size(); recv_p++) {
                 proc_id = m_uiElementRecvProcList[recv_p];
@@ -2855,6 +2903,49 @@ void Mesh::readFromGhostBeginEleDGVecScoped(T* vec, unsigned int dof,
         ctx.allocateSendBuffer(sizeof(T) * dof * sendTot * m_uiNpE);
         T* sendB    = (T*)ctx.getSendBuffer();
         size_t soff = 0;
+#if defined(DENDRO_GHOST_PACK_FLAT) && defined(DENDRO_HYBRID_OMP)
+        if (ot::g_eledg_pack_omp) {
+            // segment offsets first, then a threaded gather over (proc, var)
+            // pairs (disjoint writes), then the sends from this thread
+            const unsigned int nsp = m_uiElementSendProcList.size();
+            std::vector<size_t> segOff(nsp);
+            for (unsigned int send_p = 0; send_p < nsp; send_p++) {
+                segOff[send_p] = soff;
+                soff += sendCnt[m_uiElementSendProcList[send_p]];
+            }
+            const unsigned int sendWork = nsp * dof;
+#pragma omp parallel for schedule(dynamic)
+            for (unsigned int idx = 0; idx < sendWork; idx++) {
+                const unsigned int send_p  = idx / dof;
+                const unsigned int var     = idx % dof;
+                const unsigned int proc_id = m_uiElementSendProcList[send_p];
+                const unsigned int c       = sendCnt[proc_id];
+                if (!c) continue;
+                const unsigned int base = m_uiSendEleOffset[proc_id];
+                T* seg = sendB + dof * m_uiNpE * segOff[send_p];
+                for (unsigned int i = 0; i < c; i++) {
+                    const unsigned int k = plan.sendPerm[base + i];
+                    std::memcpy(
+                        seg + (size_t)var * m_uiNpE * c + (size_t)i * m_uiNpE,
+                        vec + (size_t)var * m_uiNumTotalElements * m_uiNpE +
+                            (size_t)(m_uiElementLocalBegin +
+                                     m_uiScatterMapElementRound1[k]) *
+                                m_uiNpE,
+                        sizeof(T) * m_uiNpE);
+                }
+            }
+            for (unsigned int send_p = 0; send_p < nsp; send_p++) {
+                const unsigned int proc_id = m_uiElementSendProcList[send_p];
+                const unsigned int c       = sendCnt[proc_id];
+                if (!c) continue;
+                MPI_Request* req = new MPI_Request();
+                par::Mpi_Isend(sendB + dof * m_uiNpE * segOff[send_p],
+                               dof * m_uiNpE * c, proc_id, m_uiCommTag,
+                               commActive, req);
+                ctx.getRequestList().push_back(req);
+            }
+        } else
+#endif
         for (unsigned int send_p = 0; send_p < m_uiElementSendProcList.size();
              send_p++) {
             const unsigned int proc_id = m_uiElementSendProcList[send_p];
@@ -2919,6 +3010,37 @@ void Mesh::readFromGhostEndEleDGVecScoped(T* vec, unsigned int dof,
     if (recvTot) {
         const T* recvB = (const T*)m_uiMPIContexts[ctxIndex].getRecvBuffer();
         size_t roff    = 0;
+#if defined(DENDRO_GHOST_PACK_FLAT) && defined(DENDRO_HYBRID_OMP)
+        if (ot::g_eledg_pack_omp) {
+            // threaded scatter over (proc, var) pairs: every ghost element is
+            // received once, so the writes are disjoint
+            const unsigned int nrp = m_uiElementRecvProcList.size();
+            std::vector<size_t> segOff(nrp);
+            for (unsigned int recv_p = 0; recv_p < nrp; recv_p++) {
+                segOff[recv_p] = roff;
+                roff += recvCnt[m_uiElementRecvProcList[recv_p]];
+            }
+            const unsigned int recvWork = nrp * dof;
+#pragma omp parallel for schedule(dynamic)
+            for (unsigned int idx = 0; idx < recvWork; idx++) {
+                const unsigned int recv_p  = idx / dof;
+                const unsigned int var     = idx % dof;
+                const unsigned int proc_id = m_uiElementRecvProcList[recv_p];
+                const unsigned int c       = recvCnt[proc_id];
+                if (!c) continue;
+                const unsigned int base = m_uiRecvEleOffset[proc_id];
+                const T* seg = recvB + dof * m_uiNpE * segOff[recv_p];
+                for (unsigned int i = 0; i < c; i++) {
+                    const unsigned int k = plan.recvPerm[base + i];
+                    std::memcpy(
+                        vec + (size_t)var * m_uiNumTotalElements * m_uiNpE +
+                            (size_t)m_uiGhostElementRound1Index[k] * m_uiNpE,
+                        seg + (size_t)var * m_uiNpE * c + (size_t)i * m_uiNpE,
+                        sizeof(T) * m_uiNpE);
+                }
+            }
+        } else
+#endif
         for (unsigned int recv_p = 0; recv_p < m_uiElementRecvProcList.size();
              recv_p++) {
             const unsigned int proc_id = m_uiElementRecvProcList[recv_p];
@@ -4758,6 +4880,17 @@ bool Mesh::isReMeshUnzip(
 template <typename T>
 void Mesh::getElementNodalValues(const T* vec, T* nodalValues,
                                  unsigned int elementID, bool isDGVec) const {
+#ifdef DENDRO_HYBRID_OMP
+    // inside a parallel region the RefElement scratch is shared: per-thread
+    // scratch instead (same arithmetic, identical output)
+    if (omp_in_parallel()) {
+        static thread_local std::vector<double> im;
+        if (im.size() < 2 * (size_t)m_uiNpE) im.resize(2 * (size_t)m_uiNpE);
+        this->getElementNodalValues(vec, nodalValues, elementID, isDGVec,
+                                    im.data(), im.data() + m_uiNpE);
+        return;
+    }
+#endif
     this->getElementNodalValues(vec, nodalValues, elementID, isDGVec,
                                 m_uiRefEl.getImVec1(), m_uiRefEl.getImVec2());
 }

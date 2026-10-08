@@ -5956,6 +5956,17 @@ inline void Mesh::currentElementNodeList_DG(unsigned int *nodeList) {
 inline void Mesh::parent2ChildInterpolation(const double *in, double *out,
                                             unsigned int cnum,
                                             unsigned int dim) const {
+#ifdef DENDRO_HYBRID_OMP
+    // the RefElement scratch below is shared: inside a parallel region use
+    // per-thread scratch (same arithmetic, identical output)
+    if (omp_in_parallel()) {
+        static thread_local std::vector<double> im;
+        if (im.size() < 2 * (size_t)m_uiNpE) im.resize(2 * (size_t)m_uiNpE);
+        this->parent2ChildInterpolation(in, out, cnum, dim, im.data(),
+                                        im.data() + m_uiNpE);
+        return;
+    }
+#endif
     dendro::timer::t_unzip_p2c.start();
     if (dim == 3)
         m_uiRefEl.I3D_Parent2Child(in, out, cnum);
