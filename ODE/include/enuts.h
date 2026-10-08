@@ -174,6 +174,29 @@ struct EnutsProf {
         }();
         return v;
     }
+    /** DENDRO_ENUTS_STAGE_TIME=1 (default off = unchanged): pass the RK stage
+     *  time t + c_s * dt_blk to the RHS and to pre_stage_blk, as ETS does
+     *  (ets.h: current_t + m_uiCi[stage] * dt). The original passes the
+     *  block's step-start time to every stage; a time-dependent RHS term
+     *  (BSSN's slow-start lapse, exp(-t^2 / 2 sigma^2)) then sees a forcing
+     *  lagged by ~dt_blk / 2, growing with the block's step: a lapse offset
+     *  of 1e-3 on q1 at the full ladder. */
+    static bool stageTime() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_STAGE_TIME");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    /** DENDRO_ENUTS_OFFSET_RESYNC=1 (default off): compute_lts_ts_offset on
+     *  every sync_with_mesh, not only in init() */
+    static bool offsetResync() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_OFFSET_RESYNC");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
     static bool ifaceNL() { return (ifaceFix() & 7) == 7; }
     static bool ifaceShift() { return (ifaceFix() & 8) != 0; }
     /** DENDRO_ENUTS_OWNER_SYNC=1: before a block takes its stage data, give
@@ -1469,6 +1492,12 @@ int ExplicitNUTS<T, Ctx>::sync_with_mesh() {
     m_uiEVar = m_uiAppCtx->get_evolution_vars();
     this->init_data_structures();
     this->allocate_internal_vars();
+
+    // DENDRO_ENUTS_OFFSET_RESYNC=1 (default off = unchanged): recompute the
+    // level offset (and whatever the ctx keys to lmin / lmax: ratio caps, the
+    // CAHD rate) on every mesh change. The original computes it in init() only,
+    // so after a remesh that changes the level range the ladder is stale.
+    if (ts::EnutsProf::offsetResync()) m_uiAppCtx->compute_lts_ts_offset();
 
     m_uiAppCtx->set_ets_synced(true);
 
@@ -4494,14 +4523,16 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                 enuts_axpy_stages(out_ptr, stp, stc, BLK_S - 1, (size_t)DOF * NN);
             }
 
+            // stage time: step start, plus c_s * dt_blk with DENDRO_ENUTS_STAGE_TIME
+            const T t_stage = current_t + dt_finest * BLK_T +
+                              (ts::EnutsProf::stageTime() ? m_uiCi[BLK_S - 1] * blk_dt : (T)0);
             m_uiAppCtx->pre_stage_blk(
                 (T*)m_uiBVec[blk]._vec[m_uiNumStages + 1].data(), DOF, blk,
-                current_t + dt_finest * BLK_T);
+                t_stage);
             debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             debug_blk_hash("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].computeVec(
-                m_uiAppCtx, m_uiBVec[blk]._vec[m_uiNumStages + 1],
-                current_t + dt_finest * BLK_T);
+                m_uiAppCtx, m_uiBVec[blk]._vec[m_uiNumStages + 1], t_stage);
             debug_nan_check("post-rhs", blk, BLK_S, pt, rk);
             debug_blk_hash("post-rhs", blk, BLK_S, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].mark_unsynced();
@@ -4797,14 +4828,16 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
                 }
             }
 
+            // stage time: step start, plus c_s * dt_blk with DENDRO_ENUTS_STAGE_TIME
+            const T t_stage = current_t + dt_finest * BLK_T +
+                              (ts::EnutsProf::stageTime() ? m_uiCi[BLK_S - 1] * blk_dt : (T)0);
             m_uiAppCtx->pre_stage_blk(
                 (T*)m_uiBVec[blk]._vec[m_uiNumStages + 1].data(), DOF, blk,
-                current_t + dt_finest * BLK_T);
+                t_stage);
             debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             debug_blk_hash("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].computeVec(
-                m_uiAppCtx, m_uiBVec[blk]._vec[m_uiNumStages + 1],
-                current_t + dt_finest * BLK_T);
+                m_uiAppCtx, m_uiBVec[blk]._vec[m_uiNumStages + 1], t_stage);
             debug_nan_check("post-rhs", blk, BLK_S, pt, rk);
             debug_blk_hash("post-rhs", blk, BLK_S, pt, rk);
             m_uiBVec[blk]._vec[BLK_S].mark_unsynced();
