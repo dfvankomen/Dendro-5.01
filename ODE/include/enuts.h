@@ -241,6 +241,20 @@ struct EnutsProf {
         }();
         return v == 1;
     }
+    /** DENDRO_ENUTS_WPART_LATE=1 (default off): register the LTS work weight
+     *  and repartition only in init(), after the context's initialize(), not
+     *  in the constructor. The constructor's early registration makes the
+     *  context's initial-grid iterations run on work-weighted partitions, so
+     *  a weighted run converges to a different initial octree than the
+     *  unweighted twin (7050 vs 7036 elements on q1); with this knob both
+     *  start from the same octree and only the partition differs. */
+    static bool wpartLate() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_WPART_LATE");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
     static bool ifaceNL() { return (ifaceFix() & 7) == 7; }
     static bool ifaceShift() { return (ifaceFix() & 8) != 0; }
     /** DENDRO_ENUTS_OWNER_SYNC=1: before a block takes its stage data, give
@@ -1118,7 +1132,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
 template <typename T, typename Ctx>
 ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart) : ETS<T, Ctx>(ctx) {
     m_uiUseWeightedPart = useWpart;
-    if (m_uiUseWeightedPart) {
+    // WPART_LATE: leave the weight unregistered until init(), after the
+    // context's initialize(), so the initial grid is the unweighted one
+    if (m_uiUseWeightedPart && !ts::EnutsProf::wpartLate()) {
         ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
         pMesh->computeMinMaxLevel(m_uiLevMin, m_uiLevMax);
 
