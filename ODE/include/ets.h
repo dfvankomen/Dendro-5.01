@@ -58,6 +58,55 @@ static inline bool ets_env_off(const char* name) {
 
 static constexpr unsigned long long ETS_POISON_BITS = 0x7ff8dead0000beefULL;
 
+/** DENDRO_TS_MEM_INFO=1 (default off): print the bytes of every buffer family
+ *  the time stepper allocates, summed over ranks and max per rank, at init and
+ *  after every remesh (ETS: "[ts-mem ets ...]", ENUTS: "[ts-mem enuts ...]").
+ *  Collective over MPI_COMM_WORLD (called from the collective allocate). */
+static inline bool ts_mem_info() {
+    static const bool v = ets_env_on("DENDRO_TS_MEM_INFO");
+    return v;
+}
+static inline void ts_mem_print(const char* who, const char* tag, int n,
+                                const char* const* names, const double* loc,
+                                bool bytes) {
+    std::vector<double> sm(n), mx(n);
+    MPI_Reduce(loc, sm.data(), n, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(loc, mx.data(), n, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    int rank;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    if (rank) return;
+    double tot = 0;
+    for (int i = 0; i < n; i++) {
+        if (bytes) {
+            tot += sm[i];
+            std::printf("[ts-mem %s %s] %-16s sum %10.1f MB  max/rank %10.1f MB\n",
+                        who, tag, names[i], sm[i] / 1048576.0, mx[i] / 1048576.0);
+        } else {
+            std::printf("[ts-mem %s %s] %-16s sum %12.0f  max/rank %12.0f\n", who,
+                        tag, names[i], sm[i], mx[i]);
+        }
+    }
+    if (bytes)
+        std::printf("[ts-mem %s %s] %-16s sum %10.1f MB\n", who, tag, "total",
+                    tot / 1048576.0);
+    std::fflush(stdout);
+}
+template <typename T>
+static inline void ts_mem_counts(const ot::Mesh* pMesh, unsigned int dof,
+                                 const char* who, const char* tag) {
+    const bool a = pMesh->isActive();
+    const char* nm[] = {"elems_local", "elems_all", "blocks", "cg_dof",
+                        "dg_dof",      "unzip_dof", "dof",    "sizeof_T"};
+    double v[]       = {a ? (double)pMesh->getNumLocalMeshElements() : 0,
+                        a ? (double)pMesh->getAllElements().size() : 0,
+                        a ? (double)pMesh->getLocalBlockList().size() : 0,
+                        a ? (double)pMesh->getDegOfFreedom() : 0,
+                        a ? (double)pMesh->getDegOfFreedomDG() : 0,
+                        a ? (double)pMesh->getDegOfFreedomUnZip() : 0,
+                        (double)dof, (double)sizeof(T)};
+    ts_mem_print(who, tag, 8, nm, v, false);
+}
+
 template <typename T>
 static bool ets_local_copy_ok(const ot::DVector<T, unsigned int>& v,
                               const ot::Mesh* pMesh) {
@@ -914,6 +963,23 @@ int ETS<T, Ctx>::allocate_internal_vars() {
                                  m_uiEVar.is_ghost_allocated());
 
     m_uiIsInternalAlloc = true;
+    if (ts_mem_info()) {
+        static int ncall = 0;
+        char tag[32];
+        std::snprintf(tag, sizeof(tag), ncall ? "remesh%d" : "init", ncall);
+        ncall++;
+        const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+        const bool a          = pMesh->isActive();
+        const double B        = (double)sizeof(T);
+        const char* nm[]      = {"ctx_evar", "st_cg", "cg_tmp", "ctx_unzip_x2_est"};
+        double v[]            = {
+            a ? B * m_uiEVar.get_size() : 0,
+            a ? B * (double)m_uiNumStages * m_uiStVec[0].get_size() : 0,
+            a ? B * (m_uiEVecTmp[0].get_size() + m_uiEVecTmp[1].get_size()) : 0,
+            a ? B * 2.0 * pMesh->getDegOfFreedomUnZip() * m_uiEVar.get_dof() : 0};
+        ts_mem_counts<T>(pMesh, m_uiEVar.get_dof(), "ets", tag);
+        ts_mem_print("ets", tag, 4, nm, v, true);
+    }
     return 0;
 }
 

@@ -69,7 +69,8 @@ class DVector {
      * @param dof : number of degrees of freedoms.
      */
     void create_vector(const ot::Mesh* pMesh, DVEC_TYPE type, DVEC_LOC loc,
-                       unsigned int dof = 1, bool allocate_ghost = true);
+                       unsigned int dof = 1, bool allocate_ghost = true,
+                       bool zero_fill = true);
 
     /**
      * @brief initialize a DVector object from already allocated ptr
@@ -177,7 +178,7 @@ DVector<T, I>::~DVector() {}
 template <typename T, typename I>
 void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
                                   DVEC_LOC loc, unsigned int dof,
-                                  bool allocate_ghost) {
+                                  bool allocate_ghost, bool zero_fill) {
     // set the internal fields based on input for storage
     m_dof             = dof;
     m_comm            = pMesh->getMPICommunicator();
@@ -220,7 +221,9 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
         // NUMA first-touch: malloc + parallel zero so pages land on the using
         // thread's node (matters on 2-socket nodes). Overwritten by init/unzip.
         m_data_ptr = (T*)malloc(sizeof(T) * m_size);
-        if (m_data_ptr != nullptr) {
+        // zero_fill = false: a work array whose rows are always written before
+        // they are read; its pages stay unmapped until then (peak RSS)
+        if (m_data_ptr != nullptr && zero_fill) {
             T* __restrict__ p = m_data_ptr;
             bool block_ft     = false;
 #if defined(_OPENMP)
@@ -307,7 +310,8 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
         // as NaN in NLSM evolution on graph-partitioned meshes where
         // some orphan local cg slots aren't written by init_grid and
         // then propagate NaN via ghost exchange to other ranks.
-        m_data_ptr = (T*)calloc(m_size, sizeof(T));
+        m_data_ptr = zero_fill ? (T*)calloc(m_size, sizeof(T))
+                               : (T*)malloc(sizeof(T) * m_size);
 #endif
 // end DENDRO_HYBRID_OMP
 #endif

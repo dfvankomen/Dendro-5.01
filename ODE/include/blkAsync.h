@@ -88,6 +88,13 @@ class BlockAsyncVector {
     /**
      * @brief : destroy a block vector.
      */
+    /** exchange the data buffers of two vectors of the same size (no copy) */
+    void swapData(BlockAsyncVector<T>& other) {
+        assert(m_uiSz[0] * m_uiSz[1] * m_uiSz[2] * m_uiDof ==
+               other.m_uiSz[0] * other.m_uiSz[1] * other.m_uiSz[2] * other.m_uiDof);
+        std::swap(m_uiVec, other.m_uiVec);
+    }
+
     void destroyVec() {
         m_uiBlkID    = LOOK_UP_TABLE_DEFAULT;
         m_uiIsSynced = false;
