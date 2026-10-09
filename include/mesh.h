@@ -2331,6 +2331,12 @@ class Mesh {
      * ensureZipPlanBuilt). For callers that need the plan's side-channel
      * products (zip-sync maps etc.) before any unzip/zip runs. */
     inline void ensureZipPlanBuiltPublic() { this->ensureZipPlanBuilt(); }
+    /** labelled rebuild joined on the SFC source's canonical ownership keys (K6) */
+    inline bool canonKeysBuilt() const { return m_uiCanonKeysBuilt; }
+    /** per send scatter-map entry: 1 = a DG-tagged code, 0 = a cg index */
+    inline const std::vector<unsigned char>& getScatterMapSendIsDG() const {
+        return m_uiScatterMapSendIsDG;
+    }
     /** local cg slots duplicating another slot's position (labelled meshes).
      *  a reduction over the local node range that must count each grid point
      *  once (norms, node counts) skips these. valid once the zip plan is built. */

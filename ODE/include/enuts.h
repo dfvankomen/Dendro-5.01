@@ -248,6 +248,20 @@ struct EnutsProf {
      *  a weighted run converges to a different initial octree than the
      *  unweighted twin (7050 vs 7036 elements on q1); with this knob both
      *  start from the same octree and only the partition differs. */
+    /** DENDRO_ENUTS_OWNER_SYNC_LABELLED=1 (default off): build the owner-sync
+     *  plan on labelled meshes too. Allowed only when the labelled rebuild
+     *  joined on the SFC source's canonical ownership keys (K6): then every
+     *  node has one owner element (cg2dg), locally owned nodes have a local
+     *  owner element and the send map holds cg indices, which is the model the
+     *  plan assumes; the checks below verify it and the decision is collective.
+     *  The end-of-step zip then takes the same owner (cg2dg) as the plan. */
+    static bool ownerSyncLabelled() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_OWNER_SYNC_LABELLED");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
     static bool wpartLate() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_WPART_LATE");
@@ -1942,6 +1956,18 @@ void ExplicitNUTS<T, Ctx>::build_cg_owner_map() {
     // slots no element references (or only hanging ones): keep the mesh's own canonical
     for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd(); cg++)
         if (m_uiCgOwnerDG[cg] == LOOK_UP_TABLE_DEFAULT && cg < cg2dg.size()) m_uiCgOwnerDG[cg] = cg2dg[cg];
+    if (ts::EnutsProf::ownerSyncLabelled() && pMesh->canonKeysBuilt()) {
+        // OWNER_SYNC_LABELLED: the plan reads owners through cg2dg; the zip
+        // must take the same copy. count where the by-position pick differs
+        size_t diff = 0;
+        for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd() && cg < cg2dg.size(); cg++) {
+            if (m_uiCgOwnerDG[cg] != cg2dg[cg]) diff++;
+            m_uiCgOwnerDG[cg] = cg2dg[cg];
+        }
+        std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
+                  << "] end-of-step owner pinned to cg2dg; by-position pick differed at "
+                  << diff << " local cgs" << std::endl;
+    }
     if (std::getenv("DENDRO_ENUTS_NANCHK")) {
         const unsigned int* e2nDG = pMesh->getE2NMapping_DG().data();
         unsigned int set = 0, agree = 0, disagree = 0;
@@ -2384,16 +2410,48 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
     const unsigned int* e2nDG           = pMesh->getE2NMapping_DG().data();
     const std::vector<unsigned int>& c2d = pMesh->getCG2DGMap();
 
+    // DENDRO_ENUTS_OWNER_SYNC_PROBE=1 (default off): on a labelled mesh run
+    // every consistency check of the plan, print what breaks and how often,
+    // and fall back to the per-element sync instead of aborting (diagnostic
+    // for building the plan on labelled meshes; the values are unchanged)
+    static const bool probeOn = [] {
+        const char* e = std::getenv("DENDRO_ENUTS_OWNER_SYNC_PROBE");
+        return e && e[0] == '1';
+    }();
+    const bool labelled = pMesh->useLabelledUnzip();
+    // OWNER_SYNC_LABELLED: like the probe, every check runs and records; the
+    // outcome is then agreed collectively (the per-element fallback must be
+    // taken by every rank or none: the two paths use different exchanges)
+    const bool lab   = labelled && !probeOn && ts::EnutsProf::ownerSyncLabelled();
+    const bool probe = (probeOn && labelled) || lab;
+    bool probeBad    = false;
     // one rank: fall back to the per-element form; more: there is no fallback
     auto fail = [&](const char* why, size_t n) -> bool {
         std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
                   << "] plan unavailable: " << why << " (" << n << ")"
-                  << (npes > 1 ? "; aborting" : "; per-element owner sync")
+                  << (probe ? "; probe" : npes > 1 ? "; aborting" : "; per-element owner sync")
                   << std::endl;
+        if (probe) {
+            probeBad = true;
+            return false;
+        }
         if (npes > 1) MPI_Abort(pMesh->getMPICommunicator(), 11);
         return false;
     };
-    if (pMesh->useLabelledUnzip()) return fail("labelled mesh", 0);
+    if (labelled && !probe) return fail("labelled mesh", 0);
+    if (lab && !pMesh->canonKeysBuilt()) fail("labelled mesh without canonical ownership keys", 0);
+    if (lab) {
+        // the plan's model needs one owner slot per node and cg-indexed sends
+        pMesh->ensureZipPlanBuiltPublic();
+        const size_t nonPrim = pMesh->getLocalNonPrimaryNodes().size();
+        if (nonPrim) fail("non-primary duplicate cg slots", nonPrim);
+        size_t dgTag = 0;
+        for (const unsigned char f : pMesh->getScatterMapSendIsDG()) dgTag += f;
+        if (dgTag) fail("DG-tagged send-map entries", dgTag);
+        size_t notInc = 0;
+        for (size_t n = 1; n < c2d.size(); n++) notInc += (c2d[n] <= c2d[n - 1]);
+        if (notInc) fail("cg2dg not strictly increasing", notInc);
+    }
     if (c2d.size() < cgSz) return fail("cg2dg map smaller than the cg vector", c2d.size());
     if (eo1 * eo1 > 65535u) return fail("element order", eO);
 
@@ -2403,7 +2461,8 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
         size_t bad = 0;
         for (size_t i = 0; i < (size_t)nEle * nPe; i++)
             if (e2n[i] >= cgSz || c2d[e2n[i]] != e2nDG[i]) bad++;
-        if (bad) return fail("e2n_dg is not cg2dg o e2n", bad);
+        if (bad && !probe) return fail("e2n_dg is not cg2dg o e2n", bad);
+        if (bad) fail("e2n_dg is not cg2dg o e2n", bad);
     }
 
     m_uiOwnDTs.clear();
@@ -2525,10 +2584,42 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
               m_uiOwnSendCum);
         build(rPr, rOff, rCnt, rSM, true, m_uiOwnRecvSlot, m_uiOwnRecvOff,
               m_uiOwnRecvCum);
-        if (badOwn) return fail("local nodes whose owner element is not local", badOwn);
-        if (badSend) return fail("send-map entries that are not local cg nodes", badSend);
-        if (badRecv) return fail("ghost nodes kept in a local element's slot", badRecv);
-        if (badCls) return fail("ghost nodes without an owner class", badCls);
+        if (badOwn && !probe) return fail("local nodes whose owner element is not local", badOwn);
+        if (badSend && !probe) return fail("send-map entries that are not local cg nodes", badSend);
+        if (badRecv && !probe) return fail("ghost nodes kept in a local element's slot", badRecv);
+        if (badCls && !probe) return fail("ghost nodes without an owner class", badCls);
+        if (probe) {
+            if (badOwn) fail("local nodes whose owner element is not local", badOwn);
+            if (badSend) fail("send-map entries that are not local cg nodes", badSend);
+            if (badRecv) fail("ghost nodes kept in a local element's slot", badRecv);
+            if (badCls) fail("ghost nodes without an owner class", badCls);
+            if (clsDiff) fail("ghost node class differs from the owner's", clsDiff);
+        }
+        if (lab) {
+            int okl = probeBad ? 0 : 1, okg = 0;
+            MPI_Allreduce(&okl, &okg, 1, MPI_INT, MPI_MIN, pMesh->getMPICommunicator());
+            if (!okg) {
+                if (!pMesh->getMPIRank())
+                    std::cout << "[enuts-owner-sync] labelled mesh: plan not buildable on some rank; "
+                                 "per-element sync on every rank" << std::endl;
+                m_uiOwnPlan.clear();
+                return false;
+            }
+        } else if (probe && !lab) {
+            std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
+                      << "] probe: labelled mesh, elems " << nEle << " local "
+                      << (ee - eb) << " cg " << cgSz << " local " << (ne - nb)
+                      << " nonprimary " << pMesh->getLocalNonPrimaryNodes().size()
+                      << " clsDiff " << clsDiff << " classes " << nCls
+                      << (probeBad ? " -> plan NOT buildable" : " -> all checks pass")
+                      << std::endl;
+            m_uiOwnPlan.clear();
+            return false;  // per-element sync for this run
+        }
+        if (lab && npes == 1 && probeBad) {
+            m_uiOwnPlan.clear();
+            return false;
+        }
         if (std::getenv("DENDRO_ENUTS_OWNER_SYNC_INFO"))
             std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
                       << "] classes " << nCls << " chain " << m_uiOwnChain
