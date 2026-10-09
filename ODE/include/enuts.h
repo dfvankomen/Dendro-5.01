@@ -1779,6 +1779,39 @@ void ExplicitNUTS<T, Ctx>::init() {
         DendroIntL oldElements = pMesh->getNumLocalMeshElements(), oldElements_g = 0;
         par::Mpi_Reduce(&oldElements, &oldElements_g, 1, MPI_SUM, 0,
                         pMesh->getMPIGlobalCommunicator());
+        // DENDRO_ENUTS_WPART_GHOST_SYNC=1: ghost-exchange the evolution vector
+        // before the weighted remesh. the IGT reads ghost cgs of local elements,
+        // and ctx initialize may end with a local-only init_grid after an IGT
+        // (which writes local cgs only), leaving those ghosts zero; elements that
+        // change rank then carry the zeros to their new owner.
+        static const bool wpartGhostSync = [] {
+            const char* e = std::getenv("DENDRO_ENUTS_WPART_GHOST_SYNC");
+            return e && e[0] == '1';
+        }();
+        if (wpartGhostSync && pMesh->isActive()) {
+            auto& ev            = m_uiAppCtx->get_evolution_vars();
+            T* evp              = ev.get_vec_ptr();
+            const unsigned int dof = ev.get_dof();
+            const unsigned int nn  = pMesh->getDegOfFreedom();
+            const unsigned int gb = pMesh->getNodeLocalBegin();
+            const unsigned int ge = pMesh->getNodeLocalEnd();
+            auto countGhostZeros = [&]() {
+                DendroIntL z = 0;
+                for (unsigned int v = 0; v < dof; v++)
+                    for (unsigned int n = 0; n < nn; n++)
+                        if ((n < gb || n >= ge) && evp[v * nn + n] == T(0)) z++;
+                return z;
+            };
+            DendroIntL z0 = countGhostZeros();
+            pMesh->readFromGhostBegin(evp, dof);
+            pMesh->readFromGhostEnd(evp, dof);
+            DendroIntL z1 = countGhostZeros(), z0g = 0, z1g = 0;
+            par::Mpi_Reduce(&z0, &z0g, 1, MPI_SUM, 0, pMesh->getMPICommunicator());
+            par::Mpi_Reduce(&z1, &z1g, 1, MPI_SUM, 0, pMesh->getMPICommunicator());
+            if (!pMesh->getMPIRank())
+                std::cout << "[LTS Init(Wpart)]: ghost sync, zero ghost entries "
+                          << z0g << " -> " << z1g << std::endl;
+        }
         m_uiAppCtx->remesh_and_gridtransfer();
         pMesh = m_uiAppCtx->get_mesh();
         DendroIntL newElements = pMesh->getNumLocalMeshElements(), newElements_g = 0;
