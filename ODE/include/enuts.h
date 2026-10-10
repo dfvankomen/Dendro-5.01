@@ -46,7 +46,9 @@ namespace ts {
 struct EnutsProf {
     enum { RHS = 0, EDG_BEGIN, EDG_END, SYNC_BLK, AXPY_ELETS, EVEC_XCH, WAIT, TOTAL,
            SY_SAME, SY_CORR, SY_CORR_FC, SY_UNZIP, SY_OWN, SY_POST, SY_P2C,
-           CN_CALLS, CN_EID, CN_ENT, CN_PAIRS, CN_P2C, CN_CORR, CN_HIT, CN_P2C_HIT, NT };
+           SY_ROW, SY_CPY,
+           CN_CALLS, CN_EID, CN_ENT, CN_PAIRS, CN_P2C, CN_CORR, CN_HIT, CN_P2C_HIT,
+           CN_P2C_UNIQ, CN_P2C_DUP, CN_P2C_OVF, NT };
     double t[NT]     = {};
     double partial   = 0;      // partial steps taken (this rank was active)
     double lev_sum   = 0;      // sum over partial steps of globally active levels
@@ -261,6 +263,44 @@ struct EnutsProf {
             return (e && e[0] == '1') ? 1 : 0;
         }();
         return v == 1;
+    }
+    /** DENDRO_ENUTS_OWN_NO_SELFCOPY=1 (default off): the owner plan does not
+     *  copy, onto the block's own element slots, nodes that element itself
+     *  owns: the source is that element's DG row, which the zip just filled
+     *  from this very block, so the copy is a no-op. Bitwise. */
+    static bool ownNoSelfCopy() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_OWN_NO_SELFCOPY");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    /** DENDRO_ENUTS_OWN_NO_ETIME_XCH=1 (default off): with the owner plan
+     *  the per-sub-step exchange of the element time vector and the barrier
+     *  after it are skipped. The owner path reads element times of local
+     *  elements only (the block's first element; owner times come from the
+     *  sub-step counter); the ghost entries feed the per-element sync path.
+     *  Bitwise. */
+    static bool ownNoEtimeXch() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_OWN_NO_ETIME_XCH");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    /** DENDRO_ENUTS_OWN_XCH_OMP=1 (default off; hybrid builds, with
+     *  DENDRO_ENUTS_OMP): the pack and unpack of the owner exchange run
+     *  threaded over the variables (plain indexed copies). Bitwise. */
+    static bool ownXchOmp() {
+#ifdef DENDRO_ENUTS_HAS_OMP
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_OWN_XCH_OMP");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1 && ompOn();
+#else
+        return false;
+#endif
     }
     static bool wpartLate() {
         static const int v = []() {
@@ -1202,8 +1242,10 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                 // node copies, hanging faces / edges, children of coarser dependents
                 "  sync:same_copy|own:prep", "  sync:corr_coarse_fut|own:copy", "  sync:corr_fine_past|own:hang", "  sync:unzip_pad|own:child", "  sync:own_interior",
                 "  sync:post_stage_blk", "  sync:  of unzip: p2c interp",
+                "  sync:  of unzip: row build", "  sync:  of unzip: child copy",
                 "  count: sync calls", "  count: dep elems", "  count: copy entries", "  count: copy pairs",
-                "  count: p2c children", "  count: corrections", "  count: corr cache hits", "  count: p2c cache hits"};
+                "  count: p2c children", "  count: corrections", "  count: corr cache hits", "  count: p2c cache hits",
+                "  count: p2c unique/pass", "  count: p2c cross-thread dups", "  count: p2c pool overflows"};
             std::cout << "[enuts-prof] npes=" << np
                       << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
                       << " mean_active_levels/step="
@@ -2379,7 +2421,10 @@ T* ExplicitNUTS<T, Ctx>::p2c_slot(unsigned int idx, const SyncTag& key,
     }
     const size_t cap =
         std::max<size_t>(64, ts::EnutsProf::p2cStoreBytes() / (stride * sizeof(T)));
-    if (m_uiP2cUsed >= cap) return nullptr;
+    if (m_uiP2cUsed >= cap) {
+        if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_OVF] += 1;
+        return nullptr;
+    }
     if ((m_uiP2cUsed + 1) * stride > m_uiP2cPool.size())
         m_uiP2cPool.resize(std::min(
             cap * stride,
@@ -2799,6 +2844,7 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
     const unsigned int NONE = ~0u;
     std::vector<unsigned int> wEle(lxyz, NONE), wNode(lxyz, 0);
     std::vector<signed char> wC(lxyz, -1);
+    std::vector<unsigned char> wOwn(lxyz, 0);  // slot of one of the block's own elements
     for (const typename SyncPlan::Ent& en : pl.ents)
         for (unsigned int q = en.b; q < en.e; q++) {
             const unsigned int d = pl.dst[q];
@@ -2819,8 +2865,11 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
                     wEle[d]  = elem;
                     wC[d]    = -1;
                     wNode[d] = k * n1 * n1 + j * n1 + i;
+                    wOwn[d]  = 1;
                 }
     }
+    const bool noSelf = ts::EnutsProf::ownNoSelfCopy();
+    size_t nSelf      = 0;  // self-copy slots dropped (reported with OWNER_SYNC_INFO)
 
     size_t uncovered = 0, badNode = 0;
     // class of a source node; it must be a value this rank has
@@ -2889,6 +2938,12 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
         }
         if (o < 0) {
             const unsigned int cg = e2n[(size_t)e * nPe + n];
+            // OWN_NO_SELFCOPY: the element owns this node, so the source is
+            // its own DG row = this block's value (zipped from it): skip
+            if (noSelf && wOwn[d] && cg < cgSz && c2d[cg] == (size_t)e * nPe + n) {
+                nSelf++;
+                continue;
+            }
             const unsigned int c  = need(cg);
             bd[c].push_back((unsigned int)d);
             bs[c].push_back(cg < cgSz ? c2d[cg] : 0);
@@ -2939,6 +2994,9 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
         }
         op.clsOff[c + 1] = (unsigned int)op.pdst.size();
         op.runOff[c + 1] = (unsigned int)op.rdst.size();
+        if (c + 1 == nCls && nSelf && std::getenv("DENDRO_ENUTS_OWNER_SYNC_INFO"))
+            std::cout << "[enuts-owner-sync] blk " << blk << ": " << nSelf
+                      << " self-copy slots dropped" << std::endl;
     }
     for (const Inst& in : opI) {
         const unsigned char code = m_uiOwnOps[m_uiOwnOpOff[in.ele] + in.o];
@@ -3234,12 +3292,14 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
     key.rk   = rk_s;
     key.fut  = 3;
     unsigned int nhit = 0;
+    double trow = 0, tcpy = 0;
     for (const typename OwnPlan::Child& w : op.ch) {
         bool hit = false;
         T* sd    = m_uiSyncPassOpen ? p2c_slot(w.store, key, stride, hit) : nullptr;
         nhit += hit;
         if (!hit && !(m_uiOwnRowBufRow == w.row && m_uiOwnRowBufPass == m_uiSyncPass &&
                       m_uiSyncPassOpen)) {
+            const double tr0 = sprof ? ts::EnutsProf::now() : 0.0;
             // the dependent's row as its zip + gather gives it: owner values,
             // then its own hanging faces and edges
             if (m_uiOwnRowBuf.size() < stride) m_uiOwnRowBuf.resize(stride);
@@ -3283,6 +3343,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
             m_uiOwnRowBufRow  = w.row;
             m_uiOwnRowBufPass = m_uiSyncPass;
             std::fill(m_uiOwnSweepOk.begin(), m_uiOwnSweepOk.end(), 0);
+            if (sprof) trow += ts::EnutsProf::now() - tr0;
         }
         if (!hit) {
             const double tp = sprof ? ts::EnutsProf::now() : 0.0;
@@ -3302,6 +3363,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
             if (sprof) tp2c += ts::EnutsProf::now() - tp;
             if (!sd) continue;
         }
+        const double tc0 = sprof ? ts::EnutsProf::now() : 0.0;
         for (unsigned int v = 0; v < dof; v++) {
             T* dv       = blkVec + (size_t)v * lxyz;
             const T* pv = sd + (size_t)v * nPe;
@@ -3311,6 +3373,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                 for (unsigned int i = 0; i < op.cLen[q]; i++) dp[i] = sp[i];
             }
         }
+        if (sprof) tcpy += ts::EnutsProf::now() - tc0;
     }
 
     if (sprof) {
@@ -3324,6 +3387,8 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
         P.t[ts::EnutsProf::SY_CORR_FC] += tops;
         P.t[ts::EnutsProf::SY_UNZIP] += t3 - t2;
         P.t[ts::EnutsProf::SY_P2C] += tp2c;
+        P.t[ts::EnutsProf::SY_ROW] += trow;
+        P.t[ts::EnutsProf::SY_CPY] += tcpy;
         P.t[ts::EnutsProf::CN_ENT] += op.ops.size();
         P.t[ts::EnutsProf::CN_CORR] += nconv;
         P.t[ts::EnutsProf::CN_HIT] += nreuse;
@@ -3377,6 +3442,10 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
         if (!cnt) continue;
         const unsigned int* sl = m_uiOwnSendSlot.data() + m_uiOwnSendOff[i];
         T* b                   = m_uiOwnSendBuf.data() + off;
+        const bool thr         = ts::EnutsProf::ownXchOmp();
+#ifdef DENDRO_ENUTS_HAS_OMP
+#pragma omp parallel for schedule(static) if (thr && !omp_in_parallel())
+#endif
         for (unsigned int v = 0; v < dof; v++) {
             const T* sv = stv + (size_t)v * dgSz;
             for (unsigned int q = 0; q < cnt; q++) b[(size_t)v * cnt + q] = sv[sl[q]];
@@ -3410,6 +3479,10 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
         if (!cnt) continue;
         const unsigned int* sl = m_uiOwnRecvSlot.data() + m_uiOwnRecvOff[i];
         const T* b             = m_uiOwnRecvBuf.data() + off;
+        const bool thr         = ts::EnutsProf::ownXchOmp();
+#ifdef DENDRO_ENUTS_HAS_OMP
+#pragma omp parallel for schedule(static) if (thr && !omp_in_parallel())
+#endif
         for (unsigned int v = 0; v < dof; v++) {
             T* sv = stv + (size_t)v * dgSz;
             for (unsigned int q = 0; q < cnt; q++) sv[sl[q]] = b[(size_t)v * cnt + q];
@@ -5063,6 +5136,22 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             // "<<m_uiBVec[blk]._vec[BLK_S].isSynced()<<std::endl;
         }
         m_uiSyncPassOpen = false;
+        if (prof) {
+            // p2c store census of this pass: children computed by any thread
+            // (unique) and computed again by another thread (duplicates)
+            size_t tot = 0, uniq = 0;
+            const size_t nst = m_uiP2cPassOf.size();
+            for (size_t i = 0; i < nst; i++) {
+                bool any = false;
+                if (m_uiP2cPassOf[i] == m_uiSyncPass) { tot++; any = true; }
+                for (size_t t = 1; t < m_uiSyncThr.size(); t++)
+                    if (m_uiSyncThr[t].p2cPassOf.size() > i &&
+                        m_uiSyncThr[t].p2cPassOf[i] == m_uiSyncPass) { tot++; any = true; }
+                uniq += any;
+            }
+            ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_UNIQ] += (double)uniq;
+            ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_DUP] += (double)(tot - uniq);
+        }
         if (thr && prof) ts::EnutsProf::mergeThreads();
         ENUTS_TOC(SYNC_BLK);
 
@@ -5161,14 +5250,18 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     ENUTS_TOC(AXPY_ELETS);
     ENUTS_TIC();
 
-    pMesh->readFromGhostBeginElementVec(m_uiEleTime.data(), 1);
-    pMesh->readFromGhostEndElementVec(m_uiEleTime.data(), 1);
+    // OWN_NO_ETIME_XCH: the owner path never reads a ghost element time
+    const bool skipEt = ownPlan && ts::EnutsProf::ownNoEtimeXch();
+    if (!skipEt) {
+        pMesh->readFromGhostBeginElementVec(m_uiEleTime.data(), 1);
+        pMesh->readFromGhostEndElementVec(m_uiEleTime.data(), 1);
+    }
     // m_uiEleDT is not exchanged here: it depends on the level only and
     // evolve() exchanged it at the start of the step
     ENUTS_TOC(EVEC_XCH);
     ENUTS_TIC();
 
-    pMesh->waitActive();
+    if (!skipEt) pMesh->waitActive();
     ENUTS_TOC(WAIT);
     if (prof) ts::EnutsProf::get().t[ts::EnutsProf::TOTAL] += ts::EnutsProf::now() - tpT;
 #undef ENUTS_TIC
