@@ -46,7 +46,7 @@ namespace ts {
 struct EnutsProf {
     enum { RHS = 0, EDG_BEGIN, EDG_END, SYNC_BLK, AXPY_ELETS, EVEC_XCH, WAIT, TOTAL,
            SY_SAME, SY_CORR, SY_CORR_FC, SY_UNZIP, SY_OWN, SY_POST, SY_P2C,
-           SY_ROW, SY_CPY,
+           SY_ROW, SY_CPY, SY_PRE,
            CN_CALLS, CN_EID, CN_ENT, CN_PAIRS, CN_P2C, CN_CORR, CN_HIT, CN_P2C_HIT,
            CN_P2C_UNIQ, CN_P2C_DUP, CN_P2C_OVF, NT };
     double t[NT]     = {};
@@ -301,6 +301,34 @@ struct EnutsProf {
 #else
         return false;
 #endif
+    }
+    /** DENDRO_ENUTS_OWN_P2C_SHARED=1 (default off): before each stage's sync
+     *  loop, the unique children (parent element, child) of every active
+     *  block are listed once, each gets a slot in one shared pool, and a
+     *  threaded pass over the unique parent rows builds each row once and
+     *  interpolates its children into the pool; the block loop then only
+     *  copies. Same row build and interpolation code as the per-block path,
+     *  so bitwise. Removes the cross-thread duplicates and the per-thread
+     *  pool-cap recomputes. DENDRO_ENUTS_P2C_SHARED_MB (default 2048) caps
+     *  the shared pool; children past the cap take the per-block path. */
+    static bool ownP2cShared() { return ownP2cSharedMode() != 0; }
+    /** 1 = shared pool, block loop copies from it; 2 = the pre-pass writes
+     *  each child's outputs straight into every reader block (no pool, no
+     *  second copy; the child slots have no other writer). Both bitwise. */
+    static int ownP2cSharedMode() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_OWN_P2C_SHARED");
+            const int i   = e ? std::atoi(e) : 0;
+            return (i == 1 || i == 2) ? i : 0;
+        }();
+        return v;
+    }
+    static size_t p2cSharedBytes() {
+        static const size_t v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_P2C_SHARED_MB");
+            return (size_t)(e ? std::atol(e) : 2048) << 20;
+        }();
+        return v;
     }
     static bool wpartLate() {
         static const int v = []() {
@@ -722,6 +750,17 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     unsigned long long m_uiP2cPoolPass = 0;
     unsigned int p2c_index(unsigned int ele, unsigned int cnum);
     T* p2c_slot(unsigned int idx, const SyncTag& key, size_t stride, bool& hit);
+    /** OWN_P2C_SHARED: shared-pool bookkeeping of the current pass */
+    bool m_uiP2cSharedOn = false;            // this pass used the shared pool
+    std::vector<unsigned int> m_uiP2cWorkRow;   // unique rows of the pass
+    std::vector<unsigned int> m_uiP2cWorkBlk;   // a reader block per row
+    std::vector<unsigned int> m_uiP2cWorkOff;   // children offsets per row
+    std::vector<unsigned int> m_uiP2cWorkStore; // store idx per child
+    std::vector<unsigned char> m_uiP2cWorkCnum; // child number per child
+    std::vector<unsigned int> m_uiP2cWorkRdr, m_uiP2cWorkOutB, m_uiP2cWorkOutE;  // mode 2: reader block + its runs
+    std::vector<T> m_uiOwnRowBuf2;              // mode 2: one child's values
+    std::vector<unsigned long long> m_uiP2cRowPass;  // row -> pass it was listed in
+    std::vector<unsigned int> m_uiP2cRowAt;          // row -> index in the work list
     std::vector<SyncTag> m_uiSyncTag;
     unsigned long long m_uiSyncPass = 0;
     bool m_uiSyncPassOpen           = false;
@@ -795,6 +834,17 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         unsigned char same = 1, ns = 0, g = 0;
         T m[8] = {};
     };
+    /** stage-conversion rows of one block class for this pass (thread-local
+     *  cache); bTime / bDT of the reader block */
+    const OwnConv* own_conv_rows(unsigned int bc, unsigned int rk_s, unsigned int bTime,
+                                 unsigned int bDT);
+    /** the reconciled DG row of a dependent (owner values, then its hanging
+     *  faces and edges) in the frame of a reader block of class rows cv */
+    void own_row_build(unsigned int row, unsigned int rk_s, const OwnConv* cv,
+                       T* rowBuf, T* g, T* pin, T* pout, double* im1, double* im2);
+    /** OWN_P2C_SHARED: list the pass's unique children and interpolate them */
+    void own_p2c_prepass(unsigned int rk_s, const unsigned int* actIds, unsigned int nAct,
+                         bool thr);
     const ot::Mesh* m_uiOwnMesh = nullptr;
     bool m_uiOwnOk              = false;
     unsigned int m_uiOwnPt      = 0;
@@ -899,6 +949,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         std::vector<unsigned int> p2cSlotOf;
         std::vector<SyncTag> p2cTagOf;
         std::vector<T> p2cPool;
+        std::vector<T> ownRowBuf2;
         size_t p2cUsed                = 0;
         unsigned long long p2cPoolPass = 0;
         // owner-sync plan (own_sync_fill) and the shared p2c sweeps
@@ -1243,6 +1294,7 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                 "  sync:same_copy|own:prep", "  sync:corr_coarse_fut|own:copy", "  sync:corr_fine_past|own:hang", "  sync:unzip_pad|own:child", "  sync:own_interior",
                 "  sync:post_stage_blk", "  sync:  of unzip: p2c interp",
                 "  sync:  of unzip: row build", "  sync:  of unzip: child copy",
+                "  sync:  p2c pre-pass (shared store)",
                 "  count: sync calls", "  count: dep elems", "  count: copy entries", "  count: copy pairs",
                 "  count: p2c children", "  count: corrections", "  count: corr cache hits", "  count: p2c cache hits",
                 "  count: p2c unique/pass", "  count: p2c cross-thread dups", "  count: p2c pool overflows"};
@@ -2406,6 +2458,16 @@ T* ExplicitNUTS<T, Ctx>::p2c_slot(unsigned int idx, const SyncTag& key,
     std::vector<SyncTag>& m_uiP2cTagOf             = thr_ ? thr_->p2cTagOf : this->m_uiP2cTagOf;
     std::vector<T>& m_uiP2cPool                    = thr_ ? thr_->p2cPool : this->m_uiP2cPool;
     hit = false;
+    if (m_uiP2cSharedOn) {
+        // OWN_P2C_SHARED: the pre-pass filled one shared pool; read-only here
+        if (this->m_uiP2cPassOf[idx] == m_uiSyncPass && this->m_uiP2cTagOf[idx] == key) {
+            hit = true;
+            if (this->m_uiP2cSlotOf[idx] == ~0u) return nullptr;  // written into the blocks already
+            return this->m_uiP2cPool.data() + (size_t)this->m_uiP2cSlotOf[idx] * stride;
+        }
+        if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_OVF] += 1;
+        return nullptr;  // past the shared cap: computed, not stored
+    }
     if (m_uiP2cPoolPass != m_uiSyncPass) {
         m_uiP2cPoolPass = m_uiSyncPass;
         m_uiP2cUsed     = 0;
@@ -3098,6 +3160,256 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
     op.built = true;
 }
 
+
+template <typename T, typename Ctx>
+const typename ExplicitNUTS<T, Ctx>::OwnConv* ExplicitNUTS<T, Ctx>::own_conv_rows(
+    unsigned int bc, unsigned int rk_s, unsigned int bTime, unsigned int bDT) {
+    SyncThr* const thr_ =
+        ts::EnutsProf::tid() ? &m_uiSyncThr[ts::EnutsProf::tid()] : nullptr;
+    ENUTSOp* const m_uiECOp           = thr_ ? thr_->op : this->m_uiECOp;
+    std::vector<OwnConv>& m_uiOwnConv = thr_ ? thr_->ownConv : this->m_uiOwnConv;
+    std::vector<unsigned long long>& m_uiOwnConvPass = thr_ ? thr_->ownConvPass : this->m_uiOwnConvPass;
+    const unsigned int nCls = m_uiOwnDTs.size();
+    OwnConv* cv = m_uiOwnConv.data() + (size_t)bc * nCls;
+    if (m_uiOwnConvPass[bc] != m_uiSyncPass) {
+        const bool ifxEq  = (ts::EnutsProf::ifaceFix() & 1);
+        const bool ifxAll = (ts::EnutsProf::ifaceFix() & 2);
+        for (unsigned int c = 0; c < nCls; c++) {
+            const unsigned int dtl = m_uiOwnDTs[c];
+            // every level steps at the multiples of its dt
+            const unsigned int tl = ((m_uiOwnPt + dtl - 1) / dtl) * dtl;
+            OwnConv& w            = cv[c];
+            w                     = OwnConv();
+            if (bTime == tl && !(ifxEq && dtl != bDT)) continue;
+            const T t_blk     = m_uiTimeInfo._m_uiT + bTime * m_uiTimeInfo._m_uiTh;
+            const T t_ele     = m_uiTimeInfo._m_uiT + tl * m_uiTimeInfo._m_uiTh;
+            const bool eqT    = (tl == bTime);
+            const bool eleFut = eqT ? (dtl > bDT) : (tl > bTime);
+            const unsigned int nsIn =
+                (ifxAll && eleFut && !eqT) ? m_uiNumStages : rk_s;
+            T dt_c = (eleFut ? dtl : bDT) * (m_uiTimeInfo._m_uiTh);
+            T dt_f = (eleFut ? bDT : dtl) * (m_uiTimeInfo._m_uiTh);
+            if (dt_c < dt_f) std::swap(dt_c, dt_f);
+            T dt = eqT ? 0 : (eleFut ? (t_ele - t_blk) : (t_blk - t_ele));
+            if (ts::EnutsProf::ifaceShift() && eleFut && !eqT)
+                dt = (T)(bTime + dtl - tl) * m_uiTimeInfo._m_uiTh;
+            w.same     = 0;
+            w.ns       = (unsigned char)nsIn;
+            if (m_uiStGOn && (eqT || nsIn == m_uiNumStages)) {
+                T row[5];
+                if (m_uiECOp->stageRowNL(eleFut, row, rk_s, dt_c, dt_f, dt, nsIn)) {
+                    w.g       = 1;
+                    row[nsIn] = row[4];
+                    w.ns      = (unsigned char)(nsIn + 1);
+                }
+                for (unsigned int k = 0; k < w.ns; k++) w.m[k] = row[k];
+            } else
+            m_uiECOp->stageRow(eleFut, w.m, rk_s, dt_c, dt_f, dt);
+        }
+        m_uiOwnConvPass[bc] = m_uiSyncPass;
+    }
+    return cv;
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::own_row_build(unsigned int row_, unsigned int rk_s,
+                                         const OwnConv* cv, T* rowBuf, T* g, T* pin,
+                                         T* pout, double* im1, double* im2) {
+    SyncThr* const thr_ =
+        ts::EnutsProf::tid() ? &m_uiSyncThr[ts::EnutsProf::tid()] : nullptr;
+    ENUTSOp* const m_uiECOp = thr_ ? thr_->op : this->m_uiECOp;
+    const ot::Mesh* pMesh   = m_uiAppCtx->get_mesh();
+    const unsigned int nPe  = pMesh->getNumNodesPerElement();
+    const size_t dgSz       = (size_t)pMesh->getAllElements().size() * nPe;
+    const unsigned int dof  = m_uiEVar.get_dof();
+    const unsigned int nCls = m_uiOwnDTs.size();
+    const T* S[8];
+    const T* SG[8];
+    const T* stG = m_uiStGOn ? m_uiStG.get_vec_ptr() : nullptr;
+    struct { unsigned int row; } w = {row_};
+    const unsigned int ele  = m_uiOwnRowEle[w.row];
+    const unsigned int* ro  = m_uiOwnRowOff.data() + (size_t)w.row * (nCls + 1);
+    const bool hasOps       = m_uiOwnOpOff[ele + 1] > m_uiOwnOpOff[ele];
+    for (unsigned int v = 0; v < dof; v++) {
+        for (unsigned int k = 0; k < m_uiNumStages; k++)
+            SG[k] = S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz;
+        if (stG) SG[rk_s] = stG + (size_t)v * dgSz;
+        T* row = rowBuf + (size_t)v * nPe;
+        T* gg  = hasOps ? g : row;
+        {
+            // the element's own DG row in the block's frame, then the
+            // nodes other elements own
+            const OwnConv& pc = cv[m_uiOwnRowPc[w.row]];
+            if (pc.same) {
+                std::memcpy(gg, S[rk_s - 1] + (size_t)ele * nPe, sizeof(T) * nPe);
+            } else {
+                const T* Se[8];
+                for (unsigned int k = 0; k < m_uiNumStages; k++)
+                    Se[k] = S[k] + (size_t)ele * nPe;
+                if (pc.g) Se[pc.ns - 1] = stG + (size_t)v * dgSz + (size_t)ele * nPe;
+                m_uiECOp->applyRow(gg, Se, pc.m, pc.ns, nPe);
+            }
+        }
+        for (unsigned int c = 0; c < nCls; c++) {
+            const unsigned int n = ro[c + 1] - ro[c];
+            if (!n) continue;
+            const unsigned int* rn = m_uiOwnRowN.data() + ro[c];
+            const unsigned int* rs = m_uiOwnRowSrc.data() + ro[c];
+            if (cv[c].same) {
+                const T* sv = S[rk_s - 1];
+                for (unsigned int q = 0; q < n; q++) gg[rn[q]] = sv[rs[q]];
+            } else {
+                m_uiECOp->gatherRow(gg, rn, rs, n, cv[c].g ? SG : S, cv[c].m, cv[c].ns);
+            }
+        }
+        if (hasOps) own_row_ops(ele, g, row, pin, pout, im1, im2);
+    }
+}
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int* actIds,
+                                           unsigned int nAct, bool thr) {
+    ot::Mesh* pMesh          = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    const ot::Block* blkList = pMesh->getLocalBlockList().data();
+    const unsigned int nPe   = pMesh->getNumNodesPerElement();
+    const unsigned int dof   = m_uiEVar.get_dof();
+    const size_t stride      = (size_t)dof * nPe;
+    const unsigned int nCls  = m_uiOwnDTs.size();
+    const size_t cap = std::max<size_t>(64, ts::EnutsProf::p2cSharedBytes() / (stride * sizeof(T)));
+    m_uiP2cSharedOn = false;
+    if (m_uiOwnPlan.size() != pMesh->getLocalBlockList().size())
+        m_uiOwnPlan.assign(pMesh->getLocalBlockList().size(), OwnPlan());
+    SyncTag key;
+    key.pass = m_uiSyncPass;
+    key.rk   = rk_s;
+    key.fut  = 3;
+    // 1. the unique children of the active blocks, one shared slot each, grouped by parent row
+    const bool direct = ts::EnutsProf::ownP2cSharedMode() == 2;
+    struct Item { unsigned int row, store, blk, outB, outE; unsigned char cnum; };
+    std::vector<Item> items;
+    size_t slots = 0, over = 0;
+    for (unsigned int bb = 0; bb < nAct; bb++) {
+        const unsigned int blk = actIds[bb];
+        OwnPlan& op            = m_uiOwnPlan[blk];
+        if (!op.built) {
+            sync_lazy_build(true);
+            build_own_plan(blk, m_uiBlkDepEid[blk], op);
+        }
+        for (const typename OwnPlan::Child& w : op.ch) {
+            if (m_uiP2cPassOf[w.store] != m_uiSyncPass) {
+                if (!direct && slots >= cap) { over++; continue; }
+                m_uiP2cPassOf[w.store] = m_uiSyncPass;
+                m_uiP2cSlotOf[w.store] = direct ? ~0u : (unsigned int)slots;
+                m_uiP2cTagOf[w.store]  = key;
+                slots++;
+            } else if (!direct) {
+                continue;  // pool mode: one entry per unique child
+            }
+            items.push_back({w.row, w.store, blk, w.outB, w.outE, w.cnum});
+        }
+    }
+    if (ts::EnutsProf::on() && over) ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_OVF] += (double)over;
+    if (!slots) return;
+    // by row, then by child: the readers of one child are contiguous
+    std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
+        return a.row != b.row ? a.row < b.row : a.store < b.store;
+    });
+    m_uiP2cWorkRow.clear();
+    m_uiP2cWorkBlk.clear();
+    m_uiP2cWorkOff.assign(1, 0);
+    m_uiP2cWorkStore.resize(items.size());
+    m_uiP2cWorkCnum.resize(items.size());
+    m_uiP2cWorkRdr.resize(items.size());
+    m_uiP2cWorkOutB.resize(items.size());
+    m_uiP2cWorkOutE.resize(items.size());
+    for (size_t i = 0; i < items.size(); i++) {
+        if (i == 0 || items[i].row != items[i - 1].row) {
+            m_uiP2cWorkRow.push_back(items[i].row);
+            m_uiP2cWorkBlk.push_back(items[i].blk);
+            if (i) m_uiP2cWorkOff.push_back((unsigned int)i);
+        }
+        m_uiP2cWorkStore[i] = items[i].store;
+        m_uiP2cWorkCnum[i]  = items[i].cnum;
+        m_uiP2cWorkRdr[i]   = items[i].blk;
+        m_uiP2cWorkOutB[i]  = items[i].outB;
+        m_uiP2cWorkOutE[i]  = items[i].outE;
+    }
+    m_uiP2cWorkOff.push_back((unsigned int)items.size());
+    if (!direct && m_uiP2cPool.size() < slots * stride) m_uiP2cPool.resize(slots * stride);
+    m_uiP2cPoolPass  = m_uiSyncPass;
+    m_uiP2cUsed      = direct ? 0 : slots;
+    m_uiP2cSharedOn  = true;
+    T* pool          = direct ? nullptr : m_uiP2cPool.data();
+    const unsigned int nRows = (unsigned int)m_uiP2cWorkRow.size();
+    // 2. each unique row once: its reconciled row, then its children into the pool
+#ifdef DENDRO_ENUTS_HAS_OMP
+#pragma omp parallel for schedule(dynamic, 1) if (thr)
+#endif
+    for (unsigned int r = 0; r < nRows; r++) {
+        SyncThr* const thr_ =
+            ts::EnutsProf::tid() ? &m_uiSyncThr[ts::EnutsProf::tid()] : nullptr;
+        std::vector<T>& rowBufV   = thr_ ? thr_->ownRowBuf : this->m_uiOwnRowBuf;
+        std::vector<T>& scrV      = thr_ ? thr_->ownScr : this->m_uiOwnScr;
+        std::vector<T>& sweepV    = thr_ ? thr_->ownSweep : this->m_uiOwnSweep;
+        std::vector<unsigned char>& sweepOkV = thr_ ? thr_->ownSweepOk : this->m_uiOwnSweepOk;
+        if (rowBufV.size() < stride) rowBufV.resize(stride);
+        if (sweepV.size() < 6 * stride) sweepV.resize(6 * stride);
+        if (sweepOkV.size() != (size_t)6 * dof) sweepOkV.assign((size_t)6 * dof, 0);
+        T* scr      = scrV.data();
+        T* g        = scr;
+        T* pin      = scr + nPe;
+        T* pout     = scr + 2 * nPe;
+        double* im1 = (double*)(scr + 3 * nPe);
+        double* im2 = (double*)(scr + 4 * nPe);
+        const unsigned int blk   = m_uiP2cWorkBlk[r];
+        const unsigned int bTime = m_uiEleTime[blkList[blk].firstElementID()];
+        const unsigned int bDT   = m_uiEleDT[blkList[blk].firstElementID()];
+        const unsigned int bc    = (unsigned int)(
+            std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(), bDT) - m_uiOwnDTs.begin());
+        const OwnConv* cv = own_conv_rows(bc, rk_s, bTime, bDT);
+        own_row_build(m_uiP2cWorkRow[r], rk_s, cv, rowBufV.data(), g, pin, pout, im1, im2);
+        std::fill(sweepOkV.begin(), sweepOkV.end(), 0);
+        if (!direct) {
+            for (unsigned int i = m_uiP2cWorkOff[r]; i < m_uiP2cWorkOff[r + 1]; i++) {
+                T* sd = pool + (size_t)m_uiP2cSlotOf[m_uiP2cWorkStore[i]] * stride;
+                for (unsigned int v = 0; v < dof; v++)
+                    p2c3_shared(pMesh, rowBufV.data() + (size_t)v * nPe, sd + (size_t)v * nPe,
+                                m_uiP2cWorkCnum[i], sweepV.data() + (size_t)v * 6 * nPe,
+                                sweepOkV.data() + (size_t)v * 6);
+            }
+        } else {
+            // one child at a time into pout, then its output runs into every reader block
+            std::vector<T>& childV = thr_ ? thr_->ownRowBuf2 : this->m_uiOwnRowBuf2;
+            if (childV.size() < stride) childV.resize(stride);
+            unsigned int i = m_uiP2cWorkOff[r];
+            while (i < m_uiP2cWorkOff[r + 1]) {
+                const unsigned int st = m_uiP2cWorkStore[i];
+                for (unsigned int v = 0; v < dof; v++)
+                    p2c3_shared(pMesh, rowBufV.data() + (size_t)v * nPe, childV.data() + (size_t)v * nPe,
+                                m_uiP2cWorkCnum[i], sweepV.data() + (size_t)v * 6 * nPe,
+                                sweepOkV.data() + (size_t)v * 6);
+                for (; i < m_uiP2cWorkOff[r + 1] && m_uiP2cWorkStore[i] == st; i++) {
+                    const unsigned int rb = m_uiP2cWorkRdr[i];
+                    const OwnPlan& rop    = m_uiOwnPlan[rb];
+                    T* blkVec = (T*)m_uiBVec[rb]._vec[stage_slot(rk_s)].data();
+                    const size_t lxyz = (size_t)blkList[rb].getAllocationSzX() *
+                                        blkList[rb].getAllocationSzY() *
+                                        blkList[rb].getAllocationSzZ();
+                    for (unsigned int v = 0; v < dof; v++) {
+                        T* dv       = blkVec + (size_t)v * lxyz;
+                        const T* pv = childV.data() + (size_t)v * nPe;
+                        for (unsigned int q = m_uiP2cWorkOutB[i]; q < m_uiP2cWorkOutE[i]; q++) {
+                            const T* sp = pv + rop.cT[q];
+                            T* dp       = dv + rop.cDst[q];
+                            for (unsigned int k = 0; k < rop.cLen[q]; k++) dp[k] = sp[k];
+                        }
+                    }
+                }
+            }
+        }
+        (void)nCls;
+    }
+}
+
 template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                                          const std::vector<unsigned int>& eid) {
@@ -3145,44 +3457,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
 
     // one conversion row per owner class for this block class and stage pass:
     // what the per-element loop decides from (element time, element dt)
-    OwnConv* cv = m_uiOwnConv.data() + (size_t)bc * nCls;
-    if (m_uiOwnConvPass[bc] != m_uiSyncPass) {
-        const bool ifxEq  = (ts::EnutsProf::ifaceFix() & 1);
-        const bool ifxAll = (ts::EnutsProf::ifaceFix() & 2);
-        for (unsigned int c = 0; c < nCls; c++) {
-            const unsigned int dtl = m_uiOwnDTs[c];
-            // every level steps at the multiples of its dt
-            const unsigned int tl = ((m_uiOwnPt + dtl - 1) / dtl) * dtl;
-            OwnConv& w            = cv[c];
-            w                     = OwnConv();
-            if (bTime == tl && !(ifxEq && dtl != bDT)) continue;
-            const T t_blk     = m_uiTimeInfo._m_uiT + bTime * m_uiTimeInfo._m_uiTh;
-            const T t_ele     = m_uiTimeInfo._m_uiT + tl * m_uiTimeInfo._m_uiTh;
-            const bool eqT    = (tl == bTime);
-            const bool eleFut = eqT ? (dtl > bDT) : (tl > bTime);
-            const unsigned int nsIn =
-                (ifxAll && eleFut && !eqT) ? m_uiNumStages : rk_s;
-            T dt_c = (eleFut ? dtl : bDT) * (m_uiTimeInfo._m_uiTh);
-            T dt_f = (eleFut ? bDT : dtl) * (m_uiTimeInfo._m_uiTh);
-            if (dt_c < dt_f) std::swap(dt_c, dt_f);
-            T dt = eqT ? 0 : (eleFut ? (t_ele - t_blk) : (t_blk - t_ele));
-            if (ts::EnutsProf::ifaceShift() && eleFut && !eqT)
-                dt = (T)(bTime + dtl - tl) * m_uiTimeInfo._m_uiTh;
-            w.same     = 0;
-            w.ns       = (unsigned char)nsIn;
-            if (m_uiStGOn && (eqT || nsIn == m_uiNumStages)) {
-                T row[5];
-                if (m_uiECOp->stageRowNL(eleFut, row, rk_s, dt_c, dt_f, dt, nsIn)) {
-                    w.g       = 1;
-                    row[nsIn] = row[4];
-                    w.ns      = (unsigned char)(nsIn + 1);
-                }
-                for (unsigned int k = 0; k < w.ns; k++) w.m[k] = row[k];
-            } else
-            m_uiECOp->stageRow(eleFut, w.m, rk_s, dt_c, dt_f, dt);
-        }
-        m_uiOwnConvPass[bc] = m_uiSyncPass;
-    }
+    const OwnConv* cv = own_conv_rows(bc, rk_s, bTime, bDT);
 
     T* blkVec = (T*)m_uiBVec[blk]._vec[stage_slot(rk_s)].data();
     // SG: the inputs of a class that reads g (k1 .. k_rk_s, g)
@@ -3297,49 +3572,14 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
         bool hit = false;
         T* sd    = m_uiSyncPassOpen ? p2c_slot(w.store, key, stride, hit) : nullptr;
         nhit += hit;
+        if (hit && !sd) continue;  // OWN_P2C_SHARED=2: the pre-pass wrote this child
         if (!hit && !(m_uiOwnRowBufRow == w.row && m_uiOwnRowBufPass == m_uiSyncPass &&
                       m_uiSyncPassOpen)) {
             const double tr0 = sprof ? ts::EnutsProf::now() : 0.0;
             // the dependent's row as its zip + gather gives it: owner values,
             // then its own hanging faces and edges
             if (m_uiOwnRowBuf.size() < stride) m_uiOwnRowBuf.resize(stride);
-            const unsigned int ele  = m_uiOwnRowEle[w.row];
-            const unsigned int* ro  = m_uiOwnRowOff.data() + (size_t)w.row * (nCls + 1);
-            const bool hasOps       = m_uiOwnOpOff[ele + 1] > m_uiOwnOpOff[ele];
-            for (unsigned int v = 0; v < dof; v++) {
-                for (unsigned int k = 0; k < m_uiNumStages; k++)
-                    SG[k] = S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz;
-                if (stG) SG[rk_s] = stG + (size_t)v * dgSz;
-                T* row = m_uiOwnRowBuf.data() + (size_t)v * nPe;
-                T* gg  = hasOps ? g : row;
-                {
-                    // the element's own DG row in the block's frame, then the
-                    // nodes other elements own
-                    const OwnConv& pc = cv[m_uiOwnRowPc[w.row]];
-                    if (pc.same) {
-                        std::memcpy(gg, S[rk_s - 1] + (size_t)ele * nPe, sizeof(T) * nPe);
-                    } else {
-                        const T* Se[8];
-                        for (unsigned int k = 0; k < m_uiNumStages; k++)
-                            Se[k] = S[k] + (size_t)ele * nPe;
-                        if (pc.g) Se[pc.ns - 1] = stG + (size_t)v * dgSz + (size_t)ele * nPe;
-                        m_uiECOp->applyRow(gg, Se, pc.m, pc.ns, nPe);
-                    }
-                }
-                for (unsigned int c = 0; c < nCls; c++) {
-                    const unsigned int n = ro[c + 1] - ro[c];
-                    if (!n) continue;
-                    const unsigned int* rn = m_uiOwnRowN.data() + ro[c];
-                    const unsigned int* rs = m_uiOwnRowSrc.data() + ro[c];
-                    if (cv[c].same) {
-                        const T* sv = S[rk_s - 1];
-                        for (unsigned int q = 0; q < n; q++) gg[rn[q]] = sv[rs[q]];
-                    } else {
-                        m_uiECOp->gatherRow(gg, rn, rs, n, cv[c].g ? SG : S, cv[c].m, cv[c].ns);
-                    }
-                }
-                if (hasOps) own_row_ops(ele, g, row, pin, pout, im1, im2);
-            }
+            own_row_build(w.row, rk_s, cv, m_uiOwnRowBuf.data(), g, pin, pout, im1, im2);
             m_uiOwnRowBufRow  = w.row;
             m_uiOwnRowBufPass = m_uiSyncPass;
             std::fill(m_uiOwnSweepOk.begin(), m_uiOwnSweepOk.end(), 0);
@@ -5097,6 +5337,13 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         ENUTS_TIC();
         m_uiSyncPass++;
         m_uiSyncPassOpen = true;
+        if (ownPlan && ts::EnutsProf::ownP2cShared()) {
+            const double tpre = prof ? ts::EnutsProf::now() : 0.0;
+            own_p2c_prepass(BLK_S, actIds, nAct, thr);
+            if (prof) ts::EnutsProf::get().t[ts::EnutsProf::SY_PRE] += ts::EnutsProf::now() - tpre;
+        } else {
+            m_uiP2cSharedOn = false;
+        }
 
 #ifdef DENDRO_ENUTS_HAS_OMP
 #pragma omp parallel for schedule(dynamic, 1) if (thr)
@@ -5136,6 +5383,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             // "<<m_uiBVec[blk]._vec[BLK_S].isSynced()<<std::endl;
         }
         m_uiSyncPassOpen = false;
+        m_uiP2cSharedOn  = false;
         if (prof) {
             // p2c store census of this pass: children computed by any thread
             // (unique) and computed again by another thread (duplicates)
