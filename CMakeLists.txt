@@ -162,7 +162,14 @@ option(DENDRO_ENABLE_OPENMP_PARTITIONING "Use OpenMP threading in graph-partitio
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
 set(OCT2BLK_COARSEST_LEV 0 CACHE STRING "Coarsest Level")
-set(OCT2BLK_MAX_SPAN 31 CACHE STRING "Max levels a merged block spans (2^s elements per side); 31 = no cap (default on this line; experimental uses 2, opt in with -DOCT2BLK_MAX_SPAN=2 or DENDRO_OCT2BLK_MAX_SPAN)")
+# hybrid builds thread over blocks and a block's RHS is one serial call, so a large merged block caps the
+# threads a rank can use: default to 4 elements per side there (q12, 16 ranks x 8 threads: global 1.26x faster)
+if(DENDRO_HYBRID_OMP)
+  set(_oct2blk_max_span_default 2)
+else()
+  set(_oct2blk_max_span_default 31)
+endif()
+set(OCT2BLK_MAX_SPAN ${_oct2blk_max_span_default} CACHE STRING "Max levels a merged block spans (2^s elements per side); 31 = no cap. Default 2 with DENDRO_HYBRID_OMP, 31 otherwise; override with -DOCT2BLK_MAX_SPAN=<s> or DENDRO_OCT2BLK_MAX_SPAN at run time")
 set(NUM_NPES_THRESHOLD 2 CACHE STRING "NPES Threshold")
 
 
