@@ -214,6 +214,16 @@ class BlockAsyncVector {
      * @brief copy a given other vector to the this vector.
      * @param other : BlockAsyncVec that need to be coppied.
      */
+    /** vecCopy without the data: id, synced flag, mode, dof and sizes */
+    void copyMeta(const BlockAsyncVector<T>& other) {
+        m_uiBlkID    = other.m_uiBlkID;
+        m_uiIsSynced = other.isSynced();
+        m_uiMode     = other.m_uiMode;
+        m_uiDof      = other.m_uiDof;
+        m_uiSz[0]    = other.m_uiSz[0];
+        m_uiSz[1]    = other.m_uiSz[1];
+        m_uiSz[2]    = other.m_uiSz[2];
+    }
     void vecCopy(const BlockAsyncVector<T>& other) {
         m_uiBlkID             = other.m_uiBlkID;
         m_uiIsSynced          = other.isSynced();

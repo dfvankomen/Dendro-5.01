@@ -46,9 +46,11 @@ namespace ts {
 struct EnutsProf {
     enum { RHS = 0, EDG_BEGIN, EDG_END, SYNC_BLK, AXPY_ELETS, EVEC_XCH, WAIT, TOTAL,
            SY_SAME, SY_CORR, SY_CORR_FC, SY_UNZIP, SY_OWN, SY_POST, SY_P2C,
-           SY_ROW, SY_CPY, SY_PRE,
+           SY_ROW, SY_CPY, SY_PRE, SY_BLK, SY_RING, SY_LOOP, SY_CENSUS,
+           EX_WAIT, EX_FIRST, EX_UNPACK,
            CN_CALLS, CN_EID, CN_ENT, CN_PAIRS, CN_P2C, CN_CORR, CN_HIT, CN_P2C_HIT,
-           CN_P2C_UNIQ, CN_P2C_DUP, CN_P2C_OVF, NT };
+           CN_P2C_UNIQ, CN_P2C_DUP, CN_P2C_OVF, CN_XCH_RECV, CN_XCH_SEND, CN_XCH_CALLS,
+           CN_CSTEPS, CN_P2C_DISTINCT, CN_HOIST_DBL, SY_ROWOPS, CN_ROWS, CN_ROWS_OPS, NT };
     double t[NT]     = {};
     double partial   = 0;      // partial steps taken (this rank was active)
     double lev_sum   = 0;      // sum over partial steps of globally active levels
@@ -230,6 +232,34 @@ struct EnutsProf {
             return e ? std::atoi(e) : 0;
         }();
         return (v == 1 || v == 2) ? v : 0;
+    }
+    /** DENDRO_ENUTS_STAGE_IN_FUSED=1 (default off; ring only): the stage
+     *  input U + a_{s,s-1} dt k_{s-1} is built in one pass over the block
+     *  (copy, sign launder and axpy per entry, mask update in the same
+     *  loop) instead of a copy pass and an axpy pass; same arithmetic.
+     *  Note the whole padded block is needed: the padding of U is carried
+     *  from sub-step to sub-step by the update itself (the per-sub-step
+     *  stage-0 sync is not run), so no pass here may stop at the interior. */
+    static bool stageInFused() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_STAGE_IN_FUSED");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return (v == 1 || ringFused()) && stageRing();
+    }
+    /** DENDRO_ENUTS_RING_FUSED=1 (default off; ring only, implies
+     *  STAGE_IN_FUSED): the accumulator term b_{s-1} dt k_{s-1} is added in
+     *  the stage-input pass of stage s, which reads k_{s-1} anyway (stage 2
+     *  forms acc = U + b_1 dt k_1 there, in place of the copy); only the
+     *  last stage's term stays in the sync loop. Same operation sequence per
+     *  entry; 19 instead of 31 block sweeps per RK4 sub-step with the input
+     *  passes. */
+    static bool ringFused() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_RING_FUSED");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1 && stageRing();
     }
     /** DENDRO_ENUTS_LAZY_TMP=1 (default off): temporaries only some paths
      *  read are allocated on first use (m_uiEVecTmp[0], the DG copy of the
@@ -745,6 +775,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<unsigned long long> m_uiP2cPassOf;
     std::vector<unsigned int> m_uiP2cSlotOf;
     std::vector<SyncTag> m_uiP2cTagOf;
+    /** prof: coarse step of the last use of a p2c store slot (distinct census) */
+    std::vector<unsigned long long> m_uiP2cStepOf;
+    unsigned long long m_uiCoarseStep = 0;
     std::vector<T> m_uiP2cPool;
     size_t m_uiP2cUsed                = 0;
     unsigned long long m_uiP2cPoolPass = 0;
@@ -928,6 +961,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         m_uiP2cPassOf.clear();
         m_uiP2cSlotOf.clear();
         m_uiP2cTagOf.clear();
+        m_uiP2cStepOf.clear();
         m_uiP2cPoolPass  = 0;
         m_uiOwnRowBufRow = ~0u;
     }
@@ -1295,9 +1329,16 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                 "  sync:post_stage_blk", "  sync:  of unzip: p2c interp",
                 "  sync:  of unzip: row build", "  sync:  of unzip: child copy",
                 "  sync:  p2c pre-pass (shared store)",
+                "  sync:blk_ts call total (thread-s)", "  sync:ring axpy (thread-s)",
+                "  sync:block loop wall", "  sync:prof census (serial, prof-only)",
+                "  xch: wait all (owner path)", "  xch:   of wait: to first recv done", "  xch: unpack",
                 "  count: sync calls", "  count: dep elems", "  count: copy entries", "  count: copy pairs",
                 "  count: p2c children", "  count: corrections", "  count: corr cache hits", "  count: p2c cache hits",
-                "  count: p2c unique/pass", "  count: p2c cross-thread dups", "  count: p2c pool overflows"};
+                "  count: p2c unique/pass", "  count: p2c cross-thread dups", "  count: p2c pool overflows",
+                "  count: xch doubles recv", "  count: xch doubles sent", "  count: xch calls",
+                "  count: coarse steps", "  count: p2c distinct children (sum over coarse steps)",
+                "  count: hoisted-p2c store doubles (classes x (NS+1) x child, sum over coarse steps)",
+                "  sync:    of row build: parent hanging ops", "  count: rows built", "  count: rows with hanging ops"};
             std::cout << "[enuts-prof] npes=" << np
                       << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
                       << " mean_active_levels/step="
@@ -2434,6 +2475,7 @@ unsigned int ExplicitNUTS<T, Ctx>::p2c_index(unsigned int ele,
         m_uiP2cPassOf.clear();
         m_uiP2cSlotOf.clear();
         m_uiP2cTagOf.clear();
+        m_uiP2cStepOf.clear();
     }
     int& i = m_uiP2cIdx[(size_t)ele * NUM_CHILDREN + cnum];
     if (i < 0) {
@@ -3262,7 +3304,16 @@ void ExplicitNUTS<T, Ctx>::own_row_build(unsigned int row_, unsigned int rk_s,
                 m_uiECOp->gatherRow(gg, rn, rs, n, cv[c].g ? SG : S, cv[c].m, cv[c].ns);
             }
         }
-        if (hasOps) own_row_ops(ele, g, row, pin, pout, im1, im2);
+        if (hasOps) {
+            const bool rprof = ts::EnutsProf::on();
+            const double to0 = rprof ? ts::EnutsProf::now() : 0.0;
+            own_row_ops(ele, g, row, pin, pout, im1, im2);
+            if (rprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_ROWOPS] += ts::EnutsProf::now() - to0;
+        }
+    }
+    if (ts::EnutsProf::on()) {
+        ts::EnutsProf::get().t[ts::EnutsProf::CN_ROWS] += 1;
+        ts::EnutsProf::get().t[ts::EnutsProf::CN_ROWS_OPS] += hasOps;
     }
 }
 template <typename T, typename Ctx>
@@ -3308,6 +3359,24 @@ void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int
         }
     }
     if (ts::EnutsProf::on() && over) ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_OVF] += (double)over;
+    if (ts::EnutsProf::on()) {
+        // distinct children of this coarse step and the store a hoisted p2c
+        // (one interpolated child per contributing class and stage) would need
+        if (m_uiP2cStepOf.size() != m_uiP2cPassOf.size()) m_uiP2cStepOf.assign(m_uiP2cPassOf.size(), 0);
+        double nd = 0, dbl = 0;
+        for (const Item& it : items) {
+            if (m_uiP2cStepOf[it.store] == m_uiCoarseStep) continue;
+            m_uiP2cStepOf[it.store] = m_uiCoarseStep;
+            const unsigned int* ro = m_uiOwnRowOff.data() + (size_t)it.row * (nCls + 1);
+            unsigned int cls = 0;
+            for (unsigned int c = 0; c < nCls; c++)
+                cls += (ro[c + 1] > ro[c] || c == m_uiOwnRowPc[it.row]);
+            nd += 1;
+            dbl += (double)cls * (m_uiNumStages + 1) * stride;
+        }
+        ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_DISTINCT] += nd;
+        ts::EnutsProf::get().t[ts::EnutsProf::CN_HOIST_DBL] += dbl;
+    }
     if (!slots) return;
     // by row, then by child: the readers of one child are contiguous
     std::stable_sort(items.begin(), items.end(), [](const Item& a, const Item& b) {
@@ -3366,7 +3435,10 @@ void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int
         const unsigned int bc    = (unsigned int)(
             std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(), bDT) - m_uiOwnDTs.begin());
         const OwnConv* cv = own_conv_rows(bc, rk_s, bTime, bDT);
+        const bool pprof  = ts::EnutsProf::on();
+        const double tr0  = pprof ? ts::EnutsProf::now() : 0.0;
         own_row_build(m_uiP2cWorkRow[r], rk_s, cv, rowBufV.data(), g, pin, pout, im1, im2);
+        if (pprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_ROW] += ts::EnutsProf::now() - tr0;
         std::fill(sweepOkV.begin(), sweepOkV.end(), 0);
         if (!direct) {
             for (unsigned int i = m_uiP2cWorkOff[r]; i < m_uiP2cWorkOff[r + 1]; i++) {
@@ -3383,10 +3455,13 @@ void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int
             unsigned int i = m_uiP2cWorkOff[r];
             while (i < m_uiP2cWorkOff[r + 1]) {
                 const unsigned int st = m_uiP2cWorkStore[i];
+                const double tp0 = pprof ? ts::EnutsProf::now() : 0.0;
                 for (unsigned int v = 0; v < dof; v++)
                     p2c3_shared(pMesh, rowBufV.data() + (size_t)v * nPe, childV.data() + (size_t)v * nPe,
                                 m_uiP2cWorkCnum[i], sweepV.data() + (size_t)v * 6 * nPe,
                                 sweepOkV.data() + (size_t)v * 6);
+                const double tc0 = pprof ? ts::EnutsProf::now() : 0.0;
+                if (pprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_P2C] += tc0 - tp0;
                 for (; i < m_uiP2cWorkOff[r + 1] && m_uiP2cWorkStore[i] == st; i++) {
                     const unsigned int rb = m_uiP2cWorkRdr[i];
                     const OwnPlan& rop    = m_uiOwnPlan[rb];
@@ -3404,6 +3479,7 @@ void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int
                         }
                     }
                 }
+                if (pprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_CPY] += ts::EnutsProf::now() - tc0;
             }
         }
         (void)nCls;
@@ -3694,6 +3770,11 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
                        &m_uiOwnReq[rPr.size() + i]);
         off += (size_t)cnt * dof;
     }
+    if (ts::EnutsProf::on()) {
+        ts::EnutsProf::get().t[ts::EnutsProf::CN_XCH_SEND] += (double)sTot * dof;
+        ts::EnutsProf::get().t[ts::EnutsProf::CN_XCH_RECV] += (double)rTot * dof;
+        ts::EnutsProf::get().t[ts::EnutsProf::CN_XCH_CALLS] += 1;
+    }
 }
 
 template <typename T, typename Ctx>
@@ -3710,9 +3791,20 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
         for (unsigned int i = 0; i < nCls; i++)
             if (pt % m_uiOwnDTs[i] == 0) j = (int)i;
     if (j < 0) return;
+    const bool xprof = ts::EnutsProf::on();
+    const double tw0 = xprof ? ts::EnutsProf::now() : 0.0;
+    const std::vector<unsigned int>& rPr = pMesh->getRecvProcList();
+    if (xprof && !rPr.empty()) {
+        // split of the wait: until the first receive completes (a late
+        // partner) vs the rest (transfer / the slowest partner)
+        int idx = MPI_UNDEFINED;
+        MPI_Waitany((int)rPr.size(), m_uiOwnReq.data(), &idx, MPI_STATUS_IGNORE);
+        ts::EnutsProf::get().t[ts::EnutsProf::EX_FIRST] += ts::EnutsProf::now() - tw0;
+    }
     if (!m_uiOwnReq.empty())
         MPI_Waitall((int)m_uiOwnReq.size(), m_uiOwnReq.data(), MPI_STATUSES_IGNORE);
-    const std::vector<unsigned int>& rPr = pMesh->getRecvProcList();
+    const double tu0 = xprof ? ts::EnutsProf::now() : 0.0;
+    if (xprof) ts::EnutsProf::get().t[ts::EnutsProf::EX_WAIT] += tu0 - tw0;
     size_t off = 0;
     for (size_t i = 0; i < rPr.size(); i++) {
         const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
@@ -3729,6 +3821,7 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
         }
         off += (size_t)cnt * dof;
     }
+    if (xprof) ts::EnutsProf::get().t[ts::EnutsProf::EX_UNPACK] += ts::EnutsProf::now() - tu0;
 }
 
 template <typename T, typename Ctx>
@@ -3943,6 +4036,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_EID] += eid.size();
     if (ownSync == 1 && m_uiSyncPassOpen && prepare_owner_sync(pMesh)) {
         own_sync_fill(blk, rk_s, eid);
+        if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_BLK] += ts::EnutsProf::now() - tsy0;
 #ifdef __PROFILE_ENUTS__
         m_uiPt[ENUTSPROFILE::BLK_SYNC].stop();
 #endif
@@ -4829,7 +4923,11 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                       << " nan " << nn << " of " << (size_t)dof * lx * ly * lz
                       << " total " << nanTot << std::endl;
     }
-    if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_OWN] += ts::EnutsProf::now() - town0;
+    if (sprof) {
+        const double tend = ts::EnutsProf::now();
+        ts::EnutsProf::get().t[ts::EnutsProf::SY_OWN] += tend - town0;
+        ts::EnutsProf::get().t[ts::EnutsProf::SY_BLK] += tend - tsy0;
+    }
 #ifdef __PROFILE_ENUTS__
     m_uiPt[ENUTSPROFILE::BLK_SYNC].stop();
 #endif
@@ -5004,6 +5102,10 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     const bool prof = ts::EnutsProf::on();
     double tp0 = 0, tp1 = 0, tpT = 0;
     if (prof) tpT = ts::EnutsProf::now();
+    if (prof && pt == 0) {
+        m_uiCoarseStep++;
+        ts::EnutsProf::get().t[ts::EnutsProf::CN_CSTEPS] += 1;
+    }
 #define ENUTS_TIC() do { if (prof) tp0 = ts::EnutsProf::now(); } while (0)
 #define ENUTS_TOC(k) do { if (prof) { tp1 = ts::EnutsProf::now(); ts::EnutsProf::get().t[ts::EnutsProf::k] += tp1 - tp0; } } while (0)
 
@@ -5222,9 +5324,58 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                                          blk, current_t + dt_finest * BLK_T);
 
             BlockAsyncVector<T>& sIn = stage_in(blk);
-            sIn.vecCopy(m_uiBVec[blk]._vec[0]);  // copy the in vector.
             T* out_ptr = (T*)sIn.data();
 
+            if (m_uiStageRing && ts::EnutsProf::stageInFused() && BLK_S > 1) {
+                // STAGE_IN_FUSED: the block below in one pass per entry
+                sIn.copyMeta(m_uiBVec[blk]._vec[0]);
+                std::vector<uint64_t>& sg = m_uiStageSgn[blk];
+                const size_t n            = (size_t)DOF * NN;
+                const T* u                = m_uiBVec[blk]._vec[0].data();
+                const T* k                = m_uiBVec[blk]._vec[RING_K].data();
+                const T c0 = blk_dt * m_uiAij[(BLK_S - 1) * m_uiNumStages + (BLK_S - 2)];
+                const bool launder = BLK_S >= 3 && ts::EnutsProf::stageRingMode() == 1;
+                const bool upd     = BLK_S + 1 <= m_uiNumStages;
+                const size_t nw    = (n + 63) / 64;
+                // RING_FUSED: acc = U + b_1 dt k_1 (stage 2) or acc += b_{s-1} dt k_{s-1}
+                const bool facc = ts::EnutsProf::ringFused();
+                T* acc          = facc ? (T*)m_uiBVec[blk]._vec[RING_ACC].data() : nullptr;
+                const T cb      = facc ? blk_dt * m_uiBi[BLK_S - 2] : (T)0;
+                for (size_t w = 0; w < nw; w++) {
+                    const size_t i0 = w * 64, i1 = std::min(n, i0 + 64);
+                    const uint64_t old = sg[w];
+                    uint64_t add = 0;
+                    if (!launder || !old) {
+                        for (size_t i = i0; i < i1; i++) {
+                            T t = u[i];
+                            t += (c0 * k[i]);
+                            out_ptr[i] = t;
+                        }
+                    } else {
+                        for (size_t i = i0; i < i1; i++) {
+                            T t = u[i];
+                            if (((old >> (i - i0)) & 1) && t == (T)0 && std::signbit(t)) t = (T)0;
+                            t += (c0 * k[i]);
+                            out_ptr[i] = t;
+                        }
+                    }
+                    if (facc) {
+                        if (BLK_S == 2)
+                            for (size_t i = i0; i < i1; i++) {
+                                T q = u[i];
+                                q += (cb * k[i]);
+                                acc[i] = q;
+                            }
+                        else
+                            for (size_t i = i0; i < i1; i++) acc[i] += (cb * k[i]);
+                    }
+                    if (upd)
+                        for (size_t i = i0; i < i1; i++)
+                            if (!std::signbit(k[i])) add |= (uint64_t)1 << (i - i0);
+                    sg[w] = old | add;
+                }
+            } else {
+            sIn.vecCopy(m_uiBVec[blk]._vec[0]);  // copy the in vector.
             if (m_uiStageRing) {
                 // STAGE_RING: U, then the dropped 0 * k_j terms (j < s-1) as
                 // their only effect, -0.0 -> +0.0 where the mask is set, then
@@ -5265,6 +5416,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                                  m_uiAij[(BLK_S - 1) * m_uiNumStages + (s - 1)];
                 }
                 enuts_axpy_stages(out_ptr, stp, stc, BLK_S - 1, (size_t)DOF * NN);
+            }
             }
 
             // stage time: step start, plus c_s * dt_blk with DENDRO_ENUTS_STAGE_TIME
@@ -5345,6 +5497,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             m_uiP2cSharedOn = false;
         }
 
+        const double tloop0 = prof ? ts::EnutsProf::now() : 0.0;
 #ifdef DENDRO_ENUTS_HAS_OMP
 #pragma omp parallel for schedule(dynamic, 1) if (thr)
 #endif
@@ -5366,17 +5519,22 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                 current_t + dt_finest * BLK_T);
             if (prof) ts::EnutsProf::get().t[ts::EnutsProf::SY_POST] += ts::EnutsProf::now() - tps0;
             m_uiBVec[blk]._vec[stage_slot(BLK_S)].mark_synced();
-            if (m_uiStageRing) {
+            if (m_uiStageRing &&
+                (!ts::EnutsProf::ringFused() || BLK_S == m_uiNumStages)) {
                 // STAGE_RING: acc = U, then += b_s dt k_s after each synced
-                // stage: the same per-entry sequence as the one-pass update
+                // stage: the same per-entry sequence as the one-pass update.
+                // RING_FUSED: stages 1 .. NS-1 are added by the next stage
+                // input pass instead (k_s is still in the ring slot there)
                 BlockAsyncVector<T>& acc = m_uiBVec[blk]._vec[RING_ACC];
                 const T* k               = m_uiBVec[blk]._vec[RING_K].data();
                 const size_t n           = (size_t)DOF * NN;
                 const T blk_dt           = m_uiTimeInfo._m_uiTh * BLK_DT;
-                if (BLK_S == 1) acc.vecCopy(m_uiBVec[blk]._vec[0]);
                 const T* stp[1] = {k};
                 const T stc[1]  = {blk_dt * m_uiBi[BLK_S - 1]};
+                const double tr0 = prof ? ts::EnutsProf::now() : 0.0;
+                if (BLK_S == 1) acc.vecCopy(m_uiBVec[blk]._vec[0]);
                 enuts_axpy_stages((T*)acc.data(), stp, stc, 1, n);
+                if (prof) ts::EnutsProf::get().t[ts::EnutsProf::SY_RING] += ts::EnutsProf::now() - tr0;
             }
             // std::cout<<"[NUTS]: pt :  "<<pt<<" blk : "<<blk<<" rk : "<<rk<<"
             // step size: "<<BLK_DT<<" is synced:
@@ -5385,6 +5543,8 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         m_uiSyncPassOpen = false;
         m_uiP2cSharedOn  = false;
         if (prof) {
+            const double tcen0 = ts::EnutsProf::now();
+            ts::EnutsProf::get().t[ts::EnutsProf::SY_LOOP] += tcen0 - tloop0;
             // p2c store census of this pass: children computed by any thread
             // (unique) and computed again by another thread (duplicates)
             size_t tot = 0, uniq = 0;
@@ -5399,6 +5559,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             }
             ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_UNIQ] += (double)uniq;
             ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_DUP] += (double)(tot - uniq);
+            ts::EnutsProf::get().t[ts::EnutsProf::SY_CENSUS] += ts::EnutsProf::now() - tcen0;
         }
         if (thr && prof) ts::EnutsProf::mergeThreads();
         ENUTS_TOC(SYNC_BLK);
