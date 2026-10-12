@@ -342,12 +342,14 @@ struct EnutsProf {
      *  (stage, DG slot) whether a local plan read it since (rows: read / in a
      *  plan but unread / in no plan). Marks every plan read with a byte
      *  store; no effect on results. */
-    static bool xchCensus() {
+    static bool xchCensus() { return xchCensusLvl() >= 1 && on(); }
+    /** =2: rank 0 also prints per call the unread slots by owner class */
+    static int xchCensusLvl() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_XCH_CENSUS");
-            return (e && e[0] == '1') ? 1 : 0;
+            return (e && e[0] >= '1' && e[0] <= '9') ? e[0] - '0' : 0;
         }();
-        return v == 1 && on();
+        return v;
     }
     /** DENDRO_ENUTS_XCH_TRACE=1|<dir> (prof-only): per owner-exchange call the
      *  wait, the partner whose request completed last and how late it sent
@@ -363,6 +365,20 @@ struct EnutsProf {
         return (d.empty() || !on()) ? nullptr : d.c_str();
     }
     static bool xchTrace() { return xchTraceDir() != nullptr; }
+    /** DENDRO_ENUTS_XCH_SCOPED=1 (default off; owner plan, chained classes):
+     *  once every block's plan exists (after the first sync pass) each rank
+     *  tells each sender, per shared node, the class of the finest local
+     *  block that reads it (255: none), and both sides re-sort the node list
+     *  by max(owner class, reader class): a stage is sent only at sub-steps
+     *  where a reader of it steps, never-read nodes never. Bitwise: a slot
+     *  not sent is not read before it is sent again. */
+    static bool xchScoped() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_XCH_SCOPED");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
     /** DENDRO_ENUTS_OWN_P2C_SHARED=1 (default off): before each stage's sync
      *  loop, the unique children (parent element, child) of every active
      *  block are listed once, each gets a slot in one shared pool, and a
@@ -974,6 +990,18 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<unsigned int> m_uiOwnSendCum, m_uiOwnRecvCum;
     std::vector<T> m_uiOwnSendBuf, m_uiOwnRecvBuf;
     std::vector<MPI_Request> m_uiOwnReq;
+    /** the fill converts a listed element whole (every node of its row) only
+     *  when its class differs from the reader block's and it is coarser, or
+     *  the equal-time interface fix converts it anyway; otherwise the block
+     *  copies the run slots alone (the padding footprint) */
+    bool xch_whole_row(unsigned int ele, unsigned int bc) const {
+        const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+        const unsigned int l  = pMesh->getAllElements()[ele].getLevel();
+        const unsigned int dt = m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax);
+        const unsigned int ce = (unsigned int)(
+            std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(), dt) - m_uiOwnDTs.begin());
+        return ce != bc && (ce > bc || (ts::EnutsProf::ifaceFix() & 1));
+    }
     /** DENDRO_ENUTS_XCH_CENSUS: per (stage, DG slot) 0 never received, 1
      *  received and not read since, 2 read; per DG slot, whether a built plan
      *  reads it at all */
@@ -1008,6 +1036,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<XchRec> m_uiXchRec;
     void xch_calibrate(ot::Mesh* pMesh);
     void xch_dump();
+    /** DENDRO_ENUTS_XCH_SCOPED: lists re-sorted by reader class (done once per mesh) */
+    bool m_uiXchScoped = false;
+    bool xch_scope_build(ot::Mesh* pMesh);
     bool prepare_owner_sync(ot::Mesh* pMesh);
     void build_own_plan(unsigned int blk, const std::vector<unsigned int>& eid,
                         OwnPlan& op);
@@ -1031,7 +1062,8 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         m_uiOwnRowBufRow = ~0u;
         m_uiXchFlag.clear();
         m_uiXchInPlan.clear();
-        m_uiXchCal = false;
+        m_uiXchCal    = false;
+        m_uiXchScoped = false;
     }
 
     /** DENDRO_ENUTS_OMP: the scratch and per-pass caches of worker thread
@@ -3285,8 +3317,11 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
     }
     if (ts::EnutsProf::xchCensus() && !m_uiXchInPlan.empty()) {
         unsigned char* ip = m_uiXchInPlan.data();
+        const unsigned int bDT = m_uiEleDT[pMesh->getLocalBlockList()[blk].firstElementID()];
+        const unsigned int bc  = (unsigned int)(
+            std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(), bDT) - m_uiOwnDTs.begin());
         for (const unsigned int e : op.cele)
-            std::memset(ip + (size_t)e * nPe, 1, nPe);
+            if (xch_whole_row(e, bc)) std::memset(ip + (size_t)e * nPe, 1, nPe);
         for (size_t r = 0; r < op.rsrc.size(); r++)
             std::memset(ip + op.rsrc[r], 1, op.rlen[r]);
         for (const unsigned int q : op.psrc) ip[q] = 1;
@@ -3867,6 +3902,7 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
     const int tag = 7153;
     m_uiOwnReq.assign(sPr.size() + rPr.size(), MPI_REQUEST_NULL);
     if (j < 0) return;
+    if (ts::EnutsProf::xchScoped() && !m_uiXchScoped && m_uiOwnChain) xch_scope_build(pMesh);
     if (ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty()) {
         // what became of the previous message into these slots (this stage):
         // read by a plan since, or overwritten unread; never-read slots no
@@ -3876,19 +3912,32 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
             if (m_uiStVec[k].get_vec_ptr() == stv) s = k;
         const unsigned char* fl = m_uiXchFlag.data() + (size_t)s * dgSz;
         double nRd = 0, nUn = 0, nNo = 0;
+        std::vector<double> unC(nCls, 0), rdC(nCls, 0);
         for (size_t i = 0; i < rPr.size(); i++) {
             const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
             const unsigned int* sl = m_uiOwnRecvSlot.data() + m_uiOwnRecvOff[i];
+            const unsigned int* cum = m_uiOwnRecvCum.data() + i * nCls;
+            unsigned int c = 0;
             for (unsigned int q = 0; q < cnt; q++) {
+                while (q >= cum[c]) c++;
                 const unsigned char f = fl[sl[q]];
                 if (!f) continue;
                 if (!m_uiXchInPlan[sl[q]])
                     nNo++;
-                else if (f == 1)
+                else if (f == 1) {
                     nUn++;
-                else
+                    unC[c]++;
+                } else {
                     nRd++;
+                    rdC[c]++;
+                }
             }
+        }
+        if (ts::EnutsProf::xchCensusLvl() >= 2 && !pMesh->getMPIRankGlobal()) {
+            std::cout << "[xch-census r0] pt " << pt << " s " << s + 1 << " j " << j << " read " << nRd
+                      << " unread " << nUn << " noplan " << nNo << " | per class read/unread:";
+            for (unsigned int c = 0; c < nCls; c++) std::cout << " " << rdC[c] << "/" << unC[c];
+            std::cout << std::endl;
         }
         ts::EnutsProf& P = ts::EnutsProf::get();
         P.t[ts::EnutsProf::CN_XCH_NOPLAN] += nNo * dof;
@@ -4065,6 +4114,102 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
         off += (size_t)cnt * dof + xt;
     }
     if (xprof) ts::EnutsProf::get().t[ts::EnutsProf::EX_UNPACK] += ts::EnutsProf::now() - tu0;
+}
+
+template <typename T, typename Ctx>
+bool ExplicitNUTS<T, Ctx>::xch_scope_build(ot::Mesh* pMesh) {
+    // XCH_SCOPED: every rank must have every block's plan (sync_prebuild
+    // builds them all in the first sync pass); until then, unscoped
+    const unsigned int nBlk = pMesh->getLocalBlockList().size();
+    int ok = (m_uiOwnPlan.size() == nBlk);
+    for (unsigned int b = 0; ok && b < nBlk; b++) ok = m_uiOwnPlan[b].built;
+    MPI_Comm comm = pMesh->getMPICommunicator();
+    int g         = 0;
+    MPI_Allreduce(&ok, &g, 1, MPI_INT, MPI_MIN, comm);
+    if (!g) return false;
+    const ot::Block* blkList = pMesh->getLocalBlockList().data();
+    const unsigned int nPe   = pMesh->getNumNodesPerElement();
+    const size_t dgSz        = (size_t)pMesh->getAllElements().size() * nPe;
+    const unsigned int nCls  = m_uiOwnDTs.size();
+    // per DG slot, the class of the finest local block whose plan reads it
+    std::vector<unsigned char> rcls(dgSz, 255);
+    auto low = [&](size_t slot, unsigned char c) {
+        if (c < rcls[slot]) rcls[slot] = c;
+    };
+    for (unsigned int b = 0; b < nBlk; b++) {
+        const OwnPlan& op = m_uiOwnPlan[b];
+        const unsigned int bDT = m_uiEleDT[blkList[b].firstElementID()];
+        const unsigned char bc = (unsigned char)(
+            std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(), bDT) - m_uiOwnDTs.begin());
+        for (const unsigned int e : op.cele)
+            if (xch_whole_row(e, bc))
+                for (unsigned int n = 0; n < nPe; n++) low((size_t)e * nPe + n, bc);
+        for (size_t r = 0; r < op.rsrc.size(); r++)
+            for (unsigned int i = 0; i < op.rlen[r]; i++) low((size_t)op.rsrc[r] + i, bc);
+        for (const unsigned int q : op.psrc) low(q, bc);
+        for (const unsigned int q : op.opSrc) low(q, bc);
+        for (const typename OwnPlan::Child& w : op.ch) {
+            const size_t e = m_uiOwnRowEle[w.row];
+            for (unsigned int n = 0; n < nPe; n++) low(e * nPe + n, bc);
+            const unsigned int* ro = m_uiOwnRowOff.data() + (size_t)w.row * (nCls + 1);
+            for (unsigned int q = ro[0]; q < ro[nCls]; q++) low(m_uiOwnRowSrc[q], bc);
+        }
+    }
+    // per receive partner, the effective class of each slot in list order
+    // (max of the owner class the list is sorted by and the reader class);
+    // tell the sender, hear ours from each receiver
+    const std::vector<unsigned int>& sPr = pMesh->getSendProcList();
+    const std::vector<unsigned int>& rPr = pMesh->getRecvProcList();
+    std::vector<unsigned char> rEff(m_uiOwnRecvSlot.size(), 255), sEff(m_uiOwnSendSlot.size(), 255);
+    for (size_t i = 0; i < rPr.size(); i++) {
+        const unsigned int* cum = m_uiOwnRecvCum.data() + i * nCls;
+        for (unsigned int c = 0; c < nCls; c++)
+            for (unsigned int q = (c ? cum[c - 1] : 0); q < cum[c]; q++) {
+                const unsigned char r = rcls[m_uiOwnRecvSlot[m_uiOwnRecvOff[i] + q]];
+                rEff[m_uiOwnRecvOff[i] + q] = (r == 255) ? 255 : std::max((unsigned char)c, r);
+            }
+    }
+    std::vector<MPI_Request> rq(sPr.size() + rPr.size(), MPI_REQUEST_NULL);
+    for (size_t i = 0; i < sPr.size(); i++) {
+        const int n = (int)(m_uiOwnSendOff[i + 1] - m_uiOwnSendOff[i]);
+        if (n) MPI_Irecv(sEff.data() + m_uiOwnSendOff[i], n, MPI_UNSIGNED_CHAR, sPr[i], 7156, comm, &rq[i]);
+    }
+    for (size_t i = 0; i < rPr.size(); i++) {
+        const int n = (int)(m_uiOwnRecvOff[i + 1] - m_uiOwnRecvOff[i]);
+        if (n) MPI_Isend(rEff.data() + m_uiOwnRecvOff[i], n, MPI_UNSIGNED_CHAR, rPr[i], 7156, comm, &rq[sPr.size() + i]);
+    }
+    MPI_Waitall((int)rq.size(), rq.data(), MPI_STATUSES_IGNORE);
+    // both sides: the same stable sort of the same sequence by effective
+    // class; the prefix counts now count effective classes, 255 never sent
+    auto resort = [&](size_t np, std::vector<unsigned int>& slot, const std::vector<unsigned int>& off,
+                      std::vector<unsigned int>& cum, const std::vector<unsigned char>& eff) {
+        std::vector<unsigned int> idx;
+        std::vector<unsigned int> tmp;
+        for (size_t i = 0; i < np; i++) {
+            const unsigned int b = off[i], n = off[i + 1] - off[i];
+            idx.resize(n);
+            for (unsigned int q = 0; q < n; q++) idx[q] = q;
+            std::stable_sort(idx.begin(), idx.end(), [&](unsigned int a, unsigned int c) {
+                return eff[b + a] < eff[b + c];
+            });
+            tmp.assign(slot.begin() + b, slot.begin() + b + n);
+            for (unsigned int q = 0; q < n; q++) slot[b + q] = tmp[idx[q]];
+            for (unsigned int c = 0; c < nCls; c++) cum[i * nCls + c] = 0;
+            for (unsigned int q = 0; q < n; q++)
+                if (eff[b + q] < nCls) cum[i * nCls + eff[b + q]]++;
+            for (unsigned int c = 1; c < nCls; c++) cum[i * nCls + c] += cum[i * nCls + c - 1];
+        }
+    };
+    resort(rPr.size(), m_uiOwnRecvSlot, m_uiOwnRecvOff, m_uiOwnRecvCum, rEff);
+    resort(sPr.size(), m_uiOwnSendSlot, m_uiOwnSendOff, m_uiOwnSendCum, sEff);
+    if (std::getenv("DENDRO_ENUTS_OWNER_SYNC_INFO")) {
+        size_t never = 0;
+        for (const unsigned char e : rEff) never += (e == 255);
+        std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal() << "] scoped send lists: recv nodes "
+                  << rEff.size() << " never read " << never << std::endl;
+    }
+    m_uiXchScoped = true;
+    return true;
 }
 
 template <typename T, typename Ctx>
