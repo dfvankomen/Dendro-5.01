@@ -16,6 +16,8 @@ implementations are based on the previous implementation of dendro version 4.0
 
 #include "octUtils.h"
 
+#include <cstdlib>
+
 #include "logger.h"
 
 // This will add boundary nodes and will also embed the octree one level higher
@@ -697,6 +699,14 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
     DendroUInt_128 octVolume =
         0;  // 128-bit integer to store oct volume inside a block.
 
+    // blocks span at most OCT2BLK_MAX_SPAN levels (2^s elements per side); DENDRO_OCT2BLK_MAX_SPAN overrides
+#ifndef OCT2BLK_MAX_SPAN
+#define OCT2BLK_MAX_SPAN 31
+#endif
+    const char* spanEnv     = std::getenv("DENDRO_OCT2BLK_MAX_SPAN");
+    const unsigned int maxBlkSpan =
+        spanEnv ? (unsigned int)std::atoi(spanEnv) : OCT2BLK_MAX_SPAN;
+
     while (!initialBLocks.empty()) {
         tmpBlock = initialBLocks.back();
         initialBLocks.pop_back();
@@ -764,6 +774,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
         blockFillRatio = (double)numRegGridOcts / numIdealRegGridOct;
         if ((parent.getLevel() >= coarsetLev) && (isTagValid) &&
             (octLevelGap) &&
+            (currRegGridLev - parent.getLevel() <= maxBlkSpan) &&
             (blockFillRatio >= OCT2BLK_DECOMP_BLK_FILL_RATIO) &&
             (octVolume == blockVolume)) {
             blockList.push_back(tmpBlock);

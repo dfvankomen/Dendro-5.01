@@ -431,8 +431,6 @@ void ETS_MSRK<T, Ctx>::evolve_bootstrap() {
                                   "Bootstrap RK4 stage {}/{}", stage + 1,
                                   m_uiNumStages);
 
-            m_uiEVecTmp[0].copy_data(m_uiEVar);
-
             // Fused: tmp += sum_p (aip*dt)*StVec[p] in one region (bit-identical).
             {
                 DendroScalar a_cf[ETS_MAX_STAGES];
@@ -446,11 +444,16 @@ void ETS_MSRK<T, Ctx>::evolve_bootstrap() {
                         a_n++;
                     }
                 }
+#if defined(DENDRO_RK_FUSE)
+                m_uiAppCtx->rk_stage_input(m_uiEVar, a_n, a_cf, a_sp,
+                                           m_uiEVecTmp[0]);
+#else
+                m_uiEVecTmp[0].copy_data(m_uiEVar);
                 if (a_n)
                     DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
+                m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
+#endif
             }
-
-            m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
 
             current_t_adv = current_t + m_uiCi[stage] * dt;
             m_uiAppCtx->pre_stage(m_uiStVec[stage]);
@@ -468,11 +471,16 @@ void ETS_MSRK<T, Ctx>::evolve_bootstrap() {
                 b_cf[k] = m_uiBi[k] * dt;
                 b_sp[k] = &m_uiStVec[k];
             }
+#if defined(DENDRO_RK_FUSE)
+            m_uiAppCtx->rk_combine(m_uiNumStages, b_cf, b_sp, m_uiEVar);
+#else
             DVec::axpy_multi(pMesh, m_uiNumStages, b_cf, b_sp, m_uiEVar);
+            m_uiAppCtx->post_timestep(m_uiEVar);
+#endif
         }
+    } else {
+        m_uiAppCtx->post_timestep(m_uiEVar);
     }
-
-    m_uiAppCtx->post_timestep(m_uiEVar);
 
     /*---------------------------------------------------------------
      * Extract history from this bootstrap step.
@@ -567,7 +575,11 @@ void ETS_MSRK<T, Ctx>::evolve_msrk() {
     if (pMesh->isActive()) {
         // Fill history stages from the stored evaluations.
         for (unsigned int s = 0; s < m_uiFirstFreshStage; s++) {
+#if defined(DENDRO_RK_FUSE)
+            std::swap(m_uiStVec[s], m_uiHistVec[s]);
+#else
             m_uiStVec[s].copy_data(m_uiHistVec[s]);
+#endif
             dendro::logger::debug(dendro::logger::Scope{"ETS_MSRK"},
                                   "Stage {}/{} filled from history", s + 1,
                                   m_uiNumStages);
@@ -579,8 +591,6 @@ void ETS_MSRK<T, Ctx>::evolve_msrk() {
             dendro::logger::debug(dendro::logger::Scope{"ETS_MSRK"},
                                   "Computing fresh stage {}/{}", stage + 1,
                                   m_uiNumStages);
-
-            m_uiEVecTmp[0].copy_data(m_uiEVar);
 
             // Accumulate contributions from all previous stages (including
             // history stages) via the Aij tableau.  Skip zero coefficients
@@ -598,11 +608,16 @@ void ETS_MSRK<T, Ctx>::evolve_msrk() {
                         a_n++;
                     }
                 }
+#if defined(DENDRO_RK_FUSE)
+                m_uiAppCtx->rk_stage_input(m_uiEVar, a_n, a_cf, a_sp,
+                                           m_uiEVecTmp[0]);
+#else
+                m_uiEVecTmp[0].copy_data(m_uiEVar);
                 if (a_n)
                     DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
+                m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
+#endif
             }
-
-            m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
 
             current_t_adv = current_t + m_uiCi[stage] * dt;
             m_uiAppCtx->pre_stage(m_uiStVec[stage]);
@@ -622,11 +637,16 @@ void ETS_MSRK<T, Ctx>::evolve_msrk() {
                 b_cf[k] = m_uiBi[k] * dt;
                 b_sp[k] = &m_uiStVec[k];
             }
+#if defined(DENDRO_RK_FUSE)
+            m_uiAppCtx->rk_combine(m_uiNumStages, b_cf, b_sp, m_uiEVar);
+#else
             DVec::axpy_multi(pMesh, m_uiNumStages, b_cf, b_sp, m_uiEVar);
+            m_uiAppCtx->post_timestep(m_uiEVar);
+#endif
         }
+    } else {
+        m_uiAppCtx->post_timestep(m_uiEVar);
     }
-
-    m_uiAppCtx->post_timestep(m_uiEVar);
 
     // Rotate history so the current f(t_n, y_n) is saved for future steps.
     rotate_history();
@@ -660,6 +680,14 @@ void ETS_MSRK<T, Ctx>::evolve_msrk() {
 
 template <typename T, typename Ctx>
 void ETS_MSRK<T, Ctx>::rotate_history() {
+#if defined(DENDRO_RK_FUSE)
+    // history was swapped into StVec[0..F): hist[s] <- StVec[s+1] is the shift + save
+    if (m_uiAppCtx->get_mesh()->isActive()) {
+        for (unsigned int s = 0; s < m_uiNumHistorySlots; s++)
+            std::swap(m_uiHistVec[s], m_uiStVec[s + 1]);
+        return;
+    }
+#endif
     if (m_uiNumHistorySlots == 1) {
         m_uiHistVec[0].copy_data(m_uiStVec[m_uiFirstFreshStage]);
 

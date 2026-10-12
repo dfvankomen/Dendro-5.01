@@ -100,6 +100,15 @@ option(DENDRO_UNZIP_SCATTER_FAST
 option(DENDRO_ZIP_PLAN
        "Precompute zip()'s ownership filter into a flat index plan (~12 bytes per owned node)"
        ON)
+option(DENDRO_UNZIP_PLAN
+       "Replay unzip_scatter_batch through a per-element interpolation and per-cell copy plan"
+       ON)
+option(DENDRO_GHOST_PACK_FLAT
+       "Thread ghost pack/unpack over (neighbour, variable) pairs instead of neighbours only"
+       ON)
+option(DENDRO_RK_FUSE
+       "Build RK stage inputs and the final combine through the Ctx rk_stage_input/rk_combine hooks"
+       ON)
 
 option(DENDRO_UNZIP_OMP
        "Enable OpenMP block-parallel unzip path (reserved hook; implementation lives on a separate hybrid branch). Implies the unzip/zip speedups."
@@ -151,6 +160,7 @@ option(DENDRO_REPORT_BUILD_CONFIG
 # Configuration Variables
 set(KWAY 128 CACHE STRING "K parameter for alltoallv_kway")
 set(OCT2BLK_COARSEST_LEV 0 CACHE STRING "Coarsest Level")
+set(OCT2BLK_MAX_SPAN 2 CACHE STRING "Max levels a merged block spans (2^s elements per side); 31 = no cap")
 set(NUM_NPES_THRESHOLD 2 CACHE STRING "NPES Threshold")
 
 
@@ -319,6 +329,7 @@ endmacro()
 
 target_compile_definitions(dendro_config INTERFACE -DMATVEC_PROFILE)
 target_compile_definitions(dendro_config INTERFACE -DOCT2BLK_COARSEST_LEV=${OCT2BLK_COARSEST_LEV})
+target_compile_definitions(dendro_config INTERFACE -DOCT2BLK_MAX_SPAN=${OCT2BLK_MAX_SPAN})
 
 dendro_add_def(USE_64BIT_INDICES USE_64BIT_INDICES)
 dendro_add_def(HILBERT_ORDERING HILBERT_ORDERING)
@@ -380,6 +391,10 @@ message(STATUS
         "scatter_fast=${DENDRO_UNZIP_SCATTER_FAST_EFFECTIVE} "
         "tensor_simd=${DENDRO_TENSOR_SIMD_EFFECTIVE} omp=${DENDRO_UNZIP_OMP_EFFECTIVE}")
 message(STATUS "Dendro hybrid OpenMP/MPI path: ${DENDRO_HYBRID_OMP} (implies unzip OMP)")
+message(STATUS "Dendro zip() plan: ${DENDRO_ZIP_PLAN}")
+message(STATUS "Dendro unzip plan: ${DENDRO_UNZIP_PLAN}")
+message(STATUS "Dendro ghost pack flat (proc,var) threading: ${DENDRO_GHOST_PACK_FLAT}")
+message(STATUS "Dendro RK fusable ctx hooks: ${DENDRO_RK_FUSE}")
 
 # DENDRO_UNZIP_SPEEDUP is also emitted as a single umbrella compile def so
 # downstream code can `#ifdef DENDRO_UNZIP_SPEEDUP` instead of testing both
@@ -391,6 +406,9 @@ dendro_add_def(DENDRO_UNZIP_OMP_EFFECTIVE DENDRO_UNZIP_OMP)
 dendro_add_def(DENDRO_TENSOR_SIMD_EFFECTIVE DENDRO_TENSOR_SIMD)
 dendro_add_def(DENDRO_HYBRID_OMP DENDRO_HYBRID_OMP)
 dendro_add_def(DENDRO_ZIP_PLAN DENDRO_ZIP_PLAN)
+dendro_add_def(DENDRO_UNZIP_PLAN DENDRO_UNZIP_PLAN)
+dendro_add_def(DENDRO_GHOST_PACK_FLAT DENDRO_GHOST_PACK_FLAT)
+dendro_add_def(DENDRO_RK_FUSE DENDRO_RK_FUSE)
 dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
 dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
 dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
@@ -621,6 +639,41 @@ if(BUILD_DENDRO_EXAMPLES)
     set_tests_properties(testZipExact_sabotage${SAB}
                          PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
   endforeach()
+  dendro_add_example(testGhostPackExact test/src/testGhostPackExact.cpp)
+  foreach(SAB 1 2 3)
+    dendro_add_example(testGhostPackExact_sabotage${SAB} test/src/testGhostPackExact.cpp)
+    target_compile_definitions(testGhostPackExact_sabotage${SAB} PRIVATE GHOST_GATE_SABOTAGE=${SAB})
+  endforeach()
+  # two ranks: one rank has no ghost exchange to compare
+  add_test(NAME testGhostPackExact_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGhostPackExact>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3 0.1 6)
+  set_tests_properties(testGhostPackExact_2rank PROPERTIES TIMEOUT 600)
+  foreach(SAB 1 2 3)
+    add_test(NAME testGhostPackExact_sabotage${SAB}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGhostPackExact_sabotage${SAB}>
+                     ${MPIEXEC_POSTFLAGS} 6 1e-3 0.1 6)
+    set_tests_properties(testGhostPackExact_sabotage${SAB}
+                         PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
+  endforeach()
+  dendro_add_example(testUnzipPlanExact test/src/testUnzipPlanExact.cpp)
+  foreach(SAB 1 2 3)
+    dendro_add_example(testUnzipPlanExact_sabotage${SAB} test/src/testUnzipPlanExact.cpp)
+    target_compile_definitions(testUnzipPlanExact_sabotage${SAB} PRIVATE UNZIP_GATE_SABOTAGE=${SAB})
+  endforeach()
+  foreach(EO 4 6 8)
+    add_test(NAME testUnzipPlanExact_eO${EO}
+             COMMAND testUnzipPlanExact 6 1e-3 0.1 ${EO})
+    set_tests_properties(testUnzipPlanExact_eO${EO} PROPERTIES TIMEOUT 600)
+  endforeach()
+  foreach(SAB 1 2 3)
+    add_test(NAME testUnzipPlanExact_sabotage${SAB}
+             COMMAND testUnzipPlanExact_sabotage${SAB} 6 1e-3 0.1 6)
+    set_tests_properties(testUnzipPlanExact_sabotage${SAB}
+                         PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
+  endforeach()
   dendro_add_example(testStabilityEvolution test/src/testStabilityEvolution.cpp)
   # Smoke test: reports a checksum but does not assert on it. The TIMEOUT is the
   # point -- a broken eO=8 interpolation shows up as runaway refinement, not a
@@ -688,6 +741,9 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testKOMatrix test/src/testKOMatrix.cpp)
   dendro_add_deriv_test(testExplicitSimd test/src/testExplicitSimd.cpp)
   dendro_add_deriv_test(testKOSimd test/src/testKOSimd.cpp)
+  dendro_add_deriv_test(testMixedSetTrim test/src/testMixedSetTrim.cpp)
+  add_test(NAME testMixedSetTrim COMMAND testMixedSetTrim)
+  set_tests_properties(testMixedSetTrim PROPERTIES TIMEOUT 300)
   dendro_add_deriv_test(testKOSign test/src/testKOSign.cpp)
   dendro_add_deriv_test(testCloneNewSize test/src/testCloneNewSize.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)

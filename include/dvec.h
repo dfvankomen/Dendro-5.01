@@ -94,6 +94,7 @@ class DVector {
 
     /**@brief: returns the vec pointer*/
     inline T* get_vec_ptr() { return m_data_ptr; };
+    inline const T* get_vec_ptr() const { return m_data_ptr; };
 
     /**
      * @brief update the vector pointer object.
