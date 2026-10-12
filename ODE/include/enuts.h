@@ -55,7 +55,11 @@ struct EnutsProf {
            CN_P2C_UNIQ, CN_P2C_DUP, CN_P2C_OVF, CN_XCH_RECV, CN_XCH_SEND, CN_XCH_CALLS,
            CN_CSTEPS, CN_P2C_DISTINCT, CN_HOIST_DBL, SY_ROWOPS, CN_ROWS, CN_ROWS_OPS,
            EX_LATE, EX_LATEMAX, CN_XCH_ARGSEND, CN_XCH_NOOFF, CN_XCH_NOPLAN, CN_XCH_UNREAD,
-           CN_XCH_READ, CN_XCH_LATEBAD, NT };
+           CN_XCH_READ, CN_XCH_LATEBAD,
+           RL_IN, RL_PRE, RL_RHS, RL_ZIP, RL_OTH, RL_CAP,
+           RC_WALL0, RC_CAP0, RC_SUM0, RC_MAX0, RC_CALLS0,
+           RC_WALL1, RC_CAP1, RC_SUM1, RC_MAX1, RC_CALLS1,
+           PE_PROLOG, EV_TOTAL, EV_PRETS, EV_UNZIP, EV_LOAD, EV_ETIME, EV_ZIP, EV_POST, NT };
     double t[NT]     = {};
     double partial   = 0;      // partial steps taken (this rank was active)
     double lev_sum   = 0;      // sum over partial steps of globally active levels
@@ -1097,6 +1101,8 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<SyncThr> m_uiSyncThr;
     /** active blocks of the partial step, largest first (DENDRO_ENUTS_OMP) */
     std::vector<unsigned int> m_uiActiveOrder;
+    /** prof: seconds spent on each active block in the current rhs loop call */
+    std::vector<double> m_uiRlBlkT;
     /** the per-mesh tables sync_blk_timestep builds on first use */
     void sync_lazy_build(bool ownEid);
     /** threads: everything a block call would build on first use (tables and
@@ -1447,7 +1453,24 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                 "  count: xch doubles recv, no local plan reads the slot (census)",
                 "  count: xch doubles recv, in a plan, overwritten unread (census)",
                 "  count: xch doubles recv, read before overwritten (census)",
-                "  count: xch calls with lateness > wait (trace; clock offset error)"};
+                "  count: xch calls with lateness > wait (trace; clock offset error)",
+                // the rhs block loop (the rhs+zipDG row is its wall): per-block work in thread-s
+                "  rhs:  stage input sweep (thread-s)", "  rhs:  pre_stage_blk (thread-s)",
+                "  rhs:  rhs_blk (thread-s)", "  rhs:  zipDG (thread-s)",
+                "  rhs:  other per block: pre_timestep_blk, marks (thread-s)",
+                "  rhs:  threads x loop wall (thread-s capacity)",
+                // the same loop by sub-step class: finest-class-only sub-steps / all others
+                "  rhs:  finest-only sub-steps: loop wall", "  rhs:    threads x wall",
+                "  rhs:    per-block work (thread-s)", "  rhs:    largest block's seconds (sum of per-call max)",
+                "  count: rhs loop calls on finest-only sub-steps",
+                "  rhs:  other sub-steps: loop wall", "  rhs:    threads x wall",
+                "  rhs:    per-block work (thread-s)", "  rhs:    largest block's seconds (sum of per-call max)",
+                "  count: rhs loop calls on other sub-steps",
+                // partial_evolve before its stage loop, and evolve() around the partial steps
+                "partial_prolog (active list, owner plan, prebuild)",
+                "evolve_total", "  evolve: ctx pre_timestep", "  evolve: ctx unzip (load)",
+                "  evolve: block load from unzip", "  evolve: element time init + exchange",
+                "  evolve: end-of-step zip", "  evolve: ctx post_timestep + waitAll"};
             std::cout << "[enuts-prof] npes=" << np
                       << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
                       << " mean_active_levels/step="
@@ -1470,6 +1493,11 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
             for (int i = 0; i < ts::EnutsProf::NT; i++)
                 std::cout << "[enuts-prof] " << nm[i] << " " << mn[i] << " "
                           << sm[i] / np << " " << mx[i] << std::endl;
+            // the two sub-step classes partition the rhs loop calls
+            const double cw = sm[ts::EnutsProf::RC_WALL0] + sm[ts::EnutsProf::RC_WALL1];
+            if (std::fabs(cw - sm[ts::EnutsProf::RHS]) > 1e-9 * std::max(1.0, sm[ts::EnutsProf::RHS]))
+                std::cout << "[enuts-prof] WARNING: rhs class walls " << cw
+                          << " != rhs+zipDG " << sm[ts::EnutsProf::RHS] << std::endl;
         }
         for (int i = 0; i < ts::EnutsProf::NT; i++) P.t[i] = 0;
         P.partial = P.lev_sum = P.blk_sum = P.blk_tot = 0;
@@ -5725,6 +5753,8 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
     // }
 
+    // prof: a finest-only sub-step has no active block with a dt above the finest
+    bool finestOnly = true;
     if (prof) {
         ts::EnutsProf& P = ts::EnutsProf::get();
         P.partial += 1;
@@ -5734,6 +5764,12 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
             if (pt % m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax) == 0) nl++;
         P.lev_sum += nl;
+        for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {
+            const unsigned int bLev =
+                pNodes[blkList[m_uiActiveBlkIDs[bb]].firstElementID()].getLevel();
+            if (m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax) != finest_t)
+                finestOnly = false;
+        }
     }
 
     // level-scoped element-DG exchange: the elements whose level fires at pt
@@ -5808,6 +5844,10 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     }
 #endif
 
+    if (prof) {
+        ts::EnutsProf::get().t[ts::EnutsProf::PE_PROLOG] += ts::EnutsProf::now() - tpT;
+        m_uiRlBlkT.assign(nAct, 0.0);
+    }
     for (unsigned int rk = 1; rk <= m_uiNumStages; rk++) {
         const unsigned int BLK_S = rk;
         ENUTS_TIC();
@@ -5825,9 +5865,15 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
             const T blk_dt = m_uiTimeInfo._m_uiTh * BLK_DT;
 
+            // prof: the per-block split (thread-s, merged after the sync loop)
+            double tb0 = 0, tb1 = 0;
+            if (prof) tb0 = tb1 = ts::EnutsProf::now();
+#define ENUTS_BLK_TOC(k) do { if (prof) { const double tb2 = ts::EnutsProf::now(); ts::EnutsProf::get().t[ts::EnutsProf::k] += tb2 - tb1; tb1 = tb2; } } while (0)
+
             assert(m_uiBVec[blk]._vec[stage_slot(rk - 1)].isSynced());
             m_uiAppCtx->pre_timestep_blk((T*)m_uiBVec[blk]._vec[0].data(), DOF,
                                          blk, current_t + dt_finest * BLK_T);
+            ENUTS_BLK_TOC(RL_OTH);
 
             BlockAsyncVector<T>& sIn = stage_in(blk);
             T* out_ptr = (T*)sIn.data();
@@ -5925,14 +5971,18 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             }
             }
 
+            ENUTS_BLK_TOC(RL_IN);
+
             // stage time: step start, plus c_s * dt_blk with DENDRO_ENUTS_STAGE_TIME
             const T t_stage = current_t + dt_finest * BLK_T +
                               (ts::EnutsProf::stageTime() ? m_uiCi[BLK_S - 1] * blk_dt : (T)0);
             m_uiAppCtx->pre_stage_blk((T*)sIn.data(), DOF, blk, t_stage);
+            ENUTS_BLK_TOC(RL_PRE);
             debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             debug_blk_hash("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             m_uiBVec[blk]._vec[stage_slot(BLK_S)].computeVec(m_uiAppCtx, sIn,
                                                              t_stage);
+            ENUTS_BLK_TOC(RL_RHS);
             debug_nan_check("post-rhs", blk, BLK_S, pt, rk);
             debug_blk_hash("post-rhs", blk, BLK_S, pt, rk);
             m_uiBVec[blk]._vec[stage_slot(BLK_S)].mark_unsynced();
@@ -5945,7 +5995,10 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
             m_uiBVec[blk]._vec[stage_slot(BLK_S)].zipDG(
                 pMesh, m_uiStVec[BLK_S - 1].get_vec_ptr(), DOF);
+            ENUTS_BLK_TOC(RL_ZIP);
             m_uiBVec[blk]._rks = rk;
+            if (prof) m_uiRlBlkT[bb] = tb1 - tb0;
+#undef ENUTS_BLK_TOC
 
 #ifdef __PROFILE_ENUTS__
             m_uiPt[ENUTSPROFILE::ENUTS_BLK_ZIP].stop();
@@ -5953,6 +6006,28 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         }
 
         ENUTS_TOC(RHS);
+        if (prof) {
+            // the loop wall by sub-step class, its thread capacity, the per-block
+            // work and the longest block of this call (granularity: max / wall)
+            ts::EnutsProf& P = ts::EnutsProf::get();
+            const double wall = tp1 - tp0;
+            double sum = 0, mxb = 0;
+            for (unsigned int bb = 0; bb < nAct; bb++) {
+                sum += m_uiRlBlkT[bb];
+                mxb = std::max(mxb, m_uiRlBlkT[bb]);
+            }
+            int nthr = 1;
+#ifdef DENDRO_ENUTS_HAS_OMP
+            if (thr) nthr = omp_get_max_threads();
+#endif
+            const int c = finestOnly ? 0 : ts::EnutsProf::RC_WALL1 - ts::EnutsProf::RC_WALL0;
+            P.t[ts::EnutsProf::RL_CAP] += nthr * wall;
+            P.t[ts::EnutsProf::RC_WALL0 + c] += wall;
+            P.t[ts::EnutsProf::RC_CAP0 + c] += nthr * wall;
+            P.t[ts::EnutsProf::RC_SUM0 + c] += sum;
+            P.t[ts::EnutsProf::RC_MAX0 + c] += mxb;
+            P.t[ts::EnutsProf::RC_CALLS0 + c] += 1;
+        }
         ENUTS_TIC();
         ot::g_eledg_pack_omp = thr;
         if (ownPlan) {
@@ -6401,7 +6476,14 @@ void ExplicitNUTS<T, Ctx>::evolve() {
     const double dt_finest  = m_uiTimeInfo._m_uiTh;
     const double dt_coarset = coarset_t * m_uiTimeInfo._m_uiTh;
 
+    // prof: what evolve() does around the partial steps (serial, per coarse step)
+    const bool eprof = ts::EnutsProf::on();
+    double te0 = 0, teT = 0;
+    if (eprof) te0 = teT = ts::EnutsProf::now();
+#define ENUTS_EV_TOC(k) do { if (eprof) { const double te1 = ts::EnutsProf::now(); ts::EnutsProf::get().t[ts::EnutsProf::k] += te1 - te0; te0 = te1; } } while (0)
+
     m_uiAppCtx->pre_timestep(m_uiEVar);
+    ENUTS_EV_TOC(EV_PRETS);
 
     if (pMesh->isActive()) {
         const unsigned int rank = pMesh->getMPIRank();
@@ -6423,6 +6505,7 @@ void ExplicitNUTS<T, Ctx>::evolve() {
             m_uiEVar, m_uiEvarUzip,
             m_uiAppCtx
                 ->get_async_batch_sz());  // unzip m_uiEVec to m_uiEVarUnzip
+        ENUTS_EV_TOC(EV_UNZIP);
         const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
 
         // initialize the block async vectors
@@ -6455,6 +6538,7 @@ void ExplicitNUTS<T, Ctx>::evolve() {
 #ifdef __PROFILE_ENUTS__
         m_uiPt[ENUTSPROFILE::ENUTS_BLK_UNZIP].stop();
 #endif
+        ENUTS_EV_TOC(EV_LOAD);
 
         for (unsigned int ele = pMesh->getElementPreGhostBegin();
              ele < pMesh->getElementPostGhostEnd(); ele++)
@@ -6467,6 +6551,7 @@ void ExplicitNUTS<T, Ctx>::evolve() {
 
         pMesh->readFromGhostEndElementVec(m_uiEleTime.data(), 1);
         pMesh->readFromGhostEndElementVec(m_uiEleDT.data(), 1);
+        ENUTS_EV_TOC(EV_ETIME);
 
         for (unsigned int pt = 0; pt < coarset_t; pt++) {
             // unsigned int numBlkEvolved = 0;
@@ -6499,6 +6584,7 @@ void ExplicitNUTS<T, Ctx>::evolve() {
 #ifdef __PROFILE_ENUTS__
         m_uiPt[ENUTSPROFILE::ENUTS_BLK_ZIP].start();
 #endif
+        if (eprof) te0 = ts::EnutsProf::now();  // partial steps have their own rows
 
         // on labelled meshes the zip plan may source a cg from a block's
         // padding, which is stale after the last sub-step: bring every block's
@@ -6532,12 +6618,16 @@ void ExplicitNUTS<T, Ctx>::evolve() {
 #ifdef __PROFILE_ENUTS__
         m_uiPt[ENUTSPROFILE::ENUTS_BLK_ZIP].stop();
 #endif
+        ENUTS_EV_TOC(EV_ZIP);
     }
 
     m_uiAppCtx->post_timestep(m_uiEVar);
     m_uiAppCtx->increment_ts_info((T)coarset_t, 1);
     m_uiTimeInfo = m_uiAppCtx->get_ts_info();
     pMesh->waitAll();
+    ENUTS_EV_TOC(EV_POST);
+    if (eprof) ts::EnutsProf::get().t[ts::EnutsProf::EV_TOTAL] += ts::EnutsProf::now() - teT;
+#undef ENUTS_EV_TOC
 
 #ifdef __PROFILE_ENUTS__
     m_uiPt[ENUTSPROFILE::ENUTS_EVOLVE].stop();
