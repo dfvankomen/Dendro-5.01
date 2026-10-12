@@ -6,7 +6,11 @@
  * School of Computing, University of Utah.
  * @brief contains utilitity functions of mesh based distributed array(da)
  * */
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <iostream>
+#include <limits>
 
 #include "TreeNode.h"
 #include "mesh.h"
@@ -473,6 +477,41 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
             return;
         }
 
+        // DENDRO_INTERP_DIRECT=1 (default off): skip the SFC splitter route
+        // (steps 2-5 and the interpolation of its hits) and prefilter the
+        // points against the local bounding box before the deepest-containing
+        // pass. The splitter route assigns each rank an SFC range of points,
+        // which matches the local elements only for an SFC partition; the
+        // deepest-containing pass below overrides every point it finds, so
+        // the output is the same either way.
+        static const bool direct = []() {
+            const char* e = std::getenv("DENDRO_INTERP_DIRECT");
+            return e && e[0] == '1';
+        }();
+        // DENDRO_INTERP_VERBOSE=1: print the splitter-route misses (every
+        // point that belongs to another rank's element: normal on a labelled
+        // mesh, a flood of one line per point and call)
+        static const bool verbose = []() {
+            const char* e = std::getenv("DENDRO_INTERP_VERBOSE");
+            return e && e[0] == '1';
+        }();
+        // DENDRO_INTERP_CHECK=1: collective over the active comm after the
+        // pass: every in-domain point found on exactly one rank, else print
+        static const bool check = []() {
+            const char* e = std::getenv("DENDRO_INTERP_CHECK");
+            return e && e[0] == '1';
+        }();
+        // DENDRO_INTERP_PROF=1: rank 0 prints per-call timings and counts; 2: every rank
+        static const int iprof = []() {
+            const char* e = std::getenv("DENDRO_INTERP_PROF");
+            return e ? std::atoi(e) : 0;
+        }();
+        static unsigned long long ncall = 0;
+        ncall++;
+        double tq0 = 0, tq1 = 0, tq2 = 0;
+        unsigned int nMiss = 0, nAssigned = 0;
+        if (iprof) tq0 = MPI_Wtime();
+
         // 1. convert coords to octants
         const unsigned int numPts = length / m_uiDim;
         if (outLev) outLev->assign(numPts, -1);
@@ -505,6 +544,7 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                                               (cz - domain_limit[0].z()) *
                                                   (gridRangeZ / domainRangeZ));
 
+            if (direct) continue;
             coordOcts_skey.push_back(ot::SearchKey(
                 octree_coords[0], octree_coords[1], octree_coords[2],
                 m_uiMaxDepth, m_uiDim, m_uiMaxDepth));
@@ -520,6 +560,8 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                       << "," << domain_limit[1].z() << "]" << std::endl;
         }
 
+        validIndices.clear();
+        if (!direct) {
         // 2. get the element local splitters.
         const std::vector<ot::TreeNode>& splitterElements =
             mesh->getSplitterElements();
@@ -555,8 +597,8 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                 ? splitterKeys[rankActive + 1].getSearchResult()
                 : coordOcts_key.size();
 
-        validIndices.clear();
         unsigned int outSz = myEnd - myBegin;
+        nAssigned          = outSz;
 
         // 5. Search the coordOcts_key in the allElements to find out the
         // corresponding keys.
@@ -572,11 +614,16 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
         Point pt_max;
 
         for (unsigned int i = myBegin; i < myEnd; i++) {
-            assert(coordOcts_key[i].getFlag() & OCT_FOUND);
             if (!(coordOcts_key[i].getFlag() & OCT_FOUND)) {
-                std::cout << "rank: " << rankActive
-                          << " key: " << coordOcts_key[i] << "not found "
-                          << std::endl;
+                // the point (or another rank's splitter key) lies in no local
+                // element: on a labelled mesh the SFC range of points this
+                // rank was handed is not its element set. The pass below
+                // finds it on its owner rank.
+                nMiss++;
+                if (verbose)
+                    std::cout << "rank: " << rankActive
+                              << " key: " << coordOcts_key[i] << "not found "
+                              << std::endl;
             }
             if (coordOcts_key[i].getFlag() & OCT_FOUND) {
                 searchResult = coordOcts_key[i].getSearchResult();
@@ -658,6 +705,8 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                 }
             }
         }
+        }  // !direct
+        if (iprof) tq1 = MPI_Wtime();
 
         // Deepest-containing-local pass (2026-06-12, supersedes the
         // 2026-06-11 containment rescue): the SFC search above fails or
@@ -677,6 +726,18 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
             for (unsigned int v : validIndices)
                 if (v < numPts) found[v] = true;
             validIndices.clear();
+            // DIRECT: the local elements' bounding box; a point outside it is
+            // in no local element
+            unsigned int bx0 = 0, by0 = 0, bz0 = 0, bx1 = 0, by1 = 0, bz1 = 0;
+            if (direct) {
+                bx0 = by0 = bz0 = std::numeric_limits<unsigned int>::max();
+                for (unsigned int e = localElementBegin; e < localElementEnd; e++) {
+                    const ot::TreeNode& el = meshOctree[e];
+                    bx0 = std::min(bx0, el.minX()); bx1 = std::max(bx1, el.maxX());
+                    by0 = std::min(by0, el.minY()); by1 = std::max(by1, el.maxY());
+                    bz0 = std::min(bz0, el.minZ()); bz1 = std::max(bz1, el.maxZ());
+                }
+            }
             for (unsigned int i = 0; i < numPts; i++) {
                 const unsigned int ox = (unsigned int)(grid_limit[0].x() +
                     (domain_coords[m_uiDim * i + 0] - domain_limit[0].x()) *
@@ -687,6 +748,9 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                 const unsigned int oz = (unsigned int)(grid_limit[0].z() +
                     (domain_coords[m_uiDim * i + 2] - domain_limit[0].z()) *
                         (gridRangeZ / domainRangeZ));
+                if (direct && (ox < bx0 || ox >= bx1 || oy < by0 || oy >= by1 ||
+                               oz < bz0 || oz >= bz1))
+                    continue;
                 unsigned int bestE   = LOOK_UP_TABLE_DEFAULT;
                 unsigned int bestLev = 0;
                 for (unsigned int e = localElementBegin; e < localElementEnd;
@@ -746,6 +810,49 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
 
         std::sort(validIndices.begin(), validIndices.end());
         meshOctree.clear();
+
+        if (iprof) {
+            tq2 = MPI_Wtime();
+            if (iprof >= 2 || rankActive == 0)
+                std::printf(
+                    "[interp-prof r%u] call %llu pts %u local_elems %u "
+                    "splitter_route %.3e s (assigned %u, misses %u) "
+                    "deepest_pass %.3e s found %zu\n",
+                    rankActive, ncall, numPts,
+                    localElementEnd - localElementBegin, tq1 - tq0, nAssigned,
+                    nMiss, tq2 - tq1, validIndices.size());
+        }
+        if (check) {
+            // every in-domain point on exactly one rank: the callers sum the
+            // per-rank contributions, so a miss drops a point and a duplicate
+            // counts it twice
+            std::vector<int> cnt(numPts, 0);
+            for (unsigned int v : validIndices)
+                if (v < numPts) cnt[v] = 1;
+            MPI_Allreduce(MPI_IN_PLACE, cnt.data(), (int)numPts, MPI_INT,
+                          MPI_SUM, mesh->getMPICommunicator());
+            unsigned int nzero = 0, ndup = 0, first = numPts;
+            for (unsigned int i = 0; i < numPts; i++) {
+                const double cx = domain_coords[m_uiDim * i + 0];
+                const double cy = domain_coords[m_uiDim * i + 1];
+                const double cz = domain_coords[m_uiDim * i + 2];
+                if (cx < domain_limit[0].x() || cx > domain_limit[1].x() ||
+                    cy < domain_limit[0].y() || cy > domain_limit[1].y() ||
+                    cz < domain_limit[0].z() || cz > domain_limit[1].z())
+                    continue;
+                if (cnt[i] == 0) { nzero++; if (first == numPts) first = i; }
+                if (cnt[i] > 1) { ndup++; if (first == numPts) first = i; }
+            }
+            if (rankActive == 0 && (nzero || ndup))
+                std::printf(
+                    "[interp-check] call %llu: %u of %u points found on no "
+                    "rank, %u on more than one (first bad point %u at %.17g "
+                    "%.17g %.17g)\n",
+                    ncall, nzero, numPts, ndup, first,
+                    domain_coords[m_uiDim * first + 0],
+                    domain_coords[m_uiDim * first + 1],
+                    domain_coords[m_uiDim * first + 2]);
+        }
     }
 
     dendro::logger::debug(dendro::logger::Scope{"daUtils"},
