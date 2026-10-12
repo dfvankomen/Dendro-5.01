@@ -19,6 +19,7 @@
 #include <atomic>
 #include <memory>
 #include <unordered_map>
+#include <functional>
 #include <map>
 #include <cmath>
 #include <algorithm>
@@ -59,7 +60,8 @@ struct EnutsProf {
            RL_IN, RL_PRE, RL_RHS, RL_ZIP, RL_OTH, RL_CAP,
            RC_WALL0, RC_CAP0, RC_SUM0, RC_MAX0, RC_CALLS0,
            RC_WALL1, RC_CAP1, RC_SUM1, RC_MAX1, RC_CALLS1,
-           PE_PROLOG, EV_TOTAL, EV_PRETS, EV_UNZIP, EV_LOAD, EV_ETIME, EV_ZIP, EV_POST, NT };
+           PE_PROLOG, EV_TOTAL, EV_PRETS, EV_UNZIP, EV_LOAD, EV_ETIME, EV_ZIP, EV_POST,
+           ST_PASS, CN_STS_ROUNDS, NT };
     double t[NT]     = {};
     double partial   = 0;      // partial steps taken (this rank was active)
     double lev_sum   = 0;      // sum over partial steps of globally active levels
@@ -1042,6 +1044,62 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     void xch_dump();
     /** DENDRO_ENUTS_XCH_SCOPED: lists re-sorted by reader class (done once per mesh) */
     bool m_uiXchScoped = false;
+    /** super-time-stepped damping, stepper side (default off): the solver
+     *  registers one variable, s(ratio) and a stage operator with set_sts().
+     *  At the end of partial_evolve every class whose dt divides pt has just
+     *  completed a block step; coarsest first, its blocks run s stages of the
+     *  operator on that variable, with one same-class padding round per stage
+     *  (one-variable zip, class-range owner exchange, run / single-node copy
+     *  from the plan). Padding of other classes, and hanging-node interfaces
+     *  inside a class, stay frozen at U's value for the pass. */
+    bool m_uiStsOn        = false;
+    unsigned int m_uiStsVar = 0;
+    std::function<unsigned int(unsigned int)> m_uiStsStages;
+    /** (blk, j, s, dt, y0, y_{j-1}, y_{j-2}, ly0, y_j): write Y_j at the
+     *  block's points (and L(y0) into ly0 when j == 1); y_j arrives holding
+     *  y_{j-1}, so the padding carries over */
+    std::function<void(unsigned int, unsigned int, unsigned int, T, const T*, const T*,
+                       const T*, T*, T*)> m_uiStsStage;
+    std::vector<std::vector<T>> m_uiStsScr;  // per block: Y_a, Y_b, Y_c, L(Y0)
+    std::vector<T> m_uiStsDG;                // one-variable DG vector
+    std::vector<T> m_uiStsChk;
+    /** DENDRO_ENUTS_STS_TEST=<s> (test only): the identity operator with s
+     *  stages on every class of ratio >= 4; the pass must leave U bitwise
+     *  unchanged, and DENDRO_ENUTS_STS_CHECK=1 verifies that per block */
+    static int stsTest() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_STS_TEST");
+            return e ? std::atoi(e) : 0;
+        }();
+        return v;
+    }
+    static bool stsCheck() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_STS_CHECK");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    void sts_hook(unsigned int pt, const unsigned int* actIds, unsigned int nAct, bool ownPlan,
+                  bool thr);
+    void sts_pass(unsigned int cls, unsigned int s, T dt, const unsigned int* actIds,
+                  unsigned int nAct, bool thr, unsigned int pt);
+    void sts_zip(unsigned int blk, const T* y, T* dg) const;
+    void sts_fill(unsigned int blk, unsigned int cls, const T* dg, T* y) const;
+
+   public:
+    /** register the super-time-stepped variable: stages(ratio) -> s (0 keeps
+     *  the variable's term in the RHS for that class), stage(...) as above */
+    void set_sts(unsigned int var, std::function<unsigned int(unsigned int)> stages,
+                 std::function<void(unsigned int, unsigned int, unsigned int, T, const T*,
+                                    const T*, const T*, T*, T*)> stage) {
+        m_uiStsVar    = var;
+        m_uiStsStages = std::move(stages);
+        m_uiStsStage  = std::move(stage);
+        m_uiStsOn     = (bool)m_uiStsStage;
+    }
+
+   private:
     bool xch_scope_build(ot::Mesh* pMesh);
     bool prepare_owner_sync(ot::Mesh* pMesh);
     void build_own_plan(unsigned int blk, const std::vector<unsigned int>& eid,
@@ -1050,8 +1108,10 @@ class ExplicitNUTS : public ETS<T, Ctx> {
                        const std::vector<unsigned int>& eid);
     void own_row_ops(unsigned int ele, const T* g, T* out, T* pin, T* pout,
                      double* im1, double* im2) const;
-    void own_node_exchange_begin(T* stv, unsigned int dof, unsigned int pt);
-    void own_node_exchange_end(T* stv, unsigned int dof, unsigned int pt);
+    /** cls >= 0: one class's slot range instead of the prefix of pt (STS
+     *  rounds; no census, trace or prof rows) */
+    void own_node_exchange_begin(T* stv, unsigned int dof, unsigned int pt, int cls = -1);
+    void own_node_exchange_end(T* stv, unsigned int dof, unsigned int pt, int cls = -1);
     /** with m_uiSyncPlan / m_uiBlkDepEid: the plans hold p2c store indices */
     void own_reset() {
         m_uiOwnMesh = nullptr;
@@ -1470,7 +1530,8 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                 "partial_prolog (active list, owner plan, prebuild)",
                 "evolve_total", "  evolve: ctx pre_timestep", "  evolve: ctx unzip (load)",
                 "  evolve: block load from unzip", "  evolve: element time init + exchange",
-                "  evolve: end-of-step zip", "  evolve: ctx post_timestep + waitAll"};
+                "  evolve: end-of-step zip", "  evolve: ctx post_timestep + waitAll",
+                "sts: passes (stages + one-variable rounds; wall)", "  count: sts rounds"};
             std::cout << "[enuts-prof] npes=" << np
                       << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
                       << " mean_active_levels/step="
@@ -3911,7 +3972,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
 
 template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
-                                                   unsigned int pt) {
+                                                   unsigned int pt, int cls) {
     ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
     if (!pMesh->isActive() || pMesh->getMPICommSize() < 2) return;
     const unsigned int nCls = m_uiOwnDTs.size();
@@ -3931,7 +3992,13 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
     m_uiOwnReq.assign(sPr.size() + rPr.size(), MPI_REQUEST_NULL);
     if (j < 0) return;
     if (ts::EnutsProf::xchScoped() && !m_uiXchScoped && m_uiOwnChain) xch_scope_build(pMesh);
-    if (ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty()) {
+    // one class: its slot range [cum[cls-1], cum[cls]) per partner (the lists
+    // are sorted by class, scoped or not)
+    const bool one = cls >= 0;
+    if (one) j = cls;
+    auto lo = [&](const unsigned int* cum) { return one && cls ? cum[cls - 1] : 0u; };
+    auto nn = [&](const unsigned int* cum) { return cum[j] - lo(cum); };
+    if (!one && ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty()) {
         // what became of the previous message into these slots (this stage):
         // read by a plan since, or overwritten unread; never-read slots no
         // plan lists are the dead weight of the map itself
@@ -3973,17 +4040,17 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
         P.t[ts::EnutsProf::CN_XCH_READ] += nRd * dof;
     }
     // XCH_TRACE: one extra double per partner message, the sender's stamp
-    const size_t xt = ts::EnutsProf::xchTrace() ? 1 : 0;
+    const size_t xt = (!one && ts::EnutsProf::xchTrace()) ? 1 : 0;
     size_t rTot = 0, sTot = 0;
-    for (size_t i = 0; i < rPr.size(); i++) rTot += m_uiOwnRecvCum[i * nCls + j];
-    for (size_t i = 0; i < sPr.size(); i++) sTot += m_uiOwnSendCum[i * nCls + j];
+    for (size_t i = 0; i < rPr.size(); i++) rTot += nn(m_uiOwnRecvCum.data() + i * nCls);
+    for (size_t i = 0; i < sPr.size(); i++) sTot += nn(m_uiOwnSendCum.data() + i * nCls);
     if (m_uiOwnRecvBuf.size() < rTot * dof + xt * rPr.size())
         m_uiOwnRecvBuf.resize(rTot * dof + xt * rPr.size());
     if (m_uiOwnSendBuf.size() < sTot * dof + xt * sPr.size())
         m_uiOwnSendBuf.resize(sTot * dof + xt * sPr.size());
     size_t off = 0;
     for (size_t i = 0; i < rPr.size(); i++) {
-        const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
+        const unsigned int cnt = nn(m_uiOwnRecvCum.data() + i * nCls);
         if (!cnt) continue;
         par::Mpi_Irecv(m_uiOwnRecvBuf.data() + off, (int)(cnt * dof + xt), rPr[i], tag,
                        comm, &m_uiOwnReq[i]);
@@ -3991,9 +4058,10 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
     }
     off = 0;
     for (size_t i = 0; i < sPr.size(); i++) {
-        const unsigned int cnt = m_uiOwnSendCum[i * nCls + j];
+        const unsigned int* cum = m_uiOwnSendCum.data() + i * nCls;
+        const unsigned int cnt  = nn(cum);
         if (!cnt) continue;
-        const unsigned int* sl = m_uiOwnSendSlot.data() + m_uiOwnSendOff[i];
+        const unsigned int* sl = m_uiOwnSendSlot.data() + m_uiOwnSendOff[i] + lo(cum);
         T* b                   = m_uiOwnSendBuf.data() + off + xt;
         const bool thr         = ts::EnutsProf::ownXchOmp();
 #ifdef DENDRO_ENUTS_HAS_OMP
@@ -4008,7 +4076,7 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
                        &m_uiOwnReq[rPr.size() + i]);
         off += (size_t)cnt * dof + xt;
     }
-    if (ts::EnutsProf::on()) {
+    if (ts::EnutsProf::on() && !one) {
         ts::EnutsProf::get().t[ts::EnutsProf::CN_XCH_SEND] += (double)sTot * dof;
         ts::EnutsProf::get().t[ts::EnutsProf::CN_XCH_RECV] += (double)rTot * dof;
         ts::EnutsProf::get().t[ts::EnutsProf::CN_XCH_CALLS] += 1;
@@ -4017,7 +4085,7 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
 
 template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
-                                                 unsigned int pt) {
+                                                 unsigned int pt, int cls) {
     ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
     if (!pMesh->isActive() || pMesh->getMPICommSize() < 2) return;
     const unsigned int nCls = m_uiOwnDTs.size();
@@ -4029,11 +4097,15 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
         for (unsigned int i = 0; i < nCls; i++)
             if (pt % m_uiOwnDTs[i] == 0) j = (int)i;
     if (j < 0) return;
-    const bool xprof = ts::EnutsProf::on();
+    const bool one = cls >= 0;
+    if (one) j = cls;
+    auto lo = [&](const unsigned int* cum) { return one && cls ? cum[cls - 1] : 0u; };
+    auto nn = [&](const unsigned int* cum) { return cum[j] - lo(cum); };
+    const bool xprof = ts::EnutsProf::on() && !one;
     const double tw0 = xprof ? ts::EnutsProf::now() : 0.0;
     const std::vector<unsigned int>& rPr = pMesh->getRecvProcList();
     const std::vector<unsigned int>& sPr = pMesh->getSendProcList();
-    const size_t xt = ts::EnutsProf::xchTrace() ? 1 : 0;
+    const size_t xt = (!one && ts::EnutsProf::xchTrace()) ? 1 : 0;
     if (xt) {
         // XCH_TRACE: completion order of every request; the last one is the
         // partner this call waited on. its lateness = its send stamp in my
@@ -4115,7 +4187,7 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
     }
     const double tu0 = xprof ? ts::EnutsProf::now() : 0.0;
     if (xprof) ts::EnutsProf::get().t[ts::EnutsProf::EX_WAIT] += tu0 - tw0;
-    const bool cen = ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty();
+    const bool cen = !one && ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty();
     unsigned char* fl = nullptr;
     if (cen) {
         unsigned int s = 0;
@@ -4125,9 +4197,10 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
     }
     size_t off = 0;
     for (size_t i = 0; i < rPr.size(); i++) {
-        const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
+        const unsigned int* cum = m_uiOwnRecvCum.data() + i * nCls;
+        const unsigned int cnt  = nn(cum);
         if (!cnt) continue;
-        const unsigned int* sl = m_uiOwnRecvSlot.data() + m_uiOwnRecvOff[i];
+        const unsigned int* sl = m_uiOwnRecvSlot.data() + m_uiOwnRecvOff[i] + lo(cum);
         const T* b             = m_uiOwnRecvBuf.data() + off + xt;
         const bool thr         = ts::EnutsProf::ownXchOmp();
 #ifdef DENDRO_ENUTS_HAS_OMP
@@ -4142,6 +4215,161 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
         off += (size_t)cnt * dof + xt;
     }
     if (xprof) ts::EnutsProf::get().t[ts::EnutsProf::EX_UNPACK] += ts::EnutsProf::now() - tu0;
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sts_hook(unsigned int pt, const unsigned int* actIds,
+                                     unsigned int nAct, bool ownPlan, bool thr) {
+    ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    if (!m_uiStsOn && stsTest() > 0) {
+        // test operator: identity, s stages on every class of ratio >= 4
+        const unsigned int ts_ = (unsigned int)stsTest();
+        set_sts(0, [ts_](unsigned int r) { return r >= 4 ? ts_ : 0u; },
+                [](unsigned int, unsigned int j, unsigned int, T, const T*, const T* y1,
+                   const T*, T* ly0, T* yj) {
+                    (void)j; (void)y1; (void)ly0; (void)yj;  // y_j arrives as y_{j-1}
+                });
+    }
+    if (!ownPlan || !m_uiOwnChain) {
+        if (!pMesh->getMPIRankGlobal())
+            std::cout << "[enuts-sts] the super-time-stepped pass needs the owner-sync plan "
+                         "with chained classes; aborting" << std::endl;
+        MPI_Abort(pMesh->getMPICommunicator(), 15);
+    }
+    const bool prof = ts::EnutsProf::on();
+    const double t0 = prof ? ts::EnutsProf::now() : 0.0;
+    const unsigned int nCls = m_uiOwnDTs.size();
+    // coarsest first: a finer class then sees its coarser neighbors diffused
+    for (unsigned int k = nCls; k-- > 0;) {
+        const unsigned int r = m_uiOwnDTs[k];
+        if (pt % r) continue;
+        const unsigned int s = m_uiStsStages(r);
+        if (!s) continue;
+        sts_pass(k, s, (T)(m_uiTimeInfo._m_uiTh * r), actIds, nAct, thr, pt);
+    }
+    if (prof) ts::EnutsProf::get().t[ts::EnutsProf::ST_PASS] += ts::EnutsProf::now() - t0;
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sts_zip(unsigned int blk, const T* y, T* dg) const {
+    const ot::Mesh* pMesh      = m_uiAppCtx->get_mesh();
+    const ot::Block& b         = pMesh->getLocalBlockList()[blk];
+    const unsigned int regLev  = b.getRegularGridLev();
+    const ot::TreeNode* pNodes = pMesh->getAllElements().data();
+    const ot::TreeNode bn      = b.getBlockNode();
+    const unsigned int eo      = pMesh->getElementOrder();
+    const unsigned int pw      = b.get1DPadWidth();
+    const unsigned int nPe     = pMesh->getNumNodesPerElement();
+    const unsigned int lx = b.getAllocationSzX(), ly = b.getAllocationSzY();
+    for (const unsigned int elem : b) {
+        const unsigned int ei = (pNodes[elem].getX() - bn.getX()) >> (m_uiMaxDepth - regLev);
+        const unsigned int ej = (pNodes[elem].getY() - bn.getY()) >> (m_uiMaxDepth - regLev);
+        const unsigned int ek = (pNodes[elem].getZ() - bn.getZ()) >> (m_uiMaxDepth - regLev);
+        T* d = dg + (size_t)elem * nPe;
+        for (unsigned int k = 0; k <= eo; k++)
+            for (unsigned int j = 0; j <= eo; j++)
+                for (unsigned int i = 0; i <= eo; i++)
+                    d[k * (eo + 1) * (eo + 1) + j * (eo + 1) + i] =
+                        y[(size_t)(ek * eo + k + pw) * ly * lx + (ej * eo + j + pw) * lx +
+                          (ei * eo + i + pw)];
+    }
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sts_fill(unsigned int blk, unsigned int cls, const T* dg,
+                                     T* y) const {
+    // same-class sources only: node-coincident copies (runs, single nodes);
+    // hanging-node ops and children rows are level jumps, frozen for the pass
+    const OwnPlan& op = m_uiOwnPlan[blk];
+    for (unsigned int r = op.runOff[cls]; r < op.runOff[cls + 1]; r++)
+    for (unsigned int q = op.clsOff[cls]; q < op.clsOff[cls + 1]; q++)
+        y[op.pdst[q]] = dg[op.psrc[q]];
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sts_pass(unsigned int cls, unsigned int s, T dt,
+                                     const unsigned int* actIds, unsigned int nAct, bool thr,
+                                     unsigned int pt) {
+    ot::Mesh* pMesh          = (ot::Mesh*)m_uiAppCtx->get_mesh();
+    const ot::Block* blkList = pMesh->getLocalBlockList().data();
+    const size_t dgSz = (size_t)pMesh->getAllElements().size() * pMesh->getNumNodesPerElement();
+    const unsigned int dof = m_uiEVar.get_dof();
+    const unsigned int var = m_uiStsVar;
+    // the blocks of this class among the active ones
+    std::vector<unsigned int> bl;
+    for (unsigned int bb = 0; bb < nAct; bb++) {
+        const unsigned int blk = actIds[bb];
+        if (m_uiEleDT[blkList[blk].firstElementID()] == m_uiOwnDTs[cls]) bl.push_back(blk);
+    }
+    if (m_uiStsScr.size() != pMesh->getLocalBlockList().size())
+        m_uiStsScr.assign(pMesh->getLocalBlockList().size(), std::vector<T>());
+    if (m_uiStsDG.size() != dgSz) m_uiStsDG.assign(dgSz, (T)0);
+    const bool chk = stsCheck();
+    std::vector<size_t> chkOff;
+    if (chk) {
+        m_uiStsChk.clear();
+        for (const unsigned int blk : bl) {
+            const size_t NN = m_uiBVec[blk]._vec[0].getSz();
+            const T* y0     = m_uiBVec[blk]._vec[0].data() + (size_t)var * NN;
+            chkOff.push_back(m_uiStsChk.size());
+            m_uiStsChk.insert(m_uiStsChk.end(), y0, y0 + NN);
+        }
+    }
+    for (const unsigned int blk : bl) {
+        const size_t NN = m_uiBVec[blk]._vec[0].getSz();
+        if (m_uiStsScr[blk].size() != 4 * NN) m_uiStsScr[blk].assign(4 * NN, (T)0);
+    }
+    // ring of three stage slots: a = Y_{j-1}, b = Y_{j-2}, c = Y_j
+    unsigned int ia = 0, ib = 1, ic = 2;
+    for (unsigned int j = 1; j <= s; j++) {
+        const unsigned int nb = bl.size();
+#ifdef DENDRO_ENUTS_HAS_OMP
+#pragma omp parallel for schedule(dynamic, 1) if (thr)
+#endif
+        for (unsigned int q = 0; q < nb; q++) {
+            const unsigned int blk = bl[q];
+            const size_t NN = m_uiBVec[blk]._vec[0].getSz();
+            const T* y0     = m_uiBVec[blk]._vec[0].data() + (size_t)var * NN;
+            T* scr          = m_uiStsScr[blk].data();
+            const T* y1     = j >= 2 ? scr + (size_t)ia * NN : y0;
+            const T* y2     = j >= 3 ? scr + (size_t)ib * NN : y0;
+            T* ly0          = scr + 3 * NN;
+            T* yj           = scr + (size_t)ic * NN;
+            std::memcpy(yj, y1, NN * sizeof(T));  // padding carries over
+            m_uiStsStage(blk, j, s, dt, y0, y1, y2, ly0, yj);
+        }
+        // the round: same-class padding of Y_j from the neighbors' Y_j
+        for (const unsigned int blk : bl)
+            sts_zip(blk, m_uiStsScr[blk].data() + (size_t)ic * m_uiBVec[blk]._vec[0].getSz(),
+                    m_uiStsDG.data());
+        own_node_exchange_begin(m_uiStsDG.data(), 1, pt, (int)cls);
+        own_node_exchange_end(m_uiStsDG.data(), 1, pt, (int)cls);
+        for (const unsigned int blk : bl)
+            sts_fill(blk, cls, m_uiStsDG.data(),
+                     m_uiStsScr[blk].data() + (size_t)ic * m_uiBVec[blk]._vec[0].getSz());
+        if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_STS_ROUNDS] += 1;
+        const unsigned int t = ib;
+        ib = ia; ia = ic; ic = t;
+    }
+    // write Y_s back into U; other-class padding was frozen at U's value
+    size_t bad = 0;
+    for (size_t q = 0; q < bl.size(); q++) {
+        const unsigned int blk = bl[q];
+        const size_t NN = m_uiBVec[blk]._vec[0].getSz();
+        T* y0           = (T*)m_uiBVec[blk]._vec[0].data() + (size_t)var * NN;
+        const T* ys     = m_uiStsScr[blk].data() + (size_t)ia * NN;
+        if (chk) {
+            const T* ref = m_uiStsChk.data() + chkOff[q];
+            for (size_t i = 0; i < NN; i++)
+                if (std::memcmp(&ys[i], &ref[i], sizeof(T))) bad++;
+        }
+        std::memcpy(y0, ys, NN * sizeof(T));
+    }
+    (void)dof;
+    if (chk && bad)
+        std::cout << "[enuts-sts-check r" << pMesh->getMPIRankGlobal() << "] pt " << pt
+                  << " class " << cls << " s " << s << " blocks " << bl.size()
+                  << " entries changed by the identity pass: " << bad << std::endl;
 }
 
 template <typename T, typename Ctx>
@@ -6238,6 +6466,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     if (m_uiStGOn) update_stage_g(pt);
     update_ele_timestep(&m_uiActiveBlkIDs);
     ENUTS_TOC(AXPY_ELETS);
+    if (m_uiStsOn || stsTest()) sts_hook(pt, actIds, nAct, ownPlan, thr);
     ENUTS_TIC();
 
     // OWN_NO_ETIME_XCH: the owner path never reads a ghost element time
