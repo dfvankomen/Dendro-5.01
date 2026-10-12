@@ -19,6 +19,9 @@
 #include <atomic>
 #include <memory>
 #include <unordered_map>
+#include <map>
+#include <cmath>
+#include <algorithm>
 
 #include "blkAsync.h"
 #include "block.h"
@@ -50,7 +53,9 @@ struct EnutsProf {
            EX_WAIT, EX_FIRST, EX_UNPACK,
            CN_CALLS, CN_EID, CN_ENT, CN_PAIRS, CN_P2C, CN_CORR, CN_HIT, CN_P2C_HIT,
            CN_P2C_UNIQ, CN_P2C_DUP, CN_P2C_OVF, CN_XCH_RECV, CN_XCH_SEND, CN_XCH_CALLS,
-           CN_CSTEPS, CN_P2C_DISTINCT, CN_HOIST_DBL, SY_ROWOPS, CN_ROWS, CN_ROWS_OPS, NT };
+           CN_CSTEPS, CN_P2C_DISTINCT, CN_HOIST_DBL, SY_ROWOPS, CN_ROWS, CN_ROWS_OPS,
+           EX_LATE, EX_LATEMAX, CN_XCH_ARGSEND, CN_XCH_NOOFF, CN_XCH_NOPLAN, CN_XCH_UNREAD,
+           CN_XCH_READ, CN_XCH_LATEBAD, NT };
     double t[NT]     = {};
     double partial   = 0;      // partial steps taken (this rank was active)
     double lev_sum   = 0;      // sum over partial steps of globally active levels
@@ -332,6 +337,32 @@ struct EnutsProf {
         return false;
 #endif
     }
+    /** DENDRO_ENUTS_XCH_CENSUS=1 (prof-only, with DENDRO_ENUTS_PROF=1): of the
+     *  owner-exchange doubles received, count at the next overwrite of each
+     *  (stage, DG slot) whether a local plan read it since (rows: read / in a
+     *  plan but unread / in no plan). Marks every plan read with a byte
+     *  store; no effect on results. */
+    static bool xchCensus() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_XCH_CENSUS");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1 && on();
+    }
+    /** DENDRO_ENUTS_XCH_TRACE=1|<dir> (prof-only): per owner-exchange call the
+     *  wait, the partner whose request completed last and how late it sent
+     *  (its send stamp, one extra double per partner message; clocks
+     *  calibrated per partner at plan build), written per rank to
+     *  <dir>/enuts_xch_r<rank>.txt (1 = cwd); sums in the rows. */
+    static const char* xchTraceDir() {
+        static const std::string d = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_XCH_TRACE");
+            if (!e || !e[0] || e[0] == '0') return std::string();
+            return (e[0] == '1' && !e[1]) ? std::string(".") : std::string(e);
+        }();
+        return (d.empty() || !on()) ? nullptr : d.c_str();
+    }
+    static bool xchTrace() { return xchTraceDir() != nullptr; }
     /** DENDRO_ENUTS_OWN_P2C_SHARED=1 (default off): before each stage's sync
      *  loop, the unique children (parent element, child) of every active
      *  block are listed once, each gets a slot in one shared pool, and a
@@ -943,6 +974,40 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<unsigned int> m_uiOwnSendCum, m_uiOwnRecvCum;
     std::vector<T> m_uiOwnSendBuf, m_uiOwnRecvBuf;
     std::vector<MPI_Request> m_uiOwnReq;
+    /** DENDRO_ENUTS_XCH_CENSUS: per (stage, DG slot) 0 never received, 1
+     *  received and not read since, 2 read; per DG slot, whether a built plan
+     *  reads it at all */
+    std::vector<unsigned char> m_uiXchFlag, m_uiXchInPlan;
+    size_t m_uiXchDg = 0;
+    /** every stage input a conversion row c reads at slot: k_{rk_s} alone when
+     *  the class is at the block's time, else the ns stage inputs (g aside) */
+    inline void xch_mark(unsigned int slot, const OwnConv& c, unsigned int rk_s) {
+        unsigned char* f = m_uiXchFlag.data() + slot;
+        if (c.same) {
+            f[(size_t)(rk_s - 1) * m_uiXchDg] = 2;
+            return;
+        }
+        const unsigned int ns = c.ns - c.g;
+        for (unsigned int k = 0; k < ns; k++) f[(size_t)k * m_uiXchDg] = 2;
+    }
+    inline void xch_mark_ele(unsigned int ele, unsigned int nPe, const OwnConv& c,
+                             unsigned int rk_s) {
+        for (unsigned int n = 0; n < nPe; n++) xch_mark(ele * nPe + n, c, rk_s);
+    }
+    /** DENDRO_ENUTS_XCH_TRACE: per recv partner, its clock minus mine (NaN:
+     *  no round trip possible), the records of every exchange call */
+    std::vector<double> m_uiXchOff, m_uiXchLat, m_uiXchSpread;
+    std::vector<unsigned int> m_uiXchOffRank;
+    double m_uiXchT0 = 0;
+    bool m_uiXchCal  = false;
+    struct XchRec {
+        unsigned int pt, s, j, arg, lateArg;
+        unsigned char argSend;
+        double tw, wait, rwait, first, late, lateMax, nrecv, argN;
+    };
+    std::vector<XchRec> m_uiXchRec;
+    void xch_calibrate(ot::Mesh* pMesh);
+    void xch_dump();
     bool prepare_owner_sync(ot::Mesh* pMesh);
     void build_own_plan(unsigned int blk, const std::vector<unsigned int>& eid,
                         OwnPlan& op);
@@ -964,6 +1029,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         m_uiP2cStepOf.clear();
         m_uiP2cPoolPass  = 0;
         m_uiOwnRowBufRow = ~0u;
+        m_uiXchFlag.clear();
+        m_uiXchInPlan.clear();
+        m_uiXchCal = false;
     }
 
     /** DENDRO_ENUTS_OMP: the scratch and per-pass caches of worker thread
@@ -1301,6 +1369,7 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
     }
     if (ts::EnutsProf::on()) {
         // collective over MPI_COMM_WORLD: every rank destroys its ENUTS object
+        xch_dump();
         ts::EnutsProf& P = ts::EnutsProf::get();
         double loc[ts::EnutsProf::NT + 4];
         for (int i = 0; i < ts::EnutsProf::NT; i++) loc[i] = P.t[i];
@@ -1338,7 +1407,15 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                 "  count: xch doubles recv", "  count: xch doubles sent", "  count: xch calls",
                 "  count: coarse steps", "  count: p2c distinct children (sum over coarse steps)",
                 "  count: hoisted-p2c store doubles (classes x (NS+1) x child, sum over coarse steps)",
-                "  sync:    of row build: parent hanging ops", "  count: rows built", "  count: rows with hanging ops"};
+                "  sync:    of row build: parent hanging ops", "  count: rows built", "  count: rows with hanging ops",
+                "  xch:   of wait: arg-max partner late by (sum of positive; trace)",
+                "  xch:   of wait: max partner lateness (sum of positive; trace)",
+                "  count: xch calls whose last request was a send (trace)",
+                "  count: xch calls with unknown arg-max lateness (trace)",
+                "  count: xch doubles recv, no local plan reads the slot (census)",
+                "  count: xch doubles recv, in a plan, overwritten unread (census)",
+                "  count: xch doubles recv, read before overwritten (census)",
+                "  count: xch calls with lateness > wait (trace; clock offset error)"};
             std::cout << "[enuts-prof] npes=" << np
                       << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
                       << " mean_active_levels/step="
@@ -2880,6 +2957,13 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
                   << " recipe mismatches " << bad << std::endl;
         if (bad) MPI_Abort(pMesh->getMPICommunicator(), 12);
     }
+    if (ts::EnutsProf::xchCensus()) {
+        const size_t dgSz = (size_t)nEle * nPe;
+        m_uiXchDg         = dgSz;
+        m_uiXchFlag.assign((size_t)m_uiNumStages * dgSz, 0);
+        m_uiXchInPlan.assign(dgSz, 0);
+    }
+    if (ts::EnutsProf::xchTrace() && npes > 1) xch_calibrate(pMesh);
     m_uiOwnOk = true;
     return true;
 }
@@ -3199,6 +3283,20 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
                   << uncovered << "; aborting" << std::endl;
         MPI_Abort(pMesh->getMPICommunicator(), 13);
     }
+    if (ts::EnutsProf::xchCensus() && !m_uiXchInPlan.empty()) {
+        unsigned char* ip = m_uiXchInPlan.data();
+        for (const unsigned int e : op.cele)
+            std::memset(ip + (size_t)e * nPe, 1, nPe);
+        for (size_t r = 0; r < op.rsrc.size(); r++)
+            std::memset(ip + op.rsrc[r], 1, op.rlen[r]);
+        for (const unsigned int q : op.psrc) ip[q] = 1;
+        for (const unsigned int q : op.opSrc) ip[q] = 1;
+        for (const typename OwnPlan::Child& w : op.ch) {
+            std::memset(ip + (size_t)m_uiOwnRowEle[w.row] * nPe, 1, nPe);
+            const unsigned int* ro = m_uiOwnRowOff.data() + (size_t)w.row * (nCls + 1);
+            for (unsigned int q = ro[0]; q < ro[nCls]; q++) ip[m_uiOwnRowSrc[q]] = 1;
+        }
+    }
     op.built = true;
 }
 
@@ -3272,6 +3370,12 @@ void ExplicitNUTS<T, Ctx>::own_row_build(unsigned int row_, unsigned int rk_s,
     const unsigned int ele  = m_uiOwnRowEle[w.row];
     const unsigned int* ro  = m_uiOwnRowOff.data() + (size_t)w.row * (nCls + 1);
     const bool hasOps       = m_uiOwnOpOff[ele + 1] > m_uiOwnOpOff[ele];
+    if (ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty()) {
+        xch_mark_ele(ele, nPe, cv[m_uiOwnRowPc[w.row]], rk_s);
+        for (unsigned int c = 0; c < nCls; c++)
+            for (unsigned int q = ro[c]; q < ro[c + 1]; q++)
+                xch_mark(m_uiOwnRowSrc[q], cv[c], rk_s);
+    }
     for (unsigned int v = 0; v < dof; v++) {
         for (unsigned int k = 0; k < m_uiNumStages; k++)
             SG[k] = S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz;
@@ -3534,6 +3638,30 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
     // one conversion row per owner class for this block class and stage pass:
     // what the per-element loop decides from (element time, element dt)
     const OwnConv* cv = own_conv_rows(bc, rk_s, bTime, bDT);
+    if (ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty()) {
+        // the stage slots this call reads (rows: in own_row_build)
+        for (unsigned int c = 0; c < nCls; c++) {
+            const OwnConv& w = cv[c];
+            if (!w.same)
+                for (unsigned int i = op.celeOff[c]; i < op.celeOff[c + 1]; i++)
+                    xch_mark_ele(op.cele[i], nPe, w, rk_s);
+            else
+                for (unsigned int r = op.runOff[c]; r < op.runOff[c + 1]; r++)
+                    for (unsigned int i = 0; i < op.rlen[r]; i++)
+                        xch_mark(op.rsrc[r] + i, w, rk_s);
+            for (unsigned int q = op.clsOff[c]; q < op.clsOff[c + 1]; q++)
+                xch_mark(op.psrc[q], w, rk_s);
+        }
+        for (const typename OwnPlan::Op& w : op.ops) {
+            unsigned int b = 0;
+            for (unsigned int sg = w.segB; sg < w.segE; sg++) {
+                const OwnConv& c     = cv[op.opSegCls[sg]];
+                const unsigned int e = op.opSegEnd[sg];
+                for (unsigned int t = b; t < e; t++) xch_mark(op.opSrc[w.inB + t], c, rk_s);
+                b = e;
+            }
+        }
+    }
 
     T* blkVec = (T*)m_uiBVec[blk]._vec[stage_slot(rk_s)].data();
     // SG: the inputs of a class that reads g (k1 .. k_rk_s, g)
@@ -3739,25 +3867,57 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
     const int tag = 7153;
     m_uiOwnReq.assign(sPr.size() + rPr.size(), MPI_REQUEST_NULL);
     if (j < 0) return;
+    if (ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty()) {
+        // what became of the previous message into these slots (this stage):
+        // read by a plan since, or overwritten unread; never-read slots no
+        // plan lists are the dead weight of the map itself
+        unsigned int s = 0;
+        for (unsigned int k = 0; k < m_uiNumStages; k++)
+            if (m_uiStVec[k].get_vec_ptr() == stv) s = k;
+        const unsigned char* fl = m_uiXchFlag.data() + (size_t)s * dgSz;
+        double nRd = 0, nUn = 0, nNo = 0;
+        for (size_t i = 0; i < rPr.size(); i++) {
+            const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
+            const unsigned int* sl = m_uiOwnRecvSlot.data() + m_uiOwnRecvOff[i];
+            for (unsigned int q = 0; q < cnt; q++) {
+                const unsigned char f = fl[sl[q]];
+                if (!f) continue;
+                if (!m_uiXchInPlan[sl[q]])
+                    nNo++;
+                else if (f == 1)
+                    nUn++;
+                else
+                    nRd++;
+            }
+        }
+        ts::EnutsProf& P = ts::EnutsProf::get();
+        P.t[ts::EnutsProf::CN_XCH_NOPLAN] += nNo * dof;
+        P.t[ts::EnutsProf::CN_XCH_UNREAD] += nUn * dof;
+        P.t[ts::EnutsProf::CN_XCH_READ] += nRd * dof;
+    }
+    // XCH_TRACE: one extra double per partner message, the sender's stamp
+    const size_t xt = ts::EnutsProf::xchTrace() ? 1 : 0;
     size_t rTot = 0, sTot = 0;
     for (size_t i = 0; i < rPr.size(); i++) rTot += m_uiOwnRecvCum[i * nCls + j];
     for (size_t i = 0; i < sPr.size(); i++) sTot += m_uiOwnSendCum[i * nCls + j];
-    if (m_uiOwnRecvBuf.size() < rTot * dof) m_uiOwnRecvBuf.resize(rTot * dof);
-    if (m_uiOwnSendBuf.size() < sTot * dof) m_uiOwnSendBuf.resize(sTot * dof);
+    if (m_uiOwnRecvBuf.size() < rTot * dof + xt * rPr.size())
+        m_uiOwnRecvBuf.resize(rTot * dof + xt * rPr.size());
+    if (m_uiOwnSendBuf.size() < sTot * dof + xt * sPr.size())
+        m_uiOwnSendBuf.resize(sTot * dof + xt * sPr.size());
     size_t off = 0;
     for (size_t i = 0; i < rPr.size(); i++) {
         const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
         if (!cnt) continue;
-        par::Mpi_Irecv(m_uiOwnRecvBuf.data() + off, (int)(cnt * dof), rPr[i], tag,
+        par::Mpi_Irecv(m_uiOwnRecvBuf.data() + off, (int)(cnt * dof + xt), rPr[i], tag,
                        comm, &m_uiOwnReq[i]);
-        off += (size_t)cnt * dof;
+        off += (size_t)cnt * dof + xt;
     }
     off = 0;
     for (size_t i = 0; i < sPr.size(); i++) {
         const unsigned int cnt = m_uiOwnSendCum[i * nCls + j];
         if (!cnt) continue;
         const unsigned int* sl = m_uiOwnSendSlot.data() + m_uiOwnSendOff[i];
-        T* b                   = m_uiOwnSendBuf.data() + off;
+        T* b                   = m_uiOwnSendBuf.data() + off + xt;
         const bool thr         = ts::EnutsProf::ownXchOmp();
 #ifdef DENDRO_ENUTS_HAS_OMP
 #pragma omp parallel for schedule(static) if (thr && !omp_in_parallel())
@@ -3766,9 +3926,10 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
             const T* sv = stv + (size_t)v * dgSz;
             for (unsigned int q = 0; q < cnt; q++) b[(size_t)v * cnt + q] = sv[sl[q]];
         }
-        par::Mpi_Isend(b, (int)(cnt * dof), sPr[i], tag, comm,
+        if (xt) b[-1] = (T)ts::EnutsProf::now();
+        par::Mpi_Isend(b - xt, (int)(cnt * dof + xt), sPr[i], tag, comm,
                        &m_uiOwnReq[rPr.size() + i]);
-        off += (size_t)cnt * dof;
+        off += (size_t)cnt * dof + xt;
     }
     if (ts::EnutsProf::on()) {
         ts::EnutsProf::get().t[ts::EnutsProf::CN_XCH_SEND] += (double)sTot * dof;
@@ -3794,6 +3955,77 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
     const bool xprof = ts::EnutsProf::on();
     const double tw0 = xprof ? ts::EnutsProf::now() : 0.0;
     const std::vector<unsigned int>& rPr = pMesh->getRecvProcList();
+    const std::vector<unsigned int>& sPr = pMesh->getSendProcList();
+    const size_t xt = ts::EnutsProf::xchTrace() ? 1 : 0;
+    if (xt) {
+        // XCH_TRACE: completion order of every request; the last one is the
+        // partner this call waited on. its lateness = its send stamp in my
+        // clock minus the time I started waiting (a send request completes
+        // when the receiver posted its receive, in its own exchange begin,
+        // so its stamp to me stands in for that too)
+        XchRec r{};
+        r.pt = pt;
+        r.j  = (unsigned int)j;
+        for (unsigned int k = 0; k < m_uiNumStages; k++)
+            if (m_uiStVec[k].get_vec_ptr() == stv) r.s = k;
+        r.tw   = tw0 - m_uiXchT0;
+        r.late = r.lateMax = std::nan("");
+        r.arg = r.lateArg = ~0u;
+        const int nReq = (int)m_uiOwnReq.size();
+        int argIdx = -1, argR = -1, argS = -1;
+        double tlast = tw0, tfirst = -1, tlr = tw0, tls = tw0;
+        for (int k = 0; k < nReq; k++) {
+            int idx = MPI_UNDEFINED;
+            MPI_Waitany(nReq, m_uiOwnReq.data(), &idx, MPI_STATUS_IGNORE);
+            if (idx == MPI_UNDEFINED) break;
+            const double tn = ts::EnutsProf::now();
+            if (idx < (int)rPr.size()) {
+                if (tfirst < 0) tfirst = tn;
+                tlr  = tn;
+                argR = idx;
+            } else {
+                tls  = tn;
+                argS = idx;
+            }
+            tlast = tn;
+        }
+        // the last receive is the partner waited on, unless a send (the
+        // partner's receive posted late) outlasted it by more than a poll
+        argIdx    = (argS >= 0 && tls > tlr + 5e-5) ? argS : argR;
+        r.wait    = tlast - tw0;
+        r.rwait   = tlr - tw0;
+        r.first   = tfirst < 0 ? 0 : tfirst - tw0;
+        r.argSend = (argIdx >= (int)rPr.size());
+        if (argIdx >= 0) r.arg = r.argSend ? sPr[argIdx - rPr.size()] : rPr[argIdx];
+        size_t off = 0;
+        for (size_t i = 0; i < rPr.size(); i++) {
+            const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
+            if (!cnt) continue;
+            r.nrecv += (double)cnt * dof;
+            const double L = std::isnan(m_uiXchOff[i])
+                                 ? std::nan("")
+                                 : (double)m_uiOwnRecvBuf[off] + m_uiXchOff[i] - tw0;
+            if (rPr[i] == r.arg) {
+                r.late = L;
+                r.argN = (double)cnt * dof;
+            }
+            if (!std::isnan(L) && (std::isnan(r.lateMax) || L > r.lateMax)) {
+                r.lateMax = L;
+                r.lateArg = rPr[i];
+            }
+            off += (size_t)cnt * dof + xt;
+        }
+        if (r.argSend && argIdx >= 0)
+            r.argN = (double)m_uiOwnSendCum[(argIdx - rPr.size()) * nCls + j] * dof;
+        ts::EnutsProf& P = ts::EnutsProf::get();
+        P.t[ts::EnutsProf::EX_FIRST] += r.first;
+        if (!std::isnan(r.late)) P.t[ts::EnutsProf::EX_LATE] += std::max(0.0, r.late);
+        if (!std::isnan(r.lateMax)) P.t[ts::EnutsProf::EX_LATEMAX] += std::max(0.0, r.lateMax);
+        P.t[ts::EnutsProf::CN_XCH_ARGSEND] += r.argSend;
+        P.t[ts::EnutsProf::CN_XCH_NOOFF] += (argIdx >= 0 && std::isnan(r.late));
+        P.t[ts::EnutsProf::CN_XCH_LATEBAD] += (!std::isnan(r.lateMax) && r.lateMax > r.wait + 1e-4);
+        m_uiXchRec.push_back(r);
+    } else {
     if (xprof && !rPr.empty()) {
         // split of the wait: until the first receive completes (a late
         // partner) vs the rest (transfer / the slowest partner)
@@ -3803,14 +4035,23 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
     }
     if (!m_uiOwnReq.empty())
         MPI_Waitall((int)m_uiOwnReq.size(), m_uiOwnReq.data(), MPI_STATUSES_IGNORE);
+    }
     const double tu0 = xprof ? ts::EnutsProf::now() : 0.0;
     if (xprof) ts::EnutsProf::get().t[ts::EnutsProf::EX_WAIT] += tu0 - tw0;
+    const bool cen = ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty();
+    unsigned char* fl = nullptr;
+    if (cen) {
+        unsigned int s = 0;
+        for (unsigned int k = 0; k < m_uiNumStages; k++)
+            if (m_uiStVec[k].get_vec_ptr() == stv) s = k;
+        fl = m_uiXchFlag.data() + (size_t)s * dgSz;
+    }
     size_t off = 0;
     for (size_t i = 0; i < rPr.size(); i++) {
         const unsigned int cnt = m_uiOwnRecvCum[i * nCls + j];
         if (!cnt) continue;
         const unsigned int* sl = m_uiOwnRecvSlot.data() + m_uiOwnRecvOff[i];
-        const T* b             = m_uiOwnRecvBuf.data() + off;
+        const T* b             = m_uiOwnRecvBuf.data() + off + xt;
         const bool thr         = ts::EnutsProf::ownXchOmp();
 #ifdef DENDRO_ENUTS_HAS_OMP
 #pragma omp parallel for schedule(static) if (thr && !omp_in_parallel())
@@ -3819,9 +4060,129 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
             T* sv = stv + (size_t)v * dgSz;
             for (unsigned int q = 0; q < cnt; q++) sv[sl[q]] = b[(size_t)v * cnt + q];
         }
-        off += (size_t)cnt * dof;
+        if (cen)
+            for (unsigned int q = 0; q < cnt; q++) fl[sl[q]] = 1;
+        off += (size_t)cnt * dof + xt;
     }
     if (xprof) ts::EnutsProf::get().t[ts::EnutsProf::EX_UNPACK] += ts::EnutsProf::now() - tu0;
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::xch_calibrate(ot::Mesh* pMesh) {
+    // XCH_TRACE: per receive partner the offset of its clock from mine, from
+    // round trips (stamp each way, then the measured one-way values each
+    // way; the sample with the least latency wins). partners I only receive
+    // from stay NaN.
+    const std::vector<unsigned int>& rPr = pMesh->getRecvProcList();
+    const std::vector<unsigned int>& sPr = pMesh->getSendProcList();
+    MPI_Comm comm                        = pMesh->getMPICommunicator();
+    const size_t nr                      = rPr.size();
+    m_uiXchOff.assign(nr, std::nan(""));
+    m_uiXchLat.assign(nr, std::nan(""));
+    m_uiXchSpread.assign(nr, std::nan(""));
+    m_uiXchOffRank.assign(rPr.begin(), rPr.end());
+    std::vector<int> both(nr, 0);
+    for (size_t i = 0; i < nr; i++)
+        both[i] = std::find(sPr.begin(), sPr.end(), rPr[i]) != sPr.end();
+    std::vector<double> st(nr, 0), mine(nr, 0), tr(nr, 0), dm(nr, 0), dp(nr, 0), best(nr, 1e300);
+    const int nRound = 64;
+    std::vector<double> latS(nr * nRound, 1e300), offS(nr * nRound, 0);
+    std::vector<MPI_Request> rq(2 * nr, MPI_REQUEST_NULL);
+    for (int round = 0; round < nRound; round++) {
+        for (size_t i = 0; i < nr; i++)
+            if (both[i]) MPI_Irecv(&st[i], 1, MPI_DOUBLE, rPr[i], 7154, comm, &rq[i]);
+        for (size_t i = 0; i < nr; i++)
+            if (both[i]) {
+                mine[i] = ts::EnutsProf::now();
+                MPI_Isend(&mine[i], 1, MPI_DOUBLE, rPr[i], 7154, comm, &rq[nr + i]);
+            }
+        for (size_t k = 0; k < 2 * nr; k++) {
+            int idx = MPI_UNDEFINED;
+            MPI_Waitany((int)(2 * nr), rq.data(), &idx, MPI_STATUS_IGNORE);
+            if (idx == MPI_UNDEFINED) break;
+            if (idx < (int)nr) tr[idx] = ts::EnutsProf::now();
+        }
+        for (size_t i = 0; i < nr; i++) dm[i] = tr[i] - st[i];  // latency - offset
+        for (size_t i = 0; i < nr; i++)
+            if (both[i]) {
+                MPI_Irecv(&dp[i], 1, MPI_DOUBLE, rPr[i], 7155, comm, &rq[i]);
+                MPI_Isend(&dm[i], 1, MPI_DOUBLE, rPr[i], 7155, comm, &rq[nr + i]);
+            }
+        MPI_Waitall((int)(2 * nr), rq.data(), MPI_STATUSES_IGNORE);
+        for (size_t i = 0; i < nr; i++) {
+            if (!both[i]) continue;
+            const double lat          = 0.5 * (dm[i] + dp[i]);
+            latS[i * nRound + round] = lat;
+            offS[i * nRound + round] = 0.5 * (dp[i] - dm[i]);
+            if (lat < best[i]) best[i] = lat;
+        }
+    }
+    // the offset: median over the samples within 2 us of the least latency
+    // (a descheduled poll inflates one direction); spread = their range
+    for (size_t i = 0; i < nr; i++) {
+        if (!both[i]) continue;
+        std::vector<double> good;
+        for (int k = 0; k < nRound; k++)
+            if (latS[i * nRound + k] <= best[i] + 2e-6) good.push_back(offS[i * nRound + k]);
+        std::sort(good.begin(), good.end());
+        m_uiXchOff[i]    = good[good.size() / 2];
+        m_uiXchLat[i]    = best[i];
+        m_uiXchSpread[i] = good.back() - good.front();
+    }
+    m_uiXchT0  = ts::EnutsProf::now();
+    m_uiXchCal = true;
+    m_uiXchRec.clear();
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::xch_dump() {
+    const char* dir = ts::EnutsProf::xchTraceDir();
+    if (!dir || m_uiXchRec.empty()) return;
+    int rk = 0;
+    MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+    std::ofstream f(std::string(dir) + "/enuts_xch_r" + std::to_string(rk) + ".txt");
+    f << "# clock offsets (partner rank: partner clock - mine, s; nan = no round trip; then the best\n"
+         "# one-way latency of the 64 samples and the range of the offsets among the low-latency\n"
+         "# samples, s; then the largest lateness - wait seen with that partner as arg-max (> 0:\n"
+         "# the offset is at least that much too large; the corrected sums subtract it)\n";
+    std::map<unsigned int, double> bad;
+    for (const XchRec& r : m_uiXchRec)
+        if (!std::isnan(r.late) && r.late - r.wait > bad[r.arg]) bad[r.arg] = r.late - r.wait;
+    for (size_t i = 0; i < m_uiXchOff.size(); i++)
+        f << "# off " << m_uiXchOffRank[i] << " " << std::setprecision(9) << m_uiXchOff[i] << " "
+          << m_uiXchLat[i] << " " << m_uiXchSpread[i] << " " << bad[m_uiXchOffRank[i]] << "\n";
+    f << "# call pt stage j t_wait_enter nrecv_doubles wait_s last_recv_s first_recv_s argmax_partner "
+         "argmax_kind(r/s) argmax_late_s argmax_doubles max_late_s max_late_partner\n";
+    std::map<unsigned int, std::pair<unsigned int, double>> hist;
+    double sw = 0, sl = 0, slm = 0, slc = 0;
+    unsigned int nbad = 0;
+    for (size_t k = 0; k < m_uiXchRec.size(); k++) {
+        const XchRec& r = m_uiXchRec[k];
+        f << k << " " << r.pt << " " << r.s + 1 << " " << r.j << " " << std::setprecision(9)
+          << r.tw << " " << std::setprecision(6) << r.nrecv << " " << r.wait << " " << r.rwait << " " << r.first
+          << " " << (int)r.arg << " " << (r.argSend ? 's' : 'r') << " " << r.late << " "
+          << r.argN << " " << r.lateMax << " " << (int)r.lateArg << "\n";
+        hist[r.arg].first++;
+        hist[r.arg].second += r.wait;
+        sw += r.wait;
+        if (!std::isnan(r.late)) {
+            sl += std::max(0.0, r.late);
+            slc += std::max(0.0, std::min(r.late - bad[r.arg], r.wait));
+            nbad += (r.late > r.wait + 1e-4);
+        }
+        if (!std::isnan(r.lateMax)) slm += std::max(0.0, r.lateMax);
+    }
+    std::vector<std::pair<unsigned int, std::pair<unsigned int, double>>> hv(hist.begin(), hist.end());
+    std::sort(hv.begin(), hv.end(), [](const auto& a, const auto& b) {
+        return a.second.second > b.second.second;
+    });
+    f << "# summary calls " << m_uiXchRec.size() << " wait " << sw << " argmax_late_pos " << sl
+      << " argmax_late_corrected " << slc << " max_late_pos " << slm << " late_gt_wait_calls " << nbad
+      << "\n";
+    f << "# argmax partner: calls wait_s (by wait)\n";
+    for (size_t i = 0; i < hv.size() && i < 12; i++)
+        f << "# arg " << (int)hv[i].first << " " << hv[i].second.first << " " << hv[i].second.second
+          << "\n";
 }
 
 template <typename T, typename Ctx>
