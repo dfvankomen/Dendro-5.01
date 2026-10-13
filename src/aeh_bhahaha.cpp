@@ -602,7 +602,8 @@ void AEH_BHaHAHA::find_horizons(
 
                 // output horizon diagnostics to file; 0 means disabled
                 if (file_output_freq_ > 0 &&
-                    current_step % file_output_freq_ == 0) {
+                    (write_every_find_ ||
+                     current_step % file_output_freq_ == 0)) {
                     bah_diagnostics_file_output(
                         &bhahaha_diags, &bha_param_data_[which_horizon],
                         num_horizons_, x_guess_[which_horizon],
@@ -1241,6 +1242,8 @@ void AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
         // make sure the n_horizons is achieved
         checkPoint["N_HORIZONS"]       = num_horizons_;
         checkPoint["IS_BBH"]           = is_bbh_;
+        checkPoint["NTHETA_MAX"]       = max_ntheta_;
+        checkPoint["NPHI_MAX"]         = max_nphi_;
 
         // using base91 for good compression and high-accuracy checkpointing
         checkPoint["X_CENTER_M1"]      = b91_encode(x_center_m1_);
@@ -1310,6 +1313,31 @@ void AEH_BHaHAHA::restore_checkpoint(const ot::Mesh* mesh,
     }
 
     infile >> checkPoint;
+
+    // the layout of every vector below follows num_horizons_ and the surface
+    // size; a checkpoint written with other parameters would otherwise fail
+    // deep inside restore_vector with no hint of what differs
+    {
+        const unsigned int nh = checkPoint.value("N_HORIZONS", num_horizons_);
+        const int nt          = checkPoint.value("NTHETA_MAX", max_ntheta_);
+        const int np          = checkPoint.value("NPHI_MAX", max_nphi_);
+        const size_t surf =
+            b91_decode<double>(checkPoint["PREV_HORIZON_M1"].get<std::string>())
+                .size();
+        const size_t surf_expected = (size_t)num_horizons_ * max_ntheta_ * max_nphi_;
+        if (nh != num_horizons_ || nt != max_ntheta_ || np != max_nphi_ ||
+            surf != surf_expected) {
+            std::cerr << "ERROR[HORIZON] rank " << globalRank
+                      << ": checkpoint " << checkpoint_file
+                      << " does not match this run: N_HORIZONS " << nh
+                      << " (run " << num_horizons_ << "), NTHETA_MAX " << nt
+                      << " (run " << max_ntheta_ << "), NPHI_MAX " << np
+                      << " (run " << max_nphi_ << "), PREV_HORIZON_M1 size "
+                      << surf << " (run " << surf_expected << ")" << std::endl;
+            throw std::runtime_error(
+                "AEH checkpoint does not match N_HORIZONS or the surface size");
+        }
+    }
 
     // read in the strings
     std::string temp             = checkPoint["X_CENTER_M1"].get<std::string>();

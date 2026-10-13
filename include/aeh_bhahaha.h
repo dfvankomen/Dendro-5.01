@@ -105,6 +105,11 @@ class AEH_BHaHAHA {
     bool is_bbh_;
 
     unsigned int file_output_freq_;
+    // write the diagnostics rows on every successful find instead of every
+    // file_output_freq_-th step: a caller whose step counter is not the fine
+    // step (LTS counts coarse steps and already gates the call on a time
+    // interval) sets it, or DENDRO_AEH_WRITE_EVERY_FIND=1. default off.
+    bool write_every_find_ = false;
 
     // this is the most important vector, it's what is fed in
     std::vector<bhahaha_params_and_data_struct> bha_param_data_;
@@ -221,6 +226,8 @@ class AEH_BHaHAHA {
           bah_bhbh_min_separation_(bah_bhbh_min_separation),
           bah_ah3_sanity_k_(bah_ah3_sanity_k),
           bah_ah3_radius_padding_(bah_ah3_radius_padding) {
+        if (const char* e = std::getenv("DENDRO_AEH_WRITE_EVERY_FIND"))
+            write_every_find_ = std::atoi(e) != 0;
         // must precede allocate_data_structures(), which sizes off these
         validate_construction_inputs(initial_x_center, initial_y_center,
                                      initial_z_center, blackholes,
@@ -594,6 +601,8 @@ class AEH_BHaHAHA {
     // ---- consumer-facing QoI accessors -------------------------------------
     // Horizon indices: BBH inspiral horizons are 0 and 1, common horizon is 2.
     unsigned int get_num_horizons() const { return num_horizons_; }
+    void set_write_every_find(bool on) { write_every_find_ = on; }
+    bool get_write_every_find() const { return write_every_find_; }
     bool is_bbh() const { return is_bbh_; }
 
     const HorizonQoI& get_horizon_qoi(unsigned int h) const { return qoi_[h]; }
