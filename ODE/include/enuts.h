@@ -22,6 +22,8 @@
 #include <functional>
 #include <map>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <algorithm>
 
 #include "blkAsync.h"
@@ -1064,6 +1066,22 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<std::vector<T>> m_uiStsScr;  // per block: Y_a, Y_b, Y_c, L(Y0)
     std::vector<T> m_uiStsDG;                // one-variable DG vector
     std::vector<T> m_uiStsChk;
+    /** the identity test operator is installed (node-coincident rounds only,
+     *  no cross-class refresh: bitwise by construction) */
+    bool m_uiStsIdent = false;
+    /** scratch of the one-variable fill (g, row, pin, pout, 6 sweeps | im1,
+     *  im2; T is double here as in own_sync_fill) */
+    mutable std::vector<T> m_uiStsOpScr;
+    /** per block, the padded slots the plan fills from other classes (test
+     *  modes: the break and the dump's shell flag; empty until asked) */
+    std::vector<std::vector<unsigned char>> m_uiStsXMask;
+    /** STS_TEST_C: per block the damping applied so far (interior slots),
+     *  per class the largest |Y_s - Y_0| of any pass, coarse steps dumped */
+    std::vector<std::vector<T>> m_uiStsAcc;
+    std::vector<std::vector<T>> m_uiStsBrk;  // STS_TEST_BREAK=1: first-pass padding
+    std::vector<T> m_uiStsInc;
+    unsigned int m_uiStsSteps = 0;
+    T m_uiStsDt0 = 0;
     /** DENDRO_ENUTS_STS_TEST=<s> (test only): the identity operator with s
      *  stages on every class of ratio >= 4; the pass must leave U bitwise
      *  unchanged, and DENDRO_ENUTS_STS_CHECK=1 verifies that per block */
@@ -1081,14 +1099,85 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         }();
         return v == 1;
     }
+    /** DENDRO_ENUTS_STS_TEST_C=<C> (test only): explicit diffusion of
+     *  variable DENDRO_ENUTS_STS_TEST_VAR (default 0) with RKL2 stages,
+     *  Y += D sum_dirs (y_- - 2 y + y_+) at the block's interior points, D =
+     *  C (dt_block / dt0) (h_finest / h_block)^2, dt0 =
+     *  DENDRO_ENUTS_STS_TEST_DT0 (default: the fine step at the first pass,
+     *  so D = C on the finest level), stage count from (s^2 + s - 2) / 4 >=
+     *  6 D plus one. The first interior layer inside a domain face gets
+     *  L = 0. DENDRO_ENUTS_STS_TEST_DUMP=<dir>: at the end of every coarse
+     *  step, per rank, the blocks' interior points with the shell flag
+     *  (within the padding width of a slot another class fills), the
+     *  accumulated damping and U (sts_dump). DENDRO_ENUTS_STS_TEST_BREAK=1
+     *  breaks the interface rule on purpose: other-class padding is pinned
+     *  to its value at the block's first pass (=2: to zero). */
+    static double stsTestC() {
+        static const double v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_STS_TEST_C");
+            return e ? std::atof(e) : 0.0;
+        }();
+        return v;
+    }
+    static unsigned int stsTestVar() {
+        static const unsigned int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_STS_TEST_VAR");
+            return e ? (unsigned int)std::atoi(e) : 0u;
+        }();
+        return v;
+    }
+    static double stsTestDt0() {
+        static const double v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_STS_TEST_DT0");
+            return e ? std::atof(e) : 0.0;
+        }();
+        return v;
+    }
+    static const char* stsTestDump() {
+        static const char* v = std::getenv("DENDRO_ENUTS_STS_TEST_DUMP");
+        return v;
+    }
+    static int stsTestBreak() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_STS_TEST_BREAK");
+            return e ? std::atoi(e) : 0;
+        }();
+        return v;
+    }
+    /** DENDRO_ENUTS_STS_FROZEN_ONLY=1: no cross-class refresh before a pass
+     *  (the A/B of the interface rule: lag of one coarse step) */
+    static bool stsFrozenOnly() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_STS_FROZEN_ONLY");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    /** damping number of the test operator for a block step dt at level lev */
+    double sts_test_D(T dt, unsigned int lev) const {
+        return stsTestC() * (double)(dt / m_uiStsDt0) *
+               std::ldexp(1.0, -2 * (int)(m_uiLevMax - lev));
+    }
     void sts_hook(unsigned int pt, const unsigned int* actIds, unsigned int nAct, bool ownPlan,
                   bool thr);
     void sts_pass(unsigned int cls, unsigned int s, T dt, const unsigned int* actIds,
                   unsigned int nAct, bool thr, unsigned int pt);
     void sts_zip(unsigned int blk, const T* y, T* dg) const;
-    void sts_fill(unsigned int blk, unsigned int cls, const T* dg, T* y) const;
+    /** the plan's class-cls sources into y: node-coincident copies always,
+     *  hanging faces / edges and the children of coarser dependents of that
+     *  class when hang (one variable, every source at its value in dg) */
+    void sts_fill(unsigned int blk, unsigned int cls, const T* dg, T* y, bool hang) const;
+    const std::vector<unsigned char>& sts_xmask(unsigned int blk);
+    void sts_test_stage(unsigned int blk, unsigned int j, unsigned int s, const T* y0,
+                        const T* y1, const T* y2, T* ly0, T* yj, double D) const;
+    void sts_test_acc(unsigned int blk, unsigned int cls, const T* y0, const T* ys);
+    void sts_dump();
 
    public:
+    /** the block's U, every variable padded (stride: the block's padded
+     *  size), at the time of the pass: what a stage operator reads besides
+     *  its own variable */
+    const T* sts_blk_u(unsigned int blk) const { return m_uiBVec[blk]._vec[0].data(); }
     /** register the super-time-stepped variable: stages(ratio) -> s (0 keeps
      *  the variable's term in the RHS for that class), stage(...) as above */
     void set_sts(unsigned int var, std::function<unsigned int(unsigned int)> stages,
@@ -1118,6 +1207,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         m_uiOwnMesh = nullptr;
         m_uiOwnOk   = false;
         m_uiOwnPlan.clear();
+        m_uiStsXMask.clear();
+        m_uiStsBrk.clear();
+        m_uiStsAcc.clear();
         m_uiP2cIdx.clear();
         m_uiP2cPassOf.clear();
         m_uiP2cSlotOf.clear();
@@ -4227,7 +4319,32 @@ template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::sts_hook(unsigned int pt, const unsigned int* actIds,
                                      unsigned int nAct, bool ownPlan, bool thr) {
     ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
-    if (!m_uiStsOn && stsTest() > 0) {
+    if (!m_uiStsOn && stsTestC() > 0) {
+        // test operator: explicit diffusion with RKL2 stages (stsTestC); the
+        // stage count of a class from the largest D of its levels
+        if (m_uiStsDt0 <= 0)
+            m_uiStsDt0 = stsTestDt0() > 0 ? (T)stsTestDt0() : m_uiTimeInfo._m_uiTh;
+        set_sts(stsTestVar(),
+                [this](unsigned int r) -> unsigned int {
+                    double D = 0;
+                    for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
+                        if (m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax) == r)
+                            D = std::max(D, sts_test_D((T)(m_uiTimeInfo._m_uiTh * r), l));
+                    unsigned int s = 2;
+                    while ((double)(s * s + s - 2) / 4.0 < 6.0 * D) s++;
+                    return s + 1;
+                },
+                [this](unsigned int blk, unsigned int j, unsigned int s, T dt, const T* y0,
+                       const T* y1, const T* y2, T* ly0, T* yj) {
+                    const unsigned int lev =
+                        m_uiAppCtx->get_mesh()->getLocalBlockList()[blk].getRegularGridLev();
+                    sts_test_stage(blk, j, s, y0, y1, y2, ly0, yj, sts_test_D(dt, lev));
+                });
+        m_uiStsIdent = false;
+        if (!pMesh->getMPIRankGlobal())
+            std::cout << "[enuts-sts] test operator: diffusion C " << stsTestC() << " on var "
+                      << stsTestVar() << " dt0 " << m_uiStsDt0 << std::endl;
+    } else if (!m_uiStsOn && stsTest() > 0) {
         // test operator: identity, s stages on every class of ratio >= 4
         const unsigned int ts_ = (unsigned int)stsTest();
         set_sts(0, [ts_](unsigned int r) { return r >= 4 ? ts_ : 0u; },
@@ -4235,6 +4352,7 @@ void ExplicitNUTS<T, Ctx>::sts_hook(unsigned int pt, const unsigned int* actIds,
                    const T*, T* ly0, T* yj) {
                     (void)j; (void)y1; (void)ly0; (void)yj;  // y_j arrives as y_{j-1}
                 });
+        m_uiStsIdent = true;
     }
     if (!ownPlan || !m_uiOwnChain) {
         if (!pMesh->getMPIRankGlobal())
@@ -4252,6 +4370,11 @@ void ExplicitNUTS<T, Ctx>::sts_hook(unsigned int pt, const unsigned int* actIds,
         const unsigned int s = m_uiStsStages(r);
         if (!s) continue;
         sts_pass(k, s, (T)(m_uiTimeInfo._m_uiTh * r), actIds, nAct, thr, pt);
+    }
+    // end of the coarse step: every class at one time
+    if (!m_uiStsIdent && stsTestC() > 0 && pt + 1 == m_uiOwnDTs.back()) {
+        m_uiStsSteps++;
+        if (stsTestDump()) sts_dump();
     }
     if (prof) ts::EnutsProf::get().t[ts::EnutsProf::ST_PASS] += ts::EnutsProf::now() - t0;
 }
@@ -4282,14 +4405,249 @@ void ExplicitNUTS<T, Ctx>::sts_zip(unsigned int blk, const T* y, T* dg) const {
 }
 
 template <typename T, typename Ctx>
-void ExplicitNUTS<T, Ctx>::sts_fill(unsigned int blk, unsigned int cls, const T* dg,
-                                     T* y) const {
-    // same-class sources only: node-coincident copies (runs, single nodes);
-    // hanging-node ops and children rows are level jumps, frozen for the pass
+void ExplicitNUTS<T, Ctx>::sts_fill(unsigned int blk, unsigned int cls, const T* dg, T* y,
+                                     bool hang) const {
     const OwnPlan& op = m_uiOwnPlan[blk];
+    // node-coincident copies: runs and single nodes
     for (unsigned int r = op.runOff[cls]; r < op.runOff[cls + 1]; r++)
+        std::memcpy(y + op.rdst[r], dg + op.rsrc[r], (size_t)op.rlen[r] * sizeof(T));
     for (unsigned int q = op.clsOff[cls]; q < op.clsOff[cls + 1]; q++)
         y[op.pdst[q]] = dg[op.psrc[q]];
+    if (!hang || (op.ops.empty() && op.ch.empty())) return;
+    // level jumps: hanging faces / edges with an input of this class, and the
+    // children of the coarser dependents of this class (the row as the full
+    // fill builds it: the element's own DG row, the nodes other elements
+    // own, its own hanging faces and edges), no stage conversion
+    const ot::Mesh* pMesh   = m_uiAppCtx->get_mesh();
+    const unsigned int nPe  = pMesh->getNumNodesPerElement();
+    const unsigned int nCls = m_uiOwnDTs.size();
+    if (m_uiStsOpScr.size() < 12 * (size_t)nPe) m_uiStsOpScr.assign(12 * (size_t)nPe, (T)0);
+    T* scr      = m_uiStsOpScr.data();
+    T* g        = scr;
+    T* row      = scr + nPe;
+    T* pin      = scr + 2 * nPe;
+    T* pout     = scr + 3 * nPe;
+    T* sw       = scr + 4 * nPe;
+    double* im1 = (double*)(scr + 10 * nPe);
+    double* im2 = (double*)(scr + 11 * nPe);
+    for (const typename OwnPlan::Op& w : op.ops) {
+        bool mine = false;
+        for (unsigned int sg = w.segB; sg < w.segE; sg++) mine |= op.opSegCls[sg] == cls;
+        if (!mine) continue;
+        const unsigned int n = op.opSegEnd[w.segE - 1];
+        for (unsigned int t = 0; t < n; t++) pin[op.opT[w.inB + t]] = dg[op.opSrc[w.inB + t]];
+        pMesh->parent2ChildInterpolation(pin, pout, w.cnum, w.dim, im1, im2);
+        for (unsigned int q = w.outB; q < w.outE; q++) y[op.oDst[q]] = pout[op.oT[q]];
+    }
+    unsigned char ok[6];
+    for (const typename OwnPlan::Child& w : op.ch) {
+        if (m_uiOwnRowPc[w.row] != cls) continue;
+        const unsigned int ele = m_uiOwnRowEle[w.row];
+        const unsigned int* ro = m_uiOwnRowOff.data() + (size_t)w.row * (nCls + 1);
+        const bool hasOps      = m_uiOwnOpOff[ele + 1] > m_uiOwnOpOff[ele];
+        T* gg                  = hasOps ? g : row;
+        std::memcpy(gg, dg + (size_t)ele * nPe, sizeof(T) * nPe);
+        for (unsigned int c = 0; c < nCls; c++)
+            for (unsigned int q = ro[c]; q < ro[c + 1]; q++)
+                gg[m_uiOwnRowN[q]] = dg[m_uiOwnRowSrc[q]];
+        if (hasOps) own_row_ops(ele, g, row, pin, pout, im1, im2);
+        std::memset(ok, 0, sizeof(ok));
+        p2c3_shared(pMesh, row, pout, w.cnum, sw, ok);
+        for (unsigned int q = w.outB; q < w.outE; q++)
+            std::memcpy(y + op.cDst[q], pout + op.cT[q], (size_t)op.cLen[q] * sizeof(T));
+    }
+}
+
+template <typename T, typename Ctx>
+const std::vector<unsigned char>& ExplicitNUTS<T, Ctx>::sts_xmask(unsigned int blk) {
+    const ot::Mesh* pMesh    = m_uiAppCtx->get_mesh();
+    const ot::Block* blkList = pMesh->getLocalBlockList().data();
+    const unsigned int nBlk  = pMesh->getLocalBlockList().size();
+    if (m_uiStsXMask.size() != nBlk) m_uiStsXMask.assign(nBlk, std::vector<unsigned char>());
+    std::vector<unsigned char>& m = m_uiStsXMask[blk];
+    if (!m.empty() || m_uiOwnPlan.size() != nBlk || !m_uiOwnPlan[blk].built) return m;
+    const size_t lxyz = (size_t)blkList[blk].getAllocationSzX() *
+                        blkList[blk].getAllocationSzY() * blkList[blk].getAllocationSzZ();
+    m.assign(lxyz, 0);
+    const OwnPlan& op       = m_uiOwnPlan[blk];
+    const unsigned int nCls = m_uiOwnDTs.size();
+    const unsigned int bc   = (unsigned int)(
+        std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(),
+                         m_uiEleDT[blkList[blk].firstElementID()]) - m_uiOwnDTs.begin());
+    for (unsigned int c = 0; c < nCls; c++) {
+        if (c == bc) continue;
+        for (unsigned int r = op.runOff[c]; r < op.runOff[c + 1]; r++)
+            for (unsigned int i = 0; i < op.rlen[r]; i++) m[op.rdst[r] + i] = 1;
+        for (unsigned int q = op.clsOff[c]; q < op.clsOff[c + 1]; q++) m[op.pdst[q]] = 1;
+    }
+    for (const typename OwnPlan::Op& w : op.ops) {
+        bool other = false;
+        for (unsigned int sg = w.segB; sg < w.segE; sg++) other |= op.opSegCls[sg] != bc;
+        if (!other) continue;
+        for (unsigned int q = w.outB; q < w.outE; q++) m[op.oDst[q]] = 1;
+    }
+    for (const typename OwnPlan::Child& w : op.ch) {
+        if (m_uiOwnRowPc[w.row] == bc) continue;
+        for (unsigned int q = w.outB; q < w.outE; q++)
+            for (unsigned int i = 0; i < op.cLen[q]; i++) m[op.cDst[q] + i] = 1;
+    }
+    return m;
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sts_test_stage(unsigned int blk, unsigned int j, unsigned int s,
+                                           const T* y0, const T* y1, const T* y2, T* ly0,
+                                           T* yj, double D) const {
+    const ot::Block& b       = m_uiAppCtx->get_mesh()->getLocalBlockList()[blk];
+    const unsigned int lx    = b.getAllocationSzX(), ly = b.getAllocationSzY(),
+                       lz    = b.getAllocationSzZ(), pw = b.get1DPadWidth();
+    const unsigned int bflag = b.getBlkNodeFlag();
+    // RKL2 (Meyer, Balsara, Aslam 2014); dt is inside D
+    const double w1 = 4.0 / (double)(s * s + s - 2);
+    auto bq = [](unsigned int q) {
+        return q < 2 ? 1.0 / 3.0 : (double)(q * q + q - 2) / (2.0 * q * (q + 1));
+    };
+    double mu = 1, nu = 0, mut = bq(1) * w1, gt = 0;
+    if (j >= 2) {
+        mu  = (2.0 * j - 1) / j * bq(j) / bq(j - 1);
+        nu  = -(j - 1.0) / j * bq(j) / bq(j - 2);
+        mut = mu * w1;
+        gt  = -(1.0 - bq(j - 1)) * mut;
+    }
+    const size_t sx = 1, sy = lx, sz = (size_t)lx * ly;
+    const bool bl = bflag & (1u << OCT_DIR_LEFT), br = bflag & (1u << OCT_DIR_RIGHT),
+               bd = bflag & (1u << OCT_DIR_DOWN), bu = bflag & (1u << OCT_DIR_UP),
+               bb = bflag & (1u << OCT_DIR_BACK), bf = bflag & (1u << OCT_DIR_FRONT);
+    for (unsigned int k = pw; k < lz - pw; k++)
+        for (unsigned int jj = pw; jj < ly - pw; jj++)
+            for (unsigned int i = pw; i < lx - pw; i++) {
+                const size_t p = k * sz + jj * sy + i;
+                const bool edge = (bl && i == pw) || (br && i + pw + 1 == lx) ||
+                                  (bd && jj == pw) || (bu && jj + pw + 1 == ly) ||
+                                  (bb && k == pw) || (bf && k + pw + 1 == lz);
+                auto L = [&](const T* y) -> double {
+                    return edge ? 0.0
+                                : D * (y[p - sx] + y[p + sx] + y[p - sy] + y[p + sy] +
+                                       y[p - sz] + y[p + sz] - 6.0 * y[p]);
+                };
+                if (j == 1) ly0[p] = (T)L(y0);
+                const double l1 = (j == 1) ? (double)ly0[p] : L(y1);
+                yj[p] = (T)(mu * y1[p] + nu * y2[p] + (1.0 - mu - nu) * y0[p] + mut * l1 +
+                            gt * ly0[p]);
+            }
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sts_test_acc(unsigned int blk, unsigned int cls, const T* y0,
+                                         const T* ys) {
+    const ot::Mesh* pMesh   = m_uiAppCtx->get_mesh();
+    const ot::Block& b      = pMesh->getLocalBlockList()[blk];
+    const unsigned int nBlk = pMesh->getLocalBlockList().size();
+    const unsigned int lx = b.getAllocationSzX(), ly = b.getAllocationSzY(),
+                       lz = b.getAllocationSzZ(), pw = b.get1DPadWidth();
+    const size_t lxyz = (size_t)lx * ly * lz;
+    if (m_uiStsAcc.size() != nBlk) m_uiStsAcc.assign(nBlk, std::vector<T>());
+    if (m_uiStsInc.size() != m_uiOwnDTs.size()) m_uiStsInc.assign(m_uiOwnDTs.size(), (T)0);
+    std::vector<T>& a = m_uiStsAcc[blk];
+    if (a.size() != lxyz) a.assign(lxyz, (T)0);
+    T mx = 0;
+    for (unsigned int k = pw; k < lz - pw; k++)
+        for (unsigned int jj = pw; jj < ly - pw; jj++)
+            for (unsigned int i = pw; i < lx - pw; i++) {
+                const size_t p = (size_t)k * lx * ly + (size_t)jj * lx + i;
+                const T d      = ys[p] - y0[p];
+                a[p] += d;
+                mx = std::max(mx, std::abs(d));
+            }
+    m_uiStsInc[cls] = std::max(m_uiStsInc[cls], mx);
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::sts_dump() {
+    // per rank <dir>/sts_r<rank>.bin: header (magic, blocks, classes, coarse
+    // steps, dt0, fine dt, per class ratio and largest pass increment), then
+    // per block (id, level, lx, ly, lz, pad, class, ratio, origin x y z) and
+    // its interior points in k, j, i order: shell flag, damping so far, U
+    const ot::Mesh* pMesh    = m_uiAppCtx->get_mesh();
+    const ot::Block* blkList = pMesh->getLocalBlockList().data();
+    const unsigned int nBlk  = pMesh->getLocalBlockList().size();
+    const unsigned int nCls  = m_uiOwnDTs.size();
+    const unsigned int var   = m_uiStsVar;
+    const std::string fn     = std::string(stsTestDump()) + "/sts_r" +
+                           std::to_string(pMesh->getMPIRankGlobal()) + ".bin";
+    FILE* f = std::fopen(fn.c_str(), "wb");
+    if (!f) {
+        std::cout << "[enuts-sts r" << pMesh->getMPIRankGlobal() << "] cannot write " << fn
+                  << std::endl;
+        return;
+    }
+    auto w32 = [&](unsigned int v) { std::fwrite(&v, 4, 1, f); };
+    auto wd  = [&](double v) { std::fwrite(&v, 8, 1, f); };
+    w32(0x53545301u);
+    w32(nBlk);
+    w32(nCls);
+    w32(m_uiStsSteps);
+    wd((double)m_uiStsDt0);
+    wd((double)m_uiTimeInfo._m_uiTh);
+    for (unsigned int c = 0; c < nCls; c++) {
+        w32(m_uiOwnDTs[c]);
+        wd(c < m_uiStsInc.size() ? (double)m_uiStsInc[c] : 0.0);
+    }
+    std::vector<unsigned char> dil, tmp;
+    for (unsigned int blk = 0; blk < nBlk; blk++) {
+        const ot::Block& b    = blkList[blk];
+        const unsigned int lx = b.getAllocationSzX(), ly = b.getAllocationSzY(),
+                           lz = b.getAllocationSzZ(), pw = b.get1DPadWidth();
+        const size_t lxyz     = (size_t)lx * ly * lz;
+        const ot::TreeNode bn = b.getBlockNode();
+        const unsigned int bc = (unsigned int)(
+            std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(),
+                             m_uiEleDT[b.firstElementID()]) - m_uiOwnDTs.begin());
+        // shell: within pw (Chebyshev) of a slot another class fills; three
+        // 1D max filters
+        const std::vector<unsigned char>& xm = sts_xmask(blk);
+        dil.assign(lxyz, 0);
+        if (xm.size() == lxyz) {
+            dil = xm;
+            tmp.assign(lxyz, 0);
+            const unsigned int n[3]   = {lx, ly, lz};
+            const size_t st[3]        = {1, lx, (size_t)lx * ly};
+            for (unsigned int d = 0; d < 3; d++) {
+                for (size_t p = 0; p < lxyz; p++) {
+                    if (!dil[p]) continue;
+                    const unsigned int c = (unsigned int)((p / st[d]) % n[d]);
+                    const unsigned int lo = c > pw ? c - pw : 0, hi = std::min(c + pw, n[d] - 1);
+                    for (unsigned int q = lo; q <= hi; q++) tmp[p + ((size_t)q - c) * st[d]] = 1;
+                }
+                dil.swap(tmp);
+                std::fill(tmp.begin(), tmp.end(), 0);
+            }
+        }
+        const T* u   = m_uiBVec[blk]._vec[0].data() + (size_t)var * lxyz;
+        const T* acc = (blk < m_uiStsAcc.size() && m_uiStsAcc[blk].size() == lxyz)
+                           ? m_uiStsAcc[blk].data()
+                           : nullptr;
+        w32(blk);
+        w32(b.getRegularGridLev());
+        w32(lx);
+        w32(ly);
+        w32(lz);
+        w32(pw);
+        w32(bc);
+        w32(m_uiOwnDTs[bc]);
+        w32(bn.getX());
+        w32(bn.getY());
+        w32(bn.getZ());
+        for (unsigned int k = pw; k < lz - pw; k++)
+            for (unsigned int jj = pw; jj < ly - pw; jj++)
+                for (unsigned int i = pw; i < lx - pw; i++) {
+                    const size_t p = (size_t)k * lx * ly + (size_t)jj * lx + i;
+                    std::fputc(dil[p], f);
+                    wd(acc ? (double)acc[p] : 0.0);
+                    wd((double)u[p]);
+                }
+    }
+    std::fclose(f);
 }
 
 template <typename T, typename Ctx>
@@ -4325,6 +4683,47 @@ void ExplicitNUTS<T, Ctx>::sts_pass(unsigned int cls, unsigned int s, T dt,
         const size_t NN = m_uiBVec[blk]._vec[0].getSz();
         if (m_uiStsScr[blk].size() != 4 * NN) m_uiStsScr[blk].assign(4 * NN, (T)0);
     }
+    // U of the class into the one-variable DG vector, exchanged in the class
+    // range (a dependent's row reads the class's nodes from it), then the
+    // padding from every coarser class at this time: its pass left its
+    // damped U in the vector, and the block's U padding holds the owner
+    // sync's value without that damping. The identity test keeps the
+    // node-coincident rounds only (bitwise); STS_FROZEN_ONLY keeps the lag
+    // of one coarse step; STS_TEST_BREAK pins that padding instead.
+    const bool test = stsTestC() > 0 && !m_uiStsIdent;
+    const bool hang = !m_uiStsIdent;
+    const int brk   = test ? stsTestBreak() : 0;
+    for (const unsigned int blk : bl)
+        sts_zip(blk, m_uiBVec[blk]._vec[0].data() + (size_t)var * m_uiBVec[blk]._vec[0].getSz(),
+                m_uiStsDG.data());
+    own_node_exchange_begin(m_uiStsDG.data(), 1, pt, (int)cls);
+    own_node_exchange_end(m_uiStsDG.data(), 1, pt, (int)cls);
+    if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_STS_ROUNDS] += 1;
+    if (brk) {
+        if (m_uiStsBrk.size() != pMesh->getLocalBlockList().size())
+            m_uiStsBrk.assign(pMesh->getLocalBlockList().size(), std::vector<T>());
+        for (const unsigned int blk : bl) {
+            const size_t NN = m_uiBVec[blk]._vec[0].getSz();
+            T* y0           = (T*)m_uiBVec[blk]._vec[0].data() + (size_t)var * NN;
+            const std::vector<unsigned char>& xm = sts_xmask(blk);
+            if (xm.size() != NN) continue;
+            if (m_uiStsBrk[blk].empty()) {
+                m_uiStsBrk[blk].assign(y0, y0 + NN);
+                if (brk == 2) std::fill(m_uiStsBrk[blk].begin(), m_uiStsBrk[blk].end(), (T)0);
+            }
+            for (size_t i = 0; i < NN; i++)
+                if (xm[i]) y0[i] = m_uiStsBrk[blk][i];
+        }
+    } else if (hang && !stsFrozenOnly()) {
+        const unsigned int nCls = m_uiOwnDTs.size();
+        for (unsigned int c = cls + 1; c < nCls; c++) {
+            if ((pt + m_uiOwnDTs[cls]) % m_uiOwnDTs[c] || !m_uiStsStages(m_uiOwnDTs[c])) continue;
+            for (const unsigned int blk : bl)
+                sts_fill(blk, c, m_uiStsDG.data(),
+                         (T*)m_uiBVec[blk]._vec[0].data() + (size_t)var * m_uiBVec[blk]._vec[0].getSz(),
+                         true);
+        }
+    }
     // ring of three stage slots: a = Y_{j-1}, b = Y_{j-2}, c = Y_j
     unsigned int ia = 0, ib = 1, ic = 2;
     for (unsigned int j = 1; j <= s; j++) {
@@ -4352,7 +4751,7 @@ void ExplicitNUTS<T, Ctx>::sts_pass(unsigned int cls, unsigned int s, T dt,
         own_node_exchange_end(m_uiStsDG.data(), 1, pt, (int)cls);
         for (const unsigned int blk : bl)
             sts_fill(blk, cls, m_uiStsDG.data(),
-                     m_uiStsScr[blk].data() + (size_t)ic * m_uiBVec[blk]._vec[0].getSz());
+                     m_uiStsScr[blk].data() + (size_t)ic * m_uiBVec[blk]._vec[0].getSz(), hang);
         if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_STS_ROUNDS] += 1;
         const unsigned int t = ib;
         ib = ia; ia = ic; ic = t;
@@ -4364,6 +4763,7 @@ void ExplicitNUTS<T, Ctx>::sts_pass(unsigned int cls, unsigned int s, T dt,
         const size_t NN = m_uiBVec[blk]._vec[0].getSz();
         T* y0           = (T*)m_uiBVec[blk]._vec[0].data() + (size_t)var * NN;
         const T* ys     = m_uiStsScr[blk].data() + (size_t)ia * NN;
+        if (test) sts_test_acc(blk, cls, y0, ys);
         if (chk) {
             const T* ref = m_uiStsChk.data() + chkOff[q];
             for (size_t i = 0; i < NN; i++)
@@ -6482,7 +6882,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     if (m_uiStGOn) update_stage_g(pt);
     update_ele_timestep(&m_uiActiveBlkIDs);
     ENUTS_TOC(AXPY_ELETS);
-    if (m_uiStsOn || stsTest()) sts_hook(pt, actIds, nAct, ownPlan, thr);
+    if (m_uiStsOn || stsTest() || stsTestC() > 0) sts_hook(pt, actIds, nAct, ownPlan, thr);
     ENUTS_TIC();
 
     // OWN_NO_ETIME_XCH: the owner path never reads a ghost element time
