@@ -61,7 +61,8 @@ struct EnutsProf {
            RC_WALL0, RC_CAP0, RC_SUM0, RC_MAX0, RC_CALLS0,
            RC_WALL1, RC_CAP1, RC_SUM1, RC_MAX1, RC_CALLS1,
            PE_PROLOG, EV_TOTAL, EV_PRETS, EV_UNZIP, EV_LOAD, EV_ETIME, EV_ZIP, EV_POST,
-           ST_PASS, CN_STS_ROUNDS, NT };
+           ST_PASS, CN_STS_ROUNDS,
+           RB_T0, RB_T1, RB_T2, RB_T3, RB_P0, RB_P1, RB_P2, RB_P3, NT };
     double t[NT]     = {};
     double partial   = 0;      // partial steps taken (this rank was active)
     double lev_sum   = 0;      // sum over partial steps of globally active levels
@@ -1531,7 +1532,12 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                 "evolve_total", "  evolve: ctx pre_timestep", "  evolve: ctx unzip (load)",
                 "  evolve: block load from unzip", "  evolve: element time init + exchange",
                 "  evolve: end-of-step zip", "  evolve: ctx post_timestep + waitAll",
-                "sts: passes (stages + one-variable rounds; wall)", "  count: sts rounds"};
+                "sts: passes (stages + one-variable rounds; wall)", "  count: sts rounds",
+                // rhs_blk by block span (elements per side): thread-s, then padded points
+                "  rhs:  rhs_blk on 1-element blocks (thread-s)", "  rhs:  rhs_blk on 2-element blocks (thread-s)",
+                "  rhs:  rhs_blk on 4-element blocks (thread-s)", "  rhs:  rhs_blk on 8+-element blocks (thread-s)",
+                "  count: rhs_blk points on 1-element blocks", "  count: rhs_blk points on 2-element blocks",
+                "  count: rhs_blk points on 4-element blocks", "  count: rhs_blk points on 8+-element blocks"};
             std::cout << "[enuts-prof] npes=" << np
                       << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
                       << " mean_active_levels/step="
@@ -6208,9 +6214,19 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             ENUTS_BLK_TOC(RL_PRE);
             debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
             debug_blk_hash("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
+            const double tr0 = tb1;
             m_uiBVec[blk]._vec[stage_slot(BLK_S)].computeVec(m_uiAppCtx, sIn,
                                                              t_stage);
             ENUTS_BLK_TOC(RL_RHS);
+            if (prof) {
+                // rhs_blk seconds and points by block span (elements per side)
+                const unsigned int bw = blkList[blk].getAllocationSzX() -
+                                        2 * blkList[blk].get1DPadWidth() - 1;
+                const unsigned int ne = bw / pMesh->getElementOrder();
+                const unsigned int bi = ne >= 8 ? 3 : ne >= 4 ? 2 : ne >= 2 ? 1 : 0;
+                ts::EnutsProf::get().t[ts::EnutsProf::RB_T0 + bi] += tb1 - tr0;
+                ts::EnutsProf::get().t[ts::EnutsProf::RB_P0 + bi] += (double)NN;
+            }
             debug_nan_check("post-rhs", blk, BLK_S, pt, rk);
             debug_blk_hash("post-rhs", blk, BLK_S, pt, rk);
             m_uiBVec[blk]._vec[stage_slot(BLK_S)].mark_unsynced();
