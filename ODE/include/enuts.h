@@ -1256,6 +1256,57 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<unsigned int> m_uiActiveOrder;
     /** prof: seconds spent on each active block in the current rhs loop call */
     std::vector<double> m_uiRlBlkT;
+    /** DENDRO_ENUTS_CLASS_WORK=1 (prof): this rank's rhs block loop by
+     *  time-step class (blocks, elements, padded and interior points of a
+     *  pass, calls, thread-s) and by sub-step type (the coarsest class
+     *  active at pt: loop calls, wall, threads x wall, thread-s); the
+     *  static columns describe the last mesh, printed per rank at the end */
+    std::vector<unsigned int> m_uiCwDTs;
+    std::vector<unsigned char> m_uiCwBlkCls;
+    std::vector<double> m_uiCwCls;
+    std::vector<double> m_uiCwType;
+    static bool classWork() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_CLASS_WORK");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    void class_work_setup() {
+        const ot::Mesh* pMesh    = m_uiAppCtx->get_mesh();
+        const ot::Block* blkList = pMesh->getLocalBlockList().data();
+        const unsigned int nBlk  = pMesh->getLocalBlockList().size();
+        const ot::TreeNode* pNodes = pMesh->getAllElements().data();
+        m_uiCwDTs.clear();
+        for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
+            m_uiCwDTs.push_back(m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax));
+        std::sort(m_uiCwDTs.begin(), m_uiCwDTs.end());
+        m_uiCwDTs.erase(std::unique(m_uiCwDTs.begin(), m_uiCwDTs.end()), m_uiCwDTs.end());
+        const size_t nCls = m_uiCwDTs.size();
+        std::vector<double> cls(nCls * 6, 0.0), typ(nCls * 4, 0.0);
+        // keep the dynamic columns across a remesh
+        for (size_t k = 0; k < nCls && k * 6 + 5 < m_uiCwCls.size(); k++) {
+            cls[k * 6 + 4] = m_uiCwCls[k * 6 + 4];
+            cls[k * 6 + 5] = m_uiCwCls[k * 6 + 5];
+        }
+        for (size_t i = 0; i < std::min(typ.size(), m_uiCwType.size()); i++) typ[i] = m_uiCwType[i];
+        m_uiCwBlkCls.assign(nBlk, 0);
+        for (unsigned int blk = 0; blk < nBlk; blk++) {
+            const unsigned int lev = pNodes[blkList[blk].firstElementID()].getLevel();
+            const unsigned int dt  = m_uiAppCtx->getBlkTimestepFac(lev, m_uiLevMin, m_uiLevMax);
+            const unsigned int k   = (unsigned int)(
+                std::lower_bound(m_uiCwDTs.begin(), m_uiCwDTs.end(), dt) - m_uiCwDTs.begin());
+            m_uiCwBlkCls[blk] = (unsigned char)k;
+            const unsigned int lx = blkList[blk].getAllocationSzX(), ly = blkList[blk].getAllocationSzY(),
+                               lz = blkList[blk].getAllocationSzZ(), pw = blkList[blk].get1DPadWidth();
+            cls[k * 6 + 0] += 1;
+            for (const unsigned int e : blkList[blk]) { (void)e; cls[k * 6 + 1] += 1; }
+            cls[k * 6 + 2] += (double)lx * ly * lz;
+            cls[k * 6 + 3] += (double)(lx - 2 * pw) * (ly - 2 * pw) * (lz - 2 * pw);
+        }
+        m_uiCwCls.swap(cls);
+        m_uiCwType.swap(typ);
+    }
     /** the per-mesh tables sync_blk_timestep builds on first use */
     void sync_lazy_build(bool ownEid);
     /** threads: everything a block call would build on first use (tables and
@@ -1657,6 +1708,32 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
             if (std::fabs(cw - sm[ts::EnutsProf::RHS]) > 1e-9 * std::max(1.0, sm[ts::EnutsProf::RHS]))
                 std::cout << "[enuts-prof] WARNING: rhs class walls " << cw
                           << " != rhs+zipDG " << sm[ts::EnutsProf::RHS] << std::endl;
+        }
+        if (classWork()) {
+            // per rank and class: the static columns and the loop by sub-step type
+            int nc = (int)m_uiCwDTs.size(), ncm = 0;
+            MPI_Allreduce(&nc, &ncm, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+            const int W = 1 + 11 * ncm;
+            std::vector<double> row((size_t)W, 0.0), all(rk == 0 ? (size_t)W * np : 0);
+            row[0] = nc;
+            for (int k = 0; k < nc; k++) {
+                row[1 + k * 11] = m_uiCwDTs[k];
+                for (int i = 0; i < 6; i++) row[2 + k * 11 + i] = m_uiCwCls[(size_t)k * 6 + i];
+                for (int i = 0; i < 4; i++) row[8 + k * 11 + i] = m_uiCwType[(size_t)k * 4 + i];
+            }
+            MPI_Gather(row.data(), W, MPI_DOUBLE, all.data(), W, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+            if (rk == 0) {
+                std::cout << "[lts-class-work] rank cls ratio blocks elements pad_pts int_pts rhs_calls "
+                             "rhs_thread_s type_loops type_wall type_cap type_thread_s" << std::endl;
+                for (int r = 0; r < np; r++) {
+                    const double* a = all.data() + (size_t)r * W;
+                    for (int k = 0; k < (int)a[0]; k++) {
+                        std::cout << "[lts-class-work] " << r << " " << k;
+                        for (int i = 0; i < 11; i++) std::cout << " " << a[1 + k * 11 + i];
+                        std::cout << std::endl;
+                    }
+                }
+            }
         }
         for (int i = 0; i < ts::EnutsProf::NT; i++) P.t[i] = 0;
         P.partial = P.lev_sum = P.blk_sum = P.blk_tot = 0;
@@ -6481,6 +6558,8 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     if (prof) {
         ts::EnutsProf::get().t[ts::EnutsProf::PE_PROLOG] += ts::EnutsProf::now() - tpT;
         m_uiRlBlkT.assign(nAct, 0.0);
+        if (classWork() && m_uiCwBlkCls.size() != pMesh->getLocalBlockList().size())
+            class_work_setup();
     }
     for (unsigned int rk = 1; rk <= m_uiNumStages; rk++) {
         const unsigned int BLK_S = rk;
@@ -6671,6 +6750,22 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             P.t[ts::EnutsProf::RC_SUM0 + c] += sum;
             P.t[ts::EnutsProf::RC_MAX0 + c] += mxb;
             P.t[ts::EnutsProf::RC_CALLS0 + c] += 1;
+            if (classWork() && !m_uiCwDTs.empty()) {
+                // sub-step type: the coarsest class active at pt
+                unsigned int tt = 0;
+                for (unsigned int k = 0; k < m_uiCwDTs.size(); k++)
+                    if (pt % m_uiCwDTs[k] == 0) tt = k;
+                double* ty = m_uiCwType.data() + (size_t)tt * 4;
+                ty[0] += 1;
+                ty[1] += wall;
+                ty[2] += nthr * wall;
+                ty[3] += sum;
+                for (unsigned int bb = 0; bb < nAct; bb++) {
+                    double* cl = m_uiCwCls.data() + (size_t)m_uiCwBlkCls[actIds[bb]] * 6;
+                    cl[4] += 1;
+                    cl[5] += m_uiRlBlkT[bb];
+                }
+            }
         }
         ENUTS_TIC();
         ot::g_eledg_pack_omp = thr;
