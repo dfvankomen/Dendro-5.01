@@ -65,9 +65,17 @@ ENUTSOp::ENUTSOp(ETSType type) {
         std::memcpy(m_uiCij.data(), ETS_C, sizeof(DendroScalar) * d2);
         std::memcpy(m_uiInvCij.data(), ETS_InvC, sizeof(DendroScalar) * d2);
 
-    } else if (type == ETSType::RK5) {
-        // these coefficients looks wrong. - Milinda. (need to fix those and
-        // enable the rk5 method. )
+    } else {
+        // the stage-interpolation matrices exist for RK3 and RK4 only; RK5's
+        // were left out as wrong (Milinda) and an empty operator segfaults
+        // in the first sync, so refuse here with a message instead
+        int rk = 0;
+        MPI_Comm_rank(MPI_COMM_WORLD, &rk);
+        if (!rk)
+            std::cerr << "[enuts] the ENUTS correction operator has stage-interpolation "
+                         "coefficients for RK3 and RK4 only (ETS type " << (int)type
+                      << "); aborting" << std::endl;
+        MPI_Abort(MPI_COMM_WORLD, 17);
         return;
         /*m_uiNumStages = 5;
         const unsigned int d1 = m_uiNumStages;
