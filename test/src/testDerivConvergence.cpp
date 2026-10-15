@@ -244,6 +244,9 @@ static const std::vector<double> &coeffs_for(const std::string &name,
     // these coefficients.
     static const std::vector<double> ZERO_ONE = {0.0};
     if (name.rfind("BYU_A6_2ND_R", 0) == 0) return ZERO_ONE;
+    // BYU_A6_1ST and BYU_C6_2nd: zero perturbation is the base scheme
+    if (name.rfind("BYU_A6_1ST_R", 0) == 0 ||
+        name.rfind("BYU_C6_2nd_r_", 0) == 0) return ZERO_ONE;
     // R2 variants: zero perturbation is the base scheme
     static const std::vector<double> ZERO_THREE = {0.0, 0.0, 0.0};
     if (name == "BYUT6R2" || name == "BYUP6R2") return ZERO_THREE;
@@ -541,7 +544,8 @@ static void print_mixed_row(const MixedResult &r) {
 // than taken from the scheme names. The name digit corroborates all of these,
 // except that pw 3 cannot resolve an 8th-order stencil -- E8Matrix and BYUP8 are
 // therefore left out -- and the parameterized BYU_A6/BYU_C6/KIM4xx families need
-// coefficients supplied via coeffs_for() and are garbage here.
+// coefficients supplied via coeffs_for(); BYU_A6_1ST and BYU_C6_2nd are gated
+// only where the measured order clears 5.0.
 struct OrderBaseline {
     const char *name;
     int deriv;
@@ -561,6 +565,87 @@ static const OrderBaseline kBaseline[] = {
     {"E6Matrix", 2, 5.5},  {"E6Simd", 2, 5.5},    {"JTT6", 2, 5.5},
     {"JTP6", 2, 5.5},      {"CCFD6", 2, 5.5},     {"BYUP6", 2, 5.0},
     {"BYUT6", 2, 4.5},     {"BYUT6R2", 2, 5.5},   {"BYUP6R2", 2, 5.5},
+    {"BYU_A6_1ST_R060_OP1", 1, 5.0}, {"BYU_A6_1ST_R060_OP10", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP11", 1, 5.0}, {"BYU_A6_1ST_R060_OP12", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP15", 1, 5.0}, {"BYU_A6_1ST_R060_OP16", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP17", 1, 5.0}, {"BYU_A6_1ST_R060_OP2", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP22", 1, 5.0}, {"BYU_A6_1ST_R060_OP23", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP24", 1, 5.0}, {"BYU_A6_1ST_R060_OP26", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP27", 1, 5.0}, {"BYU_A6_1ST_R060_OP28", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP3", 1, 5.0}, {"BYU_A6_1ST_R060_OP5", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP6", 1, 5.0}, {"BYU_A6_1ST_R060_OP7", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP8", 1, 5.0}, {"BYU_A6_1ST_R060_OP9", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP1", 1, 5.0}, {"BYU_A6_1ST_R065_OP11", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP12", 1, 5.0}, {"BYU_A6_1ST_R065_OP13", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP14", 1, 5.0}, {"BYU_A6_1ST_R065_OP15", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP16", 1, 5.0}, {"BYU_A6_1ST_R065_OP18", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP19", 1, 5.0}, {"BYU_A6_1ST_R065_OP2", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP20", 1, 5.0}, {"BYU_A6_1ST_R065_OP21", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP23", 1, 5.0}, {"BYU_A6_1ST_R065_OP24", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP3", 1, 5.0}, {"BYU_A6_1ST_R065_OP4", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP5", 1, 5.0}, {"BYU_A6_1ST_R065_OP6", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP7", 1, 5.0}, {"BYU_A6_1ST_R065_OP8", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP9", 1, 5.0}, {"BYU_A6_1ST_R070_OP1", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP10", 1, 5.0}, {"BYU_A6_1ST_R070_OP11", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP12", 1, 5.0}, {"BYU_A6_1ST_R070_OP13", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP14", 1, 5.0}, {"BYU_A6_1ST_R070_OP15", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP16", 1, 5.0}, {"BYU_A6_1ST_R070_OP17", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP18", 1, 5.0}, {"BYU_A6_1ST_R070_OP19", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP2", 1, 5.0}, {"BYU_A6_1ST_R070_OP20", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP21", 1, 5.0}, {"BYU_A6_1ST_R070_OP23", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP24", 1, 5.0}, {"BYU_A6_1ST_R070_OP25", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP26", 1, 5.0}, {"BYU_A6_1ST_R070_OP3", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP4", 1, 5.0}, {"BYU_A6_1ST_R070_OP5", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP6", 1, 5.0}, {"BYU_A6_1ST_R070_OP8", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP9", 1, 5.0}, {"BYU_A6_1ST_R075_OP1", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP10", 1, 5.0}, {"BYU_A6_1ST_R075_OP11", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP12", 1, 5.0}, {"BYU_A6_1ST_R075_OP13", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP14", 1, 5.0}, {"BYU_A6_1ST_R075_OP15", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP16", 1, 5.0}, {"BYU_A6_1ST_R075_OP17", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP18", 1, 5.0}, {"BYU_A6_1ST_R075_OP19", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP2", 1, 5.0}, {"BYU_A6_1ST_R075_OP20", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP21", 1, 5.0}, {"BYU_A6_1ST_R075_OP22", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP23", 1, 5.0}, {"BYU_A6_1ST_R075_OP24", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP25", 1, 5.0}, {"BYU_A6_1ST_R075_OP26", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP27", 1, 5.0}, {"BYU_A6_1ST_R075_OP28", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP3", 1, 5.0}, {"BYU_A6_1ST_R075_OP30", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP4", 1, 5.0}, {"BYU_A6_1ST_R075_OP6", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP7", 1, 5.0}, {"BYU_A6_1ST_R075_OP8", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP9", 1, 5.0}, {"BYU_A6_1ST_R080_OP1", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP10", 1, 5.0}, {"BYU_A6_1ST_R080_OP11", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP12", 1, 5.0}, {"BYU_A6_1ST_R080_OP13", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP3", 1, 5.0}, {"BYU_A6_1ST_R080_OP4", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP5", 1, 5.0}, {"BYU_A6_1ST_R080_OP6", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP7", 1, 5.0}, {"BYU_A6_1ST_R085_OP1", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP11", 1, 5.0}, {"BYU_A6_1ST_R085_OP12", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP13", 1, 5.0}, {"BYU_A6_1ST_R085_OP14", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP15", 1, 5.0}, {"BYU_A6_1ST_R085_OP16", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP17", 1, 5.0}, {"BYU_A6_1ST_R085_OP18", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP19", 1, 5.0}, {"BYU_A6_1ST_R085_OP20", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP21", 1, 5.0}, {"BYU_A6_1ST_R085_OP22", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP23", 1, 5.0}, {"BYU_A6_1ST_R085_OP25", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP26", 1, 5.0}, {"BYU_A6_1ST_R085_OP27", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP28", 1, 5.0}, {"BYU_A6_1ST_R085_OP29", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP3", 1, 5.0}, {"BYU_A6_1ST_R085_OP30", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP4", 1, 5.0}, {"BYU_A6_1ST_R085_OP5", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP7", 1, 5.0}, {"BYU_A6_1ST_R085_OP8", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP9", 1, 5.0}, {"BYU_C6_2nd_r_060_Op1", 2, 5.0},
+    {"BYU_C6_2nd_r_060_Op2", 2, 5.0}, {"BYU_C6_2nd_r_060_Op3", 2, 5.0},
+    {"BYU_C6_2nd_r_060_Op5", 2, 5.0}, {"BYU_C6_2nd_r_060_Op6", 2, 5.0},
+    {"BYU_C6_2nd_r_065_Op1", 2, 5.0}, {"BYU_C6_2nd_r_065_Op2", 2, 5.0},
+    {"BYU_C6_2nd_r_065_Op3", 2, 5.0}, {"BYU_C6_2nd_r_065_Op4", 2, 5.0},
+    {"BYU_C6_2nd_r_065_Op5", 2, 5.0}, {"BYU_C6_2nd_r_065_Op6", 2, 5.0},
+    {"BYU_C6_2nd_r_070_Op1", 2, 5.0}, {"BYU_C6_2nd_r_070_Op2", 2, 5.0},
+    {"BYU_C6_2nd_r_070_Op3", 2, 5.0}, {"BYU_C6_2nd_r_070_Op4", 2, 5.0},
+    {"BYU_C6_2nd_r_070_Op5", 2, 5.0}, {"BYU_C6_2nd_r_070_Op6", 2, 5.0},
+    {"BYU_C6_2nd_r_075_Op1", 2, 5.0}, {"BYU_C6_2nd_r_075_Op2", 2, 5.0},
+    {"BYU_C6_2nd_r_075_Op3", 2, 5.0}, {"BYU_C6_2nd_r_075_Op4", 2, 5.0},
+    {"BYU_C6_2nd_r_075_Op5", 2, 5.0}, {"BYU_C6_2nd_r_080_Op1", 2, 5.0},
+    {"BYU_C6_2nd_r_080_Op2", 2, 5.0}, {"BYU_C6_2nd_r_080_Op3", 2, 5.0},
+    {"BYU_C6_2nd_r_080_Op4", 2, 5.0}, {"BYU_C6_2nd_r_080_Op5", 2, 5.0},
+    {"BYU_C6_2nd_r_085_Op1", 2, 5.0}, {"BYU_C6_2nd_r_085_Op2", 2, 5.0},
+    {"BYU_C6_2nd_r_085_Op3", 2, 5.0}, {"BYU_C6_2nd_r_085_Op4", 2, 5.0},
+    {"BYU_C6_2nd_r_085_Op5", 2, 5.0},
 };
 
 // E8 family at eleorder 8 and 10: 8th-order interior, 6th-order closure rows.
