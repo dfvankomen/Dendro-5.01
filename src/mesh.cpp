@@ -7480,15 +7480,20 @@ size_t Mesh::buildBlocksFromCanonicalInfo() {
     // splits those blocks into their eight children (anchor one level
     // finer, same regular grid) until it holds n of them or they are single
     // elements, so the level's sub-steps have enough blocks for the rank's
-    // threads. Local to the rank: the decomposition is no longer the source
-    // mesh's (roundoff at block faces changes). _DRY=1 reports only,
-    // _CHECK=1 aborts when a level ends short with splittable blocks left.
+    // threads. Blocks are not split below 2 elements per side (1-element
+    // blocks cost more per element in padding and sync than they return in
+    // idle threads: q24) unless _SINGLE=1. Local to the rank: the
+    // decomposition is no longer the source mesh's (roundoff at block faces
+    // changes). _DRY=1 reports only, _CHECK=1 aborts when a level ends short
+    // with splittable blocks left.
     if (const char* env = std::getenv("DENDRO_OCT2BLK_MIN_BLOCKS")) {
         unsigned int n = 0, L = 0;
         const int got  = std::sscanf(env, "%u:%u", &n, &L);
         const char* d  = std::getenv("DENDRO_OCT2BLK_MIN_BLOCKS_DRY");
         const char* c  = std::getenv("DENDRO_OCT2BLK_MIN_BLOCKS_CHECK");
+        const char* sg = std::getenv("DENDRO_OCT2BLK_MIN_BLOCKS_SINGLE");
         const bool dry = d && d[0] == '1', chk = c && c[0] == '1';
+        const unsigned int spanFloor = (sg && sg[0] == '1') ? 0u : 1u;
         if (got >= 1 && n > 0) {
             unsigned int lmax = 0;
             for (auto& kv : blockGroups)
@@ -7506,7 +7511,7 @@ size_t Mesh::buildBlocksFromCanonicalInfo() {
                     for (auto& kv : blockGroups) {
                         const uint32_t meta = blockMetaForAnchor[kv.first];
                         const AnchorKey& k  = kv.first;
-                        if ((meta & 0xFFu) != l || k.lev >= l) continue;
+                        if ((meta & 0xFFu) != l || k.lev + spanFloor >= l) continue;
                         const uint32_t cs  = 1u << (m_uiMaxDepth - k.lev - 1);
                         const uint32_t rot = (meta >> 8) & 0xFFu;
                         std::vector<DendroIntL> ch[8];
@@ -7549,7 +7554,7 @@ size_t Mesh::buildBlocksFromCanonicalInfo() {
                 if (cnt[l] != cnt0[l] || (dry && shortL))
                     std::cout << "[oct2blk-min] rank " << m_uiActiveRank << ": level " << l
                               << " blocks " << cnt0[l] << " -> " << cnt[l]
-                              << (shortL ? (stuck[l] && !dry ? " (single elements)" : " (short)") : "")
+                              << (shortL ? (stuck[l] && !dry ? " (at the span floor)" : " (short)") : "")
                               << std::endl;
                 if (chk && shortL && !(stuck[l] && !dry)) bad = true;
             }
