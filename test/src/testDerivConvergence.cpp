@@ -243,6 +243,9 @@ static const std::vector<double> &coeffs_for(const std::string &name,
     // these coefficients.
     static const std::vector<double> ZERO_ONE = {0.0};
     if (name.rfind("BYU_A6_2ND_R", 0) == 0) return ZERO_ONE;
+    // R2 variants: zero perturbation is the base scheme
+    static const std::vector<double> ZERO_THREE = {0.0, 0.0, 0.0};
+    if (name == "BYUT6R2" || name == "BYUP6R2") return ZERO_THREE;
     return PLACEHOLDER;
 }
 
@@ -555,7 +558,7 @@ static const OrderBaseline kBaseline[] = {
     {"JTT4", 2, 3.5},      {"BYUT4", 2, 3.5},     {"E6", 2, 5.5},
     {"E6Matrix", 2, 5.5},  {"E6Simd", 2, 5.5},    {"JTT6", 2, 5.5},
     {"JTP6", 2, 5.5},      {"CCFD6", 2, 5.5},     {"BYUP6", 2, 5.0},
-    {"BYUT6", 2, 4.5},
+    {"BYUT6", 2, 4.5},     {"BYUT6R2", 2, 5.5},   {"BYUP6R2", 2, 5.5},
 };
 
 static bool g_gate = false;
@@ -657,6 +660,8 @@ int main(int argc, char **argv) {
         // coefficient sets are supplied via coeffs_for().
         if (s == "BYUT6") return false;
         if (s == "BYUP6") return false;
+        if (s == "BYUT6R2") return false;
+        if (s == "BYUP6R2") return false;
         if (s.rfind("BYUT4R", 0) == 0) return true;
         if (s.rfind("BYUT6", 0) == 0) return true;  // R1/R2/.. variants only
         if (s.rfind("BYUP6R", 0) == 0) return true;
