@@ -18,7 +18,7 @@
 // The test uses fixed eleorder = 6 (i.e. padding width pw = 3). The active
 // region within each block is (n - 2*pw)^3 cells; the boundary stencils
 // from the scheme apply to the first/last few active cells along each
-// axis.
+// axis. The E8 family needs pw >= 4 and is swept again at eleorder 8 and 10.
 //
 // To keep the test function's smoothness independent of h, the spatial
 // extent of the active region is held fixed at L = 1; only the number of
@@ -32,6 +32,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -42,8 +43,8 @@
 using namespace dendroderivs;
 
 // fixed configuration for the test
-static constexpr unsigned int ELEORDER = 6;
-static constexpr unsigned int PW       = ELEORDER / 2;            // = 3
+static unsigned int ELEORDER           = 6;
+static unsigned int PW                 = ELEORDER / 2;            // = 3
 static constexpr double L_ACTIVE       = 1.0;                     // active extent
 
 // active block sizes to sweep. n_active = n - 2*pw is the matrix dimension.
@@ -58,7 +59,7 @@ static constexpr double L_ACTIVE       = 1.0;                     // active exte
 //   49 |   43     | 1/42  = 0.02381
 //
 // six h values spanning ~7x, enough for a robust log-log slope fit.
-static const std::vector<unsigned int> N_SWEEP = {13, 17, 21, 25, 33, 49};
+static std::vector<unsigned int> N_SWEEP = {13, 17, 21, 25, 33, 49};
 
 // width (in cells) of the "boundary" region for splitting RMSE. Active
 // cells within K_BDRY of any active face count as boundary; the rest are
@@ -67,7 +68,7 @@ static const std::vector<unsigned int> N_SWEEP = {13, 17, 21, 25, 33, 49};
 // explicit schemes use biased stencils up to PW cells from the boundary,
 // so picking PW guarantees "interior" cells use only the centered stencil
 // for every scheme in the registry.
-static constexpr unsigned int K_BDRY = PW;
+static unsigned int K_BDRY = PW;
 
 // 3D test function:  u(x,y,z) = sin(2*pi*x) sin(2*pi*y) sin(2*pi*z)
 //   du/dx     =  2*pi cos(2*pi*x) sin(2*pi*y) sin(2*pi*z)
@@ -545,6 +546,7 @@ struct OrderBaseline {
     const char *name;
     int deriv;
     double floor;
+    double bdy_floor = 0.0;  // 0: boundary order not gated
 };
 
 static const OrderBaseline kBaseline[] = {
@@ -561,20 +563,37 @@ static const OrderBaseline kBaseline[] = {
     {"BYUT6", 2, 4.5},     {"BYUT6R2", 2, 5.5},   {"BYUP6R2", 2, 5.5},
 };
 
+// E8 family at eleorder 8 and 10: 8th-order interior, 6th-order closure rows.
+static const OrderBaseline kBaselineO8[] = {
+    {"E8", 1, 7.5, 5.0},       {"E8Simd", 1, 7.5, 5.0},
+    {"E8Matrix", 1, 7.5, 5.0}, {"E8", 2, 7.5, 5.0},
+    {"E8Simd", 2, 7.5, 5.0},   {"E8Matrix", 2, 7.5, 5.0},
+};
+
+static std::span<const OrderBaseline> g_baseline = kBaseline;
+
 static bool g_gate = false;
 static unsigned int g_gate_checked = 0, g_gate_failed = 0;
 
-static void gate_order(const SchemeResult &r, double p_int) {
+static void gate_order(const SchemeResult &r, double p_int, double p_bdy) {
     if (!g_gate) return;
-    for (const OrderBaseline &b : kBaseline) {
+    for (const OrderBaseline &b : g_baseline) {
         if (r.name != b.name || (int)r.deriv_order != b.deriv) continue;
         g_gate_checked++;
+        bool failed = false;
         if (!(p_int >= b.floor)) {
-            g_gate_failed++;
+            failed = true;
             std::cout << "  GATE FAIL " << b.name << " "
                       << (b.deriv == 1 ? "1st" : "2nd") << " interior order "
                       << p_int << " below floor " << b.floor << "\n";
         }
+        if (b.bdy_floor > 0.0 && !(p_bdy >= b.bdy_floor)) {
+            failed = true;
+            std::cout << "  GATE FAIL " << b.name << " "
+                      << (b.deriv == 1 ? "1st" : "2nd") << " boundary order "
+                      << p_bdy << " below floor " << b.bdy_floor << "\n";
+        }
+        if (failed) g_gate_failed++;
         return;
     }
 }
@@ -599,7 +618,7 @@ static void print_summary_row(const SchemeResult &r) {
               << std::setw(10) << p_all
               << (r.any_failure ? "  (had failures)" : "")
               << "\n";
-    gate_order(r, p_int);
+    gate_order(r, p_int, p_bdy);
 }
 
 int main(int argc, char **argv) {
@@ -754,6 +773,24 @@ int main(int argc, char **argv) {
             print_mixed_row(r_wrong);
         }
         std::cout << std::string(85, '-') << "\n";
+    }
+
+    g_baseline = kBaselineO8;
+    N_SWEEP    = {25, 33, 41, 49, 57};
+    for (unsigned int eo : {8u, 10u}) {
+        ELEORDER = eo;
+        PW       = eo / 2;
+        K_BDRY   = PW;
+        std::cout << "\n" << std::string(75, '=') << "\n"
+                  << "E8 family at eleorder " << ELEORDER << ", pw " << PW
+                  << " (K_BDRY = " << K_BDRY << ")\n"
+                  << std::string(75, '=') << "\n";
+        for (const OrderBaseline &b : kBaselineO8) {
+            auto r = (b.deriv == 1)
+                         ? run_sweep(b.name, first_reg.at(b.name), 1, csv)
+                         : run_sweep(b.name, second_reg.at(b.name), 2, csv);
+            print_summary_row(r);
+        }
     }
 
     csv.close();
