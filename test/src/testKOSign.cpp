@@ -3,8 +3,10 @@
 // KO order must return output += -(1/dx + 1/dy + 1/dz) * u on the active
 // region — the same damping rate for every order by the KO normalization,
 // and negative, i.e. dissipative. Found because the explicit KO8 stencil grew
-// a seeded mode at exactly +0.3/step in EM4 (2026-08-29). Also reports, for
-// information, whether an in-matrix filter changes the JTT6 operator at all.
+// a seeded mode at exactly +0.3/step in EM4 (2026-08-29). With all faces
+// closed the active output must not depend on padding and must annihilate a
+// constant. Also reports, for information, whether an in-matrix filter
+// changes the JTT6 operator at all.
 // Exit code 0 = pass.
 #include <chrono>
 #include <cmath>
@@ -60,6 +62,54 @@ int main() {
                     }
             checked++;
             if (wrong) { bad++; std::printf("  %-10s n=%2u  bflag=ALL: %lu active points NOT damped (%lu zero, %lu positive; out/u in [%+.3f, %+.3f]; i in [%u,%u])\n", order.c_str(), n, wrong, zero, pos, rmin, rmax, imin, imax); }
+            // all faces closed: the active output must not read padding, and
+            // a constant must be annihilated on every active row
+            {
+                auto active = [&](unsigned int i, unsigned int j,
+                                  unsigned int k) {
+                    return i >= pw && i < n - pw && j >= pw && j < n - pw &&
+                           k >= pw && k < n - pw;
+                };
+                std::vector<double> ug(u), uc(tot), og(tot, 0.0), oc(tot, 0.0);
+                for (unsigned int k = 0; k < n; k++)
+                    for (unsigned int j = 0; j < n; j++)
+                        for (unsigned int i = 0; i < n; i++) {
+                            const size_t p = i + n * (j + n * k);
+                            const bool a   = active(i, j, k);
+                            if (!a) ug[p] = 1e3 * std::sin(0.7 * p);
+                            uc[p] = a ? 1.0 : 1e3 * std::cos(0.3 * p);
+                        }
+                d->filter(ug.data(), og.data(), wx.data(), wy.data(), wz.data(),
+                          dx, dy, dz, 1.0, sz, all);
+                d->filter(uc.data(), oc.data(), wx.data(), wy.data(), wz.data(),
+                          dx, dy, dz, 1.0, sz, all);
+                unsigned long reads = 0;
+                double cmax         = 0.0;
+                for (unsigned int k = pw; k < n - pw; k++)
+                    for (unsigned int j = pw; j < n - pw; j++)
+                        for (unsigned int i = pw; i < n - pw; i++) {
+                            const size_t p = i + n * (j + n * k);
+                            if (og[p] != ob[p]) reads++;
+                            cmax = std::max(cmax, std::isfinite(oc[p])
+                                                      ? std::fabs(oc[p])
+                                                      : HUGE_VAL);
+                        }
+                checked += 2;
+                if (reads) {
+                    bad++;
+                    std::printf(
+                        "  %-10s n=%2u  bflag=ALL: %lu active points depend on "
+                        "padding\n",
+                        order.c_str(), n, reads);
+                }
+                if (cmax > 1e-10 / dz) {
+                    bad++;
+                    std::printf(
+                        "  %-10s n=%2u  bflag=ALL: constant not annihilated, "
+                        "max |out| = %.3e\n",
+                        order.c_str(), n, cmax);
+                }
+            }
             checked++;
             const bool ok = worst < 1e-10 * std::fabs(expect);
             if (!ok) bad++;
