@@ -166,8 +166,8 @@ inline int get_rk_tableau(ETSType type, unsigned int& nstages,
 
     } else if (type == ETSType::RK45_CASH_KARP) {
         // Cash-Karp embedded 4(5) pair (6 stages); the 5th-order weights are
-        // used here. Enables adaptive step sizing. From the `derivatives`
-        // experiment.
+        // propagated, get_rk_error_weights() gives the embedded error row.
+        // From the `derivatives` experiment.
         nstages                           = 6;
         static const DendroScalar ETS_C[] = {37.0 / 378.0,  0.0,
                                              250.0 / 621.0, 125.0 / 594.0,
@@ -199,8 +199,8 @@ inline int get_rk_tableau(ETSType type, unsigned int& nstages,
                               "ETS Coefficients set for RK45_CASH_KARP");
 
     } else if (type == ETSType::RKF45) {
-        // Runge-Kutta-Fehlberg 4(5) (6 stages); 5th-order weights used here.
-        // From the `derivatives` experiment.
+        // Runge-Kutta-Fehlberg 4(5) (6 stages); 5th-order weights propagated,
+        // error row in get_rk_error_weights(). From `derivatives`.
         nstages                           = 6;
         static const DendroScalar ETS_C[] = {
             16.0 / 135.0,      0.0,         6656.0 / 12825.0,
@@ -268,14 +268,85 @@ inline int get_rk_tableau(ETSType type, unsigned int& nstages,
         dendro::logger::debug(dendro::logger::Scope{"ETS"},
                               "ETS Coefficients set for RK6 (Luther, 7 stages)");
 
+    } else if (type == ETSType::RK45_DORMAND_PRINCE) {
+        // Dormand-Prince 5(4) (7 stages, FSAL not exploited); 5th-order weights
+        // propagated, error row in get_rk_error_weights().
+        nstages                           = 7;
+        static const DendroScalar ETS_C[] = {
+            35.0 / 384.0, 0.0, 500.0 / 1113.0, 125.0 / 192.0, -2187.0 / 6784.0,
+            11.0 / 84.0,  0.0};
+        static const DendroScalar ETS_T[] = {
+            0.0, 1.0 / 5.0, 3.0 / 10.0, 4.0 / 5.0, 8.0 / 9.0, 1.0, 1.0};
+        // clang-format off
+        static const DendroScalar ETS_U[] = {
+            // stage 1
+            0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 2
+            1.0 / 5.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 3
+            3.0 / 40.0, 9.0 / 40.0, 0.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 4
+            44.0 / 45.0, -56.0 / 15.0, 32.0 / 9.0, 0.0, 0.0, 0.0, 0.0,
+            // stage 5
+            19372.0 / 6561.0, -25360.0 / 2187.0, 64448.0 / 6561.0,
+            -212.0 / 729.0, 0.0, 0.0, 0.0,
+            // stage 6
+            9017.0 / 3168.0, -355.0 / 33.0, 46732.0 / 5247.0, 49.0 / 176.0,
+            -5103.0 / 18656.0, 0.0, 0.0,
+            // stage 7
+            35.0 / 384.0, 0.0, 500.0 / 1113.0, 125.0 / 192.0,
+            -2187.0 / 6784.0, 11.0 / 84.0, 0.0};
+        // clang-format on
+
+        nodes   = ETS_T;
+        weights = ETS_C;
+        matrix  = ETS_U;
+
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "ETS Coefficients set for RK45_DORMAND_PRINCE");
+
     } else {
         dendro::logger::error(
             dendro::logger::Scope{"ETS"},
             "UNKNOWN ETS TYPE (supports RK3, RK4, RK5, RK4_RALSTON, "
-            "RK5_NYSTROM, RK45_CASH_KARP, RKF45, RK6)");
+            "RK5_NYSTROM, RK45_CASH_KARP, RKF45, RK6, RK45_DORMAND_PRINCE)");
         return -1;
     }
 
+    return 0;
+}
+
+/**
+ * @brief Fetch the embedded error weights e_i = b_i - bhat_i of an embedded
+ * pair (b = propagated 5th-order row, bhat = embedded 4th-order row).
+ * @param[in]  type  scheme selector
+ * @param[out] err   e_i (length nstages of get_rk_tableau), sums to 0
+ * @return 0 on success, -1 if the scheme has no embedded pair.
+ */
+inline int get_rk_error_weights(ETSType type, const DendroScalar*& err) {
+    if (type == ETSType::RK45_CASH_KARP) {
+        // bhat = {2825/27648, 0, 18575/48384, 13525/55296, 277/14336, 1/4}
+        static const DendroScalar E[] = {-277.0 / 64512.0,  0.0,
+                                         6925.0 / 370944.0, -6925.0 / 202752.0,
+                                         -277.0 / 14336.0,  277.0 / 7084.0};
+        err                           = E;
+    } else if (type == ETSType::RKF45) {
+        // bhat = {25/216, 0, 1408/2565, 2197/4104, -1/5, 0}
+        static const DendroScalar E[] = {1.0 / 360.0,     0.0,
+                                         -128.0 / 4275.0, -2197.0 / 75240.0,
+                                         1.0 / 50.0,      2.0 / 55.0};
+        err                           = E;
+    } else if (type == ETSType::RK45_DORMAND_PRINCE) {
+        // bhat = {5179/57600, 0, 7571/16695, 393/640, -92097/339200,
+        //         187/2100, 1/40}
+        static const DendroScalar E[] = {
+            71.0 / 57600.0,      0.0,          -71.0 / 16695.0, 71.0 / 1920.0,
+            -17253.0 / 339200.0, 22.0 / 525.0, -1.0 / 40.0};
+        err = E;
+    } else {
+        err = nullptr;
+        return -1;
+    }
     return 0;
 }
 

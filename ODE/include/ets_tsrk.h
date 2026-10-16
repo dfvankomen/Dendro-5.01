@@ -66,6 +66,10 @@ class ETS_TSRK : public ETS<T, Ctx> {
         m_histAlloc = false;
         return 0;
     }
+
+    /**@brief: multistep history rules out embedded error control. */
+    bool supports_error_control() const override { return false; }
+
     void invalidate_history() {
         m_bootstrapRemaining = DEPTH;
         m_prevDt             = -1.0;

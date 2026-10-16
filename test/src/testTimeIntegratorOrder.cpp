@@ -8,7 +8,8 @@
 // matrix spectral radius (checked against the arXiv:2603.05763 intercepts).
 // TSRK: same, over its 9-dim (y + two stage clouds) map.
 //
-// Embedded pairs (RKF45, Cash-Karp) use their 5th-order rows, so expected 5.
+// Embedded pairs (RKF45, Cash-Karp, Dormand-Prince) use their 5th-order rows,
+// so expected 5.
 // Run: ./testTimeIntegratorOrder   (exit 0 = all pass, 1 = failure)
 
 #include <algorithm>
@@ -631,6 +632,7 @@ int main() {
         {ETSType::RK5_NYSTROM, "RK5_NYSTROM", 5},
         {ETSType::RK45_CASH_KARP, "RK45_CASH_KARP", 5},
         {ETSType::RKF45, "RKF45", 5},
+        {ETSType::RK45_DORMAND_PRINCE, "RK45_DORMAND_PRINCE", 5},
         {ETSType::RK6, "RK6", 6},
     };
 

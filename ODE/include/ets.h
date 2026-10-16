@@ -17,6 +17,10 @@
 #include <set>
 #endif
 
+#include <algorithm>
+#include <cfloat>
+#include <cmath>
+
 #include "ctx.h"
 #include "dendro.h"
 #include "dvec.h"
@@ -39,6 +43,28 @@ enum TimeStepperType { UTS = 0, UTS_ADAP, NUTS, NUTS_ADAP };
  * @brief ETS Flags (currently not used)
  */
 enum ETSFlags { FROM_T0 = 0, CHECKPT, CURR_STEP, CURR_TIME };
+
+/**
+ * @brief Embedded-pair error control: OFF (fixed dt), ESTIMATE (compute and
+ * record the error norm, dt unchanged), ADAPTIVE (accept/reject + controller).
+ */
+enum class ETSErrCtrl { OFF = 0, ESTIMATE, ADAPTIVE };
+
+/**@brief: per-step embedded error statistics (set when error control is on). */
+struct ETSErrStats {
+    /**@brief: scaled error norm of the accepted step (<= 1 meets tolerance)*/
+    DendroScalar err                  = 0.0;
+    /**@brief: step size actually taken*/
+    DendroScalar dt_taken             = 0.0;
+    /**@brief: controller proposal for the next step (capped when ADAPTIVE)*/
+    DendroScalar dt_next              = 0.0;
+    /**@brief: rejected attempts in the last step*/
+    unsigned int rejects              = 0;
+    /**@brief: rejected attempts since construction*/
+    unsigned long long total_rejects  = 0;
+    /**@brief: steps accepted with err > 1 after max_rejects*/
+    unsigned long long forced_accepts = 0;
+};
 
 /**
  * @brief General explicit time stepper class for Dendro-5.0
@@ -231,8 +257,26 @@ class ETS {
     /**@brief: time integrator weights*/
     DendroScalar* m_uiCi  = NULL;
 
+    /**@brief: embedded error weights e_i = b_i - bhat_i (null if none)*/
+    const DendroScalar* m_uiEi = nullptr;
+
     /**@brief: number of stages*/
     unsigned int m_uiNumStages;
+
+    /**@brief: embedded error control settings*/
+    ETSErrCtrl m_uiErrCtrl      = ETSErrCtrl::OFF;
+    DendroScalar m_uiErrAtol    = 0.0;
+    DendroScalar m_uiErrRtol    = 0.0;
+    DendroScalar m_uiErrSafety  = 0.9;
+    DendroScalar m_uiErrFacMin  = 0.2;
+    DendroScalar m_uiErrFacMax  = 5.0;
+    unsigned int m_uiMaxRejects = 10;
+
+    /**@brief: step size cap for ADAPTIVE (<= 0: none)*/
+    DendroScalar m_uiDtMax      = 0.0;
+
+    /**@brief: embedded error statistics of the last step*/
+    ETSErrStats m_uiErrStats;
 
     /**@brief: time step info*/
     TSInfo m_uiTimeInfo;
@@ -258,6 +302,22 @@ class ETS {
 
     /**@brief: Deallocate internal variables. */
     int deallocate_internal_vars();
+
+    /**@brief: false for schemes that cannot use embedded error control. */
+    virtual bool supports_error_control() const { return true; }
+
+    /**@brief: run all stages of one step of size dt from m_uiEVar. */
+    void stage_loop(double current_t, double dt);
+
+    /**@brief: m_uiEVar += dt * sum_k b_k k_k (with post_timestep). */
+    void final_combine(double dt);
+
+    /**@brief: err = dt * sum_k e_k k_k into m_uiEVecTmp[0]; returns the global
+     * max over owned nodes of |err| / (atol + rtol * max(|y_n|, |y_n+1|)). */
+    DendroScalar embedded_error_norm(double dt);
+
+    /**@brief: one step with the embedded error estimate (and control). */
+    void evolve_embedded(double current_t, double dt);
 
    public:
     /**
@@ -341,6 +401,33 @@ class ETS {
     /**@brief: returns the time step info*/
     inline TSInfo get_timestep_info() const { return m_uiTimeInfo; }
 
+    /**
+     * @brief Enable embedded error estimation / adaptive step control. Needs a
+     * single-step scheme with an embedded pair (RK45_CASH_KARP, RKF45,
+     * RK45_DORMAND_PRINCE) and host evolution vars; call after
+     * set_ets_coefficients and set_evolve_vars.
+     * @param mode        OFF, ESTIMATE or ADAPTIVE
+     * @param atol, rtol  per-point scale atol + rtol * max(|y_n|, |y_n+1|)
+     * @param safety, facmin, facmax  h_new = h * min(facmax, max(facmin,
+     * safety * err^(-1/5))); facmax is 1 right after a reject
+     * @param max_rejects attempts beyond this are accepted with a warning
+     * @return 0 on success, -1 (logged) if unsupported or invalid.
+     */
+    virtual int set_error_control(ETSErrCtrl mode, DendroScalar atol,
+                                  DendroScalar rtol, DendroScalar safety = 0.9,
+                                  DendroScalar facmin      = 0.2,
+                                  DendroScalar facmax      = 5.0,
+                                  unsigned int max_rejects = 10);
+
+    /**@brief: cap the ADAPTIVE step size and clamp the current dt to it. */
+    void set_dt_max(DendroScalar dt_max);
+
+    /**@brief: returns the error control mode. */
+    inline ETSErrCtrl error_control() const { return m_uiErrCtrl; }
+
+    /**@brief: returns the embedded error statistics of the last step. */
+    inline const ETSErrStats& get_err_stats() const { return m_uiErrStats; }
+
     /**@brief: perform synchronizations with correct variable allocations for
      * the new mesh: should be called after remeshing.  */
     virtual int sync_with_mesh();
@@ -376,6 +463,13 @@ template <typename T, typename Ctx>
 int ETS<T, Ctx>::set_ets_coefficients(DendroScalar* aij, DendroScalar* bi,
                                       DendroScalar* ci,
                                       unsigned int num_stages) {
+    if (m_uiErrCtrl != ETSErrCtrl::OFF) {
+        dendro::logger::error(dendro::logger::Scope{"ETS"},
+                              "raw coefficients have no embedded pair; turn "
+                              "error control off first");
+        return -1;
+    }
+    m_uiEi        = nullptr;
     m_uiAij       = aij;
     m_uiBi        = bi;
     m_uiCi        = ci;
@@ -430,7 +524,17 @@ int ETS<T, Ctx>::set_ets_coefficients(ETSType type) {
     unsigned int nstages      = 0;
     if (ts::get_rk_tableau(type, nstages, nodes, weights, matrix) != 0)
         return -1;
+    const DendroScalar* err = nullptr;
+    ts::get_rk_error_weights(type, err);
+    if (m_uiErrCtrl != ETSErrCtrl::OFF && err == nullptr) {
+        dendro::logger::error(dendro::logger::Scope{"ETS"},
+                              "ETS type {} has no embedded pair; turn error "
+                              "control off first",
+                              static_cast<int>(type));
+        return -1;
+    }
 
+    m_uiEi        = err;
     m_uiNumStages = nstages;
     m_uiCi        = (DendroScalar*)nodes;    // c_i abscissae
     m_uiBi        = (DendroScalar*)weights;  // b_i weights
@@ -473,7 +577,6 @@ void ETS<T, Ctx>::evolve() {
     const ot::Mesh* pMesh  = m_uiAppCtx->get_mesh();
     m_uiTimeInfo           = m_uiAppCtx->get_ts_info();
     const double current_t = m_uiTimeInfo._m_uiT;
-    double current_t_adv   = current_t;
     const double dt        = m_uiTimeInfo._m_uiTh;
 
 #ifdef ETS_CHECK_GHOSTS
@@ -530,73 +633,18 @@ void ETS<T, Ctx>::evolve() {
 
     m_uiAppCtx->pre_timestep(m_uiEVar);
 
-    if (pMesh->isActive()) {
-        for (unsigned int stage = 0; stage < m_uiNumStages; stage++) {
-            dendro::logger::debug(dendro::logger::Scope{"ETS"},
-                                  "Now executing ETS Evolve stage {}/{}",
-                                  stage + 1, m_uiNumStages);
-
-#ifdef __PROFILE_ETS__
-            if (stage < ETS_MAX_PROFILED_STAGES)
-                m_uiCtxpt[ETSPROFILE::STAGE_0 + stage].start();
-#endif
-
-            // Stage input tmp = EVar + sum_p (aip*dt)*StVec[p], post_timestep fused.
-            {
-                DendroScalar a_cf[ETS_MAX_STAGES];
-                const DVec* a_sp[ETS_MAX_STAGES];
-                unsigned int a_n = 0;
-                for (unsigned int p = 0; p < stage; p++) {
-                    const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
-                    if (aip != 0.0) {
-                        a_cf[a_n] = aip * dt;
-                        a_sp[a_n] = &m_uiStVec[p];
-                        a_n++;
-                    }
-                }
-#if defined(DENDRO_RK_FUSE)
-                m_uiAppCtx->rk_stage_input(m_uiEVar, a_n, a_cf, a_sp,
-                                           m_uiEVecTmp[0]);
-#else
-                m_uiEVecTmp[0].copy_data(m_uiEVar);
-                if (a_n)
-                    DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
-                m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
-#endif
-            }
-
-            current_t_adv = current_t + m_uiCi[stage] * dt;
-            m_uiAppCtx->pre_stage(m_uiStVec[stage]);
-            m_uiAppCtx->rhs(&m_uiEVecTmp[0], &m_uiStVec[stage], 1,
-                            current_t_adv);
-            m_uiAppCtx->post_stage(m_uiStVec[stage]);
-
-#ifdef __PROFILE_ETS__
-            if (stage < ETS_MAX_PROFILED_STAGES)
-                m_uiCtxpt[ETSPROFILE::STAGE_0 + stage].stop();
-#endif
-        }
-
-        // EVar += sum_k (bi*dt)*StVec[k], post_timestep fused.
-        {
-            DendroScalar b_cf[ETS_MAX_STAGES];
-            const DVec* b_sp[ETS_MAX_STAGES];
-            for (unsigned int k = 0; k < m_uiNumStages; k++) {
-                b_cf[k] = m_uiBi[k] * dt;
-                b_sp[k] = &m_uiStVec[k];
-            }
-#if defined(DENDRO_RK_FUSE)
-            m_uiAppCtx->rk_combine(m_uiNumStages, b_cf, b_sp, m_uiEVar);
-#else
-            DVec::axpy_multi(pMesh, m_uiNumStages, b_cf, b_sp, m_uiEVar);
-            m_uiAppCtx->post_timestep(m_uiEVar);
-#endif
-        }
+    if (m_uiErrCtrl != ETSErrCtrl::OFF) {
+        evolve_embedded(current_t, dt);
+    } else if (pMesh->isActive()) {
+        stage_loop(current_t, dt);
+        final_combine(dt);
     } else {
         m_uiAppCtx->post_timestep(m_uiEVar);
     }
 
     m_uiAppCtx->increment_ts_info();
+    if (m_uiErrCtrl == ETSErrCtrl::ADAPTIVE)
+        m_uiAppCtx->set_timestep(m_uiErrStats.dt_next);
     m_uiTimeInfo = m_uiAppCtx->get_ts_info();
     pMesh->waitAll();
 
@@ -606,6 +654,254 @@ void ETS<T, Ctx>::evolve() {
 
     dendro::logger::debug(dendro::logger::Scope{"ETS"},
                           "ETS evolve step finished!");
+}
+
+template <typename T, typename Ctx>
+void ETS<T, Ctx>::stage_loop(double current_t, double dt) {
+    [[maybe_unused]] const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+    double current_t_adv                   = current_t;
+
+    for (unsigned int stage = 0; stage < m_uiNumStages; stage++) {
+        dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                              "Now executing ETS Evolve stage {}/{}", stage + 1,
+                              m_uiNumStages);
+
+#ifdef __PROFILE_ETS__
+        if (stage < ETS_MAX_PROFILED_STAGES)
+            m_uiCtxpt[ETSPROFILE::STAGE_0 + stage].start();
+#endif
+
+        // stage input tmp = EVar + sum_p (aip*dt)*StVec[p], post_timestep fused
+        {
+            DendroScalar a_cf[ETS_MAX_STAGES];
+            const DVec* a_sp[ETS_MAX_STAGES];
+            unsigned int a_n = 0;
+            for (unsigned int p = 0; p < stage; p++) {
+                const DendroScalar aip = m_uiAij[stage * m_uiNumStages + p];
+                if (aip != 0.0) {
+                    a_cf[a_n] = aip * dt;
+                    a_sp[a_n] = &m_uiStVec[p];
+                    a_n++;
+                }
+            }
+#if defined(DENDRO_RK_FUSE)
+            m_uiAppCtx->rk_stage_input(m_uiEVar, a_n, a_cf, a_sp,
+                                       m_uiEVecTmp[0]);
+#else
+            m_uiEVecTmp[0].copy_data(m_uiEVar);
+            if (a_n) DVec::axpy_multi(pMesh, a_n, a_cf, a_sp, m_uiEVecTmp[0]);
+            m_uiAppCtx->post_timestep(m_uiEVecTmp[0]);
+#endif
+        }
+
+        current_t_adv = current_t + m_uiCi[stage] * dt;
+        m_uiAppCtx->pre_stage(m_uiStVec[stage]);
+        m_uiAppCtx->rhs(&m_uiEVecTmp[0], &m_uiStVec[stage], 1, current_t_adv);
+        m_uiAppCtx->post_stage(m_uiStVec[stage]);
+
+#ifdef __PROFILE_ETS__
+        if (stage < ETS_MAX_PROFILED_STAGES)
+            m_uiCtxpt[ETSPROFILE::STAGE_0 + stage].stop();
+#endif
+    }
+}
+
+template <typename T, typename Ctx>
+void ETS<T, Ctx>::final_combine(double dt) {
+    [[maybe_unused]] const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+
+    // EVar += sum_k (bi*dt)*StVec[k], post_timestep fused.
+    DendroScalar b_cf[ETS_MAX_STAGES];
+    const DVec* b_sp[ETS_MAX_STAGES];
+    for (unsigned int k = 0; k < m_uiNumStages; k++) {
+        b_cf[k] = m_uiBi[k] * dt;
+        b_sp[k] = &m_uiStVec[k];
+    }
+#if defined(DENDRO_RK_FUSE)
+    m_uiAppCtx->rk_combine(m_uiNumStages, b_cf, b_sp, m_uiEVar);
+#else
+    DVec::axpy_multi(pMesh, m_uiNumStages, b_cf, b_sp, m_uiEVar);
+    m_uiAppCtx->post_timestep(m_uiEVar);
+#endif
+}
+
+template <typename T, typename Ctx>
+DendroScalar ETS<T, Ctx>::embedded_error_norm(double dt) {
+    const ot::Mesh* pMesh  = m_uiAppCtx->get_mesh();
+    const unsigned int dof = m_uiEVar.get_dof();
+    const unsigned int sz  = m_uiEVar.get_size() / dof;
+    unsigned int nb, ne;
+    if (m_uiEVar.get_type() == ot::DVEC_TYPE::OCT_SHARED_NODES) {
+        nb = pMesh->getNodeLocalBegin();
+        ne = pMesh->getNodeLocalEnd();
+    } else {
+        const unsigned int npe = pMesh->getNumNodesPerElement();
+        nb                     = pMesh->getElementLocalBegin() * npe;
+        ne                     = pMesh->getElementLocalEnd() * npe;
+    }
+
+    const unsigned int ns = m_uiNumStages;
+    const T* sp[ETS_MAX_STAGES];
+    DendroScalar b_cf[ETS_MAX_STAGES], e_cf[ETS_MAX_STAGES];
+    for (unsigned int k = 0; k < ns; k++) {
+        sp[k]   = m_uiStVec[k].get_vec_ptr();
+        b_cf[k] = m_uiBi[k] * dt;
+        e_cf[k] = m_uiEi[k] * dt;
+    }
+    const T* y              = m_uiEVar.get_vec_ptr();
+    T* err                  = m_uiEVecTmp[0].get_vec_ptr();
+    const DendroScalar atol = m_uiErrAtol;
+    const DendroScalar rtol = m_uiErrRtol;
+
+    double emax             = 0.0;
+#ifdef DENDRO_HYBRID_OMP
+#pragma omp parallel for collapse(2) reduction(max : emax)
+#endif
+    for (unsigned int v = 0; v < dof; v++)
+        for (unsigned int node = nb; node < ne; node++) {
+            const unsigned int idx = v * sz + node;
+            T y1 = y[idx], e = 0.0;
+            for (unsigned int k = 0; k < ns; k++) {
+                y1 += b_cf[k] * sp[k][idx];
+                e += e_cf[k] * sp[k][idx];
+            }
+            err[idx]        = e;
+            const double sc = atol + rtol * std::max(std::fabs((double)y[idx]),
+                                                     std::fabs((double)y1));
+            double r        = std::fabs((double)e) / sc;
+            // NaN/inf counts as an infinite error
+            if (!(r <= DBL_MAX)) r = HUGE_VAL;
+            emax = std::max(emax, r);
+        }
+
+    double emax_g = emax;
+    par::Mpi_Allreduce(&emax, &emax_g, 1, MPI_MAX, pMesh->getMPICommunicator());
+    return emax_g;
+}
+
+template <typename T, typename Ctx>
+void ETS<T, Ctx>::evolve_embedded(double current_t, double dt) {
+    const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+    const bool adapt      = (m_uiErrCtrl == ETSErrCtrl::ADAPTIVE);
+    if (adapt && m_uiDtMax > 0.0) dt = std::min(dt, m_uiDtMax);
+
+    // {err, dt_taken, dt_next, rejects, forced}; zeros on inactive ranks
+    double st[5] = {0.0, 0.0, 0.0, 0.0, 0.0};
+    if (pMesh->isActive()) {
+        unsigned int nrej = 0;
+        double err        = 0.0;
+        for (;;) {
+            stage_loop(current_t, dt);
+            err = embedded_error_norm(dt);
+            if (!adapt || err <= 1.0) break;
+            if (nrej == m_uiMaxRejects) {
+                st[4] = 1.0;
+                break;
+            }
+            nrej++;
+            const double dt_rej = dt;
+            dt *= std::max((double)m_uiErrFacMin,
+                           m_uiErrSafety * std::pow(err, -0.2));
+            dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                                  "step rejected: err={} dt={} -> {}", err,
+                                  dt_rej, dt);
+        }
+        final_combine(dt);
+
+        const double fmax = nrej ? 1.0 : (double)m_uiErrFacMax;
+        const double fac =
+            err > 0.0 ? m_uiErrSafety * std::pow(err, -0.2) : fmax;
+        double dt_next =
+            dt * std::min(fmax, std::max((double)m_uiErrFacMin, fac));
+        if (adapt && m_uiDtMax > 0.0) dt_next = std::min(dt_next, m_uiDtMax);
+
+        st[0] = err;
+        st[1] = dt;
+        st[2] = dt_next;
+        st[3] = nrej;
+    } else {
+        m_uiAppCtx->post_timestep(m_uiEVar);
+    }
+
+    double st_g[5];
+    par::Mpi_Allreduce(st, st_g, 5, MPI_MAX, pMesh->getMPIGlobalCommunicator());
+    m_uiErrStats.err      = st_g[0];
+    m_uiErrStats.dt_taken = st_g[1];
+    m_uiErrStats.dt_next  = st_g[2];
+    m_uiErrStats.rejects  = (unsigned int)st_g[3];
+    m_uiErrStats.total_rejects += m_uiErrStats.rejects;
+    if (st_g[4] > 0.0) {
+        m_uiErrStats.forced_accepts++;
+        if (!pMesh->getMPIRankGlobal())
+            dendro::logger::warn(
+                dendro::logger::Scope{"ETS"},
+                "step accepted with err={} after {} rejects (dt={})", st_g[0],
+                m_uiMaxRejects, st_g[1]);
+    }
+
+    dendro::logger::debug(dendro::logger::Scope{"ETS"},
+                          "embedded err={} dt={} next={} rejects={}", st_g[0],
+                          st_g[1], st_g[2], m_uiErrStats.rejects);
+
+    // time advances by the step actually taken
+    m_uiAppCtx->set_timestep(st_g[1]);
+}
+
+template <typename T, typename Ctx>
+int ETS<T, Ctx>::set_error_control(ETSErrCtrl mode, DendroScalar atol,
+                                   DendroScalar rtol, DendroScalar safety,
+                                   DendroScalar facmin, DendroScalar facmax,
+                                   unsigned int max_rejects) {
+    const dendro::logger::Scope scope{"ETS"};
+    if (mode == ETSErrCtrl::OFF) {
+        m_uiErrCtrl = mode;
+        return 0;
+    }
+    if (!supports_error_control()) {
+        dendro::logger::error(scope,
+                              "embedded error control needs a single-step RK "
+                              "scheme (not MSRK/TSRK)");
+        return -1;
+    }
+    if (m_uiEi == nullptr) {
+        dendro::logger::error(scope,
+                              "embedded error control needs an embedded pair "
+                              "(RK45_CASH_KARP, RKF45, RK45_DORMAND_PRINCE)");
+        return -1;
+    }
+    if (m_uiEVar.get_loc() != ot::DVEC_LOC::HOST ||
+        (m_uiEVar.get_type() != ot::DVEC_TYPE::OCT_SHARED_NODES &&
+         m_uiEVar.get_type() != ot::DVEC_TYPE::OCT_LOCAL_NODES)) {
+        dendro::logger::error(scope,
+                              "embedded error control needs host nodal "
+                              "evolution vars (no GPU support)");
+        return -1;
+    }
+    if (!(atol > 0.0) || !(rtol >= 0.0) || !(safety > 0.0 && safety <= 1.0) ||
+        !(facmin > 0.0 && facmin <= 1.0) || !(facmax >= 1.0)) {
+        dendro::logger::error(scope,
+                              "invalid error control settings: need atol > 0, "
+                              "rtol >= 0, 0 < safety <= 1, 0 < facmin <= 1 <= "
+                              "facmax");
+        return -1;
+    }
+    m_uiErrCtrl    = mode;
+    m_uiErrAtol    = atol;
+    m_uiErrRtol    = rtol;
+    m_uiErrSafety  = safety;
+    m_uiErrFacMin  = facmin;
+    m_uiErrFacMax  = facmax;
+    m_uiMaxRejects = max_rejects;
+    return 0;
+}
+
+template <typename T, typename Ctx>
+void ETS<T, Ctx>::set_dt_max(DendroScalar dt_max) {
+    m_uiDtMax = dt_max;
+    if (m_uiErrCtrl == ETSErrCtrl::ADAPTIVE && dt_max > 0.0 &&
+        m_uiAppCtx->get_ts_info()._m_uiTh > dt_max)
+        m_uiAppCtx->set_timestep(dt_max);
+    m_uiTimeInfo = m_uiAppCtx->get_ts_info();
 }
 
 template <typename T, typename Ctx>
