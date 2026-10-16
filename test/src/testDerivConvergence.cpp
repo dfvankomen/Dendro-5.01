@@ -646,6 +646,11 @@ static const OrderBaseline kBaseline[] = {
     {"BYU_C6_2nd_r_085_Op1", 2, 5.0}, {"BYU_C6_2nd_r_085_Op2", 2, 5.0},
     {"BYU_C6_2nd_r_085_Op3", 2, 5.0}, {"BYU_C6_2nd_r_085_Op4", 2, 5.0},
     {"BYU_C6_2nd_r_085_Op5", 2, 5.0},
+    {"BYU_A6_1ST_R060_OP25", 1, 5.0}, {"BYU_A6_1ST_R060_OP29", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP4", 1, 5.0}, {"BYU_A6_1ST_R065_OP10", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP17", 1, 5.0}, {"BYU_A6_1ST_R065_OP22", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP22", 1, 5.0}, {"BYU_A6_1ST_R070_OP7", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP14", 1, 5.0}, {"BYU_A6_1ST_R080_OP9", 1, 5.0},
 };
 
 // E8 family at eleorder 8 and 10: 8th-order interior, 6th-order closure rows.
