@@ -64,7 +64,7 @@ struct EnutsProf {
            RC_WALL1, RC_CAP1, RC_SUM1, RC_MAX1, RC_CALLS1,
            PE_PROLOG, EV_TOTAL, EV_PRETS, EV_UNZIP, EV_LOAD, EV_ETIME, EV_ZIP, EV_POST,
            ST_PASS, CN_STS_ROUNDS,
-           RB_T0, RB_T1, RB_T2, RB_T3, RB_P0, RB_P1, RB_P2, RB_P3, NT };
+           RB_T0, RB_T1, RB_T2, RB_T3, RB_P0, RB_P1, RB_P2, RB_P3, CN_G0, CN_GRESET, CN_GALL, NT };
     double t[NT]     = {};
     double partial   = 0;      // partial steps taken (this rank was active)
     double lev_sum   = 0;      // sum over partial steps of globally active levels
@@ -809,6 +809,8 @@ class ExplicitNUTS : public ETS<T, Ctx> {
      *  (re)allocation */
     DVec m_uiStG;
     bool m_uiStGOn = false;
+    /** IFACE_FIX bit 4: per element, whether update_stage_g wrote its g since the last (re)allocation */
+    std::vector<unsigned char> m_uiStGValid;
     void update_stage_g(unsigned int pt);
 
     /** per-element tag of the correction currently held in m_uiDGTmp0 */
@@ -1680,7 +1682,11 @@ ExplicitNUTS<T, Ctx>::~ExplicitNUTS() {
                 "  rhs:  rhs_blk on 1-element blocks (thread-s)", "  rhs:  rhs_blk on 2-element blocks (thread-s)",
                 "  rhs:  rhs_blk on 4-element blocks (thread-s)", "  rhs:  rhs_blk on 8+-element blocks (thread-s)",
                 "  count: rhs_blk points on 1-element blocks", "  count: rhs_blk points on 2-element blocks",
-                "  count: rhs_blk points on 4-element blocks", "  count: rhs_blk points on 8+-element blocks"};
+                "  count: rhs_blk points on 4-element blocks", "  count: rhs_blk points on 8+-element blocks",
+                // IFACE_FIX bit 4: nodes whose stage conversion read a stored g that no step had written yet
+                // (first step of the element's class after a (re)allocation), and the (re)allocations
+                "  count: stage conversions reading g = 0 (nodes, once per node)", "  count: g vector (re)allocations",
+                "  count: stage conversions reading g (nodes, once per node, valid or not)"};
             std::cout << "[enuts-prof] npes=" << np
                       << " partial_steps(max rank)=" << mx[ts::EnutsProf::NT]
                       << " mean_active_levels/step="
@@ -1959,6 +1965,8 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
                               m_uiEVar.get_dof(), true);
         std::fill(m_uiStG.get_vec_ptr(),
                   m_uiStG.get_vec_ptr() + m_uiStG.get_size(), (T)0);
+        m_uiStGValid.assign(m_uiAppCtx->get_mesh()->getAllElements().size(), 0);
+        if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_GRESET] += 1;
     }
 
     m_uiEvarUzip.create_vector(m_uiAppCtx->get_mesh(),
@@ -3692,6 +3700,10 @@ void ExplicitNUTS<T, Ctx>::own_row_build(unsigned int row_, unsigned int rk_s,
                 for (unsigned int k = 0; k < m_uiNumStages; k++)
                     Se[k] = S[k] + (size_t)ele * nPe;
                 if (pc.g) Se[pc.ns - 1] = stG + (size_t)v * dgSz + (size_t)ele * nPe;
+                if (ts::EnutsProf::on() && pc.g && !v) {
+                    ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += nPe;
+                    if (!m_uiStGValid[ele]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += nPe;
+                }
                 m_uiECOp->applyRow(gg, Se, pc.m, pc.ns, nPe);
             }
         }
@@ -3705,6 +3717,11 @@ void ExplicitNUTS<T, Ctx>::own_row_build(unsigned int row_, unsigned int rk_s,
                 for (unsigned int q = 0; q < n; q++) gg[rn[q]] = sv[rs[q]];
             } else {
                 m_uiECOp->gatherRow(gg, rn, rs, n, cv[c].g ? SG : S, cv[c].m, cv[c].ns);
+                if (ts::EnutsProf::on() && cv[c].g && !v) {
+                    ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += n;
+                    for (unsigned int q = 0; q < n; q++)
+                        if (!m_uiStGValid[rs[q] / nPe]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += 1;
+                }
             }
         }
         if (hasOps) {
@@ -3999,6 +4016,10 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                 for (unsigned int k = 0; k < m_uiNumStages; k++)
                     S[k] = m_uiStVec[k].get_vec_ptr() + (size_t)v * dgSz + (size_t)ele * nPe;
                 if (cv[c].g) S[cv[c].ns - 1] = stG + (size_t)v * dgSz + (size_t)ele * nPe;
+                if (sprof && cv[c].g && !v) {
+                    ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += nPe;
+                    if (!m_uiStGValid[ele]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += nPe;
+                }
                 m_uiECOp->applyRow(dgW + (size_t)v * dgSz + (size_t)ele * nPe, S,
                                    cv[c].m, cv[c].ns, nPe);
             }
@@ -4035,6 +4056,11 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                 for (unsigned int q = 0; q < n; q++) dv[dp[q]] = sv[sp[q]];
             } else {
                 m_uiECOp->gatherRow(dv, dp, sp, n, cv[c].g ? SG : S, cv[c].m, cv[c].ns);
+                if (sprof && cv[c].g && !v) {
+                    ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += n;
+                    for (unsigned int q = 0; q < n; q++)
+                        if (!m_uiStGValid[sp[q] / nPe]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += 1;
+                }
             }
         }
         const double to0 = sprof ? ts::EnutsProf::now() : 0.0;
@@ -4051,6 +4077,11 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                     for (unsigned int t = b; t < e; t++) pin[ti[t]] = sv[src[t]];
                 } else {
                     m_uiECOp->gatherRow(pin, ti + b, src + b, e - b, c.g ? SG : S, c.m, c.ns);
+                    if (sprof && c.g && !v) {
+                        ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += e - b;
+                        for (unsigned int t = b; t < e; t++)
+                            if (!m_uiStGValid[src[t] / nPe]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += 1;
+                    }
                 }
                 b = e;
             }
@@ -6336,6 +6367,7 @@ void ExplicitNUTS<T, Ctx>::update_stage_g(unsigned int pt) {
             for (unsigned int q = 0; q < nPe; q++)
                 g[o + q] = (k4[o + q] - 2 * k3[o + q]) + k1[o + q];
         }
+        if (e < m_uiStGValid.size()) m_uiStGValid[e] = 1;
     }
 }
 
