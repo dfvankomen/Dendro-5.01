@@ -199,6 +199,31 @@ struct EnutsProf {
      *  (BSSN's slow-start lapse, exp(-t^2 / 2 sigma^2)) then sees a forcing
      *  lagged by ~dt_blk / 2, growing with the block's step: a lapse offset
      *  of 1e-3 on q1 at the full ladder. */
+    /** DENDRO_ENUTS_G_XCH=1 (default off): with IFACE_FIX bit 4 and the owner
+     *  sync, exchange the stored vector g of the classes that completed a
+     *  step at this partial step (the owner-node exchange, on the unscoped
+     *  lists when the stage exchange is scoped), so a ghost row's g is its
+     *  owner's value. Without it g on ghost rows is formed locally from stage
+     *  slots the exchange only partly delivered, and the result depends on
+     *  the partition (np2 vs np4: 5e-10). */
+    static bool gXch() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_G_XCH");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
+    /** DENDRO_ENUTS_G_RESET_EVERY=1 (default off, test only): at the start
+     *  of every coarse step zero the stored g and mark every class unwritten,
+     *  exactly as a (re)allocation does, on an unchanged mesh: the oracle for
+     *  what carrying g through a remesh could recover (nothing, measured) */
+    static bool gResetEvery() {
+        static const int v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_G_RESET_EVERY");
+            return (e && e[0] == '1') ? 1 : 0;
+        }();
+        return v == 1;
+    }
     static bool stageTime() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_STAGE_TIME");
@@ -811,6 +836,11 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     bool m_uiStGOn = false;
     /** IFACE_FIX bit 4: per element, whether update_stage_g wrote its g since the last (re)allocation */
     std::vector<unsigned char> m_uiStGValid;
+    /** per class: whether the class completed a step since the (re)allocation
+     *  (every element of a class completes together, so this is the same on
+     *  every rank, unlike a per-ghost-element flag before its dt is known) */
+    std::vector<unsigned char> m_uiStGValidCls;
+    bool gValidCls(unsigned int c) const { return c < m_uiStGValidCls.size() && m_uiStGValidCls[c]; }
     void update_stage_g(unsigned int pt);
 
     /** per-element tag of the correction currently held in m_uiDGTmp0 */
@@ -999,6 +1029,10 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<unsigned int> m_uiOwnSendSlot, m_uiOwnRecvSlot;
     std::vector<unsigned int> m_uiOwnSendOff, m_uiOwnRecvOff;
     std::vector<unsigned int> m_uiOwnSendCum, m_uiOwnRecvCum;
+    /** G_XCH with XCH_SCOPED: the unscoped lists, kept at the re-sort (the
+     *  scoped order sends a slot only when a class that reads it is
+     *  stepping, which a g written at a step end would miss) */
+    std::vector<unsigned int> m_uiOwnSendSlotU, m_uiOwnRecvSlotU, m_uiOwnSendCumU, m_uiOwnRecvCumU;
     std::vector<T> m_uiOwnSendBuf, m_uiOwnRecvBuf;
     std::vector<MPI_Request> m_uiOwnReq;
     /** the fill converts a listed element whole (every node of its row) only
@@ -1966,6 +2000,7 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
         std::fill(m_uiStG.get_vec_ptr(),
                   m_uiStG.get_vec_ptr() + m_uiStG.get_size(), (T)0);
         m_uiStGValid.assign(m_uiAppCtx->get_mesh()->getAllElements().size(), 0);
+        m_uiStGValidCls.assign(m_uiOwnDTs.size(), 0);
         if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_GRESET] += 1;
     }
 
@@ -3702,7 +3737,7 @@ void ExplicitNUTS<T, Ctx>::own_row_build(unsigned int row_, unsigned int rk_s,
                 if (pc.g) Se[pc.ns - 1] = stG + (size_t)v * dgSz + (size_t)ele * nPe;
                 if (ts::EnutsProf::on() && pc.g && !v) {
                     ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += nPe;
-                    if (!m_uiStGValid[ele]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += nPe;
+                    if (!gValidCls(m_uiOwnRowPc[w.row])) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += nPe;
                 }
                 m_uiECOp->applyRow(gg, Se, pc.m, pc.ns, nPe);
             }
@@ -3719,8 +3754,7 @@ void ExplicitNUTS<T, Ctx>::own_row_build(unsigned int row_, unsigned int rk_s,
                 m_uiECOp->gatherRow(gg, rn, rs, n, cv[c].g ? SG : S, cv[c].m, cv[c].ns);
                 if (ts::EnutsProf::on() && cv[c].g && !v) {
                     ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += n;
-                    for (unsigned int q = 0; q < n; q++)
-                        if (!m_uiStGValid[rs[q] / nPe]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += 1;
+                    if (!gValidCls(c)) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += n;
                 }
             }
         }
@@ -4018,7 +4052,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                 if (cv[c].g) S[cv[c].ns - 1] = stG + (size_t)v * dgSz + (size_t)ele * nPe;
                 if (sprof && cv[c].g && !v) {
                     ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += nPe;
-                    if (!m_uiStGValid[ele]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += nPe;
+                    if (!gValidCls(c)) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += nPe;
                 }
                 m_uiECOp->applyRow(dgW + (size_t)v * dgSz + (size_t)ele * nPe, S,
                                    cv[c].m, cv[c].ns, nPe);
@@ -4058,8 +4092,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                 m_uiECOp->gatherRow(dv, dp, sp, n, cv[c].g ? SG : S, cv[c].m, cv[c].ns);
                 if (sprof && cv[c].g && !v) {
                     ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += n;
-                    for (unsigned int q = 0; q < n; q++)
-                        if (!m_uiStGValid[sp[q] / nPe]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += 1;
+                    if (!gValidCls(c)) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += n;
                 }
             }
         }
@@ -4079,8 +4112,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
                     m_uiECOp->gatherRow(pin, ti + b, src + b, e - b, c.g ? SG : S, c.m, c.ns);
                     if (sprof && c.g && !v) {
                         ts::EnutsProf::get().t[ts::EnutsProf::CN_GALL] += e - b;
-                        for (unsigned int t = b; t < e; t++)
-                            if (!m_uiStGValid[src[t] / nPe]) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += 1;
+                        if (!gValidCls(op.opSegCls[sg])) ts::EnutsProf::get().t[ts::EnutsProf::CN_G0] += e - b;
                     }
                 }
                 b = e;
@@ -4970,6 +5002,12 @@ bool ExplicitNUTS<T, Ctx>::xch_scope_build(ot::Mesh* pMesh) {
             for (unsigned int c = 1; c < nCls; c++) cum[i * nCls + c] += cum[i * nCls + c - 1];
         }
     };
+    if (ts::EnutsProf::gXch()) {
+        m_uiOwnRecvSlotU = m_uiOwnRecvSlot;
+        m_uiOwnRecvCumU  = m_uiOwnRecvCum;
+        m_uiOwnSendSlotU = m_uiOwnSendSlot;
+        m_uiOwnSendCumU  = m_uiOwnSendCum;
+    }
     resort(rPr.size(), m_uiOwnRecvSlot, m_uiOwnRecvOff, m_uiOwnRecvCum, rEff);
     resort(sPr.size(), m_uiOwnSendSlot, m_uiOwnSendOff, m_uiOwnSendCum, sEff);
     if (std::getenv("DENDRO_ENUTS_OWNER_SYNC_INFO")) {
@@ -6369,6 +6407,9 @@ void ExplicitNUTS<T, Ctx>::update_stage_g(unsigned int pt) {
         }
         if (e < m_uiStGValid.size()) m_uiStGValid[e] = 1;
     }
+    if (m_uiStGValidCls.size() != m_uiOwnDTs.size()) m_uiStGValidCls.assign(m_uiOwnDTs.size(), 0);
+    for (size_t c = 0; c < m_uiOwnDTs.size(); c++)
+        if (pt % m_uiOwnDTs[c] == 0) m_uiStGValidCls[c] = 1;
 }
 
 template <typename T, typename Ctx>
@@ -7007,6 +7048,21 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     }
 
     if (m_uiStGOn) update_stage_g(pt);
+    if (m_uiStGOn && ownPlan && ts::EnutsProf::gXch()) {
+        // ghost rows of g from their owners (the classes that completed at
+        // pt), on the unscoped lists when the stage exchange is scoped
+        const bool sw = m_uiXchScoped && !m_uiOwnRecvCumU.empty();
+        if (sw) {
+            m_uiOwnRecvSlot.swap(m_uiOwnRecvSlotU); m_uiOwnRecvCum.swap(m_uiOwnRecvCumU);
+            m_uiOwnSendSlot.swap(m_uiOwnSendSlotU); m_uiOwnSendCum.swap(m_uiOwnSendCumU);
+        }
+        own_node_exchange_begin(m_uiStG.get_vec_ptr(), DOF, pt);
+        own_node_exchange_end(m_uiStG.get_vec_ptr(), DOF, pt);
+        if (sw) {
+            m_uiOwnRecvSlot.swap(m_uiOwnRecvSlotU); m_uiOwnRecvCum.swap(m_uiOwnRecvCumU);
+            m_uiOwnSendSlot.swap(m_uiOwnSendSlotU); m_uiOwnSendCum.swap(m_uiOwnSendCumU);
+        }
+    }
     update_ele_timestep(&m_uiActiveBlkIDs);
     ENUTS_TOC(AXPY_ELETS);
     if (m_uiStsOn || stsTest() || stsTestC() > 0) sts_hook(pt, actIds, nAct, ownPlan, thr);
@@ -7325,6 +7381,13 @@ void ExplicitNUTS<T, Ctx>::evolve() {
         pMesh->readFromGhostEndElementVec(m_uiEleDT.data(), 1);
         ENUTS_EV_TOC(EV_ETIME);
 
+        if (m_uiStGOn && ts::EnutsProf::gResetEvery()) {
+            // G_RESET_EVERY: as after a (re)allocation
+            std::fill(m_uiStG.get_vec_ptr(), m_uiStG.get_vec_ptr() + m_uiStG.get_size(), (T)0);
+            std::fill(m_uiStGValid.begin(), m_uiStGValid.end(), 0);
+            std::fill(m_uiStGValidCls.begin(), m_uiStGValidCls.end(), 0);
+            if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_GRESET] += 1;
+        }
         for (unsigned int pt = 0; pt < coarset_t; pt++) {
             // unsigned int numBlkEvolved = 0;
             // for(unsigned int blk =0; blk < blkList.size(); blk++)
