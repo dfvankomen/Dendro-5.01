@@ -214,78 +214,6 @@ struct EnutsProf {
         }();
         return v == 1;
     }
-    /** DENDRO_ENUTS_STAGE_SCRATCH=1 (default off): the stage input (the copy
-     *  of the block solution plus the stage terms, _vec[NS+1]) is one scratch
-     *  vector per thread sized for the largest block instead of one per block.
-     *  It is live only between its build and the RHS call of the same block
-     *  and stage, so the result is the same. Saves one padded copy. */
-    static bool stageScratch() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_STAGE_SCRATCH");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1 || stageRing();
-    }
-    /** DENDRO_ENUTS_STAGE_RING=1 (default off; implies STAGE_SCRATCH): one
-     *  stage vector per block instead of NS, plus an accumulator. The stage
-     *  input of stage s needs only k_{s-1} when the tableau has a_{s,j} = 0
-     *  for j < s-1 (RK4), and the final update U + sum_s b_s k_s is formed by
-     *  adding each b_s k_s right after stage s is synced, in the same order
-     *  per entry as the one-pass update. The dropped zero-coefficient terms
-     *  0 * k_j only turn a -0.0 entry of U into +0.0 when some k_j has its sign
-     *  bit clear there; a per-block sign mask reproduces that, so the stage
-     *  inputs are bit-identical for finite stages. Saves NS - 1 - 1 = 2 padded
-     *  copies per block for RK4 (6 -> 3 with the scratch). */
-    static bool stageRing() { return stageRingMode() != 0; }
-    /** 1 = ring with the sign mask; 2 = ring without it (test only: shows the
-     *  mask is what keeps the -0.0 entries bit-identical) */
-    static int stageRingMode() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_STAGE_RING");
-            return e ? std::atoi(e) : 0;
-        }();
-        return (v == 1 || v == 2) ? v : 0;
-    }
-    /** DENDRO_ENUTS_STAGE_IN_FUSED=1 (default off; ring only): the stage
-     *  input U + a_{s,s-1} dt k_{s-1} is built in one pass over the block
-     *  (copy, sign launder and axpy per entry, mask update in the same
-     *  loop) instead of a copy pass and an axpy pass; same arithmetic.
-     *  Note the whole padded block is needed: the padding of U is carried
-     *  from sub-step to sub-step by the update itself (the per-sub-step
-     *  stage-0 sync is not run), so no pass here may stop at the interior. */
-    static bool stageInFused() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_STAGE_IN_FUSED");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return (v == 1 || ringFused()) && stageRing();
-    }
-    /** DENDRO_ENUTS_RING_FUSED=1 (default off; ring only, implies
-     *  STAGE_IN_FUSED): the accumulator term b_{s-1} dt k_{s-1} is added in
-     *  the stage-input pass of stage s, which reads k_{s-1} anyway (stage 2
-     *  forms acc = U + b_1 dt k_1 there, in place of the copy); only the
-     *  last stage's term stays in the sync loop. Same operation sequence per
-     *  entry; 19 instead of 31 block sweeps per RK4 sub-step with the input
-     *  passes. */
-    static bool ringFused() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_RING_FUSED");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1 && stageRing();
-    }
-    /** DENDRO_ENUTS_LAZY_TMP=1 (default off): temporaries only some paths
-     *  read are allocated on first use (m_uiEVecTmp[0], the DG copy of the
-     *  solution m_uiEvarDG), m_uiEVecTmp[1] (never read) is not allocated,
-     *  and the DG work array m_uiDGTmp0 is allocated untouched (its rows are
-     *  written before they are read). Same values, fewer resident pages. */
-    static bool lazyTmp() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_LAZY_TMP");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-    }
     /** DENDRO_ENUTS_WPART_LATE=1 (default off): register the LTS work weight
      *  and repartition only in init(), after the context's initialize(), not
      *  in the constructor. The constructor's early registration makes the
@@ -1331,9 +1259,20 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief: List of block async vector. */
     std::vector<ts::BlockTimeStep<T>> m_uiBVec;
 
-    /** DENDRO_ENUTS_STAGE_SCRATCH / _RING state (see EnutsProf) */
-    bool m_uiStageScratch = false;
-    bool m_uiStageRing    = false;
+    /** The stage input (the block solution plus the stage terms) is one
+     *  scratch vector per thread, sized for the largest block: it is live only
+     *  between its build and the RHS call of the same block and stage.
+     *
+     *  With the ring (tableaus with a_{s,j} = 0 for j < s-1, i.e. RK4) a block
+     *  keeps one stage vector instead of NS, plus an accumulator: the stage
+     *  input of stage s needs only k_{s-1}, and the final update
+     *  U + sum_s b_s dt k_s is accumulated in the same per-entry order as the
+     *  one-pass update, its term b_{s-1} dt k_{s-1} added in the stage-input
+     *  pass of stage s (the last one in the sync loop). The dropped
+     *  zero-coefficient terms 0 * k_j only turn a -0.0 entry of U into +0.0
+     *  where some k_j has its sign bit clear; a per-block sign mask reproduces
+     *  that, so the stage inputs are bit-identical to full storage. */
+    bool m_uiStageRing = false;
     /** per-thread stage-input scratch, sized for the largest block */
     std::vector<BlockAsyncVector<T>> m_uiStageIn;
     /** ring: per block, bit i set when a dropped stage k_j (j < s-1) had its
@@ -1345,10 +1284,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     inline unsigned int stage_slot(unsigned int s) const {
         return (m_uiStageRing && s > 0) ? RING_K : s;
     }
-    /** the stage-input vector of a block: _vec[NS+1] or the thread's scratch */
+    /** the stage-input vector of a block: the thread's scratch */
     inline BlockAsyncVector<T>& stage_in(unsigned int blk) {
-        return m_uiStageScratch ? m_uiStageIn[ts::EnutsProf::tid()]
-                                : m_uiBVec[blk]._vec[m_uiNumStages + 1];
+        return m_uiStageIn[ts::EnutsProf::tid()];
     }
     /** vector behind a debug index s in 0..NS+1 (NS+1 = the stage input) */
     inline const BlockAsyncVector<T>& stage_vec_dbg(unsigned int blk,
@@ -1358,10 +1296,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     }
     inline void mark_stages_unsynced(unsigned int blk) {
         for (unsigned int s = 1; s < m_uiBVec[blk]._vec.size(); s++)
-            if (m_uiStageScratch || s <= m_uiNumStages)
-                m_uiBVec[blk]._vec[s].mark_unsynced();
+            m_uiBVec[blk]._vec[s].mark_unsynced();
     }
-    /** DENDRO_ENUTS_LAZY_TMP: allocate a temporary on first use */
+    /** temporaries only some paths read are allocated on first use */
     void ensure_evar_dg() {
         if (m_uiEvarDG.get_vec_ptr() == nullptr)
             m_uiEvarDG.create_vector(m_uiAppCtx->get_mesh(),
@@ -1939,20 +1876,10 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
             m_uiAppCtx->get_mesh(), ot::DVEC_TYPE::OCT_LOCAL_NODES,
             ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
 
-    const bool lazyTmp = ts::EnutsProf::lazyTmp();
-    if (!lazyTmp) {
-        m_uiEVecTmp[0].create_vector(m_uiAppCtx->get_mesh(),
-                                     ot::DVEC_TYPE::OCT_SHARED_NODES,
-                                     ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
-        m_uiEVecTmp[1].create_vector(m_uiAppCtx->get_mesh(),
-                                     ot::DVEC_TYPE::OCT_SHARED_NODES,
-                                     ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
-    }
-
-    // allocate tmp DG vectors (untouched with LAZY_TMP: a work array)
+    // a work array: its rows are written before they are read
     m_uiDGTmp0.create_vector(m_uiAppCtx->get_mesh(),
                              ot::DVEC_TYPE::OCT_LOCAL_NODES, ot::DVEC_LOC::HOST,
-                             m_uiEVar.get_dof(), true, !lazyTmp);
+                             m_uiEVar.get_dof(), true, false);
 
     m_uiStGOn = ts::EnutsProf::ifaceNL() && m_uiType == ETSType::RK4;
     if (m_uiStGOn) {
@@ -1977,10 +1904,10 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
     free_sync_threads();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
-    // LAZY_TMP: the DG copy of the solution is read by the element-wise sync
-    // path (owner sync off), the labelled zip and the legacy remesh; with the
-    // owner plan it is allocated where those paths start (ensure_evar_dg)
-    if (!lazyTmp || ts::EnutsProf::ownerSync() != 1)
+    // the DG copy of the solution is read by the element-wise sync path (owner
+    // sync off) and the labelled zip; with the owner plan it is allocated
+    // where those paths start (ensure_evar_dg)
+    if (ts::EnutsProf::ownerSync() != 1)
         m_uiEvarDG.create_vector(m_uiAppCtx->get_mesh(),
                                  ot::DVEC_TYPE::OCT_LOCAL_NODES,
                                  ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
@@ -1993,23 +1920,14 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
         const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
         m_uiBVec.resize(blkList.size());
 
-        m_uiStageScratch = ts::EnutsProf::stageScratch();
-        m_uiStageRing    = ts::EnutsProf::stageRing();
-        if (m_uiStageRing) {
-            // the ring needs a_{s,j} = 0 for j < s-1 (stage s reads k_{s-1} only)
-            for (unsigned int st = 3; st <= m_uiNumStages; st++)
-                for (unsigned int j = 1; j < st - 1; j++)
-                    if (m_uiAij[(st - 1) * m_uiNumStages + (j - 1)] != (T)0) {
-                        std::cerr << "[enuts] DENDRO_ENUTS_STAGE_RING needs a "
-                                     "tableau with a_{s,j} = 0 for j < s-1"
-                                  << std::endl;
-                        MPI_Abort(MPI_COMM_WORLD, 1);
-                    }
-        }
-        // slots: solution, NS stages (ring: one), stage input (scratch: none)
-        const unsigned int nvec = m_uiStageRing      ? 3
-                                  : m_uiStageScratch ? m_uiNumStages + 1
-                                                     : m_uiNumStages + 2;
+        // the ring needs a_{s,j} = 0 for j < s-1 (stage s reads k_{s-1} only)
+        m_uiStageRing = true;
+        for (unsigned int st = 3; st <= m_uiNumStages; st++)
+            for (unsigned int j = 1; j < st - 1; j++)
+                if (m_uiAij[(st - 1) * m_uiNumStages + (j - 1)] != (T)0)
+                    m_uiStageRing = false;
+        // slots: solution, NS stages (ring: one stage and the accumulator)
+        const unsigned int nvec = m_uiStageRing ? 3 : m_uiNumStages + 1;
         unsigned int maxNN = 0;
         for (unsigned int blk = 0; blk < blkList.size(); blk++) {
             const unsigned int sz[3] = {blkList[blk].getAllocationSzX(),
@@ -2018,17 +1936,15 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
             m_uiBVec[blk].alloc_vec(nvec, blk, sz, DOF);
             maxNN = std::max(maxNN, sz[0] * sz[1] * sz[2]);
         }
-        if (m_uiStageScratch) {
-            unsigned int nt = 1;
+        unsigned int nt = 1;
 #ifdef DENDRO_ENUTS_HAS_OMP
-            nt = (unsigned int)omp_get_max_threads();
+        nt = (unsigned int)omp_get_max_threads();
 #endif
-            m_uiStageIn.resize(nt);
-            const unsigned int ssz[3] = {maxNN, 1, 1};
-            for (unsigned int t = 0; t < nt; t++)
-                m_uiStageIn[t].createVec(0, ssz, false,
-                                         BLK_ASYNC_VEC_MODE::BLK_UNZIP, DOF);
-        }
+        m_uiStageIn.resize(nt);
+        const unsigned int ssz[3] = {maxNN, 1, 1};
+        for (unsigned int t = 0; t < nt; t++)
+            m_uiStageIn[t].createVec(0, ssz, false,
+                                     BLK_ASYNC_VEC_MODE::BLK_UNZIP, DOF);
         if (m_uiStageRing) {
             m_uiStageSgn.resize(blkList.size());
             for (unsigned int blk = 0; blk < blkList.size(); blk++)
@@ -2068,8 +1984,7 @@ void ExplicitNUTS<T, Ctx>::mem_report() {
         const double nn = (double)m_uiBVec[blk]._vec[0].getSz();
         blkN += nn;
         const unsigned int nv = (unsigned int)m_uiBVec[blk]._vec.size();
-        scratchSlots += m_uiStageScratch ? 0 : nn;
-        stageSlots += nn * (nv - 1 - (m_uiStageScratch ? 0 : 1));
+        stageSlots += nn * (nv - 1);
     }
     for (unsigned int t = 0; t < m_uiStageIn.size(); t++)
         scratchSlots += (double)m_uiStageIn[t].getSz();
@@ -5318,7 +5233,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         return;
     }
     if (ownSync) sync_lazy_build(true);  // [ENUTS_OMP edit 3/5, second part]
-    if (!thr_ && m_uiEvarDG.get_vec_ptr() == nullptr) ensure_evar_dg();  // LAZY_TMP, serial path
+    if (!thr_ && m_uiEvarDG.get_vec_ptr() == nullptr) ensure_evar_dg();  // serial path
     // elements whose stage is brought to this block's time frame
     const std::vector<unsigned int>& cel = ownSync ? m_uiBlkOwnEid[blk] : eid;
 
@@ -5683,7 +5598,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         // the cg vector (what zip + unzip does for a stage in ETS)
         const unsigned int* e2n_dg = pMesh->getE2NMapping_DG().data();
         // [ENUTS_OMP edit 4/5] per-thread stand-in for the shared cg scratch
-        if (!thr_) ensure_cg_tmp();  // LAZY_TMP: thread 0 / serial only
+        if (!thr_) ensure_cg_tmp();  // thread 0 / serial only
         T* cgW = thr_ ? thr_->cgW.get() : m_uiEVecTmp[0].get_vec_ptr();
         std::vector<unsigned int> es(eid.begin(), eid.end());
         for (const unsigned int elem : blkList[blk]) {
@@ -6583,7 +6498,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         const int own = ts::EnutsProf::ownerSync();
         sync_prebuild(ownPlan, own && !ownPlan, ts::EnutsProf::syncFast() && !own);
         sync_thread_setup(own && !ownPlan);
-        if (!ownPlan) ensure_evar_dg();  // LAZY_TMP: before the parallel loops
+        if (!ownPlan) ensure_evar_dg();  // before the parallel loops
     }
 #endif
 
@@ -6623,21 +6538,23 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             BlockAsyncVector<T>& sIn = stage_in(blk);
             T* out_ptr = (T*)sIn.data();
 
-            if (m_uiStageRing && ts::EnutsProf::stageInFused() && BLK_S > 1) {
-                // STAGE_IN_FUSED: the block below in one pass per entry
+            if (m_uiStageRing && BLK_S > 1) {
+                // ring: U, the -0.0 -> +0.0 of the dropped 0 * k_j terms
+                // (j < s-1) where the mask is set, the live term
+                // a_{s,s-1} dt k_{s-1}, the accumulator term b_{s-1} dt k_{s-1}
+                // and the mask update, in one pass per entry
                 sIn.copyMeta(m_uiBVec[blk]._vec[0]);
                 std::vector<uint64_t>& sg = m_uiStageSgn[blk];
                 const size_t n            = (size_t)DOF * NN;
                 const T* u                = m_uiBVec[blk]._vec[0].data();
                 const T* k                = m_uiBVec[blk]._vec[RING_K].data();
                 const T c0 = blk_dt * m_uiAij[(BLK_S - 1) * m_uiNumStages + (BLK_S - 2)];
-                const bool launder = BLK_S >= 3 && ts::EnutsProf::stageRingMode() == 1;
+                const bool launder = BLK_S >= 3;
                 const bool upd     = BLK_S + 1 <= m_uiNumStages;
                 const size_t nw    = (n + 63) / 64;
-                // RING_FUSED: acc = U + b_1 dt k_1 (stage 2) or acc += b_{s-1} dt k_{s-1}
-                const bool facc = ts::EnutsProf::ringFused();
-                T* acc          = facc ? (T*)m_uiBVec[blk]._vec[RING_ACC].data() : nullptr;
-                const T cb      = facc ? blk_dt * m_uiBi[BLK_S - 2] : (T)0;
+                // acc = U + b_1 dt k_1 (stage 2) or acc += b_{s-1} dt k_{s-1}
+                T* acc     = (T*)m_uiBVec[blk]._vec[RING_ACC].data();
+                const T cb = blk_dt * m_uiBi[BLK_S - 2];
                 for (size_t w = 0; w < nw; w++) {
                     const size_t i0 = w * 64, i1 = std::min(n, i0 + 64);
                     const uint64_t old = sg[w];
@@ -6656,64 +6573,35 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                             out_ptr[i] = t;
                         }
                     }
-                    if (facc) {
-                        if (BLK_S == 2)
-                            for (size_t i = i0; i < i1; i++) {
-                                T q = u[i];
-                                q += (cb * k[i]);
-                                acc[i] = q;
-                            }
-                        else
-                            for (size_t i = i0; i < i1; i++) acc[i] += (cb * k[i]);
-                    }
+                    if (BLK_S == 2)
+                        for (size_t i = i0; i < i1; i++) {
+                            T q = u[i];
+                            q += (cb * k[i]);
+                            acc[i] = q;
+                        }
+                    else
+                        for (size_t i = i0; i < i1; i++) acc[i] += (cb * k[i]);
                     if (upd)
                         for (size_t i = i0; i < i1; i++)
                             if (!std::signbit(k[i])) add |= (uint64_t)1 << (i - i0);
                     sg[w] = old | add;
                 }
             } else {
-            sIn.vecCopy(m_uiBVec[blk]._vec[0]);  // copy the in vector.
-            if (m_uiStageRing) {
-                // STAGE_RING: U, then the dropped 0 * k_j terms (j < s-1) as
-                // their only effect, -0.0 -> +0.0 where the mask is set, then
-                // the one live term a_{s,s-1} k_{s-1} from the ring slot
-                std::vector<uint64_t>& sg = m_uiStageSgn[blk];
-                const size_t n            = (size_t)DOF * NN;
-                if (BLK_S == 1) std::fill(sg.begin(), sg.end(), 0);
-                if (BLK_S >= 3 && ts::EnutsProf::stageRingMode() == 1) {
-                    for (size_t w = 0; w < sg.size(); w++) {
-                        uint64_t bits = sg[w];
-                        while (bits) {
-                            const int b    = __builtin_ctzll(bits);
-                            const size_t i = w * 64 + b;
-                            bits &= bits - 1;
-                            if (i < n && out_ptr[i] == (T)0 && std::signbit(out_ptr[i]))
-                                out_ptr[i] = (T)0;
-                        }
+                sIn.vecCopy(m_uiBVec[blk]._vec[0]);
+                if (m_uiStageRing) {
+                    // stage 1: no stage term yet, a fresh sign mask
+                    std::fill(m_uiStageSgn[blk].begin(), m_uiStageSgn[blk].end(), 0);
+                } else {
+                    // all stage terms in one pass (same order per entry)
+                    const T* stp[16];
+                    T stc[16];
+                    for (unsigned int s = 1; s < BLK_S; s++) {
+                        stp[s - 1] = m_uiBVec[blk]._vec[s].data();
+                        stc[s - 1] = blk_dt *
+                                     m_uiAij[(BLK_S - 1) * m_uiNumStages + (s - 1)];
                     }
+                    enuts_axpy_stages(out_ptr, stp, stc, BLK_S - 1, (size_t)DOF * NN);
                 }
-                if (BLK_S > 1) {
-                    const T* k = m_uiBVec[blk]._vec[RING_K].data();  // k_{s-1}
-                    // k_{s-1} is a dropped 0 * k term of stages s+1 .. NS
-                    if (BLK_S + 1 <= m_uiNumStages)
-                        for (size_t i = 0; i < n; i++)
-                            if (!std::signbit(k[i])) sg[i >> 6] |= (uint64_t)1 << (i & 63);
-                    const T* stp[1] = {k};
-                    const T stc[1]  = {blk_dt * m_uiAij[(BLK_S - 1) * m_uiNumStages +
-                                                        (BLK_S - 2)]};
-                    enuts_axpy_stages(out_ptr, stp, stc, 1, n);
-                }
-            } else {
-                // all stage terms in one pass (same order per entry)
-                const T* stp[16];
-                T stc[16];
-                for (unsigned int s = 1; s < BLK_S; s++) {
-                    stp[s - 1] = m_uiBVec[blk]._vec[s].data();
-                    stc[s - 1] = blk_dt *
-                                 m_uiAij[(BLK_S - 1) * m_uiNumStages + (s - 1)];
-                }
-                enuts_axpy_stages(out_ptr, stp, stc, BLK_S - 1, (size_t)DOF * NN);
-            }
             }
 
             ENUTS_BLK_TOC(RL_IN);
@@ -6871,12 +6759,9 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
                 current_t + dt_finest * BLK_T);
             if (prof) ts::EnutsProf::get().t[ts::EnutsProf::SY_POST] += ts::EnutsProf::now() - tps0;
             m_uiBVec[blk]._vec[stage_slot(BLK_S)].mark_synced();
-            if (m_uiStageRing &&
-                (!ts::EnutsProf::ringFused() || BLK_S == m_uiNumStages)) {
-                // STAGE_RING: acc = U, then += b_s dt k_s after each synced
-                // stage: the same per-entry sequence as the one-pass update.
-                // RING_FUSED: stages 1 .. NS-1 are added by the next stage
-                // input pass instead (k_s is still in the ring slot there)
+            if (m_uiStageRing && BLK_S == m_uiNumStages) {
+                // ring: the last stage's accumulator term (the earlier ones
+                // went in with the next stage's input pass)
                 BlockAsyncVector<T>& acc = m_uiBVec[blk]._vec[RING_ACC];
                 const T* k               = m_uiBVec[blk]._vec[RING_K].data();
                 const size_t n           = (size_t)DOF * NN;
@@ -6981,7 +6866,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
         T* out_ptr     = (T*)m_uiBVec[blk]._vec[0].data();
         if (m_uiStageRing) {
-            // STAGE_RING: the accumulator already holds U + sum_s b_s dt k_s
+            // ring: the accumulator already holds U + sum_s b_s dt k_s
             m_uiBVec[blk]._vec[0].swapData(m_uiBVec[blk]._vec[RING_ACC]);
         } else {
             const T* stp[16];
@@ -7076,8 +6961,6 @@ void ExplicitNUTS<T, Ctx>::evolve() {
         const unsigned int rank = pMesh->getMPIRank();
         const unsigned int npes = pMesh->getMPICommSize();
 
-        assert(ts::EnutsProf::lazyTmp() || m_uiEVar.get_dof() == m_uiEVecTmp[0].get_dof());
-        assert(ts::EnutsProf::lazyTmp() || m_uiEVar.get_dof() == m_uiEVecTmp[1].get_dof());
 
         const unsigned int DOF           = m_uiEVar.get_dof();
         MPI_Comm comm                    = pMesh->getMPICommunicator();
