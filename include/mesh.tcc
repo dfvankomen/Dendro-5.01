@@ -770,19 +770,7 @@ void Mesh::performGhostExchange(T* vec) {
     // Stage 3 uses m_uiZipNonPrimaryToGhostCg, populated by
     // buildZipPlan() via an inverse-scatter-map lookup that picks
     // EXACTLY the ghost cg whose source is the primary's local cg
-    // on the primary's rank. The legacy m_uiPassDDemotedToGhostCg
-    // (built by Pass D's "first-found ghost cg at phys_pos" walk)
-    // is still applied for compatibility — it will be removed in
-    // Stage 4 when Pass A/D/E are deleted.
-    static const char* nopd_env_a =
-        std::getenv("DENDRO_DISABLE_PASSD_MIRROR");
-    static const bool skip_passd_a =
-        nopd_env_a && nopd_env_a[0] == '1' && nopd_env_a[1] == '\0';
-    if (!skip_passd_a && !m_uiPassDDemotedToGhostCg.empty()) {
-        for (auto& kv : m_uiPassDDemotedToGhostCg) {
-            vec[kv.first] = vec[kv.second];
-        }
-    }
+    // on the primary's rank.
     if (!m_uiZipNonPrimaryToGhostCg.empty()) {
         for (auto& kv : m_uiZipNonPrimaryToGhostCg) {
             vec[kv.first] = vec[kv.second];
@@ -1895,20 +1883,8 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
         }
 
         if (xp) xprofMark(7);
-        // Sync non-primary local cgs from ghost (Stage 3 + legacy
-        // Pass D path). See performGhostExchange for rationale.
-        static const char* nopd_env_b =
-            std::getenv("DENDRO_DISABLE_PASSD_MIRROR");
-        static const bool skip_passd_b =
-            nopd_env_b && nopd_env_b[0] == '1' && nopd_env_b[1] == '\0';
-        if (!skip_passd_b && !m_uiPassDDemotedToGhostCg.empty()) {
-            for (unsigned int var = 0; var < dof; var++) {
-                T* vptr = vec + var * m_uiNumActualNodes;
-                for (auto& kv : m_uiPassDDemotedToGhostCg) {
-                    vptr[kv.first] = vptr[kv.second];
-                }
-            }
-        }
+        // Sync non-primary local cgs from ghost. See performGhostExchange
+        // for rationale.
         if (!m_uiZipNonPrimaryToGhostCg.empty()) {
             for (unsigned int var = 0; var < dof; var++) {
                 T* vptr = vec + var * m_uiNumActualNodes;
@@ -2399,30 +2375,8 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
         spScatter.stop();
         if (xp) xprofMark(7);
         dendro::stepprof::Scope spMirror(dendro::stepprof::GE_MIRROR);
-        // Sync non-primary local cgs from ghost (Stage 3 + legacy
-        // Pass D path). See performGhostExchange for rationale.
-        //
-        // The legacy PassD mirror picks "smallest-indexed ghost cg at
-        // phys_pos" which doesn't always correspond to the cascade's
-        // actual ship source for the canonical primary. When wrong, it
-        // OVERWRITES the correct value that syncZipNonPrimary placed
-        // into the demoted local cg at the start of readFromGhost.
-        // Env gate `DENDRO_DISABLE_PASSD_MIRROR=1` skips it; Stage 3
-        // mirror (which uses inverse scatter map lookup, correct
-        // source) handles the cases it covers, and syncZipNonPrimary
-        // handles the rest via direct Alltoallv.
-        static const char* nopd_env =
-            std::getenv("DENDRO_DISABLE_PASSD_MIRROR");
-        static const bool skip_passd_mirror =
-            nopd_env && nopd_env[0] == '1' && nopd_env[1] == '\0';
-        if (!skip_passd_mirror && !m_uiPassDDemotedToGhostCg.empty()) {
-            for (unsigned int var = 0; var < dof; var++) {
-                T* vptr = vec + var * m_uiNumActualNodes;
-                for (auto& kv : m_uiPassDDemotedToGhostCg) {
-                    vptr[kv.first] = vptr[kv.second];
-                }
-            }
-        }
+        // Sync non-primary local cgs from ghost. See performGhostExchange
+        // for rationale.
         if (!m_uiZipNonPrimaryToGhostCg.empty()) {
             for (unsigned int var = 0; var < dof; var++) {
                 T* vptr = vec + var * m_uiNumActualNodes;

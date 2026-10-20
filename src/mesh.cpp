@@ -1648,7 +1648,6 @@ const std::vector<unsigned int> &Mesh::getStageCopyGhostSlots() {
                        3 * m_uiScatterMapActualNodeRecv.size() +
                        5 * m_uiZipLocalDupSrc.size() +
                        7 * m_uiZipSyncSendCg.size() +
-                       11 * m_uiPassDDemotedToGhostCg.size() +
                        13 * m_uiZipNonPrimaryToGhostCg.size() +
                        17 * m_uiZipGhostToLocalAtConsensus.size();
     if (sig == m_uiStageCopySig) return m_uiStageCopySlots;
@@ -1673,7 +1672,6 @@ const std::vector<unsigned int> &Mesh::getStageCopyGhostSlots() {
     }
     for (auto cg : m_uiZipLocalDupSrc) add(ex, cg);
     for (auto cg : m_uiZipSyncSendCg) add(ex, cg);
-    for (auto &kv : m_uiPassDDemotedToGhostCg) add(ex, kv.second);
     for (auto &kv : m_uiZipNonPrimaryToGhostCg) add(ex, kv.second);
     for (auto &kv : m_uiZipGhostToLocalAtConsensus) add(ex, kv.second);
     for (auto cg : m_uiScatterMapActualNodeRecv) add(m_uiRecvGhostSlots, cg);
@@ -1728,8 +1726,7 @@ void Mesh::dumpStepProf(std::ostream &out, const char *tag) {
         (double)(m_uiNodeLocalEnd - m_uiNodeLocalBegin),
         (double)(m_uiNumActualNodes - (m_uiNodeLocalEnd - m_uiNodeLocalBegin)),
         (double)m_uiZipLocalDupSrc.size(),
-        (double)(m_uiZipNonPrimaryToGhostCg.size() +
-                 m_uiPassDDemotedToGhostCg.size()),
+        (double)m_uiZipNonPrimaryToGhostCg.size(),
         (double)m_uiZipSyncSendCg.size(),
         (double)m_uiZipSyncRecvCg.size(),
         (double)m_uiScatterMapActualNodeSend.size(),
@@ -7295,13 +7292,12 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
     size_t legitimate_hang   = 0;
     size_t finer_owner_seen  = 0;
     size_t unresolved        = 0;
-    size_t passd_skipped     = 0;
     size_t dangling_class    = 0;
     size_t dangling_patched  = 0;
     size_t dangling_unres    = 0;
 
     struct AuditCounters {
-        size_t patched = 0, bug = 0, hang = 0, finer = 0, unres = 0, passd = 0,
+        size_t patched = 0, bug = 0, hang = 0, finer = 0, unres = 0,
                dangling_class = 0, dangling_patched = 0, dangling_unres = 0;
     };
     // audit one (e, n) slot; true iff it was re-routed. a slot's verdict
@@ -7340,11 +7336,8 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         // hanging-edge cases (owner is coarser parent at a
         // different phys; we still want the canonical CG at
         // the parent's phys so the p2c interp reads the right
-        // value). Skip cgs PassD owns (cross-rank consolidation
-        // handles them separately).
-        if (cgIdx < nTotal_cg && !hasCanonicalWriter[cgIdx] &&
-            m_uiPassDDemotedLocalCgs.count(cgIdx) == 0 &&
-            m_uiPassDDemotedToGhostCg.count(cgIdx) == 0) {
+        // value).
+        if (cgIdx < nTotal_cg && !hasCanonicalWriter[cgIdx]) {
             c.dangling_class++;
             unsigned int newCg = findCgAtPos(actual, true);
             // expected-phys fallback for misrouted non-hanging
@@ -7440,11 +7433,6 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         // Same level + phys_pos mismatch == bug class.
         c.bug++;
 
-        if (m_uiPassDDemotedLocalCgs.count(cgIdx) ||
-            m_uiPassDDemotedToGhostCg.count(cgIdx)) {
-            c.passd++;
-            return false;
-        }
 
         const unsigned int newCg = findCgAtPos(expected, false);
         if (newCg == LOOK_UP_TABLE_DEFAULT) {
@@ -7552,7 +7540,6 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
             sum.hang += c.hang;
             sum.finer += c.finer;
             sum.unres += c.unres;
-            sum.passd += c.passd;
             sum.dangling_class += c.dangling_class;
             sum.dangling_patched += c.dangling_patched;
             sum.dangling_unres += c.dangling_unres;
@@ -7562,7 +7549,6 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
         legitimate_hang  += sum.hang;
         finer_owner_seen += sum.finer;
         unresolved       += sum.unres;
-        passd_skipped    += sum.passd;
         patched          += sum.patched;
         dangling_class   += sum.dangling_class;
         dangling_patched += sum.dangling_patched;
@@ -7590,7 +7576,6 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
                   << " hanging=" << legitimate_hang
                   << " finer_owner=" << finer_owner_seen
                   << " unresolved=" << unresolved
-                  << " passd_skipped=" << passd_skipped
                   << " dangling_class=" << dangling_class
                   << " dangling_patched=" << dangling_patched
                   << " dangling_unres=" << dangling_unres
@@ -8259,8 +8244,6 @@ void Mesh::pruneZipSync() {
         }
         for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
             readSet.insert(kv.second);
-        for (const auto& kv : m_uiPassDDemotedToGhostCg)
-            readSet.insert(kv.second);
     }
     const size_t recvN = m_uiZipSyncRecvCg.size();
     const size_t sendN = m_uiZipSyncSendCg.size();
@@ -8372,8 +8355,7 @@ void Mesh::zipFastCompare() {
         !m_uiZipSyncSendCg.empty() || !m_uiZipSyncRecvCg.empty(),
         !m_uiZipLocalDupSrc.empty() || !m_uiZipLocalDupDst.empty(),
         !m_uiZipNonPrimaryToGhostCg.empty(), !m_uiZipGhostToLocalAtConsensus.empty(),
-        !m_uiPassDDemotedToGhostCg.empty() || !m_uiPassDDemotedLocalCgs.empty() ||
-            !m_uiLocalNonPrimaryCg.empty(),
+        !m_uiLocalNonPrimaryCg.empty(),
         (unsigned long long)m_uiZipSyncGlobalActive};
     MPI_Allreduce(MPI_IN_PLACE, d, 8, MPI_UNSIGNED_LONG_LONG, MPI_SUM, m_uiCommActive);
     if (!m_uiActiveRank)
@@ -8940,7 +8922,6 @@ void Mesh::buildZipPlanCore() {
             return (pl ? std::atoi(pl) : 2) >= 2 && !(pc && pc[0] == '1') &&
                    !(cf && cf[0] == '0') && !(pz && pz[0] == '0') &&
                    !(ef && ef[0] == '1') && !std::getenv("DENDRO_ZIPPLAN_STATS") &&
-                   !DENDRO_PROBE_GETENV("DENDRO_PASSD_CLEANUP_DBG") &&
                    !DENDRO_PROBE_GETENV("DENDRO_DUP_PROBE_DIR");
         }();
         const unsigned int nAll = m_uiNumActualNodes;
@@ -8949,7 +8930,6 @@ void Mesh::buildZipPlanCore() {
         int why = 0;
         if (!fastEnvOk) why |= 1;
         if (!(m_uiCanonKeysBuilt || !m_uiIsLabelledRebuild) ||
-            !m_uiPassDDemotedToGhostCg.empty() || !m_uiPassDDemotedLocalCgs.empty() ||
             m_e2b_unzip_counts.size() != m_uiNumTotalElements || m_uiCG2DG.size() < nAll)
             why |= 2;
         int ok = why == 0;
@@ -9119,8 +9099,6 @@ void Mesh::buildZipPlanCore() {
             }
         }
         for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
-            if (kv.second < nTotal_cg) ghostKeep[kv.second] = 1;
-        for (const auto& kv : m_uiPassDDemotedToGhostCg)
             if (kv.second < nTotal_cg) ghostKeep[kv.second] = 1;
         for (unsigned int c : m_uiScatterMapActualNodeRecv)
             if (c < nTotal_cg) ghostKeep[c] = 0;  // delivered: not kept as read
@@ -9362,7 +9340,6 @@ void Mesh::buildZipPlanCore() {
                     markCg(m_uiE2NMapping_CG[(size_t)e * npe + k]);
             }
             for (const auto& kv : m_uiZipNonPrimaryToGhostCg) { markCg(kv.first); markCg(kv.second); }
-            for (const auto& kv : m_uiPassDDemotedToGhostCg) { markCg(kv.first); markCg(kv.second); }
             for (int i = 0; i < myCount; i++) {
                 const int g = myGrp[i];
                 if (g < 0) continue;
@@ -9433,49 +9410,7 @@ void Mesh::buildZipPlanCore() {
         return it == winners.end() ? nullptr : &it->second;
     };
 
-    // ---- Cleanup: remove cascade-primary cgs from PassD's demoted
-    // mirror list ----
-    //
-    // patchE2NCgFromMasks (mask-patch) populates m_uiPassDDemotedToGhostCg
-    // when it redirects an over-claim from `old_cg` to `owner_cg`. After
-    // the redirect, no LOCAL element on this rank references `old_cg`
-    // via E2N_CG (it's orphan). PassD's mirror then copies a ghost cg's
-    // value into `old_cg` on every readFromGhostEnd.
-    //
-    // BUT cascade's cross-rank winner pick (above) can independently
-    // designate `old_cg` as the PRIMARY for its phys_pos: plan-zip
-    // writes the correct value into `old_cg`, the integrator's axpy
-    // updates it, and syncZipNonPrimary later sends `old_cg` to all
-    // non-primary ranks. If PassD then mirrors a stale ghost back into
-    // `old_cg` after the standard ghost exchange, it overwrites the
-    // correct post-axpy value with stale IC data — silently corrupting
-    // every RK stage past stage 1 of step 0 at level-transition corners.
-    //
-    // Fix: walk winners[] and erase any (rank == me, cg == winner_cg)
-    // entry from m_uiPassDDemotedToGhostCg. Cascade primaries are NOT
-    // demoted; they're the source of truth.
-
     if (__zp_on) __zp_win = MPI_Wtime();
-
-    size_t passDCleanupErased = 0;
-    bool dbgWinnerCleanup =
-        (DENDRO_PROBE_GETENV("DENDRO_PASSD_CLEANUP_DBG") != nullptr);
-    auto eraseWinnerFromPassD = [&](const Winner& w) {
-        if (w.rank != m_uiActiveRank) return;
-        if (m_uiPassDDemotedToGhostCg.erase(w.cg)) passDCleanupErased++;
-        m_uiPassDDemotedLocalCgs.erase(w.cg);
-    };
-    if (zpDist) {
-        for (const Winner& w : winByClaim) eraseWinnerFromPassD(w);
-    } else {
-        for (auto& kv : winners) eraseWinnerFromPassD(kv.second);
-    }
-    if (dbgWinnerCleanup) {
-        std::cout << "[passd-cleanup r" << m_uiActiveRank
-                  << "] erased " << passDCleanupErased
-                  << " winner-cgs from PassDDemotedToGhostCg"
-                  << std::endl;
-    }
 
     if (__zp_on) __zp_passd = MPI_Wtime();
 
@@ -9959,35 +9894,6 @@ void Mesh::buildZipPlanCore() {
 
     if (__zp_on) __zp_plan = MPI_Wtime();
 
-    // ---- Cleanup pass 2: PassD's heuristic mirror is shadowed by
-    // (a) the precise Stage 3 mirror m_uiZipNonPrimaryToGhostCg, and
-    // (b) the side-channel Alltoallv syncZipNonPrimary which delivers
-    // the primary's value directly into local non-primary cgs in
-    // m_uiZipSyncRecvCg.
-    //
-    // PassD can pick a wrong ghost source ("smallest-indexed ghost cg
-    // at phys_pos" walk) and OVERWRITE the value that (a) or (b)
-    // placed. Erase any cg from PassDDemotedToGhostCg that is covered
-    // by either (a) or (b). What remains in PassDDemotedToGhostCg is
-    // only those cgs that NEITHER mechanism handles, where PassD's
-    // heuristic mirror is the only sync available.
-    size_t passDOverlapErased = 0;
-    for (auto& kv : m_uiZipNonPrimaryToGhostCg) {
-        if (m_uiPassDDemotedToGhostCg.erase(kv.first)) passDOverlapErased++;
-        m_uiPassDDemotedLocalCgs.erase(kv.first);
-    }
-    for (unsigned int recv_cg : m_uiZipSyncRecvCg) {
-        if (m_uiPassDDemotedToGhostCg.erase(recv_cg)) passDOverlapErased++;
-        m_uiPassDDemotedLocalCgs.erase(recv_cg);
-    }
-    if (dbgWinnerCleanup) {
-        std::cout << "[passd-cleanup r" << m_uiActiveRank
-                  << "] erased " << passDOverlapErased
-                  << " overlap cgs from PassDDemotedToGhostCg"
-                  << " (Stage3+SyncZipNonPrimary coverage)"
-                  << std::endl;
-    }
-
     if (__zp_on) __zp_clean2 = MPI_Wtime();
 
     // ---- Build element-read fixup map ----
@@ -10014,7 +9920,7 @@ void Mesh::buildZipPlanCore() {
     static const bool erfix_on =
         erfix_env && erfix_env[0] == '1' && erfix_env[1] == '\0';
     const bool buildElemReadFixup =
-        erfix_on || dbgWinnerCleanup || std::getenv("DENDRO_ZIPPLAN_STATS");
+        erfix_on || std::getenv("DENDRO_ZIPPLAN_STATS");
     if (buildElemReadFixup) {
         // Map phys_pos → a local cg on this rank that holds the
         // primary's post-sync value. Prefer the cascade winner if
@@ -10082,12 +9988,6 @@ void Mesh::buildZipPlanCore() {
             }
         }
     }
-    if (dbgWinnerCleanup) {
-        std::cout << "[passd-cleanup r" << m_uiActiveRank
-                  << "] built " << m_uiZipGhostToLocalAtConsensus.size()
-                  << " element-read fixup entries"
-                  << std::endl;
-    }
 
     if (std::getenv("DENDRO_ZIPPLAN_STATS")) {
         // targets outside the active recv SM never get refreshed by the
@@ -10095,9 +9995,7 @@ void Mesh::buildZipPlanCore() {
         std::unordered_set<unsigned int> recvSet(
             m_uiScatterMapActualNodeRecv.begin(),
             m_uiScatterMapActualNodeRecv.end());
-        size_t passDStale = 0, stage3Stale = 0;
-        for (const auto& kv : m_uiPassDDemotedToGhostCg)
-            if (!recvSet.count(kv.second)) passDStale++;
+        size_t stage3Stale = 0;
         for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
             if (!recvSet.count(kv.second)) stage3Stale++;
         // a pairless non-primary cg is fine if the zip-sync alltoallv
@@ -10116,13 +10014,11 @@ void Mesh::buildZipPlanCore() {
         }
         fprintf(stderr,
                 "[zipplan-stats r%d] nonPrimary=%zu mirrorPairs=%zu "
-                "invMiss=%zu unprotected=%zu passDSurvive=%zu "
-                "passDTargetNotInRecvSM=%zu stage3TargetNotInRecvSM=%zu "
+                "invMiss=%zu unprotected=%zu stage3TargetNotInRecvSM=%zu "
                 "recvSM=%zu\n",
                 m_uiActiveRank, zpsNonPrimary,
                 m_uiZipNonPrimaryToGhostCg.size(), zpsInvMiss,
-                zpsUnprotected, m_uiPassDDemotedToGhostCg.size(),
-                passDStale, stage3Stale,
+                zpsUnprotected, stage3Stale,
                 m_uiScatterMapActualNodeRecv.size());
     }
 
@@ -22109,8 +22005,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         std::swap(m_uiE2NMapping_DG, e2n_dg);
         std::swap(m_uiCG2DG, cg2dg);
         std::swap(m_uiDG2CG, dg2cg);
-            m_uiPassDDemotedLocalCgs.clear();
-        m_uiPassDDemotedToGhostCg.clear();
         m_uiSendNodeCount.assign(m_uiActiveNpes, 0);
         m_uiRecvNodeCount.assign(m_uiActiveNpes, 0);
         m_uiSendNodeOffset.assign(m_uiActiveNpes, 0);
@@ -23275,8 +23169,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 // non-primary local cgs must keep full-map semantics
                 for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
                     keepSlots.insert(kv.second);
-                for (const auto& kv : m_uiPassDDemotedToGhostCg)
-                    keepSlots.insert(kv.second);
                 static const bool smFilter = [] {
                     const char* e = std::getenv("DENDRO_MINIMAL_SCATTER_FILTER");
                     return !(e && e[0] == '0');
@@ -23531,20 +23423,19 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         __phase("block-decomposition");
         if (ckUse || std::getenv("DENDRO_ZIPSYNC_STATS")) {
             // K6 expects no duplicate cgs anywhere: empty sync lists, no mirrors
-            unsigned long long v[8] = {zsRaw[0], zsRaw[1], m_uiZipSyncSendCg.size(),
+            unsigned long long v[7] = {zsRaw[0], zsRaw[1], m_uiZipSyncSendCg.size(),
                                        m_uiZipSyncRecvCg.size(), m_uiZipLocalDupSrc.size(),
                                        m_uiZipNonPrimaryToGhostCg.size(),
-                                       m_uiPassDDemotedToGhostCg.size(),
                                        m_uiLocalNonPrimaryCg.size()};
-            unsigned long long t[8], mx[8];
-            MPI_Reduce(v, t, 8, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
-            MPI_Reduce(v, mx, 8, MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, commActive);
+            unsigned long long t[7], mx[7];
+            MPI_Reduce(v, t, 7, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, commActive);
+            MPI_Reduce(v, mx, 7, MPI_UNSIGNED_LONG_LONG, MPI_MAX, 0, commActive);
             if (!rank)
                 std::printf("[zipsync-summary] keys=%d sync send/recv raw=%llu/%llu pruned=%llu/%llu "
-                            "local_dup=%llu znp_mirror=%llu passd_mirror=%llu local_nonprimary=%llu "
+                            "local_dup=%llu znp_mirror=%llu local_nonprimary=%llu "
                             "global_active=%d | max/rank pruned=%llu/%llu local_dup=%llu znp=%llu "
                             "local_nonprimary=%llu\n", (int)ckUse, t[0], t[1], t[2], t[3], t[4], t[5],
-                            t[6], t[7], (int)m_uiZipSyncGlobalActive, mx[2], mx[3], mx[4], mx[5], mx[7]);
+                            t[6], (int)m_uiZipSyncGlobalActive, mx[2], mx[3], mx[4], mx[5], mx[6]);
         }
         if (ckUse) {
             // absent-owner slots by ring of their element (local, R1, R2, R3,
@@ -23732,8 +23623,6 @@ std::vector<char> Mesh::bcastKeepSlots() const {
         }
     }
     for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
-        if (kv.second < N && !delivered[kv.second]) keepSlot[kv.second] = 1;
-    for (const auto& kv : m_uiPassDDemotedToGhostCg)
         if (kv.second < N && !delivered[kv.second]) keepSlot[kv.second] = 1;
     {
         const bool useDG = m_uiScatterMapSendIsDG.size() ==
@@ -23943,7 +23832,6 @@ void Mesh::buildBcastPlanDist(int claimLevel,
             }
         }
         for (const auto& kv : m_uiZipNonPrimaryToGhostCg) { markCg(kv.first); markCg(kv.second); }
-        for (const auto& kv : m_uiPassDDemotedToGhostCg) { markCg(kv.first); markCg(kv.second); }
         if (forceRoute)
             for (size_t k = 0; k + 2 < forceRoute->size(); k += 3)
                 exPos.push_back(PhysKey3{(*forceRoute)[k], (*forceRoute)[k + 1],
@@ -24650,27 +24538,27 @@ void Mesh::ghostPosCheck(const char* tag) {
         std::snprintf(b, n, "(%.3f,%.3f,%.3f)", X / scale, Y / scale, Z / scale);
     };
     auto report = [&](const std::vector<double>& t, const char* phase) {
-        size_t badL = 0, badG = 0, inDeliv = 0, inSync = 0, inZnp = 0, inPassD = 0;
+        size_t badL = 0, badG = 0, inDeliv = 0, inSync = 0, inZnp = 0;
         std::vector<std::string> samples;
         for (unsigned int cg = 0; cg < nAct; cg++) {
             if (ref[cg] < 0 || t[cg] == ref[cg]) continue;
             const bool loc = cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd;
             (loc ? badL : badG)++;
-            const int d = deliv.count(cg), sy = synced.count(cg), z = m_uiZipNonPrimaryToGhostCg.count(cg), pd = m_uiPassDDemotedToGhostCg.count(cg);
-            inDeliv += d; inSync += sy; inZnp += z; inPassD += pd;
+            const int d = deliv.count(cg), sy = synced.count(cg), z = m_uiZipNonPrimaryToGhostCg.count(cg);
+            inDeliv += d; inSync += sy; inZnp += z;
             if (samples.size() < 8) {
                 char a[96], b[96], line[512];
                 decode(ref[cg], a, sizeof(a)); decode(t[cg], b, sizeof(b));
                 const ot::TreeNode& E = m_uiAllElements[refE[cg]];
-                std::snprintf(line, sizeof(line), "cg=%u %s pos=%s got=%s deliv=%d sync=%d znp=%d passd=%d owner=(%u,%u,%u,%u)%s",
-                              cg, loc ? "LOCAL" : "ghost", a, b, d, sy, z, pd, E.getX(), E.getY(), E.getZ(), E.getLevel(),
+                std::snprintf(line, sizeof(line), "cg=%u %s pos=%s got=%s deliv=%d sync=%d znp=%d owner=(%u,%u,%u,%u)%s",
+                              cg, loc ? "LOCAL" : "ghost", a, b, d, sy, z, E.getX(), E.getY(), E.getZ(), E.getLevel(),
                               (refE[cg] >= m_uiElementLocalBegin && refE[cg] < m_uiElementLocalEnd) ? "L" : "G");
                 samples.emplace_back(line);
             }
         }
         std::cout << "[ghost-pos r" << m_uiActiveRank << " " << tag << "/" << phase << "] labelled=" << (int)m_uiIsLabelledRebuild
                   << " bad_local=" << badL << " bad_ghost=" << badG << " inDeliv=" << inDeliv << " inSync=" << inSync
-                  << " znpDst=" << inZnp << " passdDst=" << inPassD << std::endl;
+                  << " znpDst=" << inZnp << std::endl;
         for (const auto& l : samples) std::cout << "[ghost-pos r" << m_uiActiveRank << "]   " << l << std::endl;
     };
     std::vector<double> t(ref);

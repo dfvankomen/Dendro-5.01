@@ -625,25 +625,7 @@ class Mesh {
     /** dg to cg mapping*/
     std::vector<unsigned int> m_uiDG2CG;
 
-    /** Local CG indices that Pass D (cross-rank consolidation in
-     *  buildE2NWithSMRepartitioned) demoted on this rank because
-     *  another (winning) rank claimed the same phys_pos. Pass E
-     *  must NOT promote these back to local writers — leaving them
-     *  unwritten is the correct outcome (their value flows from
-     *  the winner via standard ghost exchange to a ghost cg that
-     *  this rank's elements have been redirected to). */
-    std::unordered_set<unsigned int> m_uiPassDDemotedLocalCgs;
 
-    /** Map: demoted local cg → its corresponding ghost cg at the
-     *  same phys_pos (sourced from the winner rank). After ghost
-     *  exchange, performGhostExchange/syncDemotedLocalCgs uses
-     *  this to mirror chi[ghost_cg] → chi[demoted_cg] so the
-     *  demoted slot reflects the correct value (otherwise it would
-     *  hold whatever stale data was last written, leading to
-     *  partition-dependent VTU output and analytical-diff
-     *  artifacts even though the actual evolution is correct). */
-    std::unordered_map<unsigned int, unsigned int>
-        m_uiPassDDemotedToGhostCg;
 
     /** Explicit zip plan: list of (target_cg, unzip_idx) pairs telling
      *  zip exactly which slot in the unzipped block buffer to read
@@ -1545,8 +1527,6 @@ class Mesh {
      *  Must run AFTER buildE2NWithSMRepartitioned, and BEFORE REBUILD NODAL SCATTER MAPS / buildZipPlan so the corrected
      *  E2N_CG is reflected in scatter maps and zip-plan.
      *
-     *  Honors PassD's intentional demotions (skips cgs in
-     *  m_uiPassDDemotedLocalCgs and m_uiPassDDemotedToGhostCg).
      *
      *  @return number of E2N_CG entries patched. */
     size_t auditAndRepairE2NCgPhysPos();
