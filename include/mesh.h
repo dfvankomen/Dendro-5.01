@@ -154,13 +154,6 @@ struct oct_data {
     T edgeNeighbors[12];
     T vertexNeighbors[8];
 
-    // 27-bit ownership mask in the eOrd=2 representative layout. Bit r
-    // ∈ [0, 27) is set iff this element OWNS the sub-node at
-    // representative r = nk*9 + nj*3 + ni for ni,nj,nk ∈ {0,1,2}.
-    // Computed pre-partition from a working cascade and travels with
-    // the element through any partition exchange.
-    uint32_t ownerMask = 0u;
-
     // canonical SFC block membership. populated pre-partition from the
     // source mesh's m_uiLocalBlockList and travels with the element
     // through partition exchange. on the receiver, elements that share
@@ -352,9 +345,9 @@ template <typename T>
 MPI_Datatype create_octdata_mpi_type() {
     MPI_Datatype octdata_mpi_datatype;
     int blocklengths[] = {1, 1, 1, 1, 3, 6, 1, 1, 1, 1, 12, 8,
-                          1, 1, 1, 1, 1, 1};
-    MPI_Aint offsets[18];
-    MPI_Datatype types[18];
+                          1, 1, 1, 1, 1};
+    MPI_Aint offsets[17];
+    MPI_Datatype types[17];
 
     types[0] = MPI_UINT32_T;  // 'rank' is always uint32_t
     types[1] = MPI_UINT32_T;  // 'target_rank' is always uint32_t
@@ -364,12 +357,11 @@ MPI_Datatype create_octdata_mpi_type() {
     types[9]                                             = MPI_CXX_BOOL;
     types[10]                                            = get_mpi_type<T>();
     types[11]                                            = get_mpi_type<T>();
-    types[12]                                            = MPI_UINT32_T;  // ownerMask
-    types[13]                                            = MPI_UINT32_T;  // blkAnchorX
-    types[14]                                            = MPI_UINT32_T;  // blkAnchorY
-    types[15]                                            = MPI_UINT32_T;  // blkAnchorZ
-    types[16]                                            = MPI_UINT32_T;  // blkAnchorLevel
-    types[17]                                            = MPI_UINT32_T;  // blkMeta
+    types[12]                                            = MPI_UINT32_T;  // blkAnchorX
+    types[13]                                            = MPI_UINT32_T;  // blkAnchorY
+    types[14]                                            = MPI_UINT32_T;  // blkAnchorZ
+    types[15]                                            = MPI_UINT32_T;  // blkAnchorLevel
+    types[16]                                            = MPI_UINT32_T;  // blkMeta
 
     // get the offsets for each member of the struct
     offsets[0]  = offsetof(oct_data<T>, rank);
@@ -384,14 +376,13 @@ MPI_Datatype create_octdata_mpi_type() {
     offsets[9]  = offsetof(oct_data<T>, isGhostTwo);
     offsets[10] = offsetof(oct_data<T>, edgeNeighbors);
     offsets[11] = offsetof(oct_data<T>, vertexNeighbors);
-    offsets[12] = offsetof(oct_data<T>, ownerMask);
-    offsets[13] = offsetof(oct_data<T>, blkAnchorX);
-    offsets[14] = offsetof(oct_data<T>, blkAnchorY);
-    offsets[15] = offsetof(oct_data<T>, blkAnchorZ);
-    offsets[16] = offsetof(oct_data<T>, blkAnchorLevel);
-    offsets[17] = offsetof(oct_data<T>, blkMeta);
+    offsets[12] = offsetof(oct_data<T>, blkAnchorX);
+    offsets[13] = offsetof(oct_data<T>, blkAnchorY);
+    offsets[14] = offsetof(oct_data<T>, blkAnchorZ);
+    offsets[15] = offsetof(oct_data<T>, blkAnchorLevel);
+    offsets[16] = offsetof(oct_data<T>, blkMeta);
 
-    MPI_Type_create_struct(18, blocklengths, offsets, types,
+    MPI_Type_create_struct(17, blocklengths, offsets, types,
                            &octdata_mpi_datatype);
     MPI_Type_commit(&octdata_mpi_datatype);
 
@@ -682,23 +673,6 @@ class Mesh {
     std::vector<unsigned int> m_uiBlkZipPlanStart;
     std::vector<unsigned int> m_uiBlkZipPlanIdx;
 
-    /** Per-element 27-bit ownership mask (eOrd=2 representative
-     *  layout). Bit r ∈ [0, 27) is set iff this element owns the
-     *  sub-node at representative r = nk*9 + nj*3 + ni for ni,nj,nk
-     *  in {0,1,2}. Computed once after buildE2NMap on the SFC mesh
-     *  (where the cascade is canonically correct), then travels
-     *  with the element through partition exchanges via oct_data.
-     *
-     *  At eOrd=2 this maps directly to all 27 sub-nodes. At higher
-     *  eOrd, an actual sub n at (ni, nj, nk) maps to representative
-     *  r where each axis is collapsed: 0 → 0 (boundary low), eOrd
-     *  → 2 (boundary high), interior → 1. All higher-order
-     *  sub-nodes in the same sharing category as a representative
-     *  inherit ownership from that representative.
-     *
-     *  Sized to match m_uiAllElements (local + ghost). Indexed by
-     *  the element's local index in m_uiAllElements. */
-    std::vector<uint32_t> m_uiOwnerMask;
 
     /** Per-element canonical SFC block info. populated pre-partition
      *  from m_uiLocalBlockList (which is correct on the SFC mesh) and
@@ -1558,19 +1532,6 @@ class Mesh {
         m_xpLazyMs += (MPI_Wtime() - t0) * 1e3;
     }
 
-    /**@brief Derive the per-element 27-bit ownership mask
-     * (m_uiOwnerMask) from the current cascade output. For each
-     * element e, walk the 27 representative sub-nodes (eOrd=2
-     * layout) and set bit r iff E2N_DG[e*npe+sub_for_r]/npe == e.
-     *
-     * Must be called AFTER buildE2NMap completes the cascade
-     * (i.e., after the SFC mesh is built where the cascade is
-     * canonically correct). The result is a compact, transportable
-     * representation of "this element owns these sub-nodes" that
-     * can ride along oct_data through partition exchanges.
-     *
-     * Cost: O(27) per element. Cheap. */
-    void deriveOwnerMasksFromCascade();
 
     /**@brief Audit E2N_CG entries and repair wrong-cascade routings using
      *  phys_pos comparison. For each local element (e, sub), checks whether
@@ -2303,19 +2264,6 @@ class Mesh {
     }
     inline const std::vector<unsigned int>& getZipPlanCg() const { return m_uiZipPlanCg; }
     inline const std::vector<unsigned int>& getZipPlanUnzipIdx() const { return m_uiZipPlanUnzipIdx; }
-
-    /**@brief Read-only accessor for the per-element ownership masks. */
-    inline const std::vector<uint32_t>& getOwnerMask() const {
-        return m_uiOwnerMask;
-    }
-
-    /**@brief Assign external ownership masks (by move). Used to inject
-     * pre-computed masks from a source mesh (where cascade is correct)
-     * into a fresh repartition target before its cascade runs.
-     * Caller is responsible for matching the size to m_uiAllElements. */
-    inline void setOwnerMask(std::vector<uint32_t>&& mask) {
-        m_uiOwnerMask = std::move(mask);
-    }
 
     /**@brief Read-only accessor for canonical block info. */
     inline const std::vector<CanonicalBlockInfo>& getBlockInfo() const {
@@ -5116,14 +5064,6 @@ class Mesh {
             oct_connectivity_map[lid_ele].rank     = rank;
             oct_connectivity_map[lid_ele].level    = pNodes[ele].getLevel();
             oct_connectivity_map[lid_ele].flag     = pNodes[ele].getFlag();
-            // 27-bit ownership mask in eOrd=2 representative layout.
-            // Pre-partition value (cascade-correct on SFC mesh). Empty
-            // (0u) before deriveOwnerMasksFromCascade has run; that's
-            // ok because the post-partition mask path detects this and
-            // falls back to cascade.
-            oct_connectivity_map[lid_ele].ownerMask =
-                (ele < m_uiOwnerMask.size()) ? m_uiOwnerMask[ele] : 0u;
-
             // canonical SFC block membership. populated pre-partition
             // from the source mesh's m_uiLocalBlockList. zero (invalid
             // bit unset) when source didn't carry block info — the

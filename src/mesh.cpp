@@ -966,16 +966,11 @@ Mesh *Mesh::repartitionFrom(const Mesh &src, PartitioningOptions method,
     g->setPartitioningMethod(method);
     g->setScatterMapType(SM_TYPE::FDM);
 
-    // masks / canonical block info: src's local slice into g's local slots
-    // (the clone has src's element layout, so the slots coincide); ghosts 0
+    // canonical block info: src's local slice into g's local slots (the
+    // clone has src's element layout, so the slots coincide); ghosts 0
     const unsigned int lb = src.m_uiElementLocalBegin;
     const unsigned int le = src.m_uiElementLocalEnd;
     const size_t total    = g->m_uiAllElements.size();
-    std::vector<uint32_t> dstMask(total, 0u);
-    if (src.m_uiOwnerMask.size() >= le)
-        for (unsigned int i = lb; i < le && i < total; i++)
-            dstMask[i] = src.m_uiOwnerMask[i];
-    g->setOwnerMask(std::move(dstMask));
     std::vector<CanonicalBlockInfo> dstBlk(total);
     if (src.m_uiBlockInfo.size() >= le)
         for (unsigned int i = lb; i < le && i < total; i++)
@@ -1486,7 +1481,6 @@ std::string Mesh::diffKeyArrays(const Mesh &o, bool e2eOnly) const {
     K2CMP(ZipLocalDupDst);
     K2CMP(UnzipCanonWriter);
     K2CMP(E2BlkMap);
-    K2CMP(OwnerMask);
     K2CMP(RepartPreLabel);
     cmpTN(m_uiRepartPreTN, o.m_uiRepartPreTN, "RepartPreTN");
     if (m_uiRepartOrigin.size() != o.m_uiRepartOrigin.size()) note("RepartOrigin.size");
@@ -4510,13 +4504,6 @@ void Mesh::buildE2NWithSM() {
 
     // 2. Expand to full order and rebuild scatter maps
     buildE2NWithSMRepartitioned(eleOrder);
-
-    // 3. Derive per-element ownership masks from the now-finalized
-    // cascade. The masks freeze cascade's correct ownership decisions
-    // into a compact, transportable form. Future repartition exchanges
-    // ship masks alongside oct_data so the receiver doesn't need a
-    // working post-partition cascade.
-    deriveOwnerMasksFromCascade();
 }
 
 void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
@@ -6496,58 +6483,6 @@ void Mesh::buildE2N_DG() {
 
     dendro::logger::info(dendro::logger::Scope{"MESH"},
                          "Finished constructing E2N Map (DG)!");
-}
-
-void Mesh::deriveOwnerMasksFromCascade() {
-    // Sized to match m_uiAllElements (local + ghost). At this point in
-    // construction, m_uiAllElements is finalized and E2N_DG is the
-    // cascade's authoritative ownership map.
-    const size_t nElTot = m_uiAllElements.size();
-    m_uiOwnerMask.assign(nElTot, 0u);
-    if (!m_uiIsActive || nElTot == 0) return;
-
-    const unsigned int npe  = m_uiNpE;
-    const unsigned int eOrd = m_uiElementOrder;
-    if (eOrd == 0) return;  // degenerate; nothing to do
-
-    // For each of the 27 eOrd=2 representative coordinates
-    // (ni27, nj27, nk27) ∈ {0, 1, 2}^3, compute the actual sub-index
-    // at the mesh's eOrd. The "interior" representative maps to the
-    // element's interior midpoint; "boundary low/high" map to the
-    // element's 0 / eOrd ends.
-    auto subForRep = [&](unsigned int rep) -> unsigned int {
-        const unsigned int ni27 = rep % 3;
-        const unsigned int nj27 = (rep / 3) % 3;
-        const unsigned int nk27 = rep / 9;
-        // Pick a STABLE representative within each category for
-        // higher orders. The mid-point is `eOrd / 2` (integer
-        // division). For eOrd=2 this collapses to the natural sub
-        // index 0/1/2 and the formula is exact.
-        const unsigned int ni = (ni27 == 0) ? 0u
-                              : (ni27 == 2) ? eOrd
-                              : (eOrd / 2);
-        const unsigned int nj = (nj27 == 0) ? 0u
-                              : (nj27 == 2) ? eOrd
-                              : (eOrd / 2);
-        const unsigned int nk = (nk27 == 0) ? 0u
-                              : (nk27 == 2) ? eOrd
-                              : (eOrd / 2);
-        return nk * (eOrd + 1) * (eOrd + 1) + nj * (eOrd + 1) + ni;
-    };
-
-    for (size_t e = 0; e < nElTot; e++) {
-        uint32_t mask = 0u;
-        for (unsigned int r = 0; r < 27; r++) {
-            const unsigned int sub = subForRep(r);
-            const unsigned int dg  =
-                m_uiE2NMapping_DG[e * npe + sub];
-            // Self-owned canonical writer test: the cascade's
-            // canonical DG slot for this (elem, sub) points back at
-            // this elem.
-            if (dg / npe == (unsigned int)e) mask |= (1u << r);
-        }
-        m_uiOwnerMask[e] = mask;
-    }
 }
 
 void Mesh::deriveBlockInfoFromBlocks() {
@@ -21853,15 +21788,11 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
     std::swap(m_uiE2EMapping, newE2EMap);
 
-    // Reconstruct m_uiAllElements from oct_data coordinates AND
-    // copy received ownerMasks into m_uiOwnerMask in lockstep — the
-    // mask rides with each element across the partition exchange.
-    // canonical block info rides along the same way so post-partition
-    // block setup can reconstruct the source rank's SFC blocks.
+    // Reconstruct m_uiAllElements from oct_data coordinates; canonical
+    // block info rides along with each element so post-partition block
+    // setup can reconstruct the source rank's SFC blocks.
     std::vector<ot::TreeNode> newAllElements;
     newAllElements.reserve(new_oct_connectivity_map.size());
-    std::vector<uint32_t> newOwnerMask;
-    newOwnerMask.reserve(new_oct_connectivity_map.size());
     std::vector<CanonicalBlockInfo> newBlockInfo;
     newBlockInfo.reserve(new_oct_connectivity_map.size());
     for (const auto &oct : new_oct_connectivity_map) {
@@ -21870,7 +21801,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                           oct.coord[2] - psz, oct.level, 3, m_uiMaxDepth);
         temp.setFlag(oct.flag);
         newAllElements.push_back(temp);
-        newOwnerMask.push_back(oct.ownerMask);
 
         CanonicalBlockInfo bi;
         bi.anchorX     = oct.blkAnchorX;
@@ -21898,7 +21828,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     std::swap(m_uiAllElements, newAllElements);
     m_uiUnzipEleOrder.clear();
     m_uiUnzipAllBlkIds.clear();
-    std::swap(m_uiOwnerMask, newOwnerMask);
     std::swap(m_uiBlockInfo, newBlockInfo);
 
     // Update element ranges and counts

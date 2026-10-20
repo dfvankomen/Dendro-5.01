@@ -2827,7 +2827,7 @@ int main(int argc, char** argv) {
     }
 
     // TEST 8bs: EM4-style buildGraphTwin path (E2E_ONLY -> FDM flip
-    // WITH ownerMask + blockInfo injection) — does unzip produce
+    // WITH blockInfo injection) — does unzip produce
     // bit-perfect output vs the source SFC mesh?
     //
     // 8bp proves the IN-PLACE repartition path is bit-perfect. EM4 uses
@@ -2852,19 +2852,10 @@ int main(int argc, char** argv) {
 
         // mirror em4_partitioning.h's buildGraphTwin injection
         if (mesh->isActive() && gTwin->isActive()) {
-            const auto& srcMask = mesh->getOwnerMask();
             const unsigned int srcLB = mesh->getElementLocalBegin();
             const unsigned int srcLE = mesh->getElementLocalEnd();
             const unsigned int dstLB = gTwin->getElementLocalBegin();
             const size_t totalElems = gTwin->getAllElements().size();
-            std::vector<uint32_t> dstMask(totalElems, 0u);
-            if (srcMask.size() >= srcLE) {
-                for (unsigned int i = 0;
-                     i < (srcLE - srcLB) && (dstLB + i) < totalElems; i++)
-                    dstMask[dstLB + i] = srcMask[srcLB + i];
-            }
-            gTwin->setOwnerMask(std::move(dstMask));
-
             const auto& srcBlk = mesh->getBlockInfo();
             std::vector<ot::Mesh::CanonicalBlockInfo> dstBlk(totalElems);
             if (srcBlk.size() >= srcLE) {
