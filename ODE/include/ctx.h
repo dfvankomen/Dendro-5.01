@@ -247,8 +247,8 @@ class Ctx {
     /**@brief: derived class static cast*/
     inline DerivedCtx& asLeaf() { return static_cast<DerivedCtx&>(*this); }
 
-    /**@brief true when the leaf declares its own member (pointer f) in place
-     * of the base's forwarder (pointer g): the types differ by class*/
+    /// True when the leaf declares its own member (pointer `f`) in place of
+    /// the base's forwarder (pointer `g`): the pointer types differ by class.
     template <class F, class G>
     static constexpr bool overrides(F, G) {
         return !std::is_same_v<F, G>;
@@ -305,27 +305,18 @@ class Ctx {
         return asLeaf().rhs(in, out, sz, time);
     }
 
-    /**
-     * @brief LTS: right-hand side of one block, out = F(in, blk_time).
-     * @param in : block-local input, dof variables of the padded block
-     * @param out : block-local output, same layout
-     * @param dof : number of variables
-     * @param local_blk_id : local block id
-     * @param blk_time : time of the stage
-     */
+    /// LTS, required: right-hand side of one block, `out = F(in, blk_time)`.
+    /// `in` and `out` hold `dof` variables of the padded block (variable v at
+    /// v * nn, see ts::BlockView). Collective: no. Thread-safe: required if the
+    /// context declares lts_thread_safe.
+    /// @param blk_time  the stage time
     int rhs_blk(const T* in, T* out, unsigned int dof,
                 unsigned int local_blk_id, T blk_time) {
         return asLeaf().rhs_blk(in, out, dof, local_blk_id, blk_time);
     }
 
-    /**
-     * @brief LTS, optional: in-place pointwise operation on a block's stage
-     * input before its right-hand side.
-     * @param in : block-local stage input, dof variables of the padded block
-     * @param dof : number of variables
-     * @param local_blk_id : local block id
-     * @param blk_time : time of the stage
-     */
+    /// LTS, optional: in-place pointwise operation on a block's stage input
+    /// before its right-hand side. Collective: no. Thread-safe: as rhs_blk.
     int pre_stage_blk(T* in, unsigned int dof, unsigned int local_blk_id,
                       T blk_time) {
         if constexpr (overrides(&DerivedCtx::pre_stage_blk, &Ctx::pre_stage_blk))
@@ -333,13 +324,8 @@ class Ctx {
         return 0;
     }
 
-    /**
-     * @brief LTS, optional: in-place operation on a block after a stage.
-     * @param in : block-local data, dof variables of the padded block
-     * @param dof : number of variables
-     * @param local_blk_id : local block id
-     * @param blk_time : time of the stage
-     */
+    /// LTS, optional: in-place operation on a block after a stage.
+    /// Collective: no. Thread-safe: as rhs_blk.
     int post_stage_blk(T* in, unsigned int dof, unsigned int local_blk_id,
                        T blk_time) {
         if constexpr (overrides(&DerivedCtx::post_stage_blk, &Ctx::post_stage_blk))
@@ -347,14 +333,9 @@ class Ctx {
         return 0;
     }
 
-    /**
-     * @brief LTS, optional: called with a block's step input y_k when the
-     * block starts a step (padding synced, all of it at blk_time).
-     * @param in : block-local step input, dof variables of the padded block
-     * @param dof : number of variables
-     * @param local_blk_id : local block id
-     * @param blk_time : time of the step start
-     */
+    /// LTS, optional: called with a block's step input when the block starts a
+    /// step; its padding is synced and all of it is at `blk_time`.
+    /// Collective: no. Thread-safe: as rhs_blk.
     int pre_timestep_blk(T* in, unsigned int dof, unsigned int local_blk_id,
                          T blk_time) {
         if constexpr (overrides(&DerivedCtx::pre_timestep_blk, &Ctx::pre_timestep_blk))
@@ -362,13 +343,8 @@ class Ctx {
         return 0;
     }
 
-    /**
-     * @brief LTS, optional: in-place operation on a block's new step y_{k+1}.
-     * @param in : block-local step result, dof variables of the padded block
-     * @param dof : number of variables
-     * @param local_blk_id : local block id
-     * @param blk_time : time at the end of the step
-     */
+    /// LTS, optional: in-place operation on a block's new step.
+    /// Collective: no. Thread-safe: as rhs_blk.
     int post_timestep_blk(T* in, unsigned int dof, unsigned int local_blk_id,
                           T blk_time) {
         if constexpr (overrides(&DerivedCtx::post_timestep_blk, &Ctx::post_timestep_blk))
@@ -417,31 +393,33 @@ class Ctx {
     /**@brief: function execute after each step*/
     bool is_remesh() { return asLeaf().is_remesh(); };
 
-    /**@brief optional: rebuild what the solver keeps per mesh after the mesh
-     * object changed. remeshed is true when the octree changed, false when
-     * only the element-to-rank labelling did.*/
+    /// Optional: rebuild what the solver keeps per mesh after the mesh object
+    /// changed; `remeshed` is true when the octree changed, false when only
+    /// the element-to-rank labelling did. Collective: yes.
     void on_mesh_changed(bool remeshed) {
         if constexpr (overrides(&DerivedCtx::on_mesh_changed, &Ctx::on_mesh_changed))
             asLeaf().on_mesh_changed(remeshed);
     }
 
-    /**@brief optional: true while the mesh carries a non-SFC labelling*/
+    /// Optional: true while the mesh carries a non-SFC labelling.
     bool is_labelled() {
         if constexpr (overrides(&DerivedCtx::is_labelled, &Ctx::is_labelled))
             return asLeaf().is_labelled();
         return false;
     }
 
-    /**@brief optional: move a labelled mesh and its data to the SFC mesh with
-     * the same elements; false if the mesh is not labelled*/
+    /// Optional: move a labelled mesh and its data to the SFC mesh with the same
+    /// elements. Collective: yes. Invalidates: the mesh object.
+    /// @return false if the mesh is not labelled
     bool to_sfc_partition() {
         if constexpr (overrides(&DerivedCtx::to_sfc_partition, &Ctx::to_sfc_partition))
             return asLeaf().to_sfc_partition();
         return false;
     }
 
-    /**@brief optional: label the mesh with the solver's partition method and
-     * move the data onto it; true if the mesh object changed*/
+    /// Optional: label the mesh with the solver's partition method and move the
+    /// data onto it. Collective: yes. Invalidates: the mesh object.
+    /// @return true if the mesh object changed
     bool maybe_apply_partitioning() {
         if constexpr (overrides(&DerivedCtx::maybe_apply_partitioning,
                                 &Ctx::maybe_apply_partitioning))
@@ -616,8 +594,9 @@ class Ctx {
     }
 
     /**@brief compute ts offset value*/
-    /**@brief LTS: level offset of the step ladder for the current mesh (see
-     * ts::level_offset); collective over the mesh's global communicator*/
+    /// LTS, required: level offset of the step ladder for the current mesh
+    /// (see ts::level_offset). Collective: yes, over the mesh's global
+    /// communicator.
     unsigned int compute_lts_ts_offset() { return asLeaf().compute_lts_ts_offset(); }
 
 #ifdef __CUDACC__
