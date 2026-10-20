@@ -2172,6 +2172,13 @@ int ExplicitNUTS<T, Ctx>::sync_with_mesh() {
     m_uiEVar = m_uiAppCtx->get_evolution_vars();
     this->init_data_structures();
     this->allocate_internal_vars();
+    {
+        const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+        if (pMesh->isActive() && !pMesh->getMPIRank())
+            std::cout << "[LTS] level offset " << m_uiLevOffset
+                      << ", coarsest step ratio " << step_ratio(m_uiLevMin)
+                      << std::endl;
+    }
 
     m_uiAppCtx->set_ets_synced(true);
 
