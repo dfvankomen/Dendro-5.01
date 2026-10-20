@@ -633,12 +633,6 @@ class Mesh {
     std::vector<unsigned int> m_uiCG2DG;
     /** dg to cg mapping*/
     std::vector<unsigned int> m_uiDG2CG;
-    /** Local CG slots (sorted) where Pass A (in
-     *  buildE2NWithSMRepartitioned) found no local element with
-     *  E2N_DG self-owned and E2N_CG = cg. These are
-     *  duplicate-local-ownership candidates for cross-rank
-     *  reconciliation in reconcileCrossRankDuplicateCGs. */
-    std::vector<unsigned int> m_uiPassACgsWithoutLocalCanonical;
 
     /** Local CG indices that Pass D (cross-rank consolidation in
      *  buildE2NWithSMRepartitioned) demoted on this rank because
