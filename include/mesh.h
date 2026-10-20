@@ -1488,7 +1488,7 @@ class Mesh {
         const std::vector<unsigned int>& myTNZ,
         const std::vector<unsigned int>& myTNLev,
         const std::vector<unsigned int>& myCg,
-        const std::vector<unsigned int>& myInterior, bool use_packtn,
+        const std::vector<unsigned int>& myInterior,
         std::vector<int>& winRank, std::vector<unsigned int>& winCg,
         std::vector<unsigned int>& winTNX, std::vector<unsigned int>& winTNY,
         std::vector<unsigned int>& winTNZ, std::vector<unsigned int>& winTNLev,

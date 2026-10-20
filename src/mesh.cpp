@@ -7747,7 +7747,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
     const std::vector<unsigned int>& myTNZ,
     const std::vector<unsigned int>& myTNLev,
     const std::vector<unsigned int>& myCg,
-    const std::vector<unsigned int>& myInterior, bool use_packtn,
+    const std::vector<unsigned int>& myInterior,
     std::vector<int>& winRank, std::vector<unsigned int>& winCg,
     std::vector<unsigned int>& winTNX, std::vector<unsigned int>& winTNY,
     std::vector<unsigned int>& winTNZ, std::vector<unsigned int>& winTNLev,
@@ -7783,21 +7783,15 @@ void Mesh::buildZipPlanArbitrateDistributed(
                        unsigned int bZ, unsigned int bL) -> bool {
         if (aL == TN_LEV_NONE) return false;
         if (bL == TN_LEV_NONE) return true;
-        if (use_packtn) {
-            unsigned long long pa = ((unsigned long long)(aL & 0xFFULL) << 56) |
-                                    ((unsigned long long)(aX & 0xFFFFFFFULL)
-                                     << 28) |
-                                    (unsigned long long)(aY & 0xFFFFFFFULL);
-            unsigned long long pb = ((unsigned long long)(bL & 0xFFULL) << 56) |
-                                    ((unsigned long long)(bX & 0xFFFFFFFULL)
-                                     << 28) |
-                                    (unsigned long long)(bY & 0xFFFFFFFULL);
-            return pa < pb;
-        }
-        if (aL != bL) return aL < bL;
-        ot::TreeNode ta(aX, aY, aZ, aL, m_uiDim, m_uiMaxDepth);
-        ot::TreeNode tb(bX, bY, bZ, bL, m_uiDim, m_uiMaxDepth);
-        return ta < tb;
+        unsigned long long pa = ((unsigned long long)(aL & 0xFFULL) << 56) |
+                                ((unsigned long long)(aX & 0xFFFFFFFULL)
+                                 << 28) |
+                                (unsigned long long)(aY & 0xFFFFFFFULL);
+        unsigned long long pb = ((unsigned long long)(bL & 0xFFULL) << 56) |
+                                ((unsigned long long)(bX & 0xFFFFFFFULL)
+                                 << 28) |
+                                (unsigned long long)(bY & 0xFFFFFFFULL);
+        return pa < pb;
     };
 
     // home(phys): pure integer mix, so every rank agrees. Positions -- not
@@ -7983,7 +7977,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
             if (grp2.empty()) grp2 = *localGrp;
             buildZipPlanArbitrateDistributed(
                 myX, myY, myZ, myTNX, myTNY, myTNZ, myTNLev, myCg, myInterior,
-                use_packtn, winRank, winCg, winTNX, winTNY, winTNZ, winTNLev,
+                winRank, winCg, winTNX, winTNY, winTNZ, winTNLev,
                 winInterior, &grp2, nGrp);
             return;
         }
@@ -8569,19 +8563,6 @@ void Mesh::buildZipPlanCore() {
     // This matches what Pass D currently uses and gives a proven
     // 5× improvement on EM4 np=4 vs no rescue (1.157e-7 → 2.2e-8).
     //
-    // Opt-in DENDRO_USE_CASCADE_RULE=1 switches to dendro's true
-    // cascade rule (smallest level then ot::TreeNode::operator< /
-    // Hilbert NCA, see meshE2NUtils.tcc CORNER_NODE_MAP). Cascade
-    // rule matches SFC's natural canonical pick at corners — but
-    // currently regresses because the standard scatter maps were
-    // built from the pre-Pass-D cascade and don't include the
-    // (primary_rank, primary_cg) → ghost path needed for the new
-    // sync to find the right ghost cg. Future work: rebuild scatter
-    // maps after primary pick to enable bit-perfect cascade-rule.
-    static const char* cascade_env =
-        std::getenv("DENDRO_USE_CASCADE_RULE");
-    static const bool use_packtn =
-        !(cascade_env && cascade_env[0] == '1' && cascade_env[1] == '\0');
     auto packTN = [&](unsigned int e) -> unsigned long long {
         unsigned long long lev = (unsigned long long)pNodes[e].getLevel()
                                  & 0xFFULL;
@@ -8610,15 +8591,9 @@ void Mesh::buildZipPlanCore() {
             + (unsigned long long)nk * len;
     };
 
-    // Cascade-rule TreeNode comparator. Returns true iff a < b
-    // under (level, ot::TreeNode::operator<). With use_packtn,
-    // falls back to the lexicographic packTN ordering.
+    // element order of the cascade pick: lexicographic packTN
     auto tnLT = [&](unsigned int ea, unsigned int eb) -> bool {
-        if (use_packtn) return packTN(ea) < packTN(eb);
-        const unsigned int la = pNodes[ea].getLevel();
-        const unsigned int lb = pNodes[eb].getLevel();
-        if (la != lb) return la < lb;
-        return pNodes[ea] < pNodes[eb];
+        return packTN(ea) < packTN(eb);
     };
 
     // Build phys_pos -> (smallest-TreeNode-local-elem, sub) on this
@@ -8687,15 +8662,6 @@ void Mesh::buildZipPlanCore() {
     auto isCascadeOwner = [&](unsigned int e, unsigned int n) -> bool {
         return m_uiE2NMapping_DG[e * npe + n] / npe == e;
     };
-    // Optional gate: DENDRO_ZIPPLAN_USE_SMALLEST_TN=1 reverts to the
-    // legacy smallest-TN-local pick (no cascade-owner preference).
-    // Useful for A/B testing.
-    static const char* legacy_pick_env =
-        std::getenv("DENDRO_ZIPPLAN_USE_SMALLEST_TN");
-    static const bool legacy_pick =
-        legacy_pick_env && legacy_pick_env[0] == '1'
-        && legacy_pick_env[1] == '\0';
-
     // every local (e, n) claim, sorted by phys_pos then scan order and folded
     // per position with the preference rule (interior > padding, cascade-
     // owner > non-owner, smaller TN). visiting each position's claims in scan
@@ -8791,7 +8757,7 @@ void Mesh::buildZipPlanCore() {
                 } else {
                     c.interior = false;
                 }
-                c.is_owner = !legacy_pick && isCascadeOwner(e, n);
+                c.is_owner = isCascadeOwner(e, n);
                 if (inner) {
                     slotGrp[sl] = (int)myMin.size();
                     myMin.push_back(c);
@@ -8825,7 +8791,7 @@ void Mesh::buildZipPlanCore() {
                 c.elem     = e;
                 c.sub      = n;
                 c.interior = isInteriorWriter(e, n);
-                c.is_owner = !legacy_pick && isCascadeOwner(e, n);
+                c.is_owner = isCascadeOwner(e, n);
             }
         }
         // an element's own subs sit at distinct positions, so (pos, elem)
@@ -9256,21 +9222,15 @@ void Mesh::buildZipPlanCore() {
                        unsigned int bZ, unsigned int bL) -> bool {
         if (aL == TN_LEV_NONE) return false;
         if (bL == TN_LEV_NONE) return true;
-        if (use_packtn) {
-            unsigned long long pa =
-                ((unsigned long long)(aL & 0xFFULL) << 56)
-                | ((unsigned long long)(aX & 0xFFFFFFFULL) << 28)
-                | (unsigned long long)(aY & 0xFFFFFFFULL);
-            unsigned long long pb =
-                ((unsigned long long)(bL & 0xFFULL) << 56)
-                | ((unsigned long long)(bX & 0xFFFFFFFULL) << 28)
-                | (unsigned long long)(bY & 0xFFFFFFFULL);
-            return pa < pb;
-        }
-        if (aL != bL) return aL < bL;
-        ot::TreeNode ta(aX, aY, aZ, aL, m_uiDim, m_uiMaxDepth);
-        ot::TreeNode tb(bX, bY, bZ, bL, m_uiDim, m_uiMaxDepth);
-        return ta < tb;
+        unsigned long long pa =
+            ((unsigned long long)(aL & 0xFFULL) << 56)
+            | ((unsigned long long)(aX & 0xFFFFFFFULL) << 28)
+            | (unsigned long long)(aY & 0xFFFFFFFULL);
+        unsigned long long pb =
+            ((unsigned long long)(bL & 0xFFULL) << 56)
+            | ((unsigned long long)(bX & 0xFFFFFFFULL) << 28)
+            | (unsigned long long)(bY & 0xFFFFFFFULL);
+        return pa < pb;
     };
 
     // Build phys_pos -> (winner_rank, winner_cg). Strict preference:
@@ -9356,7 +9316,7 @@ void Mesh::buildZipPlanCore() {
             std::printf("[zipplan-mark] %.1f ms (r0)\n", (MPI_Wtime() - __zp_tMark) * 1e3);
         buildZipPlanArbitrateDistributed(
             myX, myY, myZ, myTNX, myTNY, myTNZ, myTNLev, myCg, myInterior,
-            use_packtn, winRank, winCg, winTNX, winTNY, winTNZ, winTNLev,
+            winRank, winCg, winTNX, winTNY, winTNZ, winTNLev,
             winInterior, localArb ? &localGrp : nullptr, (int)myMin.size());
         winByClaim.resize(myCount);
         winIdxOfCg.assign(nTotal_cg, -1);
