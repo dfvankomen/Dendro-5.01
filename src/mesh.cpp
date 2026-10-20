@@ -379,15 +379,10 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             // E2N repair must be eager (mutates E2N_CG; no-op on unique-TN
             // SFC meshes).
             unifyE2NCgAcrossTNInstances();
-            // DENDRO_LAZY_ZIPPLAN=1 defers the canon-writer table + zip plan to
-            // the first zip/unzip. Byte-identical on EM4; NLSM runs its wavelet
-            // decision on the twin and diverges with it (2026-09-24), so opt-in.
+            // canon-writer table + zip plan: eager, unless the next
+            // constructor was marked lazy (s_uiNextCtorLazyZipPlan)
             {
-                static const char* lzp_env =
-                    std::getenv("DENDRO_LAZY_ZIPPLAN");
-                static const bool lzp_on =
-                    lzp_env && lzp_env[0] == '1' && lzp_env[1] == '\0';
-                if (!lzp_on && !s_uiNextCtorLazyZipPlan) {
+                if (!s_uiNextCtorLazyZipPlan) {
                     tb0 = MPI_Wtime();
                     buildUnzipCanonicalWriterTable();
                     tb_canon = MPI_Wtime() - tb0;
@@ -737,14 +732,9 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             if (exactGhostCheckLevel()) checkExactGhostCover("sfc");
             // E2N repair must be eager (see non-weighted ctor).
             unifyE2NCgAcrossTNInstances();
-            // canon-writer table + zip plan: eager by default,
-            // DENDRO_LAZY_ZIPPLAN=1 defers — see the non-weighted ctor.
+            // canon-writer table + zip plan: as the non-weighted ctor
             {
-                static const char* lzp_env =
-                    std::getenv("DENDRO_LAZY_ZIPPLAN");
-                static const bool lzp_on =
-                    lzp_env && lzp_env[0] == '1' && lzp_env[1] == '\0';
-                if (!lzp_on && !s_uiNextCtorLazyZipPlan) {
+                if (!s_uiNextCtorLazyZipPlan) {
                     tb0 = MPI_Wtime();
                     buildUnzipCanonicalWriterTable();
                     tb_canon = MPI_Wtime() - tb0;
