@@ -12,6 +12,7 @@
 #pragma once
 #include <functional>
 #include <iostream>
+#include <type_traits>
 #include <vector>
 
 #include "dendro.h"
@@ -246,6 +247,13 @@ class Ctx {
     /**@brief: derived class static cast*/
     inline DerivedCtx& asLeaf() { return static_cast<DerivedCtx&>(*this); }
 
+    /**@brief true when the leaf declares its own member (pointer f) in place
+     * of the base's forwarder (pointer g): the types differ by class*/
+    template <class F, class G>
+    static constexpr bool overrides(F, G) {
+        return !std::is_same_v<F, G>;
+    }
+
     /**@brief: update the mesh data strucutre. */
     void set_mesh(ot::Mesh* pMesh) {
         m_uiMesh        = pMesh;
@@ -298,12 +306,12 @@ class Ctx {
     }
 
     /**
-     * @brief compute the block for the rhs (used in LTS).
-     * @param in :  blk vectot in
-     * @param out : blk vector out
-     * @param local_blk_id : blkid
-     * @param blk_time : blk time
-     * @return int
+     * @brief LTS: right-hand side of one block, out = F(in, blk_time).
+     * @param in : block-local input, dof variables of the padded block
+     * @param out : block-local output, same layout
+     * @param dof : number of variables
+     * @param local_blk_id : local block id
+     * @param blk_time : time of the stage
      */
     int rhs_blk(const T* in, T* out, unsigned int dof,
                 unsigned int local_blk_id, T blk_time) {
@@ -311,56 +319,61 @@ class Ctx {
     }
 
     /**
-     * @brief apply pre_stage compute for u vector F(u) at the block level.
-     * @param in :  blk vectot in
-     * @param out : blk vector out
-     * @param local_blk_id : blkid
-     * @param blk_time : blk time
-     * @return int
+     * @brief LTS, optional: in-place pointwise operation on a block's stage
+     * input before its right-hand side.
+     * @param in : block-local stage input, dof variables of the padded block
+     * @param dof : number of variables
+     * @param local_blk_id : local block id
+     * @param blk_time : time of the stage
      */
     int pre_stage_blk(T* in, unsigned int dof, unsigned int local_blk_id,
                       T blk_time) {
-        return asLeaf().pre_stage_blk(in, dof, local_blk_id, blk_time);
+        if constexpr (overrides(&DerivedCtx::pre_stage_blk, &Ctx::pre_stage_blk))
+            return asLeaf().pre_stage_blk(in, dof, local_blk_id, blk_time);
+        return 0;
     }
 
     /**
-     * @brief apply post_stage compute for v vector v=F(u) at the block level.
-     * @param in :  blk vectot in
-     * @param out : blk vector out
-     * @param local_blk_id : blkid
-     * @param blk_time : blk time
-     * @return int
+     * @brief LTS, optional: in-place operation on a block after a stage.
+     * @param in : block-local data, dof variables of the padded block
+     * @param dof : number of variables
+     * @param local_blk_id : local block id
+     * @param blk_time : time of the stage
      */
     int post_stage_blk(T* in, unsigned int dof, unsigned int local_blk_id,
                        T blk_time) {
-        return asLeaf().post_stage_blk(in, dof, local_blk_id, blk_time);
+        if constexpr (overrides(&DerivedCtx::post_stage_blk, &Ctx::post_stage_blk))
+            return asLeaf().post_stage_blk(in, dof, local_blk_id, blk_time);
+        return 0;
     }
 
     /**
-     * @brief apply pre_timestep operation before entering the rk solver  apply
-     * for y_{k}.
-     * @param in :  blk vectot in
-     * @param out : blk vector out
-     * @param local_blk_id : blkid
-     * @param blk_time : blk time
-     * @return int
+     * @brief LTS, optional: called with a block's step input y_k when the
+     * block starts a step (padding synced, all of it at blk_time).
+     * @param in : block-local step input, dof variables of the padded block
+     * @param dof : number of variables
+     * @param local_blk_id : local block id
+     * @param blk_time : time of the step start
      */
     int pre_timestep_blk(T* in, unsigned int dof, unsigned int local_blk_id,
                          T blk_time) {
-        return asLeaf().pre_timestep_blk(in, dof, local_blk_id, blk_time);
+        if constexpr (overrides(&DerivedCtx::pre_timestep_blk, &Ctx::pre_timestep_blk))
+            return asLeaf().pre_timestep_blk(in, dof, local_blk_id, blk_time);
+        return 0;
     }
 
     /**
-     * @brief apply post_timestep operation for each y_{k+1} computed from y_{k}
-     * @param in :  blk vectot in
-     * @param out : blk vector out
-     * @param local_blk_id : blkid
-     * @param blk_time : blk time
-     * @return int
+     * @brief LTS, optional: in-place operation on a block's new step y_{k+1}.
+     * @param in : block-local step result, dof variables of the padded block
+     * @param dof : number of variables
+     * @param local_blk_id : local block id
+     * @param blk_time : time at the end of the step
      */
     int post_timestep_blk(T* in, unsigned int dof, unsigned int local_blk_id,
                           T blk_time) {
-        return asLeaf().post_timestep_blk(in, dof, local_blk_id, blk_time);
+        if constexpr (overrides(&DerivedCtx::post_timestep_blk, &Ctx::post_timestep_blk))
+            return asLeaf().post_timestep_blk(in, dof, local_blk_id, blk_time);
+        return 0;
     }
 
     /**@brief: function execute before each stage
