@@ -7134,20 +7134,3 @@ bool ExplicitNUTS<T, Ctx>::isRemeshEvars(
 }
 
 }  // namespace ts
-
-namespace ts {
-// utility functions
-/**
- * @brief Perform block padding synchronization for a block vector.
- *
- * @tparam T vector type.
- * @param pMesh :  underlying mesh bVec is created and allocated for.
- * @param bVec  : list of block vectors,
- * @param blk   : block id to synchronize the padding regions.
- * @param bVecIndex : bVec[blk]._vec[bVecIndex] will be synchronized.
- */
-template <typename T>
-void sync_blk_padding(const ot::Mesh* pMesh, const T* const dgWVec,
-                      std::vector<ts::BlockTimeStep<T>>& bVec, unsigned int blk,
-                      unsigned int bVecIndex, unsigned int dof = 1);
-}  // namespace ts

@@ -715,7 +715,6 @@ if(BUILD_DENDRO_EXAMPLES)
     target_link_libraries(testGwExtract PRIVATE dendro_gr)
   endif()
 
-  dendro_add_example(testLTSBlkVec ODE/examples/testLTSBlkVec.cpp)
   dendro_add_example(dgVecTest FEM/examples/src/dgVecTest.cpp)
   dendro_add_example(testInterp FEM/examples/src/testInterp.cpp)
   dendro_add_example(meshLoop examples/src/meshLooping.cpp)
