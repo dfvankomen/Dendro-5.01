@@ -189,13 +189,6 @@ struct EnutsProf {
         return o;
     }
     static int ifaceFix() { return (int)options().iface; }
-    /** DENDRO_ENUTS_STAGE_TIME=1 (default off = unchanged): pass the RK stage
-     *  time t + c_s * dt_blk to the RHS and to pre_stage_blk, as ETS does
-     *  (ets.h: current_t + m_uiCi[stage] * dt). The original passes the
-     *  block's step-start time to every stage; a time-dependent RHS term
-     *  (BSSN's slow-start lapse, exp(-t^2 / 2 sigma^2)) then sees a forcing
-     *  lagged by ~dt_blk / 2, growing with the block's step: a lapse offset
-     *  of 1e-3 on q1 at the full ladder. */
     /** with interface setting bit 4 and the owner sync, exchange the stored
      *  vector g of the classes that completed a step at this partial step
      *  (the owner-node exchange, on the unscoped lists when the stage exchange
@@ -203,13 +196,6 @@ struct EnutsProf {
      *  ghost rows is formed locally from stage slots the exchange only partly
      *  delivered, and the result depends on the partition. */
     static bool gXch() { return options().g_exchange; }
-    static bool stageTime() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_STAGE_TIME");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-    }
     /** DENDRO_ENUTS_WPART_LATE=1 (default off): register the LTS work weight
      *  and repartition only in init(), after the context's initialize(), not
      *  in the constructor. The constructor's early registration makes the
@@ -6595,9 +6581,9 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
             ENUTS_BLK_TOC(RL_IN);
 
-            // stage time: step start, plus c_s * dt_blk with DENDRO_ENUTS_STAGE_TIME
-            const T t_stage = current_t + dt_finest * BLK_T +
-                              (ts::EnutsProf::stageTime() ? m_uiCi[BLK_S - 1] * blk_dt : (T)0);
+            // the RK stage time, as ETS passes it: a time-dependent RHS term
+            // sees its forcing at the stage, not at the step start
+            const T t_stage = current_t + dt_finest * BLK_T + m_uiCi[BLK_S - 1] * blk_dt;
             m_uiAppCtx->pre_stage_blk((T*)sIn.data(), DOF, blk, t_stage);
             ENUTS_BLK_TOC(RL_PRE);
             debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
