@@ -55,6 +55,7 @@ inline bool poolCheck() {
 }
 inline size_t poolCapBytes() {
     static const size_t cap = [] {
+        // site setting: pooled exchange-buffer bytes per rank, default 512 MB
         const char* e = std::getenv("DENDRO_XCHG_BUF_POOL_MAX_MB");
         double mb     = (e && e[0]) ? std::atof(e) : 512.0;
         if (mb < 0) mb = 0;
@@ -96,6 +97,10 @@ inline void* acquire(size_t bytes) {
         if (init) MPI_Comm_rank(MPI_COMM_WORLD, &P.rank);
         const char* r = std::getenv("DENDRO_XCHG_BUF_POOL_REPORT");
         if (r && r[0] == '1') std::atexit([] { poolReport(); });
+        if (P.rank == 0)
+            std::printf("[xbuf-pool] exchange buffer pool cap %.0f MB per rank "
+                        "(DENDRO_XCHG_BUF_POOL_MAX_MB)\n",
+                        poolCapBytes() / 1048576.0);
     }
     long best  = -1;
     long large = -1;
