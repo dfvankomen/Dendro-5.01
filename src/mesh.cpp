@@ -9566,13 +9566,8 @@ void Mesh::buildZipPlanCore() {
         // cg index; the value shipped is the cg that element sub maps to.
         // matching the raw DG code against a primary's cg index paired
         // non-primary local cgs with unrelated ghost cgs (the ZNP mirror
-        // then overwrote them every ghost exchange). DENDRO_ZIPPLAN_INV_DG=0
-        // restores the raw codes (A/B only)
-        static const bool invDG = [] {
-            const char* v = std::getenv("DENDRO_ZIPPLAN_INV_DG");
-            return !(v && v[0] == '0');
-        }();
-        const bool sendDG = invDG && m_uiScatterMapSendIsDG.size() == sendN;
+        // then overwrote them every ghost exchange)
+        const bool sendDG = m_uiScatterMapSendIsDG.size() == sendN;
         for (size_t k = 0; k < sendN; k++) {
             unsigned int idx = m_uiScatterMapActualNodeSend[k];
             if (sendDG && m_uiScatterMapSendIsDG[k])
@@ -15090,18 +15085,7 @@ void Mesh::findBlockNeighborsWithoutSFC(ot::Block &blk) {
     //           << std::endl;
 }
 
-// DENDRO_SPATIAL_HASH_FULLKEY (default on, =0 reverts): the old key packed
-// z at bit 50 and lost its high bits for coordinates >= 2^14 (maxDepth >= 15),
-// so cells aliased and block edge/vertex neighbours came back wrong or
-// missing -> unwritten edge/corner unzip padding on labelled meshes. Pack the
-// level-L cell index (L bits per axis) instead; exact for L <= 19.
-static bool spatialHashFullKey() {
-    static const bool on = [] {
-        const char *v = std::getenv("DENDRO_SPATIAL_HASH_FULLKEY");
-        return !(v && v[0] == '0');
-    }();
-    return on;
-}
+// spatial-hash key: the level-L cell index (L bits per axis); exact for L <= 19
 // DENDRO_SPATIAL_HASH_CHECK=1: every hash lookup is checked against a linear
 // scan for the deepest containing element; abort (94) on a mismatch.
 static bool spatialHashCheck() {
@@ -15113,7 +15097,6 @@ static bool spatialHashCheck() {
 }
 static inline uint64_t spatialHashKey(uint64_t L, uint64_t x, uint64_t y,
                                       uint64_t z, unsigned int maxDepth) {
-    if (!spatialHashFullKey()) return L | (x << 6) | (y << 28) | (z << 50);
     const unsigned int sh = maxDepth - (unsigned int)L;
     return L | ((x >> sh) << 5) | ((y >> sh) << (5 + L)) |
            ((z >> sh) << (5 + 2 * L));
@@ -15235,7 +15218,7 @@ void Mesh::performBlocksSetupRepartitioned(unsigned int cLev, unsigned int *tag,
     // which was ~6.5s for a 16k-element Random partition run.
     m_uiAllElementsSpatialHash.clear();
     // the full key needs 5 + 3 * maxDepth bits; deeper trees take the scan
-    const bool hashOk = !spatialHashFullKey() || m_uiMaxDepth <= 19;
+    const bool hashOk = m_uiMaxDepth <= 19;
     if (hashOk) m_uiAllElementsSpatialHash.reserve(m_uiAllElements.size());
     for (unsigned int e = 0; hashOk && e < m_uiAllElements.size(); e++) {
         const auto &tn = m_uiAllElements[e];
@@ -20393,10 +20376,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // DENDRO_BLOCK_FLOOR_TEST=r (test only) relabels everything labelled r to
     // r+1 before the floor, to force the empty case at small np.
     auto blockFloor = [&](std::vector<unsigned int>& parts) {
-        static const bool on = [] {
-            const char* e = std::getenv("DENDRO_BLOCK_FLOOR");
-            return !(e && e[0] == '0');
-        }();
         static const int forceEmpty = [] {
             const char* e = std::getenv("DENDRO_BLOCK_FLOOR_TEST");
             return e ? atoi(e) : -1;
@@ -20404,7 +20383,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         if (forceEmpty >= 0 && forceEmpty < npes - 1)
             for (auto& q : parts)
                 if (q == (unsigned int)forceEmpty) q = forceEmpty + 1;
-        if (!on) return;
         std::map<AnchorKey, std::vector<size_t>> groups;
         std::vector<std::vector<size_t>> singles;
         for (size_t i = 0; i < localSz; ++i) {
@@ -20638,14 +20616,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // the cascade (collective agreement) when no SFC E2N source exists.
     // _CHECK=1 also runs the cascade + audit and compares it with the keys
     // (canonical phys per slot must match in local/R1 rows, else abort 77).
-    static const bool canonKeysEnv = [] {
-        const char* e = std::getenv("DENDRO_REPART_CANON_KEYS");
-        return !(e && e[0] == '0');   // default on (K6); =0 reverts
-    }();
-    static const bool canonCheck = [] {
-        const char* e = std::getenv("DENDRO_REPART_CANON_KEYS_CHECK");
-        return e && e[0] == '1';
-    }();
     // DENDRO_REPART_EXACT_GHOST (default on, =0 reverts; needs K6 keys, else rings): push every element
     // once to its exact destination set (computeExactGhostDest: label, labels
     // of touching elements incl. finer ones, K6 owner closure) instead of the
@@ -20683,7 +20653,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // ghost rings so the exact push (DENDRO_REPART_EXACT_GHOST) can use it
         const Mesh* ckS = g_canonKeySrc ? g_canonKeySrc : this;
         int ckAll = 0;
-        if (canonKeysEnv || canonCheck || exactGhostEnv || exactGhostCheck) {
+        {
             const Mesh* S = ckS;
             const size_t npeS = S->m_uiNpE;
             const bool hasE2N =
@@ -20718,7 +20688,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         // exact owner-side destinations: computed for the exact push and
         // for its checker (which compares them with what the rings deliver)
-        const bool exactUse = exactGhostEnv && canonKeysEnv && ckAll && npes > 1;
+        const bool exactUse = exactGhostEnv && ckAll && npes > 1;
         std::vector<size_t> exOff;
         std::vector<unsigned int> exDst;
         std::vector<unsigned char> exCls;
@@ -20783,7 +20753,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }
         for (int p = 0; p < npes; ++p)
             if (p != rank) nPushedRemote += out[p].size();
-        if (canonKeysEnv || canonCheck) {
+        {
             const Mesh* S = ckS;
             const int all = ckAll;
             if (all) {
@@ -20837,7 +20807,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                               << tnBad << std::endl;
                 ckRecv = exchangeBuckets(kout, MPI_UINT64_T);
                 ckHave = true;
-                ckUse  = canonKeysEnv;
+                ckUse  = true;
                 m_uiCanonKeysBuilt = ckUse;
             } else if (!rank) {
                 std::cout << "[canon-keys] no SFC E2N source, cascade path" << std::endl;
@@ -20848,17 +20818,12 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // K6c (keys + DENDRO_REPART_GHOST_RINGS=2): canonical owners of keyed
         // slots that the 2-ring push did not deliver are fetched as
         // topology-only records from their SFC source (splitter-routed by TN)
-        // DENDRO_REPART_CANON_TARGETS (default 1, =0 reverts): also with all
-        // three rings, owners outside the fetched set exist at scale (the
-        // 26-lists miss finer neighbours) and some sit in elements the unzip
-        // reads; fetch them as keyed topology records (tag 4)
-        static const bool canonTargets = [] {
-            const char* e = std::getenv("DENDRO_REPART_CANON_TARGETS");
-            return !(e && e[0] == '0');
-        }();
+        // also with all three rings, owners outside the fetched set exist at
+        // scale (the 26-lists miss finer neighbours) and some sit in elements
+        // the unzip reads; fetch them as keyed topology records (tag 4)
         // (target deliveries, recorded for the exact-ghost checker)
         std::vector<std::pair<size_t, unsigned int>> tgtDeliv;
-        if (ckHave && canonTargets && !exactUse) {
+        if (ckHave && !exactUse) {
             const Mesh* S = g_canonKeySrc ? g_canonKeySrc : this;
             struct TK { std::uint64_t a, b; bool operator==(const TK& o) const { return a == o.a && b == o.b; } };
             struct TKH { size_t operator()(const TK& k) const {
@@ -21362,60 +21327,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         w0 = ckRecv[o + 1 + 2 * k];
         w1 = ckRecv[o + 2 + 2 * k];
     };
-    // _CHECK: slots of local/R1 rows whose current E2N (CG2DG[E2N_CG] and E2N_DG)
-    // differs from the key: canonical phys, and owner (TN + sub)
-    auto ckCompare = [&](const char* tag) {
-        const unsigned int npe = m_uiNpE, eo = m_uiElementOrder;
-        unsigned long long st[3][8] = {};  // [local/R1/R2][slots, physMiss, ownMiss, dgOwnMiss, hang, hangOwnMiss]
-        auto phys = [&](std::uint64_t w0, std::uint64_t w1, unsigned int sub,
-                        unsigned long long& x, unsigned long long& y, unsigned long long& z) {
-            const unsigned int lev = (unsigned int)(w1 >> 32);
-            const unsigned long long len = 1ull << (m_uiMaxDepth - lev);
-            x = (w0 & 0xffffffffu) * (unsigned long long)eo + (sub % (eo + 1)) * len;
-            y = (w0 >> 32) * (unsigned long long)eo + ((sub / (eo + 1)) % (eo + 1)) * len;
-            z = (w1 & 0xffffffffu) * (unsigned long long)eo + (sub / ((eo + 1) * (eo + 1))) * len;
-        };
-        for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
-            if (ckOff[e] == SIZE_MAX) continue;
-            const int r = (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd)
-                              ? 0 : (new_oct_connectivity_map[e].isGhostTwo ? 2 : 1);
-            for (unsigned int n = 0; n < npe; n++) {
-                std::uint64_t kw0, kw1; unsigned int ks;
-                ckSlot(e, n, kw0, kw1, ks);
-                st[r][0]++;
-                const size_t slot = (size_t)e * npe + n;
-                const unsigned int cg = m_uiE2NMapping_CG[slot];
-                if (cg >= m_uiCG2DG.size()) { st[r][1]++; st[r][2]++; continue; }
-                const unsigned int dg = m_uiCG2DG[cg];
-                const ot::TreeNode& O = m_uiAllElements[dg / npe];
-                unsigned long long ax, ay, az, kx, ky, kz, sx, sy, sz;
-                phys(ckTNw0(O), ckTNw1(O), dg % npe, ax, ay, az);
-                phys(kw0, kw1, ks, kx, ky, kz);
-                phys(ckTNw0(m_uiAllElements[e]), ckTNw1(m_uiAllElements[e]), n, sx, sy, sz);
-                const bool hang = !(kx == sx && ky == sy && kz == sz);
-                const bool own = ckTNw0(O) == kw0 && ckTNw1(O) == kw1 && dg % npe == ks;
-                const unsigned int dd = m_uiE2NMapping_DG[slot];
-                const ot::TreeNode& D = m_uiAllElements[dd / npe];
-                const bool downOk = ckTNw0(D) == kw0 && ckTNw1(D) == kw1 && dd % npe == ks;
-                if (!(ax == kx && ay == ky && az == kz)) st[r][1]++;
-                if (!own) st[r][2]++;
-                if (!downOk) st[r][3]++;
-                if (hang) { st[r][4]++; if (!own) st[r][5]++; }
-            }
-        }
-        unsigned long long tot[3][8];
-        MPI_Allreduce(st, tot, 24, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
-        if (!rank)
-            for (int r = 0; r < 3; r++)
-                std::printf("[canon-keys-check %s %s] slots=%llu phys_miss=%llu owner_miss=%llu "
-                            "dg_owner_miss=%llu hang=%llu hang_owner_miss=%llu\n",
-                            tag, r == 0 ? "local" : (r == 1 ? "R1" : "R2"), tot[r][0], tot[r][1], tot[r][2],
-                            tot[r][3], tot[r][4], tot[r][5]);
-        std::fflush(stdout);
-        return tot[0][1] + tot[1][1];  // R2 phys misses are reported, not fatal
-    };
 
-    if (!ckUse || canonCheck) {
+    if (!ckUse) {
     // Build order-2 E2N from E2E (handles hanging nodes correctly)
     {
         const unsigned int eleOrder = m_uiElementOrder;
@@ -21452,15 +21365,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         this->auditAndRepairE2NCgPhysPos();
         __phase("e2n-audit");
     }
-    }
-    if (canonCheck && ckHave) {
-        const unsigned long long pm = ckCompare("cascade-vs-keys");
-        if (pm) {
-            if (!rank)
-                std::cerr << "[canon-keys-check] cascade canonical phys differs from "
-                             "the SFC keys in local/R1 rows: " << pm << std::endl;
-            MPI_Abort(commActive, 77);
-        }
     }
     if (ckUse) {
         // key join: local + R1 rows from their records; rows 2/3 (no record)
@@ -21592,19 +21496,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         m_uiScatterMapActualNodeSend.clear();
         m_uiScatterMapActualNodeRecv.clear();
         __phase("canon-keys join");
-        if (canonCheck) {
-            const unsigned long long pm = ckCompare("keyed-vs-keys");
-            unsigned long long ab[2] = {ownerAbsent, ownerUnres}, abAll[2] = {0, 0};
-            MPI_Allreduce(ab, abAll, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
-            if (!rank)
-                std::printf("[canon-keys-check keyed] owner-absent=%llu unresolved=%llu\n",
-                            abAll[0], abAll[1]);
-            if (pm) {
-                if (!rank)
-                    std::cerr << "[canon-keys-check] keyed E2N phys misses=" << pm << std::endl;
-                MPI_Abort(commActive, 77);
-            }
-        }
     }
 
     // --------------------

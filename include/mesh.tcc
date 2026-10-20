@@ -8607,12 +8607,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // every dst local slot without an authoritative write plus every dst ghost
     // slot the unzip reads that got none; the non-authoritative pass stays as
     // the fallback for positions no src rank owns locally.
-    static const bool canonFill = [] {
-        const char* v = std::getenv("DENDRO_REDIST_CANON_FILL");
-        return !(v && v[0] == '0');
-    }();
-    std::vector<unsigned char> authAll;
-    if (canonFill) authAll.assign(dstCgSz, 0);
+    std::vector<unsigned char> authAll(dstCgSz, 0);
     // dst GHOST regions: a fresh DVec's ghost slots are undefined until
     // the first standard exchange delivers them, but the zip-sync mirror
     // paths inside performGhostExchange can copy ghost->local BEFORE that
@@ -8679,7 +8674,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                     vecOut[v * dstCgSz + cg] = recvDG[base + v];
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd)
                     cgWrittenAuth[cg - dstNodeLocalBegin] = 1;
-                if (canonFill) authAll[cg] = 1;
+                authAll[cg] = 1;
                 if (rprobe) rpPath[cg] = 1;
                 markWritten(cg);
             }
@@ -8738,16 +8733,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     const unsigned int dstEOrd  = dstMesh->getElementOrder();
     const auto* dstPN           = dstMesh->getAllElements().data();
     const auto& dstCG2DG        = dstMesh->getCG2DGMap();
-    std::vector<unsigned char> dstRefByLocal(
-        dstNodeLocalEnd - dstNodeLocalBegin, 0);
-    for (unsigned int e = dstMesh->getElementLocalBegin();
-         e < dstMesh->getElementLocalEnd(); e++) {
-        for (unsigned int n = 0; n < npe; n++) {
-            unsigned int cg = e2n[e * npe + n];
-            if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd)
-                dstRefByLocal[cg - dstNodeLocalBegin] = 1;
-        }
-    }
     struct OrphanKey {
         int          rank;
         unsigned int cg;
@@ -8756,7 +8741,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     std::vector<OrphanKey> myOrphans;
     std::vector<unsigned int> pullCgs;
     size_t pullLocalNoAuth = 0, pullGhostRead = 0;
-    if (canonFill) {
+    {
         for (unsigned int cg = dstNodeLocalBegin; cg < dstNodeLocalEnd; cg++)
             if (!authAll[cg]) { pullCgs.push_back(cg); pullLocalNoAuth++; }
         // ghost slots: only those the unzip reads and no exchange on dst
@@ -8780,9 +8765,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                 }
             }
         }
-    } else {
-        for (unsigned int cg = dstNodeLocalBegin; cg < dstNodeLocalEnd; cg++)
-            if (!dstRefByLocal[cg - dstNodeLocalBegin]) pullCgs.push_back(cg);
     }
     for (unsigned int cg : pullCgs) {
         if (cg >= dstCG2DG.size()) continue;
@@ -8875,7 +8857,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             std::cout << "[redist-probe r" << rank << "]   " << l << std::endl;
         rprobeCall++;
     };
-    if (canonFill) {
+    {
         static bool announced = false;
         if (!rank && !announced) {
             announced = true;
