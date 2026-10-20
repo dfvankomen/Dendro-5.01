@@ -5094,6 +5094,9 @@ void ExplicitNUTS<T, Ctx>::xch_dump() {
     int rk = 0;
     MPI_Comm_rank(MPI_COMM_WORLD, &rk);
     std::ofstream f(std::string(dir) + "/enuts_xch_r" + std::to_string(rk) + ".txt");
+    // XCH_TRACE: the calibration instant in this rank's clock, so entry times (t_wait_enter, since
+    // it) chain into one clock across ranks through the partner offsets
+    f << "# t0 " << std::setprecision(12) << m_uiXchT0 << "\n";
     f << "# clock offsets (partner rank: partner clock - mine, s; nan = no round trip; then the best\n"
          "# one-way latency of the 64 samples and the range of the offsets among the low-latency\n"
          "# samples, s; then the largest lateness - wait seen with that partner as arg-max (> 0:\n"
