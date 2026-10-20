@@ -9545,16 +9545,9 @@ void Mesh::zip(const T* unzippedVec, T* zippedVec) {
     // buildZipPlan() after mesh construction. Replaces the legacy
     // implicit "E2N_DG self-owned scan" inside zip with an O(N)
     // data-driven loop.
-    //
-    // Env gate: DENDRO_USE_LEGACY_ZIP=1 falls back to the legacy
-    // implementation. Used to A/B test plan-zip vs cascade-zip
-    // during the partitioning rewrite.
-    static const char* legacy_env = std::getenv("DENDRO_USE_LEGACY_ZIP");
-    static const bool use_legacy =
-        legacy_env && legacy_env[0] == '1' && legacy_env[1] == '\0';
     // the plan pairs with unzip_scatter_labelled, so it follows the same
     // routing: labelled meshes, or every mesh under DENDRO_UNZIP_LABELLED_PATH=1
-    if (!use_legacy && useLabelledUnzip()) {
+    if (useLabelledUnzip()) {
         ensureZipPlanBuilt();
         const size_t N = m_uiZipPlanCg.size();
         const unsigned int* __restrict__ cgs   = m_uiZipPlanCg.data();
@@ -9673,7 +9666,7 @@ void Mesh::zip(const T* unzippedVec, T* zippedVec) {
         return;
     }
 
-    // ---- SFC meshes (and DENDRO_USE_LEGACY_ZIP=1): ownership-filter zip ----
+    // ---- SFC meshes: ownership-filter zip ----
 #if defined(DENDRO_ZIP_PLAN)
     if (!m_uiZipIndexPlanBuilt) buildZipIndexPlan();
     const size_t np                = m_uiZipPlanUzIdx.size();

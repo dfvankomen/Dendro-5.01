@@ -8472,21 +8472,10 @@ void Mesh::buildZipPlanCore() {
     m_uiZipPlanCg.reserve(reserveN);
     m_uiZipPlanUnzipIdx.reserve(reserveN);
 
-    // Env gate: DENDRO_USE_LEGACY_PLAN_BUILD=1 falls back to the
-    // cascade-self-owned-scan for plan construction (Stage 1
-    // behavior). Default uses the explicit primary-pick path below
-    // (Stage 2): plan ownership is determined by allgather +
-    // smallest-packTN rule, not by E2N_DG self-ownership. This makes
-    // the plan independent of Pass A/D/E's E2N_DG rewrites.
-    static const char* legacy_plan_env =
-        std::getenv("DENDRO_USE_LEGACY_PLAN_BUILD");
-    static const bool use_legacy_plan = legacy_plan_env
-        && legacy_plan_env[0] == '1' && legacy_plan_env[1] == '\0';
-
-    if (use_legacy_plan || m_uiActiveNpes <= 1) {
-        // Stage 1 path: cascade-self-owned scan. Used when the env
-        // gate is set, or in the single-rank case where no allgather
-        // is needed.
+    // more than one rank: plan ownership by the explicit primary pick below
+    // (allgather + smallest-packTN rule), not by E2N_DG self-ownership
+    if (m_uiActiveNpes <= 1) {
+        // one rank: cascade-self-owned scan, no allgather needed
         for (unsigned int blk = 0; blk < m_uiLocalBlockList.size(); blk++) {
             const auto& block        = m_uiLocalBlockList[blk];
             const ot::TreeNode blkNode = block.getBlockNode();
@@ -22427,26 +22416,18 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             // exactly, so one-sided FD stencils at block boundaries
             // sample the same padding regardless of partition.
             //
-            // legacy path: octree2BlockDecompositionRepartitioned does a
-            // local-only re-decomposition that depends on which subset
-            // of elements landed on this rank — different partitions
-            // produce different blocks, breaking long-haul bit-identity.
-            const char* legacyEnv = std::getenv("DENDRO_USE_LEGACY_BLOCKS");
-            const bool useLegacyBlocks = (legacyEnv && legacyEnv[0] == '1');
-
-            size_t nProduced = 0;
-            if (!useLegacyBlocks) {
-                nProduced = buildBlocksFromCanonicalInfo();
-                if (nProduced > 0 && !rank) {
-                    std::cout << "[canonical-blocks] rank " << rank
-                              << " reconstructed " << nProduced
-                              << " blocks from transported block info"
-                              << std::endl;
-                }
+            // without canonical info the fallback, a local-only
+            // re-decomposition, depends on which subset of elements landed
+            // on this rank: different partitions give different blocks.
+            const size_t nProduced = buildBlocksFromCanonicalInfo();
+            if (nProduced > 0 && !rank) {
+                std::cout << "[canonical-blocks] rank " << rank
+                          << " reconstructed " << nProduced
+                          << " blocks from transported block info"
+                          << std::endl;
             }
             if (nProduced == 0) {
-                // fall back to legacy local re-decomposition (no
-                // canonical info shipped, or env gate forces it)
+                // no canonical info shipped: local re-decomposition
                 if (!rank) {
                     std::cout << "[canonical-blocks] rank " << rank
                               << " falling back to legacy local "
