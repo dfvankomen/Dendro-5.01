@@ -112,10 +112,9 @@ struct EnutsProf {
         }
 #endif
     }
-    /** the per-block loops of partial_evolve (stage input + rhs_blk + zipDG,
-     *  sync_blk_timestep + post_stage_blk, final update) run threaded over
-     *  the active blocks, largest first: a hybrid build and a context that
-     *  declares lts_thread_safe (set by the ExplicitNUTS constructor) */
+    /// True when the per-block loops of partial_evolve run threaded over the
+    /// active blocks, largest first: a hybrid build and a context that
+    /// declares lts_thread_safe. Set by the ExplicitNUTS constructor.
     static bool& threaded() {
         static bool on = false;
         return on;
@@ -182,8 +181,8 @@ struct EnutsProf {
      *     when the block sits at the midpoint of the element's step: true
      *     between 2:1 neighbours, not for an owner two time levels away
      *     (reached through a hanging node of a dependent). */
-    /** the solution-changing settings of the process's stepper, set by the
-     *  ExplicitNUTS constructor */
+    /// The solution-changing settings of the process's stepper. Set by the
+    /// ExplicitNUTS constructor; one stepper per process.
     static ts::LtsOptions& options() {
         static ts::LtsOptions o;
         return o;
@@ -1351,18 +1350,15 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     void update_ele_timestep(const std::vector<unsigned int>* blks = nullptr);
 
    public:
-    /**@brief: constructor
-     * Assumptions: Note that blocks result in from octree to block
-     * decomposition can be not 2:1 balanced. But to perform NUTS, blocks should
-     * be 2:1 balanced.
-     * @param ctx : the solver context
-     * @param useWpart : repartition by LTS work after the initial grid
-     * @param opts : the settings that change the solution
-     */
+    /// LTS stepper over the context's mesh. Blocks of the octree-to-block
+    /// decomposition must be 2:1 balanced. Collective: no (init() is).
+    /// Aborts unless `opts.iface` is 3 or 15.
+    /// @param useWpart  repartition by LTS work after the initial grid
     ExplicitNUTS(Ctx* ctx, bool useWpart = true,
                  const ts::LtsOptions& opts = ts::LtsOptions());
 
-    /**@brief step of a block at level blev in units of the finest step*/
+    /// Step of a block at level `blev` in units of the finest step.
+    /// Collective: no. Thread-safe: yes.
     unsigned int step_ratio(unsigned int blev) const {
         return ts::step_ratio(blev, m_uiLevMax, m_uiLevOffset,
                               ts::EnutsProf::options().ratio_cap);
