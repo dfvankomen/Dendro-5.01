@@ -23192,11 +23192,6 @@ std::vector<oct_data<T>> Mesh::getOctDataFromOtherProcesses(
 // DENDRO_BCAST_PLAN_CHECK=1 builds both and counts differing vectors.
 bool Mesh::posBcastGateOn() const {
     if (!m_uiIsActive || m_uiActiveNpes <= 1) return false;
-    static const char* gate_env = std::getenv("DENDRO_FORCE_POS_BCAST");
-    if (gate_env && gate_env[1] == '\0') {
-        if (gate_env[0] == '1') return true;
-        if (gate_env[0] == '0') return false;
-    }
     return m_uiPosBcastEnabled;
 }
 

@@ -744,10 +744,7 @@ class Mesh {
 
     /** Enables broadcastCgValuesByPhysPos (the consensus pos-bcast).
      *  Set by full-machinery solvers (NLSM/BSSN buildGraphTwin); EM4's
-     *  validated minimal config leaves it off. DENDRO_FORCE_POS_BCAST=1/0
-     *  overrides in either direction for A/B runs. Previously the bcast
-     *  was a silent no-op unless the env var was set, so validated
-     *  configs depended on ambient environment setup. */
+     *  validated minimal config leaves it off. */
     bool m_uiPosBcastEnabled = false;
 
     /** Per-var fill values for "phantom" cgs — graph-partition positions
@@ -1576,7 +1573,7 @@ class Mesh {
      *  local, undelivered ghosts the unzip or a mirror reads, exchange send
      *  sources (the pruneZipSync level-2 keep set). */
     std::vector<char> bcastKeepSlots() const;
-    /** the pos-bcast gate: active, >1 rank, enabled (or DENDRO_FORCE_POS_BCAST). */
+    /** the pos-bcast gate: active, >1 rank, enabled. */
     bool posBcastGateOn() const;
 
 
@@ -2182,9 +2179,8 @@ class Mesh {
     template <typename T>
     void broadcastCgValuesByPhysPosStep(T* vec, unsigned int dof);
 
-    /**@brief Enable/disable the consensus pos-bcast structurally (vs the
-     * DENDRO_FORCE_POS_BCAST env override). Full-machinery solvers set
-     * this on their graph twins; default off. */
+    /**@brief Enable/disable the consensus pos-bcast. Full-machinery solvers
+     * set this on their graph twins; default off. */
     inline void setPosBcastEnabled(bool on) { m_uiPosBcastEnabled = on; }
     inline bool isPosBcastEnabled() const { return m_uiPosBcastEnabled; }
 

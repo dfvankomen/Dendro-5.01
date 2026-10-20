@@ -913,7 +913,6 @@ void Mesh::broadcastCgValuesByPhysPos(T* vec, unsigned int dof) {
     // gate: m_uiPosBcastEnabled (set by full-machinery solvers via
     // setPosBcastEnabled on their graph twins; EM4-minimal leaves it off
     // since it costs an extra allgather + alltoallv per call).
-    // DENDRO_FORCE_POS_BCAST=1/0 overrides either way for A/B runs.
     if (!posBcastGateOn()) return;
 
     // DENDRO_BCAST_PLAN=0 reverts to the per-call rebuild; the probe
