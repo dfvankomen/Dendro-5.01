@@ -231,15 +231,6 @@ struct EnutsProf {
         }();
         return v == 1;
     }
-    /** DENDRO_ENUTS_OFFSET_RESYNC=1 (default off): compute_lts_ts_offset on
-     *  every sync_with_mesh, not only in init() */
-    static bool offsetResync() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_OFFSET_RESYNC");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-    }
     /** DENDRO_ENUTS_STAGE_SCRATCH=1 (default off): the stage input (the copy
      *  of the block solution plus the stage terms, _vec[NS+1]) is one scratch
      *  vector per thread sized for the largest block instead of one per block.
@@ -2323,18 +2314,15 @@ template <typename T, typename Ctx>
 int ExplicitNUTS<T, Ctx>::sync_with_mesh() {
     if (m_uiAppCtx->is_ets_synced()) return 0;
 
+    // the level offset belongs to the new mesh, and the ladder built below reads it
+    m_uiAppCtx->compute_lts_ts_offset();
+
     this->deallocate_internal_vars();
     this->free_data_structures();
 
     m_uiEVar = m_uiAppCtx->get_evolution_vars();
     this->init_data_structures();
     this->allocate_internal_vars();
-
-    // DENDRO_ENUTS_OFFSET_RESYNC=1 (default off = unchanged): recompute the
-    // level offset (and whatever the ctx keys to lmin / lmax: ratio caps, the
-    // CAHD rate) on every mesh change. The original computes it in init() only,
-    // so after a remesh that changes the level range the ladder is stale.
-    if (ts::EnutsProf::offsetResync()) m_uiAppCtx->compute_lts_ts_offset();
 
     m_uiAppCtx->set_ets_synced(true);
 
