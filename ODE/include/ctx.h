@@ -800,29 +800,6 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
         }
         if (prof) { const double t1 = MPI_Wtime(); ot::Mesh::s_dProfGhostBegin += t1 - t0; t0 = t1; }
 
-        // DENDRO_UNZIP_SRC_SPLIT=1 (2 = also check against a plain unzip): scatter the
-        // local elements that read no ghost node while the messages are in flight,
-        // everything else after the wait. Each element is scattered once.
-        static const int srcSplitMode = [] {
-            const char* e = std::getenv("DENDRO_UNZIP_SRC_SPLIT");
-            return e ? std::atoi(e) : 0;
-        }();
-#ifdef DENDRO_UNZIP_BATCH
-        const bool srcSplit = false;
-#else
-        const bool srcSplit = srcSplitMode > 0 && !m_uiMesh->useLabelledUnzip();
-#endif
-        if (srcSplit) {
-            dendro::stepprof::Scope spUz(dendro::stepprof::UZ_UNZIP_COMPUTE);
-            for (unsigned int i = 0; i < async_k; i++) {
-                const unsigned int v_begin  = ((i * dof) / async_k);
-                const unsigned int v_end    = (((i + 1) * dof) / async_k);
-                m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
-                                out_ptr + v_begin * sz_per_dof_uzip, v_end - v_begin,
-                                ot::Mesh::UNZIP_SRC_EARLY);
-            }
-        }
-
         for (unsigned int i = 0; i < async_k; i++) {
             const unsigned int v_begin  = ((i * dof) / async_k);
             const unsigned int v_end    = (((i + 1) * dof) / async_k);
@@ -862,33 +839,7 @@ void Ctx<DerivedCtx, T, I>::unzip(ot::DVector<T, I>& in, ot::DVector<T, I>& out,
                 }
 #else
                 m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip,
-                                out_ptr + v_begin * sz_per_dof_uzip, batch_sz,
-                                srcSplit ? ot::Mesh::UNZIP_SRC_LATE : -1);
-                if (srcSplit && srcSplitMode == 2 && sizeof(T) == sizeof(double)) {
-                    // check: same slots filled, values equal up to which writer won
-                    static long calls = 0, bitDiff = 0;
-                    static double maxAbs = 0;
-                    const size_t n = (size_t)batch_sz * sz_per_dof_uzip;
-                    std::vector<T> ref(n);
-                    std::memcpy(ref.data(), out_ptr + v_begin * sz_per_dof_uzip, n * sizeof(T));
-                    T* o = out_ptr + v_begin * sz_per_dof_uzip;
-                    m_uiMesh->unzip(in_ptr + v_begin * sz_per_dof_zip, o, batch_sz);
-                    bool bad = false;
-                    double scale = 0;
-                    for (size_t q = 0; q < n; q++) scale = std::max(scale, std::fabs((double)o[q]));
-                    for (size_t q = 0; q < n; q++) {
-                        if (std::memcmp(&o[q], &ref[q], sizeof(T)) == 0) continue;
-                        bitDiff++;
-                        const double d = std::fabs((double)o[q] - (double)ref[q]);
-                        maxAbs = std::max(maxAbs, d);
-                        if (!(d <= 1e-9 * (1.0 + scale))) bad = true;
-                    }
-                    if (bad || (++calls <= 3 && m_uiMesh->getMPIRank() == 0))
-                        std::cout << "[unzip-src-split] check r" << m_uiMesh->getMPIRank() << ": slots=" << n
-                                  << " cumulative bit-different=" << bitDiff << " max abs diff=" << maxAbs
-                                  << (bad ? " FAILED" : "") << std::endl;
-                    if (bad) MPI_Abort(m_uiMesh->getMPIGlobalCommunicator(), 98);
-                }
+                                out_ptr + v_begin * sz_per_dof_uzip, batch_sz);
 #endif
             }
             if (prof) { const double t1 = MPI_Wtime(); ot::Mesh::s_dProfUnzip += t1 - t0; t0 = t1; }

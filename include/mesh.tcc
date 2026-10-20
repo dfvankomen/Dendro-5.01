@@ -16357,17 +16357,9 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     // and the second (post-exchange) one is the result.
     // DENDRO_UNZIP_LABELLED_PATH=1 forces it on SFC meshes too (A/B).
     if (useLabelledUnzip()) {
-        // source split: the labelled scatter does everything in the late call
-        if (blk_filter == UNZIP_SRC_EARLY) return;
         this->unzip_scatter_labelled(in, out, dof);
         return;
     }
-    // source split (blk_filter < -1): which elements this call scatters
-    const bool srcSplit = blk_filter <= UNZIP_SRC_EARLY;
-    if (srcSplit) buildEleGhostFree();
-    const unsigned char* const eleFree = srcSplit ? m_uiEleGhostFree.data() : nullptr;
-    const bool srcEarly = blk_filter == UNZIP_SRC_EARLY;
-#define DENDRO_UZ_SKIP_ELE(e) (srcSplit && ((eleFree[(e)] != 0) != srcEarly))
     // same lazy canon-writer table + zip plan build the labelled path does
     ensureZipPlanBuilt();
 
@@ -16428,7 +16420,6 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 #pragma omp for schedule(dynamic, 16)
         for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
             if (m_e2b_unzip_counts[ele] == 0) continue;
-            if (DENDRO_UZ_SKIP_ELE(ele)) continue;
             if (blk_filter >= 0) {
                 // Overlap path: precompute DG only for elements that feed a
                 // filter-matching block (interior or boundary). Equivalent to
@@ -16492,7 +16483,6 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 
             for (unsigned int idx = e_start; idx < e_end; idx++) {
                 const unsigned int ele = b2e_map[idx];
-                if (DENDRO_UZ_SKIP_ELE(ele)) continue;
                 // dgWVec_t is just a pointer into the precomputed all_dg.
                 T* dgWVec_t = all_dg.data() + (std::size_t)ele * dof * dgSz;
 
@@ -16631,13 +16621,6 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 
     for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
         if (m_e2b_unzip_counts[ele] == 0) continue;
-        if (DENDRO_UZ_SKIP_ELE(ele)) continue;
-        // the early pass runs while messages are in flight: let MPI make progress
-        if (srcEarly && (ele & 31u) == 0) {
-            int flag = 0;
-            MPI_Iprobe(MPI_ANY_SOURCE, MPI_ANY_TAG, m_uiCommActive, &flag,
-                       MPI_STATUS_IGNORE);
-        }
 
         for (unsigned int ii = 0; ii < NUM_CHILDREN; ii++)
             p2c_interp_valid[ii] = false;
@@ -16961,7 +16944,6 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
         }
     }
 }
-#undef DENDRO_UZ_SKIP_ELE
 
 template <typename T>
 void Mesh::unzip_scatter_labelled(const T* in, T* out, unsigned int dof) {
