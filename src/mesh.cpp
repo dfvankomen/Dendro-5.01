@@ -20591,46 +20591,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }
     };
 
-    // per-element target rank -> sorted global eids this rank will own
-    auto partitionFromLabels = [&](const std::vector<unsigned int>& parts) {
-        std::vector<D_INT_L> mine;
-        std::vector<std::vector<unsigned int>> to_send(npes);
-        for (size_t i = 0; i < localSz; ++i) {
-            if (parts[i] == (unsigned int)rank) mine.push_back(oct_connectivity_map[i].eid);
-            else to_send[parts[i]].push_back(oct_connectivity_map[i].eid);
-        }
-        std::vector<int> nsend(npes, 0), nrecv(npes, 0), sendOffset(npes, 0), recvOffset(npes, 0);
-        std::vector<unsigned int> flatten_send;
-        for (int p = 0; p < npes; ++p) {
-            nsend[p] = (int)to_send[p].size();
-            flatten_send.insert(flatten_send.end(), to_send[p].begin(), to_send[p].end());
-        }
-        repartRound();
-        MPI_Alltoall(nsend.data(), 1, MPI_INT, nrecv.data(), 1, MPI_INT, commActive);
-        for (int p = 1; p < npes; ++p) {
-            sendOffset[p] = sendOffset[p - 1] + nsend[p - 1];
-            recvOffset[p] = recvOffset[p - 1] + nrecv[p - 1];
-        }
-        std::vector<unsigned int> flatten_recv(recvOffset[npes - 1] + nrecv[npes - 1]);
-        repartRound();
-        MPI_Alltoallv(flatten_send.data(), nsend.data(), sendOffset.data(), MPI_UNSIGNED,
-                      flatten_recv.data(), nrecv.data(), recvOffset.data(), MPI_UNSIGNED, commActive);
-        mine.insert(mine.end(), flatten_recv.begin(), flatten_recv.end());
-        std::sort(mine.begin(), mine.end());
-        return mine;
-    };
-
-    static const bool legacyFetch = [] {
-        const char* e = std::getenv("DENDRO_REPART_LEGACY_FETCH");
-        return e && e[0] == '1';
-    }();
     std::vector<unsigned int> pushLabels;
     bool pushPath = false;
     auto takeLabels = [&](std::vector<unsigned int>& parts) {
-        if (legacyFetch) {
-            my_partition = partitionFromLabels(parts);
-            return;
-        }
         pushLabels = std::move(parts);
         pushPath   = true;
     };
@@ -20834,16 +20797,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         m_uiRepartPreLabel = pushLabels;
     }
 
-    // DENDRO_REPART_GHOST_RINGS (default 3): how many 26-rings of ghost elements
-    // the labelled rebuild fetches. R3 is ~40 % of a labelled ghost layer, but
-    // =2 is WRONG as it stands (testPartitioning 7b: 100 errors > 0.5, EM4 md5
-    // moves) -- R2's canonical owners need R3 (see the legacy path's R3 note);
-    // kept only for A/B while a trimmed-R3 variant is explored
-    static const unsigned char ghostRings = [] {
-        const char* e = std::getenv("DENDRO_REPART_GHOST_RINGS");
-        const int v = e ? std::atoi(e) : 3;
-        return (unsigned char)(v < 2 ? 2 : (v > 3 ? 3 : v));
-    }();
+    // the labelled rebuild fetches three 26-rings of ghost elements: R2's
+    // canonical owners need R3 (see the legacy path's R3 note)
+    const unsigned char ghostRings = 3;
     // forward push of the owned set + R1/R2/R3 closure. the source of an
     // element knows its label and its 26 neighbour ids, so "rank p needs g at
     // ring d" claims travel to g's source (3 claim rounds, one per ring), then
@@ -21080,7 +21036,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }();
         // (target deliveries, recorded for the exact-ghost checker)
         std::vector<std::pair<size_t, unsigned int>> tgtDeliv;
-        if (ckHave && (ghostRings < 3 || canonTargets) && !exactUse) {
+        if (ckHave && canonTargets && !exactUse) {
             const Mesh* S = g_canonKeySrc ? g_canonKeySrc : this;
             struct TK { std::uint64_t a, b; bool operator==(const TK& o) const { return a == o.a && b == o.b; } };
             struct TKH { size_t operator()(const TK& k) const {
@@ -21397,7 +21353,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // ownership, which later makes createVector on different ranks
     // write different f(physical_pos) values at the same CG slot.
     std::set<D_INT_L> r3_keys;
-    if (ghostRings >= 3) {
     collectNeighborKeys(r2_fetched, r3_keys);
     collectNeighborKeys(r2_local, r3_keys);
     for (auto id : present) r3_keys.erase(id);
@@ -21415,7 +21370,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                                     r3_fetched.begin(), r3_fetched.end());
     new_oct_connectivity_map.insert(new_oct_connectivity_map.end(),
                                     r3_local.begin(), r3_local.end());
-    }
     }
 
     std::sort(new_oct_connectivity_map.begin(),
@@ -22494,169 +22448,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // -----
     // ELEMENT SCATTERMAP
     // Each rank pulls the 26-closure of its local elements from the owners,
-    // so the element ghost exchange is exact by construction. The legacy push
-    // variant walks ghost-side e2e chains, which miss finer neighbours and
-    // ghosts fetched in round 2 on ragged labellings (ENUTS stage sync NaN).
-    static const bool elemSmPush = [] {
-        const char* e = std::getenv("DENDRO_ELEM_SM_PUSH");
-        return e && e[0] == '1';
-    }();
-    if (elemSmPush) {
-    std::set<unsigned int> scatterMapSend_R1[npes];
-    // get the element scattermap as well
-
-    // post_first_round_comms_ids are *all* the elements by global ID that
-    // *actually* work, need to convert them to locals, then sort
-    std::vector<unsigned int> post_first_round_comms_vec_local;
-    post_first_round_comms_vec_local.reserve(post_first_round_comms_ids.size());
-    for (const auto &ele_id_global : post_first_round_comms_ids) {
-        // fortunately, since they were fetched, they're all captured
-        const unsigned int local_id = globaltoNewLocal[ele_id_global];
-        post_first_round_comms_vec_local.push_back(local_id);
-    }
-
-    // then build up ele_scattermap
-    std::sort(post_first_round_comms_vec_local.begin(),
-              post_first_round_comms_vec_local.end());
-    for (const auto &ele_id : post_first_round_comms_vec_local) {
-        if (ele_id >= newLocalBegin && ele_id < newLocalEnd) {
-            // don't process local stuff for this map
-            continue;
-        }
-
-        const auto &oct         = new_oct_connectivity_map[ele_id];
-        const D_INT_L procOwner = oct.trank;
-
-        unsigned int lookup[NUM_CHILDREN];
-
-        for (const unsigned int dir :
-             {OCT_DIR_LEFT, OCT_DIR_RIGHT, OCT_DIR_DOWN, OCT_DIR_UP,
-              OCT_DIR_BACK, OCT_DIR_FRONT}) {
-            getElementalFaceNeighbors(ele_id, dir, lookup);
-            if (lookup[1] != LOOK_UP_TABLE_DEFAULT) {
-                if (lookup[1] >= newLocalBegin && lookup[1] < newLocalEnd) {
-                    scatterMapSend_R1[procOwner].insert(lookup[1] -
-                                                        newLocalBegin);
-                }
-            }
-        }
-
-        for (const unsigned int dir :
-             {OCT_DIR_LEFT_DOWN, OCT_DIR_LEFT_UP, OCT_DIR_LEFT_BACK,
-              OCT_DIR_LEFT_FRONT, OCT_DIR_RIGHT_DOWN, OCT_DIR_RIGHT_UP,
-              OCT_DIR_RIGHT_BACK, OCT_DIR_RIGHT_FRONT, OCT_DIR_DOWN_BACK,
-              OCT_DIR_DOWN_FRONT, OCT_DIR_UP_BACK, OCT_DIR_UP_FRONT}) {
-            getElementalEdgeNeighbors(ele_id, dir, lookup);
-            for (unsigned int lookup_id = 1; lookup_id < 4; ++lookup_id) {
-                if (lookup[lookup_id] != LOOK_UP_TABLE_DEFAULT) {
-                    if (lookup[lookup_id] >= newLocalBegin &&
-                        lookup[lookup_id] < newLocalEnd) {
-                        scatterMapSend_R1[procOwner].insert(lookup[lookup_id] -
-                                                            newLocalBegin);
-                    }
-                }
-            }
-        }
-
-        for (const unsigned int dir :
-             {OCT_DIR_LEFT_DOWN_BACK, OCT_DIR_RIGHT_DOWN_BACK,
-              OCT_DIR_LEFT_UP_BACK, OCT_DIR_RIGHT_UP_BACK,
-              OCT_DIR_LEFT_DOWN_FRONT, OCT_DIR_RIGHT_DOWN_FRONT,
-              OCT_DIR_LEFT_UP_FRONT, OCT_DIR_RIGHT_UP_FRONT}) {
-            getElementalVertexNeighbors(ele_id, dir, lookup);
-            for (unsigned int lookup_id = 1; lookup_id < NUM_CHILDREN;
-                 ++lookup_id) {
-                if (lookup[lookup_id] != LOOK_UP_TABLE_DEFAULT) {
-                    if (lookup[lookup_id] >= newLocalBegin &&
-                        lookup[lookup_id] < newLocalEnd) {
-                        scatterMapSend_R1[procOwner].insert(lookup[lookup_id] -
-                                                            newLocalBegin);
-                    }
-                }
-            }
-        }
-    }
-
-    // now we can flatten the data
-    m_uiScatterMapElementRound1.clear();
-    std::fill(m_uiSendEleCount.begin(), m_uiSendEleCount.end(), 0);
-    std::fill(m_uiRecvEleCount.begin(), m_uiRecvEleCount.end(), 0);
-    std::fill(m_uiSendEleOffset.begin(), m_uiSendEleOffset.end(), 0);
-    std::fill(m_uiRecvEleOffset.begin(), m_uiRecvEleOffset.end(), 0);
-    for (unsigned int p = 0; p < npes; ++p) {
-        m_uiScatterMapElementRound1.insert(m_uiScatterMapElementRound1.end(),
-                                           scatterMapSend_R1[p].begin(),
-                                           scatterMapSend_R1[p].end());
-        m_uiSendEleCount[p] = scatterMapSend_R1[p].size();
-    }
-
-    repartRound();
-    par::Mpi_Alltoall(m_uiSendEleCount.data(), m_uiRecvEleCount.data(), 1,
-                      m_uiCommActive);
-    m_uiSendEleOffset[0] = 0;
-    m_uiRecvEleOffset[0] = 0;
-
-    omp_par::scan(m_uiSendEleCount.data(), m_uiSendEleOffset.data(), npes);
-    omp_par::scan(m_uiRecvEleCount.data(), m_uiRecvEleOffset.data(), npes);
-
-    m_uiElementSendProcList.clear();
-    m_uiElementRecvProcList.clear();
-
-    for (unsigned int p = 0; p < m_uiActiveNpes; p++) {
-        if (m_uiSendEleCount[p] > 0) m_uiElementSendProcList.push_back(p);
-        if (m_uiRecvEleCount[p] > 0) m_uiElementRecvProcList.push_back(p);
-    }
-
-    // END ELEMENT SCATTERMAP
-
-    // Build m_uiGhostElementRound1Index: maps recv buffer positions
-    // to element indices in m_uiAllElements for element ghost exchange.
+    // so the element ghost exchange is exact by construction.
     {
-        // convert to int for MPI
-        std::vector<int> sendEleCounts_i(npes), sendEleOffsets_i(npes);
-        std::vector<int> recvEleCounts_i(npes), recvEleOffsets_i(npes);
-        for (int p = 0; p < npes; p++) {
-            sendEleCounts_i[p]  = static_cast<int>(m_uiSendEleCount[p]);
-            sendEleOffsets_i[p] = static_cast<int>(m_uiSendEleOffset[p]);
-            recvEleCounts_i[p]  = static_cast<int>(m_uiRecvEleCount[p]);
-            recvEleOffsets_i[p] = static_cast<int>(m_uiRecvEleOffset[p]);
-        }
-        int totalEleSend = sendEleOffsets_i[npes - 1] + sendEleCounts_i[npes - 1];
-        int totalEleRecv = recvEleOffsets_i[npes - 1] + recvEleCounts_i[npes - 1];
-
-        // build send buffer: global IDs of elements we're sending
-        std::vector<unsigned int> sendEleGlobalIDs(totalEleSend);
-        for (int k = 0; k < totalEleSend; k++) {
-            unsigned int localEleIdx = m_uiScatterMapElementRound1[k];
-            sendEleGlobalIDs[k] =
-                new_oct_connectivity_map[newLocalBegin + localEleIdx].eid;
-        }
-
-        // exchange: other ranks tell us which elements they're sending
-        std::vector<unsigned int> recvEleGlobalIDs(totalEleRecv);
-        repartRound();
-        MPI_Alltoallv(sendEleGlobalIDs.data(), sendEleCounts_i.data(),
-                      sendEleOffsets_i.data(), MPI_UNSIGNED,
-                      recvEleGlobalIDs.data(), recvEleCounts_i.data(),
-                      recvEleOffsets_i.data(), MPI_UNSIGNED, commActive);
-
-        // now map received global IDs to positions in m_uiAllElements
-        m_uiGhostElementRound1Index.resize(totalEleRecv);
-        for (int k = 0; k < totalEleRecv; k++) {
-            auto it = globaltoNewLocal.find(recvEleGlobalIDs[k]);
-            if (it != globaltoNewLocal.end()) {
-                m_uiGhostElementRound1Index[k] = it->second;
-            } else {
-                m_uiGhostElementRound1Index[k] = 0;
-                std::cerr << rank
-                          << ": ERROR building GhostElementRound1Index: "
-                             "couldn't find global ID "
-                          << recvEleGlobalIDs[k] << std::endl;
-            }
-        }
-    }
-
-    } else {
         const unsigned int nAll = m_uiAllElements.size();
         std::vector<unsigned int> ghostByX;
         ghostByX.reserve(nAll - (newLocalEnd - newLocalBegin));
