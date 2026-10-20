@@ -8873,8 +8873,7 @@ void Mesh::buildZipPlanCore() {
             const char* cf = std::getenv("DENDRO_ZIPPLAN_CLAIM_FILTER");
             const char* pz = std::getenv("DENDRO_ZIPSYNC_PRUNE_LABELLED");
             return (pl ? std::atoi(pl) : 2) >= 2 && !(pc && pc[0] == '1') &&
-                   !(cf && cf[0] == '0') && !(pz && pz[0] == '0') &&
-                   !DENDRO_PROBE_GETENV("DENDRO_DUP_PROBE_DIR");
+                   !(cf && cf[0] == '0') && !(pz && pz[0] == '0');
         }();
         const unsigned int nAll = m_uiNumActualNodes;
         // reason bits: 1 env, 2 mesh state, 4 local position shared / owner
@@ -9546,90 +9545,6 @@ void Mesh::buildZipPlanCore() {
                 if (m_uiActiveRank == r)
                     m_uiZipSyncRecvCg[recvPos[p_rank]++] = kcg;
             }
-        }
-        // probe: dump multi-claim phys positions to file. one file per
-        // rank per remesh. set DENDRO_DUP_PROBE_DIR=/path to enable.
-        static int s_dup_probe_call_id = 0;
-        const char* dup_probe_dir = DENDRO_PROBE_GETENV("DENDRO_DUP_PROBE_DIR");
-        if (dup_probe_dir) {
-            // also write a sidecar with the syncRecvCg / syncSendCg arrays
-            // so we can verify whether a given non-primary local cg is in
-            // the recv list.
-            char fn2[1024];
-            std::snprintf(fn2, sizeof(fn2),
-                          "%s/sync_arrays_call%d_r%d.txt",
-                          dup_probe_dir, s_dup_probe_call_id,
-                          (int)m_uiActiveRank);
-            FILE* fp2 = std::fopen(fn2, "w");
-            if (fp2) {
-                std::fprintf(fp2, "# rank=%d call=%d sendN=%zu recvN=%zu planN=%zu\n",
-                             (int)m_uiActiveRank,
-                             s_dup_probe_call_id,
-                             m_uiZipSyncSendCg.size(),
-                             m_uiZipSyncRecvCg.size(),
-                             m_uiZipPlanCg.size());
-                std::fprintf(fp2, "# send_cgs:\n");
-                for (size_t kk = 0; kk < m_uiZipSyncSendCg.size(); kk++)
-                    std::fprintf(fp2, "S %u\n", m_uiZipSyncSendCg[kk]);
-                std::fprintf(fp2, "# recv_cgs:\n");
-                for (size_t kk = 0; kk < m_uiZipSyncRecvCg.size(); kk++)
-                    std::fprintf(fp2, "R %u\n", m_uiZipSyncRecvCg[kk]);
-                std::fprintf(fp2, "# plan_cgs:\n");
-                for (size_t kk = 0; kk < m_uiZipPlanCg.size(); kk++)
-                    std::fprintf(fp2, "P %u\n", m_uiZipPlanCg[kk]);
-                std::fclose(fp2);
-            }
-            char fn[1024];
-            std::snprintf(fn, sizeof(fn),
-                          "%s/dup_probe_call%d_r%d.txt",
-                          dup_probe_dir, s_dup_probe_call_id,
-                          (int)m_uiActiveRank);
-            FILE* fp = std::fopen(fn, "w");
-            if (fp) {
-                std::fprintf(fp,
-                    "# rank=%d call=%d\n"
-                    "# phys_x phys_y phys_z n_claims winner_rank "
-                    "winner_cg winner_tnLev winner_interior claims...\n",
-                    (int)m_uiActiveRank, s_dup_probe_call_id);
-                size_t ii = 0;
-                while (ii < sidx.size()) {
-                    size_t jj = ii;
-                    while (jj < sidx.size()
-                           && allX[sidx[jj]] == allX[sidx[ii]]
-                           && allY[sidx[jj]] == allY[sidx[ii]]
-                           && allZ[sidx[jj]] == allZ[sidx[ii]])
-                        ++jj;
-                    if (jj - ii > 1) {
-                        auto wit2 = winners.find(PhysKey3{
-                            allX[sidx[ii]], allY[sidx[ii]], allZ[sidx[ii]]});
-                        std::fprintf(fp,
-                            "%llu %llu %llu %zu",
-                            (unsigned long long)allX[sidx[ii]],
-                            (unsigned long long)allY[sidx[ii]],
-                            (unsigned long long)allZ[sidx[ii]],
-                            jj - ii);
-                        if (wit2 != winners.end()) {
-                            std::fprintf(fp, " %d %u %u %u",
-                                wit2->second.rank,
-                                wit2->second.cg,
-                                wit2->second.tnLev,
-                                wit2->second.interior);
-                        } else {
-                            std::fprintf(fp, " -1 0 0 0");
-                        }
-                        for (size_t k = ii; k < jj; k++) {
-                            std::fprintf(fp, " | r=%d cg=%u tnLev=%u",
-                                (int)rankOf[sidx[k]],
-                                allCg[sidx[k]],
-                                allTNLev[sidx[k]]);
-                        }
-                        std::fprintf(fp, "\n");
-                    }
-                    ii = jj;
-                }
-                std::fclose(fp);
-            }
-            s_dup_probe_call_id++;
         }
     }
     }  // end if (!zpDist): the global side-channel sync build

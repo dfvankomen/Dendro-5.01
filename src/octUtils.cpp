@@ -727,14 +727,6 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
     const char* spanEnv     = std::getenv("DENDRO_OCT2BLK_MAX_SPAN");
     const unsigned int maxBlkSpan =
         spanEnv ? (unsigned int)std::atoi(spanEnv) : OCT2BLK_MAX_SPAN;
-    // per regular-grid level (default off, all levels at maxBlkSpan):
-    // DENDRO_OCT2BLK_MAX_SPAN_LEV=<L>:<s> caps levels >= L at s
-    std::vector<unsigned int> span(maxDepth + 2, maxBlkSpan);
-    if (const char* e = std::getenv("DENDRO_OCT2BLK_MAX_SPAN_LEV")) {
-        unsigned int L = 0, sp = 0;
-        if (std::sscanf(e, "%u:%u", &L, &sp) == 2)
-            for (unsigned int l = L; l < span.size(); l++) span[l] = sp;
-    }
 
     while (!initialBLocks.empty()) {
         tmpBlock = initialBLocks.back();
@@ -805,7 +797,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
         blockFillRatio = (double)numRegGridOcts / numIdealRegGridOct;
         if ((parent.getLevel() >= coarsetLev) && (isTagValid) &&
             (octLevelGap) &&
-            (currRegGridLev - parent.getLevel() <= span[currRegGridLev]) &&
+            (currRegGridLev - parent.getLevel() <= maxBlkSpan) &&
             (blockFillRatio >= OCT2BLK_DECOMP_BLK_FILL_RATIO) &&
             (octVolume == blockVolume)) {
             blockList.push_back(tmpBlock);
