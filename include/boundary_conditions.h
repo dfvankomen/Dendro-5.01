@@ -9,6 +9,9 @@
  * padding width. Face-node kinds act only on nodes lying on a physical face; the
  * nodes behind keep the solver's own stencils and closures.
  *
+ * Padding form (for_each_exterior_node): visits the padding outside the domain,
+ * for solvers that fill it with exact data before differentiating.
+ *
  * Value form (face_nodes, set_face_values): overwrites a zipped state on the
  * domain's face nodes, for boundary data without a closed-form time derivative.
  * Solvers call it on every stage state before its rhs, at the stage time, and on
@@ -78,6 +81,37 @@ inline void for_each_face_node(const double* pmin, const double* pmax,
     for_each_face_node_on(pmin, pmax, sz, bflag, pw,
                           [&](unsigned int pp, double x, double y, double z,
                               unsigned int) { f(pp, x, y, z); });
+}
+
+/**
+ * Calls f(pp, x, y, z) once for every padding node outside the domain: those in
+ * the padding slab of a physical face, edges and corners included. Filling them
+ * with exact data lets the block be differentiated as an interior block.
+ */
+template <typename F>
+inline void for_each_exterior_node(const double* pmin, const double* pmax,
+                                   const unsigned int* sz, unsigned int bflag,
+                                   unsigned int pw, F&& f) {
+    const unsigned int nx = sz[0], ny = sz[1], nz = sz[2];
+    const double hx = (pmax[0] - pmin[0]) / (nx - 1);
+    const double hy = (pmax[1] - pmin[1]) / (ny - 1);
+    const double hz = (pmax[2] - pmin[2]) / (nz - 1);
+    auto on = [bflag](unsigned int dir) { return (bflag & (1u << dir)) != 0; };
+
+    for (unsigned int k = 0; k < nz; k++) {
+        const bool zo = (on(OCT_DIR_BACK) && k < pw) || (on(OCT_DIR_FRONT) && k >= nz - pw);
+        for (unsigned int j = 0; j < ny; j++) {
+            const bool yo = zo || (on(OCT_DIR_DOWN) && j < pw) ||
+                            (on(OCT_DIR_UP) && j >= ny - pw);
+            for (unsigned int i = 0; i < nx; i++) {
+                if (!(yo || (on(OCT_DIR_LEFT) && i < pw) ||
+                      (on(OCT_DIR_RIGHT) && i >= nx - pw)))
+                    continue;
+                f(i + nx * (j + ny * k), pmin[0] + i * hx, pmin[1] + j * hy,
+                  pmin[2] + k * hz);
+            }
+        }
+    }
 }
 
 /**
