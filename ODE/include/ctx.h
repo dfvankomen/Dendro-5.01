@@ -584,7 +584,9 @@ class Ctx {
     }
 
     /**@brief compute ts offset value*/
-    void compute_lts_ts_offset() { return asLeaf().compute_lts_ts_offset(); }
+    /**@brief LTS: level offset of the step ladder for the current mesh (see
+     * ts::level_offset); collective over the mesh's global communicator*/
+    unsigned int compute_lts_ts_offset() { return asLeaf().compute_lts_ts_offset(); }
 
 #ifdef __CUDACC__
     device::MeshGPU*& get_meshgpu_device_ptr() {
@@ -595,12 +597,6 @@ class Ctx {
         return asLeaf().get_meshgpu_host_handle();
     }
 #endif
-
-    /**@brief: retunrs time step size factor for the  specified block*/
-    static unsigned int getBlkTimestepFac(unsigned int blev, unsigned int lmin,
-                                          unsigned int lmax) {
-        return DerivedCtx::getBlkTimestepFac(blev, lmin, lmax);
-    }
 };
 
 /**

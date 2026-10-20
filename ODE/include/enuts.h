@@ -29,6 +29,7 @@
 #include "blkAsync.h"
 #include "block.h"
 #include "ets.h"
+#include "lts.h"
 #include "mathMeshUtils.h"
 #include "mesh.h"
 #include "meshUtils.h"
@@ -185,13 +186,13 @@ struct EnutsProf {
      *     when the block sits at the midpoint of the element's step: true
      *     between 2:1 neighbours, not for an owner two time levels away
      *     (reached through a hanging node of a dependent). */
-    static int ifaceFix() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_IFACE_FIX");
-            return e ? std::atoi(e) : 0;
-        }();
-        return v;
+    /** the solution-changing settings of the process's stepper, set by the
+     *  ExplicitNUTS constructor */
+    static ts::LtsOptions& options() {
+        static ts::LtsOptions o;
+        return o;
     }
+    static int ifaceFix() { return (int)options().iface; }
     /** DENDRO_ENUTS_STAGE_TIME=1 (default off = unchanged): pass the RK stage
      *  time t + c_s * dt_blk to the RHS and to pre_stage_blk, as ETS does
      *  (ets.h: current_t + m_uiCi[stage] * dt). The original passes the
@@ -199,20 +200,13 @@ struct EnutsProf {
      *  (BSSN's slow-start lapse, exp(-t^2 / 2 sigma^2)) then sees a forcing
      *  lagged by ~dt_blk / 2, growing with the block's step: a lapse offset
      *  of 1e-3 on q1 at the full ladder. */
-    /** DENDRO_ENUTS_G_XCH=1 (default off): with IFACE_FIX bit 4 and the owner
-     *  sync, exchange the stored vector g of the classes that completed a
-     *  step at this partial step (the owner-node exchange, on the unscoped
-     *  lists when the stage exchange is scoped), so a ghost row's g is its
-     *  owner's value. Without it g on ghost rows is formed locally from stage
-     *  slots the exchange only partly delivered, and the result depends on
-     *  the partition (np2 vs np4: 5e-10). */
-    static bool gXch() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_G_XCH");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-    }
+    /** with interface setting bit 4 and the owner sync, exchange the stored
+     *  vector g of the classes that completed a step at this partial step
+     *  (the owner-node exchange, on the unscoped lists when the stage exchange
+     *  is scoped), so a ghost row's g is its owner's value. Without it g on
+     *  ghost rows is formed locally from stage slots the exchange only partly
+     *  delivered, and the result depends on the partition. */
+    static bool gXch() { return options().g_exchange; }
     /** DENDRO_ENUTS_G_RESET_EVERY=1 (default off, test only): at the start
      *  of every coarse step zero the stored g and mark every class unwritten,
      *  exactly as a (re)allocation does, on an unchanged mesh: the oracle for
@@ -489,8 +483,8 @@ namespace ts {
 struct WeightedPartitionData {
     unsigned int lmin;
     unsigned int lmax;
-    unsigned int (*tfac)(unsigned int blev, unsigned int lmin,
-                         unsigned int lmax);
+    unsigned int offset;
+    unsigned int cap;
 };
 
 /**@brief:  wpart meta data, (only should be used in the LTS class. )*/
@@ -784,6 +778,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief: max level of the grid. */
     unsigned int m_uiLevMax;
 
+    /**@brief level offset of the step ladder (ctx compute_lts_ts_offset)*/
+    unsigned int m_uiLevOffset = 0;
+
     /**@brief: element to block map. */
     std::vector<unsigned int> m_uiE2B;
 
@@ -1033,7 +1030,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     bool xch_whole_row(unsigned int ele, unsigned int bc) const {
         const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
         const unsigned int l  = pMesh->getAllElements()[ele].getLevel();
-        const unsigned int dt = m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax);
+        const unsigned int dt = step_ratio(l);
         const unsigned int ce = (unsigned int)(
             std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(), dt) - m_uiOwnDTs.begin());
         return ce != bc && (ce > bc || (ts::EnutsProf::ifaceFix() & 1));
@@ -1306,7 +1303,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         const ot::TreeNode* pNodes = pMesh->getAllElements().data();
         m_uiCwDTs.clear();
         for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
-            m_uiCwDTs.push_back(m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax));
+            m_uiCwDTs.push_back(step_ratio(l));
         std::sort(m_uiCwDTs.begin(), m_uiCwDTs.end());
         m_uiCwDTs.erase(std::unique(m_uiCwDTs.begin(), m_uiCwDTs.end()), m_uiCwDTs.end());
         const size_t nCls = m_uiCwDTs.size();
@@ -1320,7 +1317,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
         m_uiCwBlkCls.assign(nBlk, 0);
         for (unsigned int blk = 0; blk < nBlk; blk++) {
             const unsigned int lev = pNodes[blkList[blk].firstElementID()].getLevel();
-            const unsigned int dt  = m_uiAppCtx->getBlkTimestepFac(lev, m_uiLevMin, m_uiLevMax);
+            const unsigned int dt  = step_ratio(lev);
             const unsigned int k   = (unsigned int)(
                 std::lower_bound(m_uiCwDTs.begin(), m_uiCwDTs.end(), dt) - m_uiCwDTs.begin());
             m_uiCwBlkCls[blk] = (unsigned char)k;
@@ -1471,8 +1468,18 @@ class ExplicitNUTS : public ETS<T, Ctx> {
      * Assumptions: Note that blocks result in from octree to block
      * decomposition can be not 2:1 balanced. But to perform NUTS, blocks should
      * be 2:1 balanced.
+     * @param ctx : the solver context
+     * @param useWpart : repartition by LTS work after the initial grid
+     * @param opts : the settings that change the solution
      */
-    ExplicitNUTS(Ctx* ctx, bool useWpart = true);
+    ExplicitNUTS(Ctx* ctx, bool useWpart = true,
+                 const ts::LtsOptions& opts = ts::LtsOptions());
+
+    /**@brief step of a block at level blev in units of the finest step*/
+    unsigned int step_ratio(unsigned int blev) const {
+        return ts::step_ratio(blev, m_uiLevMax, m_uiLevOffset,
+                              ts::EnutsProf::options().ratio_cap);
+    }
 
     /**@brief: default destructor */
     ~ExplicitNUTS();
@@ -1524,14 +1531,12 @@ class ExplicitNUTS : public ETS<T, Ctx> {
 
     /**@brief returns the dt min value */
     T get_dt_min() const {
-        return m_uiTimeInfo._m_uiTh * m_uiAppCtx->getBlkTimestepFac(
-                                          m_uiLevMax, m_uiLevMin, m_uiLevMax);
+        return m_uiTimeInfo._m_uiTh * step_ratio(m_uiLevMax);
     }
 
     /**@brief returns the dt max value */
     T get_dt_max() const {
-        return m_uiTimeInfo._m_uiTh * m_uiAppCtx->getBlkTimestepFac(
-                                          m_uiLevMin, m_uiLevMin, m_uiLevMax);
+        return m_uiTimeInfo._m_uiTh * step_ratio(m_uiLevMin);
     }
 
     /**@brief: prints the load balance statistis*/
@@ -1578,36 +1583,33 @@ class ExplicitNUTS : public ETS<T, Ctx> {
 
     /**@brief: compute weight for a wpart. */
     static unsigned int getOctWeight(const ot::TreeNode* pNode) {
-        const unsigned int finest_t = wpart_meta.tfac(
-            wpart_meta.lmax, wpart_meta.lmin,
-            wpart_meta
-                .lmax);  // m_uiAppCtx->getBlkTimestepFac(m_uiLevMax,m_uiLevMin,m_uiLevMax);
-                         // // finest  time level.
-        const unsigned int coarset_t = wpart_meta.tfac(
-            wpart_meta.lmin, wpart_meta.lmin,
-            wpart_meta
-                .lmax);  // m_uiAppCtx->getBlkTimestepFac(m_uiLevMin,m_uiLevMin,m_uiLevMax);
-                         // // coarset time level.
+        const WeightedPartitionData& w = wpart_meta;
+        const unsigned int finest_t  = ts::step_ratio(w.lmax, w.lmax, w.offset, w.cap);
+        const unsigned int coarset_t = ts::step_ratio(w.lmin, w.lmax, w.offset, w.cap);
         const unsigned int weight =
-            ((coarset_t - finest_t) /
-             (wpart_meta.tfac(pNode->getLevel(), wpart_meta.lmin,
-                              wpart_meta.lmax)));  //*nPe;
+            (coarset_t - finest_t) /
+            ts::step_ratio(pNode->getLevel(), w.lmax, w.offset, w.cap);
         return std::max(1u, weight);
     }
 
     /**@brief: update wpart meta data from current variables. */
     void update_wpart_metadata() {
-        wpart_meta.lmin = m_uiLevMin;
-        wpart_meta.lmax = m_uiLevMax;
-        wpart_meta.tfac = &(Ctx::getBlkTimestepFac);
+        wpart_meta.lmin   = m_uiLevMin;
+        wpart_meta.lmax   = m_uiLevMax;
+        wpart_meta.offset = m_uiLevOffset;
+        wpart_meta.cap    = ts::EnutsProf::options().ratio_cap;
 
         return;
     }
 };
 
 template <typename T, typename Ctx>
-ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart) : ETS<T, Ctx>(ctx) {
-    m_uiUseWeightedPart = useWpart;
+ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart,
+                                   const ts::LtsOptions& opts)
+    : ETS<T, Ctx>(ctx) {
+    ts::EnutsProf::options()           = opts;
+    ts::EnutsProf::options().ratio_cap = ts::snap_ratio_cap(opts.ratio_cap);
+    m_uiUseWeightedPart                = useWpart;
     // WPART_LATE: leave the weight unregistered until init(), after the
     // context's initialize(), so the initial grid is the unweighted one
     if (m_uiUseWeightedPart && !ts::EnutsProf::wpartLate()) {
@@ -1782,10 +1784,8 @@ void ExplicitNUTS<T, Ctx>::dump_est_speedup(std::ostream& sout, bool verbose) {
         const unsigned int npes     = pMesh->getMPICommSize();
         MPI_Comm comm               = pMesh->getMPICommunicator();
 
-        const unsigned int finest_t = m_uiAppCtx->getBlkTimestepFac(
-            m_uiLevMax, m_uiLevMin, m_uiLevMax);  // finest  time level.
-        const unsigned int coarset_t = m_uiAppCtx->getBlkTimestepFac(
-            m_uiLevMin, m_uiLevMin, m_uiLevMax);  // coarset time level.
+        const unsigned int finest_t = step_ratio(m_uiLevMax);  // finest  time level.
+        const unsigned int coarset_t = step_ratio(m_uiLevMin);  // coarset time level.
 
         double red_stat[3];  // for mpi reduction stats.
         const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
@@ -1846,7 +1846,7 @@ void ExplicitNUTS<T, Ctx>::dump_est_speedup(std::ostream& sout, bool verbose) {
                 const unsigned int bLev =
                     pNodes[blkList[blk].firstElementID()].getLevel();
                 const unsigned int BLK_DT =
-                    m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+                    step_ratio(bLev);
                 if (pt % BLK_DT != 0) continue;
 
                 double nnx = (blkList[blk].getAllocationSzX() -
@@ -1886,7 +1886,7 @@ void ExplicitNUTS<T, Ctx>::dump_est_speedup(std::ostream& sout, bool verbose) {
             //     const unsigned int bLev =
             //     pNodes[blkList[blk].firstElementID()].getLevel(); const
             //     unsigned int BLK_DT =
-            //     m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
+            //     step_ratio(bLev);
             //     if( pt% BLK_DT !=0 )
             //         continue;
 
@@ -2148,8 +2148,7 @@ void ExplicitNUTS<T, Ctx>::mem_report() {
         sync_lazy_build(own);  // same lists partial_evolve builds lazily
         std::vector<unsigned int> dtOf(all.size(), 0);
         for (size_t e = 0; e < all.size(); e++)
-            dtOf[e] = m_uiAppCtx->getBlkTimestepFac(all[e].getLevel(),
-                                                    m_uiLevMin, m_uiLevMax);
+            dtOf[e] = step_ratio(all[e].getLevel());
         std::vector<unsigned char> live(all.size(), 0), persist(all.size(), 0);
         for (unsigned int b = 0; b < blkList.size(); b++) {
             const unsigned int bdt = dtOf[blkList[b].firstElementID()];
@@ -2315,7 +2314,7 @@ int ExplicitNUTS<T, Ctx>::sync_with_mesh() {
     if (m_uiAppCtx->is_ets_synced()) return 0;
 
     // the level offset belongs to the new mesh, and the ladder built below reads it
-    m_uiAppCtx->compute_lts_ts_offset();
+    m_uiLevOffset = m_uiAppCtx->compute_lts_ts_offset();
 
     this->deallocate_internal_vars();
     this->free_data_structures();
@@ -2334,7 +2333,7 @@ void ExplicitNUTS<T, Ctx>::init() {
     m_uiAppCtx->initialize();
     m_uiTimeInfo = m_uiAppCtx->get_ts_info();
     allocate_internal_vars();
-    m_uiAppCtx->compute_lts_ts_offset();
+    m_uiLevOffset = m_uiAppCtx->compute_lts_ts_offset();
 
     if (m_uiUseWeightedPart) {
         ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
@@ -3021,7 +3020,7 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
     m_uiOwnDTs.clear();
     for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
         m_uiOwnDTs.push_back(
-            m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax));
+            step_ratio(l));
     std::sort(m_uiOwnDTs.begin(), m_uiOwnDTs.end());
     m_uiOwnDTs.erase(std::unique(m_uiOwnDTs.begin(), m_uiOwnDTs.end()),
                      m_uiOwnDTs.end());
@@ -3036,7 +3035,7 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
         const unsigned int l = pNodes[e].getLevel();
         if (e >= nEle || l < m_uiLevMin || l > m_uiLevMax) return 255u;
         const unsigned int dt =
-            m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax);
+            step_ratio(l);
         return (unsigned int)(std::lower_bound(m_uiOwnDTs.begin(),
                                                m_uiOwnDTs.end(), dt) -
                               m_uiOwnDTs.begin());
@@ -3563,8 +3562,7 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
             for (unsigned int n = 0; n < nPe; n++)
                 rc[n] = (unsigned char)need(e2n[(size_t)in.ele * nPe + n]);
             {
-                const unsigned int dt = m_uiAppCtx->getBlkTimestepFac(
-                    pNodes[in.ele].getLevel(), m_uiLevMin, m_uiLevMax);
+                const unsigned int dt = step_ratio(pNodes[in.ele].getLevel());
                 m_uiOwnRowPc.push_back((unsigned char)(
                     std::lower_bound(m_uiOwnDTs.begin(), m_uiOwnDTs.end(), dt) -
                     m_uiOwnDTs.begin()));
@@ -4456,7 +4454,7 @@ void ExplicitNUTS<T, Ctx>::sts_hook(unsigned int pt, const unsigned int* actIds,
                 [this](unsigned int r) -> unsigned int {
                     double D = 0;
                     for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
-                        if (m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax) == r)
+                        if (step_ratio(l) == r)
                             D = std::max(D, sts_test_D((T)(m_uiTimeInfo._m_uiTh * r), l));
                     unsigned int s = 2;
                     while ((double)(s * s + s - 2) / 4.0 < 6.0 * D) s++;
@@ -6255,7 +6253,7 @@ void ExplicitNUTS<T, Ctx>::update_ele_timestep(
         const unsigned int bLev =
             pNodes[blkList[blk].firstElementID()].getLevel();
         const unsigned int BLK_DT =
-            m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+            step_ratio(bLev);
 
         for (const unsigned int ele : blkList[blk]) {
             m_uiEleTime[ele] = m_uiBVec[blk]._time;
@@ -6279,7 +6277,7 @@ bool ExplicitNUTS<T, Ctx>::prepare_scoped_exchange(ot::Mesh* pMesh) {
     // so the elements firing at pt (DT | pt) are a prefix of the sorted segment
     for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
         m_uiScopedDTs.push_back(
-            m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax));
+            step_ratio(l));
     std::sort(m_uiScopedDTs.begin(), m_uiScopedDTs.end());
     m_uiScopedDTs.erase(
         std::unique(m_uiScopedDTs.begin(), m_uiScopedDTs.end()),
@@ -6298,7 +6296,7 @@ bool ExplicitNUTS<T, Ctx>::prepare_scoped_exchange(ot::Mesh* pMesh) {
             ok = false;
             break;
         }
-        dtOf[e] = m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax);
+        dtOf[e] = step_ratio(l);
     }
     const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
     for (unsigned int b = 0; ok && b < blkList.size(); b++) {
@@ -6425,10 +6423,9 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
     double current_t_adv                  = current_t;
 
-    const unsigned int finest_t           = m_uiAppCtx->getBlkTimestepFac(
-        m_uiLevMax, m_uiLevMin, m_uiLevMax);  // finest  time level.
+    const unsigned int finest_t           = step_ratio(m_uiLevMax);  // finest  time level.
     const unsigned int coarset_t =
-        m_uiAppCtx->getBlkTimestepFac(m_uiLevMin, m_uiLevMin, m_uiLevMax);
+        step_ratio(m_uiLevMin);
 
     const double dt_finest  = m_uiTimeInfo._m_uiTh;
     const double dt_coarset = coarset_t * m_uiTimeInfo._m_uiTh;
@@ -6466,7 +6463,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         const unsigned int bLev =
             pNodes[blkList[blk].firstElementID()].getLevel();
         const unsigned int BLK_DT =
-            m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+            step_ratio(bLev);
 
         const T blk_dt   = m_uiTimeInfo._m_uiTh * BLK_DT;
 
@@ -6520,7 +6517,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     //     const unsigned int bLev =
     //     pNodes[blkList[blk].firstElementID()].getLevel(); const
     //     unsigned int BLK_DT =
-    //     m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
+    //     step_ratio(bLev);
 
     //     m_uiBVec[blk]._vec[0].mark_unsynced();
     //     sync_blk_timestep(blk,0);
@@ -6537,12 +6534,12 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         P.blk_tot += (double)blkList.size();
         unsigned int nl = 0;
         for (unsigned int l = m_uiLevMin; l <= m_uiLevMax; l++)
-            if (pt % m_uiAppCtx->getBlkTimestepFac(l, m_uiLevMin, m_uiLevMax) == 0) nl++;
+            if (pt % step_ratio(l) == 0) nl++;
         P.lev_sum += nl;
         for (unsigned int bb = 0; bb < m_uiActiveBlkIDs.size(); bb++) {
             const unsigned int bLev =
                 pNodes[blkList[m_uiActiveBlkIDs[bb]].firstElementID()].getLevel();
-            if (m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax) != finest_t)
+            if (step_ratio(bLev) != finest_t)
                 finestOnly = false;
         }
     }
@@ -6558,9 +6555,8 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         // the plan takes an owner's time from its dt: every block must sit at
         // the next multiple of its dt (true inside evolve())
         for (unsigned int blk = 0; blk < blkList.size(); blk++) {
-            const unsigned int bdt = m_uiAppCtx->getBlkTimestepFac(
-                pNodes[blkList[blk].firstElementID()].getLevel(), m_uiLevMin,
-                m_uiLevMax);
+            const unsigned int bdt =
+                step_ratio(pNodes[blkList[blk].firstElementID()].getLevel());
             if (m_uiBVec[blk]._time != ((pt + bdt - 1) / bdt) * bdt) {
                 std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
                           << "] blk " << blk << " time " << m_uiBVec[blk]._time
@@ -6638,7 +6634,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             const unsigned int bLev =
                 pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
-                m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+                step_ratio(bLev);
 
             const T blk_dt = m_uiTimeInfo._m_uiTh * BLK_DT;
 
@@ -6892,7 +6888,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             const unsigned int bLev =
                 pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
-                m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+                step_ratio(bLev);
 
             sync_blk_timestep(blk, BLK_S);
             debug_nan_check("post-sync", blk, BLK_S, pt, rk);
@@ -6963,7 +6959,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
         pNodes[blkList[blk].firstElementID()].getLevel(); const unsigned
-        int BLK_DT = m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
+        int BLK_DT = step_ratio(bLev);
 
             sync_blk_timestep(blk,BLK_S);
             m_uiAppCtx->post_stage_blk((T*)m_uiBVec[blk]._vec[BLK_S].data(),DOF,blk,current_t
@@ -6983,7 +6979,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             const unsigned int NN   =  m_uiBVec[blk]._vec[0].getSz();
             const unsigned int bLev =
         pNodes[blkList[blk].firstElementID()].getLevel(); const unsigned
-        int BLK_DT = m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
+        int BLK_DT = step_ratio(bLev);
 
             sync_blk_timestep(blk,BLK_S);
             m_uiAppCtx->post_stage_blk((T*)m_uiBVec[blk]._vec[BLK_S].data(),DOF,blk,current_t
@@ -7008,7 +7004,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         const unsigned int bLev =
             pNodes[blkList[blk].firstElementID()].getLevel();
         const unsigned int BLK_DT =
-            m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+            step_ratio(bLev);
         const T blk_dt = m_uiTimeInfo._m_uiTh * BLK_DT;
 
         T* out_ptr     = (T*)m_uiBVec[blk]._vec[0].data();
@@ -7091,10 +7087,9 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
 
     double current_t_adv                  = current_t;
 
-    const unsigned int finest_t           = m_uiAppCtx->getBlkTimestepFac(
-        m_uiLevMax, m_uiLevMin, m_uiLevMax);  // finest  time level.
+    const unsigned int finest_t           = step_ratio(m_uiLevMax);  // finest  time level.
     const unsigned int coarset_t =
-        m_uiAppCtx->getBlkTimestepFac(m_uiLevMin, m_uiLevMin, m_uiLevMax);
+        step_ratio(m_uiLevMin);
 
     const double dt_finest  = m_uiTimeInfo._m_uiTh;
     const double dt_coarset = coarset_t * m_uiTimeInfo._m_uiTh;
@@ -7134,7 +7129,7 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
     //     const unsigned int bLev =
     //     pNodes[blkList[blk].firstElementID()].getLevel(); const
     //     unsigned int BLK_DT =
-    //     m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
+    //     step_ratio(bLev);
 
     //     m_uiBVec[blk]._vec[0].mark_unsynced();
     //     sync_blk_timestep(blk,0);
@@ -7151,7 +7146,7 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
             const unsigned int bLev =
                 pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
-                m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+                step_ratio(bLev);
 
             const T blk_dt = m_uiTimeInfo._m_uiTh * BLK_DT;
 
@@ -7218,7 +7213,7 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
             const unsigned int bLev =
                 pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
-                m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+                step_ratio(bLev);
 
             m_uiBVec[blk]._vec[BLK_S].copyFromUnzip(
                 pMesh, m_uiEvarUzip.get_vec_ptr(), true, DOF);
@@ -7240,7 +7235,7 @@ void ExplicitNUTS<T, Ctx>::gts_evolve(unsigned int pt) {
         const unsigned int bLev =
             pNodes[blkList[blk].firstElementID()].getLevel();
         const unsigned int BLK_DT =
-            m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+            step_ratio(bLev);
         const T blk_dt = m_uiTimeInfo._m_uiTh * BLK_DT;
 
         T* out_ptr     = (T*)m_uiBVec[blk]._vec[0].data();
@@ -7287,10 +7282,8 @@ void ExplicitNUTS<T, Ctx>::evolve() {
     double current_t_adv        = current_t;
     // Assumption: m_uiEvar is time synced accross all the blocks.
 
-    const unsigned int finest_t = m_uiAppCtx->getBlkTimestepFac(
-        m_uiLevMax, m_uiLevMin, m_uiLevMax);  // finest  time level.
-    const unsigned int coarset_t = m_uiAppCtx->getBlkTimestepFac(
-        m_uiLevMin, m_uiLevMin, m_uiLevMax);  // coarset time level.
+    const unsigned int finest_t = step_ratio(m_uiLevMax);  // finest  time level.
+    const unsigned int coarset_t = step_ratio(m_uiLevMin);  // coarset time level.
 
     const double dt_finest  = m_uiTimeInfo._m_uiTh;
     const double dt_coarset = coarset_t * m_uiTimeInfo._m_uiTh;
@@ -7388,7 +7381,7 @@ void ExplicitNUTS<T, Ctx>::evolve() {
             //     const unsigned int bLev =
             //     pNodes[blkList[blk].firstElementID()].getLevel(); const
             //     unsigned int BLK_DT =
-            //     m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);;
+            //     step_ratio(bLev);;
             //     if( pt% BLK_DT !=0 )
             //         continue;
             //     numBlkEvolved++;
@@ -7436,7 +7429,7 @@ void ExplicitNUTS<T, Ctx>::evolve() {
             const unsigned int bLev =
                 pNodes[blkList[blk].firstElementID()].getLevel();
             const unsigned int BLK_DT =
-                m_uiAppCtx->getBlkTimestepFac(bLev, m_uiLevMin, m_uiLevMax);
+                step_ratio(bLev);
 
             m_uiBVec[blk]._vec[0].zip(pMesh, m_uiEVar.get_vec_ptr(), DOF);
         }
@@ -7574,7 +7567,7 @@ void ExplicitNUTS<T, Ctx>::remesh(unsigned int grain_sz, double ld_tol,
 
     // {
     //         const unsigned int coarset_t =
-    //         m_uiAppCtx->getBlkTimestepFac(m_uiLevMin,m_uiLevMin,m_uiLevMax);
+    //         step_ratio(m_uiLevMin);
     //         // coarset time level. std::vector<double> eleT;
     //         eleT.resize(newMesh->getAllElements().size(),0);
 
@@ -7863,10 +7856,8 @@ void ExplicitNUTS<T, Ctx>::evolve_with_remesh(unsigned int remesh_freq) {
     double current_t_adv        = current_t;
 
     // Assumption: m_uiEvar is time synced accross all the blocks.
-    const unsigned int finest_t = m_uiAppCtx->getBlkTimestepFac(
-        m_uiLevMax, m_uiLevMin, m_uiLevMax);  // finest  time level.
-    const unsigned int coarset_t = m_uiAppCtx->getBlkTimestepFac(
-        m_uiLevMin, m_uiLevMin, m_uiLevMax);  // coarset time level.
+    const unsigned int finest_t = step_ratio(m_uiLevMax);  // finest  time level.
+    const unsigned int coarset_t = step_ratio(m_uiLevMin);  // coarset time level.
     const unsigned int sync_level = m_uiLevMin;
 
     const double dt_finest        = m_uiTimeInfo._m_uiTh;
@@ -8045,7 +8036,7 @@ void ExplicitNUTS<T, Ctx>::evolve_with_remesh(unsigned int remesh_freq) {
             // const unsigned int bLev =
             // pNodes[blkList[blk].firstElementID()].getLevel(); const
             // unsigned int BLK_DT =
-            // m_uiAppCtx->getBlkTimestepFac(bLev,m_uiLevMin,m_uiLevMax);
+            // step_ratio(bLev);
             m_uiBVec[blk]._vec[0].zip(pMesh, m_uiEVar.get_vec_ptr(), DOF);
         }
 

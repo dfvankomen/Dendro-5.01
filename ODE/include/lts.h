@@ -32,6 +32,25 @@ struct LtsOptions {
     unsigned int ratio_cap = 0;
 };
 
+/**@brief ratio cap snapped down to a power of two (0 stays 0 = no cap)*/
+inline unsigned int snap_ratio_cap(unsigned int cap) {
+    if (cap <= 1) return cap;
+    unsigned int p = 1u;
+    while ((p << 1) <= cap) p <<= 1;
+    return p;
+}
+
+/**@brief Step of a block at level blev in units of the finest step: 1 on the
+ * finest offset + 1 levels, doubling per level above them, at most cap
+ * (0 = no cap).*/
+inline unsigned int step_ratio(unsigned int blev, unsigned int lmax,
+                               unsigned int offset, unsigned int cap) {
+    unsigned int fac =
+        ((lmax - blev) <= offset) ? 1u : (1u << (lmax - blev - offset));
+    if (cap != 0u && fac > cap) fac = cap;
+    return fac;
+}
+
 /**@brief true when the context declares
  * `static constexpr bool lts_thread_safe = true;`, i.e. its block hooks may
  * run concurrently on different blocks. Without it the stepper's block loops
