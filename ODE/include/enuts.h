@@ -166,7 +166,7 @@ struct EnutsProf {
      *  per-stage correction reuse across blocks, padding-fill plan, per-pass
      *  store and shared sweeps of the parent-to-child interpolations) */
     /** interface setting (LtsOptions::iface, 3 or 15), a bit mask: how a
-     *  block converts stage data it takes from a neighbour that steps with a
+     *  block converts stage data it takes from a neighbor that steps with a
      *  different dt.
      *  1: same time -> convert the neighbour's stages to this block's dt
      *     (the plain copy is first order in dt).

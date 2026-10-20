@@ -20819,7 +20819,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // slots that the 2-ring push did not deliver are fetched as
         // topology-only records from their SFC source (splitter-routed by TN)
         // also with all three rings, owners outside the fetched set exist at
-        // scale (the 26-lists miss finer neighbours) and some sit in elements
+        // scale (the 26-lists miss finer neighbors) and some sit in elements
         // the unzip reads; fetch them as keyed topology records (tag 4)
         // (target deliveries, recorded for the exact-ghost checker)
         std::vector<std::pair<size_t, unsigned int>> tgtDeliv;
