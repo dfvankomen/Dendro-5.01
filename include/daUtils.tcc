@@ -477,24 +477,6 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
             return;
         }
 
-        // DENDRO_INTERP_DIRECT=1 (default off): skip the SFC splitter route
-        // (steps 2-5 and the interpolation of its hits) and prefilter the
-        // points against the local bounding box before the deepest-containing
-        // pass. The splitter route assigns each rank an SFC range of points,
-        // which matches the local elements only for an SFC partition; the
-        // deepest-containing pass below overrides every point it finds, so
-        // the output is the same either way.
-        static const bool direct = []() {
-            const char* e = std::getenv("DENDRO_INTERP_DIRECT");
-            return e && e[0] == '1';
-        }();
-        // DENDRO_INTERP_VERBOSE=1: print the splitter-route misses (every
-        // point that belongs to another rank's element: normal on a labelled
-        // mesh, a flood of one line per point and call)
-        static const bool verbose = []() {
-            const char* e = std::getenv("DENDRO_INTERP_VERBOSE");
-            return e && e[0] == '1';
-        }();
         // DENDRO_INTERP_CHECK=1: collective over the active comm after the
         // pass: every in-domain point found on exactly one rank, else print
         static const bool check = []() {
@@ -508,47 +490,23 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
         }();
         static unsigned long long ncall = 0;
         ncall++;
-        double tq0 = 0, tq1 = 0, tq2 = 0;
-        unsigned int nMiss = 0, nAssigned = 0;
+        double tq0 = 0, tq2 = 0;
         if (iprof) tq0 = MPI_Wtime();
 
         // 1. convert coords to octants
         const unsigned int numPts = length / m_uiDim;
         if (outLev) outLev->assign(numPts, -1);
-        std::vector<ot::SearchKey> coordOcts_skey;
-        unsigned int octree_coords[m_uiDim];
-
+        // out-of-domain points are skipped below: a negative offset cast to
+        // unsigned int wraps and would match a bogus element
         unsigned int n_skipped = 0;
         for (unsigned int i = 0; i < numPts; i++) {
             const double cx = domain_coords[m_uiDim * i + 0];
             const double cy = domain_coords[m_uiDim * i + 1];
             const double cz = domain_coords[m_uiDim * i + 2];
-
-            // skip out-of-domain points. casting a negative offset to
-            // unsigned int below wraps to a huge value and silently matches
-            // a bogus element on the other side of the octree.
             if (cx < domain_limit[0].x() || cx > domain_limit[1].x() ||
                 cy < domain_limit[0].y() || cy > domain_limit[1].y() ||
-                cz < domain_limit[0].z() || cz > domain_limit[1].z()) {
+                cz < domain_limit[0].z() || cz > domain_limit[1].z())
                 n_skipped++;
-                continue;
-            }
-
-            octree_coords[0] = (unsigned int)(grid_limit[0].x() +
-                                              (cx - domain_limit[0].x()) *
-                                                  (gridRangeX / domainRangeX));
-            octree_coords[1] = (unsigned int)(grid_limit[0].y() +
-                                              (cy - domain_limit[0].y()) *
-                                                  (gridRangeY / domainRangeY));
-            octree_coords[2] = (unsigned int)(grid_limit[0].z() +
-                                              (cz - domain_limit[0].z()) *
-                                                  (gridRangeZ / domainRangeZ));
-
-            if (direct) continue;
-            coordOcts_skey.push_back(ot::SearchKey(
-                octree_coords[0], octree_coords[1], octree_coords[2],
-                m_uiMaxDepth, m_uiDim, m_uiMaxDepth));
-            coordOcts_skey.back().addOwner(i);
         }
 
         if (n_skipped > 0 && rankActive == 0) {
@@ -561,182 +519,25 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
         }
 
         validIndices.clear();
-        if (!direct) {
-        // 2. get the element local splitters.
-        const std::vector<ot::TreeNode>& splitterElements =
-            mesh->getSplitterElements();
-        std::vector<ot::Key> splitterKeys;  // contains the splitter key begin.
-        for (unsigned int i = 0; i < npesActive; i++) {
-            coordOcts_skey.push_back(ot::SearchKey(splitterElements[2 * i]));
-            splitterKeys.push_back(ot::Key(splitterElements[2 * i]));
-        }
 
-        // 3. merge the coords keys.
-        std::vector<ot::Key> coordOcts_key;
-        mergeKeys(coordOcts_skey,
-                  coordOcts_key);  // note that this will result sorted keys.
-        coordOcts_skey.clear();
-
-        // 4. Search the splitter keys in the coordOCt_keys to find which coords
-        // resides in the local proc.
-        SFC::seqSearch::SFC_treeSearch(
-            &(*(splitterKeys.begin())), &(*(coordOcts_key.begin())), 0,
-            splitterKeys.size(), 0, coordOcts_key.size(), m_uiMaxDepth,
-            m_uiMaxDepth, ROOT_ROTATION);
-
-        assert(splitterKeys[rankActive].getFlag() & OCT_FOUND);
-        if (!(splitterKeys[rankActive].getFlag() & OCT_FOUND)) {
-            std::cout << "Error[" << __func__ << "]: splitter keys not found "
-                      << std::endl;
-            return;
-        }
-
-        const unsigned int myBegin = splitterKeys[rankActive].getSearchResult();
-        const unsigned int myEnd =
-            (rankActive + 1 < npesActive)
-                ? splitterKeys[rankActive + 1].getSearchResult()
-                : coordOcts_key.size();
-
-        unsigned int outSz = myEnd - myBegin;
-        nAssigned          = outSz;
-
-        // 5. Search the coordOcts_key in the allElements to find out the
-        // corresponding keys.
-        SFC::seqSearch::SFC_treeSearch(
-            &(*(coordOcts_key.begin())), &(*(meshOctree.begin())), myBegin,
-            myEnd, localElementBegin, localElementEnd, m_uiMaxDepth,
-            m_uiMaxDepth, ROOT_ROTATION);
-
-        unsigned int searchResult;
-        double coord[3];
-        std::vector<unsigned int>* ownerList;
-        Point pt_min;
-        Point pt_max;
-
-        for (unsigned int i = myBegin; i < myEnd; i++) {
-            if (!(coordOcts_key[i].getFlag() & OCT_FOUND)) {
-                // the point (or another rank's splitter key) lies in no local
-                // element: on a labelled mesh the SFC range of points this
-                // rank was handed is not its element set. The pass below
-                // finds it on its owner rank.
-                nMiss++;
-                if (verbose)
-                    std::cout << "rank: " << rankActive
-                              << " key: " << coordOcts_key[i] << "not found "
-                              << std::endl;
-            }
-            if (coordOcts_key[i].getFlag() & OCT_FOUND) {
-                searchResult = coordOcts_key[i].getSearchResult();
-                ownerList    = coordOcts_key[i].getOwnerList();
-
-                // containment-verify (2026-06-12): SFC_treeSearch on a
-                // graph-partitioned mesh can return FALSE POSITIVES (the
-                // walk assumes SFC-sorted elements). Interpolating a point
-                // far outside the wrong element extrapolates the Lagrange
-                // basis to huge/±inf values that poison downstream
-                // reductions (BSSN BH tracker NaN). Treat a non-containing
-                // hit as not-found — the containment-rescue pass below
-                // picks the point up on its true owner rank.
-                {
-                    const ot::TreeNode& fe = meshOctree[searchResult];
-                    const unsigned int kx  = coordOcts_key[i].minX();
-                    const unsigned int ky  = coordOcts_key[i].minY();
-                    const unsigned int kz  = coordOcts_key[i].minZ();
-                    if (kx < fe.minX() || kx >= fe.maxX() || ky < fe.minY() ||
-                        ky >= fe.maxY() || kz < fe.minZ() || kz >= fe.maxZ())
-                        continue;
-                }
-
-                coord[0] =
-                    domain_limit[0].x() +
-                    ((meshOctree[searchResult].minX() - grid_limit[0].x()) *
-                     (domainRangeX / gridRangeX));
-                coord[1] =
-                    domain_limit[0].y() +
-                    ((meshOctree[searchResult].minY() - grid_limit[0].y()) *
-                     (domainRangeY / gridRangeY));
-                coord[2] =
-                    domain_limit[0].z() +
-                    ((meshOctree[searchResult].minZ() - grid_limit[0].z()) *
-                     (domainRangeZ / gridRangeZ));
-
-                pt_min = Point(coord[0], coord[1], coord[2]);
-
-                coord[0] =
-                    domain_limit[0].x() +
-                    ((meshOctree[searchResult].maxX() - grid_limit[0].x()) *
-                     (domainRangeX / gridRangeX));
-                coord[1] =
-                    domain_limit[0].y() +
-                    ((meshOctree[searchResult].maxY() - grid_limit[0].y()) *
-                     (domainRangeY / gridRangeY));
-                coord[2] =
-                    domain_limit[0].z() +
-                    ((meshOctree[searchResult].maxZ() - grid_limit[0].z()) *
-                     (domainRangeZ / gridRangeZ));
-
-                pt_max = Point(coord[0], coord[1], coord[2]);
-
-                // perform the linterpolation
-                for (unsigned int w = 0; w < ownerList->size(); w++) {
-                    coord[0] = domain_coords[m_uiDim * (*ownerList)[w]];
-                    coord[1] = domain_coords[m_uiDim * (*ownerList)[w] + 1];
-                    coord[2] = domain_coords[m_uiDim * (*ownerList)[w] + 2];
-                    out[(*ownerList)[w]] = lagrangeInterpElementToCoord(
-                        mesh, in, coord, pt_min, pt_max, searchResult,
-                        mesh->getElementOrder());
-                    // out[(*ownerList)[w]] = linear_lagrange(mesh, in, coord,
-                    // pt_min, pt_max, searchResult);
-                    {
-                        static const char* ipb =
-                            std::getenv("DENDRO_INTERP_PROBE");
-                        if (ipb && ipb[0] == '1')
-                            std::printf(
-                                "[interp-probe r%u FOUND pt=%u c=(%.17g,%.17g,"
-                                "%.17g) elem=%u box=(%g,%g,%g)-(%g,%g,%g) "
-                                "val=%.6e]\n",
-                                rankActive, (*ownerList)[w], coord[0],
-                                coord[1], coord[2], searchResult, pt_min.x(),
-                                pt_min.y(), pt_min.z(), pt_max.x(), pt_max.y(),
-                                pt_max.z(),
-                                (double)out[(*ownerList)[w]]);
-                    }
-                    validIndices.push_back((*ownerList)[w]);
-                }
-            }
-        }
-        }  // !direct
-        if (iprof) tq1 = MPI_Wtime();
-
-        // Deepest-containing-local pass (2026-06-12, supersedes the
-        // 2026-06-11 containment rescue): the SFC search above fails or
-        // returns shallow results luck-dependently on graph-partitioned
-        // meshes (unsorted m_uiAllElements, non-SFC splitters), AND the
-        // graph local range can contain COARSE duplicate instances that
-        // overlap the true fine leaves — interpolating those reads
-        // phantom cgs with no canonical writer (the BSSN BH-tracker NaN,
-        // see docs/graph_partitioning_correctness.md). For EVERY point,
-        // scan the LOCAL range and interpolate from the DEEPEST
-        // containing element (the true leaf). Overrides any shallower
-        // SFC-search result. outLev (when provided) reports the chosen
-        // element level per point so callers can resolve cross-rank
-        // duplicate-instance contributions by depth.
+        // every point is located by containment in the local elements, from
+        // the deepest one that contains it (the true leaf): an SFC splitter
+        // search assumes one SFC range per rank, and a labelled local range
+        // can hold coarse duplicate instances that overlap the fine leaves,
+        // whose cgs have no canonical writer (the BSSN tracker NaN, see
+        // docs/graph_partitioning_correctness.md). outLev (when provided)
+        // reports the chosen element level per point so callers can resolve
+        // cross-rank duplicate-instance contributions by depth.
         {
-            std::vector<bool> found(numPts, false);
-            for (unsigned int v : validIndices)
-                if (v < numPts) found[v] = true;
-            validIndices.clear();
-            // DIRECT: the local elements' bounding box; a point outside it is
-            // in no local element
-            unsigned int bx0 = 0, by0 = 0, bz0 = 0, bx1 = 0, by1 = 0, bz1 = 0;
-            if (direct) {
-                bx0 = by0 = bz0 = std::numeric_limits<unsigned int>::max();
-                for (unsigned int e = localElementBegin; e < localElementEnd; e++) {
-                    const ot::TreeNode& el = meshOctree[e];
-                    bx0 = std::min(bx0, el.minX()); bx1 = std::max(bx1, el.maxX());
-                    by0 = std::min(by0, el.minY()); by1 = std::max(by1, el.maxY());
-                    bz0 = std::min(bz0, el.minZ()); bz1 = std::max(bz1, el.maxZ());
-                }
+            // the local elements' bounding box; a point outside it is in no
+            // local element
+            unsigned int bx0 = std::numeric_limits<unsigned int>::max(), bx1 = 0;
+            unsigned int by0 = bx0, by1 = 0, bz0 = bx0, bz1 = 0;
+            for (unsigned int e = localElementBegin; e < localElementEnd; e++) {
+                const ot::TreeNode& el = meshOctree[e];
+                bx0 = std::min(bx0, el.minX()); bx1 = std::max(bx1, el.maxX());
+                by0 = std::min(by0, el.minY()); by1 = std::max(by1, el.maxY());
+                bz0 = std::min(bz0, el.minZ()); bz1 = std::max(bz1, el.maxZ());
             }
             for (unsigned int i = 0; i < numPts; i++) {
                 const unsigned int ox = (unsigned int)(grid_limit[0].x() +
@@ -748,8 +549,8 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                 const unsigned int oz = (unsigned int)(grid_limit[0].z() +
                     (domain_coords[m_uiDim * i + 2] - domain_limit[0].z()) *
                         (gridRangeZ / domainRangeZ));
-                if (direct && (ox < bx0 || ox >= bx1 || oy < by0 || oy >= by1 ||
-                               oz < bz0 || oz >= bz1))
+                if (ox < bx0 || ox >= bx1 || oy < by0 || oy >= by1 || oz < bz0 ||
+                    oz >= bz1)
                     continue;
                 unsigned int bestE   = LOOK_UP_TABLE_DEFAULT;
                 unsigned int bestLev = 0;
@@ -805,7 +606,6 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                 }
                 validIndices.push_back(i);
             }
-            (void)found;
         }
 
         std::sort(validIndices.begin(), validIndices.end());
@@ -816,11 +616,10 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
             if (iprof >= 2 || rankActive == 0)
                 std::printf(
                     "[interp-prof r%u] call %llu pts %u local_elems %u "
-                    "splitter_route %.3e s (assigned %u, misses %u) "
-                    "deepest_pass %.3e s found %zu\n",
+                    "%.3e s found %zu\n",
                     rankActive, ncall, numPts,
-                    localElementEnd - localElementBegin, tq1 - tq0, nAssigned,
-                    nMiss, tq2 - tq1, validIndices.size());
+                    localElementEnd - localElementBegin, tq2 - tq0,
+                    validIndices.size());
         }
         if (check) {
             // every in-domain point on exactly one rank: the callers sum the
