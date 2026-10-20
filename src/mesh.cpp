@@ -5158,13 +5158,7 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
     // Fix: for each orphan CG X, find the "real" CG Y that the local
     // canonical element actually points to. Redirect every E2N_CG
     // entry that references X (on any element) to Y instead.
-    //
-    // env gate: DENDRO_DISABLE_ORPHAN_FIX=1 skips the orphan-fix.
-    // Lets us A/B-test it without recompiling.
-    const char* _orphan_env = std::getenv("DENDRO_DISABLE_ORPHAN_FIX");
-    const bool _orphan_enabled =
-        !(_orphan_env && _orphan_env[0] == '1' && _orphan_env[1] == '\0');
-    if (_orphan_enabled && m_uiIsActive) {
+    if (m_uiIsActive) {
         const unsigned int npe = m_uiNpE;
         const unsigned int nLB = m_uiNodeLocalBegin;
         const unsigned int nLE = m_uiNodeLocalEnd;
@@ -20372,10 +20366,8 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         return lab;
     };
 
-    // whole-block majority vote (most votes, then lowest rank); DENDRO_DISABLE_BLOCK_VOTE=1 skips
+    // whole-block majority vote (most votes, then lowest rank)
     auto blockVote = [&](std::vector<unsigned int>& parts) {
-        const char* disableVote = std::getenv("DENDRO_DISABLE_BLOCK_VOTE");
-        if (disableVote && disableVote[0] == '1') return;
         std::map<AnchorKey, std::vector<size_t>> blockGroups;
         for (size_t i = 0; i < localSz; ++i) {
             const auto& oct = oct_connectivity_map[i];

@@ -2374,17 +2374,8 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
         // after the standard scatter restores the primary's value.
         // The send half of the alltoallv is unchanged; the recv side
         // overwrites stale standard-scatter writes.
-        //
-        // Env gate `DENDRO_DISABLE_POST_SYNC=1` skips this for A/B.
-        // The drift investigation needs to test whether the
-        // post-scatter overwrite is the source of the per-step
-        // ~2.5e-12 noise on rank 2's +X edge.
-        static const char* nopost_env =
-            std::getenv("DENDRO_DISABLE_POST_SYNC");
-        static const bool skip_post_sync =
-            nopost_env && nopost_env[0] == '1' && nopost_env[1] == '\0';
         spMirror.stop();
-        if (!skip_post_sync) {
+        {
             dendro::stepprof::Scope spSyncPost(dendro::stepprof::GE_SYNC_POST);
             this->syncZipNonPrimary(vec, dof);
         }
@@ -6465,14 +6456,9 @@ void Mesh::interGridTransfer(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
     // it). IGT writes via the scatter-map path, which doesn't sync
     // duplicates. without this call, the FIRST stepping remesh's IGT
     // leaves duplicate cgs at partition-dependent interpolated values,
-    // seeding the U_E2 noise that grows step-by-step. env
-    // DENDRO_DISABLE_POST_IGT_SYNC=1 disables.
+    // seeding the U_E2 noise that grows step-by-step.
     {
-        static const char* dis_env =
-            std::getenv("DENDRO_DISABLE_POST_IGT_SYNC");
-        const bool skip =
-            dis_env && dis_env[0] == '1' && dis_env[1] == '\0';
-        if (!skip && pMesh != nullptr && pMesh->isActive()) {
+        if (pMesh != nullptr && pMesh->isActive()) {
             ot::Mesh* pMeshMut = const_cast<ot::Mesh*>(pMesh);
             pMeshMut->syncZipNonPrimary(vecOut, dof);
         }
@@ -8821,8 +8807,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     int myOrphCount = (int)myOrphans.size();
     static const bool orphanP2P = [] {
         const char* v = std::getenv("DENDRO_REDIST_ORPHAN_P2P");
-        const char* g = std::getenv("DENDRO_ORPHAN_FILL_GEOM_KEY");
-        if (g && g[0] == '1') return false;  // legacy geometric keying: old path
         return !(v && v[0] == '0');
     }();
     const bool leanOrph = redistLean && orphanP2P;
@@ -9387,12 +9371,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // target phys (see docs/findings_2026-05-26_orphan_fill_geom_key_bug).
     // Keying by canonical phys ensures each src LOCAL cg appears once
     // at its true phys, so orphan fill reads the correct value.
-    //
-    // env DENDRO_ORPHAN_FILL_GEOM_KEY=1 reverts to the buggy geometric
-    // keying (for A/B comparison only; do not enable in production).
-    static const char* ofgk_env = std::getenv("DENDRO_ORPHAN_FILL_GEOM_KEY");
-    static const bool ofgk_on =
-        ofgk_env && ofgk_env[0] == '1' && ofgk_env[1] == '\0';
     std::map<std::tuple<uint64_t, uint64_t, uint64_t>, unsigned int>
         srcPosToLocalCG;
     // duplicate canonical phys here is EXPECTED in graph mode (duplicate
@@ -9402,56 +9380,29 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     if (m_uiIsActive) {
         const unsigned int srcEOrd = m_uiElementOrder;
         const auto* srcPN          = m_uiAllElements.data();
-        if (ofgk_on) {
-            // legacy buggy geometric-phys keying (for A/B only)
-            for (unsigned int e = m_uiElementLocalBegin;
-                 e < m_uiElementLocalEnd; e++) {
-                for (unsigned int n = 0; n < npe; n++) {
-                    unsigned int cg = m_uiE2NMapping_CG[e * npe + n];
-                    if (!(cg >= m_uiNodeLocalBegin &&
-                          cg < m_uiNodeLocalEnd)) continue;
-                    uint64_t len = (uint64_t)1
-                                   << (m_uiMaxDepth - srcPN[e].getLevel());
-                    uint64_t x =
-                        (uint64_t)srcPN[e].getX() * srcEOrd +
-                        (uint64_t)(n % (srcEOrd + 1)) * len;
-                    uint64_t y =
-                        (uint64_t)srcPN[e].getY() * srcEOrd +
-                        (uint64_t)((n / (srcEOrd + 1)) % (srcEOrd + 1)) * len;
-                    uint64_t z =
-                        (uint64_t)srcPN[e].getZ() * srcEOrd +
-                        (uint64_t)(n / ((srcEOrd + 1) * (srcEOrd + 1))) * len;
-                    if (!srcPosToLocalCG
-                             .emplace(std::make_tuple(x, y, z), cg)
-                             .second)
-                        posKeyDup++;
-                }
-            }
-        } else {
-            const auto& srcCG2DG       = m_uiCG2DG;
-            for (unsigned int cg = m_uiNodeLocalBegin;
-                 cg < m_uiNodeLocalEnd; cg++) {
-                if (cg >= srcCG2DG.size()) continue;
-                unsigned int dg = srcCG2DG[cg];
-                if (dg == LOOK_UP_TABLE_DEFAULT) continue;
-                unsigned int oe = dg / npe;
-                unsigned int on = dg % npe;
-                if (oe >= m_uiAllElements.size()) continue;
-                uint64_t len = (uint64_t)1
-                               << (m_uiMaxDepth - srcPN[oe].getLevel());
-                uint64_t x =
-                    (uint64_t)srcPN[oe].getX() * srcEOrd +
-                    (uint64_t)(on % (srcEOrd + 1)) * len;
-                uint64_t y =
-                    (uint64_t)srcPN[oe].getY() * srcEOrd +
-                    (uint64_t)((on / (srcEOrd + 1)) % (srcEOrd + 1)) * len;
-                uint64_t z =
-                    (uint64_t)srcPN[oe].getZ() * srcEOrd +
-                    (uint64_t)(on / ((srcEOrd + 1) * (srcEOrd + 1))) * len;
-                if (!srcPosToLocalCG.emplace(std::make_tuple(x, y, z), cg)
-                         .second)
-                    posKeyDup++;
-            }
+        const auto& srcCG2DG       = m_uiCG2DG;
+        for (unsigned int cg = m_uiNodeLocalBegin;
+             cg < m_uiNodeLocalEnd; cg++) {
+            if (cg >= srcCG2DG.size()) continue;
+            unsigned int dg = srcCG2DG[cg];
+            if (dg == LOOK_UP_TABLE_DEFAULT) continue;
+            unsigned int oe = dg / npe;
+            unsigned int on = dg % npe;
+            if (oe >= m_uiAllElements.size()) continue;
+            uint64_t len = (uint64_t)1
+                           << (m_uiMaxDepth - srcPN[oe].getLevel());
+            uint64_t x =
+                (uint64_t)srcPN[oe].getX() * srcEOrd +
+                (uint64_t)(on % (srcEOrd + 1)) * len;
+            uint64_t y =
+                (uint64_t)srcPN[oe].getY() * srcEOrd +
+                (uint64_t)((on / (srcEOrd + 1)) % (srcEOrd + 1)) * len;
+            uint64_t z =
+                (uint64_t)srcPN[oe].getZ() * srcEOrd +
+                (uint64_t)(on / ((srcEOrd + 1) * (srcEOrd + 1))) * len;
+            if (!srcPosToLocalCG.emplace(std::make_tuple(x, y, z), cg)
+                     .second)
+                posKeyDup++;
         }
     }
     {
