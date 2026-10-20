@@ -1572,31 +1572,6 @@ class Mesh {
      * Cost: O(27) per element. Cheap. */
     void deriveOwnerMasksFromCascade();
 
-    /**@brief Compare m_uiOwnerMask (transported from pre-partition
-     * cascade) with what the current cascade output says, per
-     * element + per representative. Logs disagreements and returns
-     * the count. Useful for diagnosing where post-partition cascade
-     * disagrees with the canonical pre-partition decision.
-     *
-     * @return number of (elem, representative) disagreements on this rank. */
-    size_t validateOwnerMasksAgainstCurrentCascade() const;
-
-    /**@brief Patch the post-partition cascade output using
-     * authoritative ownership info from m_uiOwnerMask. For each
-     * local (elem, sub) where cascade marks elem self-owned but the
-     * mask disagrees ("over-claim"), find the true owner via E2EMap
-     * neighbor walk and mask check. Redirect E2N_CG / E2N_DG to
-     * point at the true owner's slot, and stash the now-orphan local
-     * cg into m_uiPassDDemotedToGhostCg so the existing sync helper
-     * mirrors values correctly post-exchange.
-     *
-     * Must run AFTER buildE2NWithSMRepartitioned and AFTER masks are
-     * populated (either from cascade derivation on initial SFC build
-     * or from oct_data transport on repartition).
-     *
-     * @return number of slots patched. */
-    size_t patchE2NCgFromMasks();
-
     /**@brief Audit E2N_CG entries and repair wrong-cascade routings using
      *  phys_pos comparison. For each local element (e, sub), checks whether
      *  E2N_CG[e*npe+sub]'s actual phys_pos matches the expected phys_pos for
@@ -1606,8 +1581,7 @@ class Mesh {
      *  expected phys_pos (which is guaranteed present given the R3 ghost
      *  layer).
      *
-     *  Must run AFTER buildE2NWithSMRepartitioned + Pass A/D/E + mask-patch,
-     *  and BEFORE REBUILD NODAL SCATTER MAPS / buildZipPlan so the corrected
+     *  Must run AFTER buildE2NWithSMRepartitioned, and BEFORE REBUILD NODAL SCATTER MAPS / buildZipPlan so the corrected
      *  E2N_CG is reflected in scatter maps and zip-plan.
      *
      *  Honors PassD's intentional demotions (skips cgs in
@@ -1615,24 +1589,6 @@ class Mesh {
      *
      *  @return number of E2N_CG entries patched. */
     size_t auditAndRepairE2NCgPhysPos();
-
-    /**@brief structural canonicalization of hanging-face/edge/corner
-     *  routing in E2N_CG/DG. For any (e, n) where the order=eOrder
-     *  routing decodes to an owner whose level != e's level (hanging
-     *  case), redirect to the Morton-tree parent's slot at the SAME
-     *  sub-index n. Uses a TN→local_idx hash map over m_uiAllElements
-     *  for fast lookup — no per-cg phys-pos hash needed.
-     *
-     *  When the Morton-tree parent is on this rank (local or ghost),
-     *  the override is direct and partition-invariant. When the
-     *  parent is not on this rank, the slot is left untouched and
-     *  the slower phys-pos audit acts as a fallback.
-     *
-     *  Should be called BEFORE auditAndRepairE2NCgPhysPos to reduce
-     *  the audit's work to a fast verification pass.
-     *
-     *  @return number of E2N_CG/DG entries canonicalized. */
-    size_t canonicalizeHangingFaceRoutingTN();
 
     /**@brief derive m_uiBlockInfo from the current m_uiLocalBlockList
      *  on the SFC mesh. for each block, walks its (contiguous)
