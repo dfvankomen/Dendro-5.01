@@ -354,15 +354,19 @@ struct EnutsProf {
     static bool ifaceShift() { return (ifaceFix() & 8) != 0; }
     /** DENDRO_ENUTS_OWNER_SYNC=1: before a block takes its stage data, give
      *  every shared or hanging node of the block's elements and of its unzip
-     *  dependents the value of the node's owner (what zip + unzip does in ETS).
-     *  1: per-block plan (OwnPlan), owner values exchanged per node on more
-     *     than one rank.
-     *  3: the original per-element zip + gather (one rank only).
-     *  2: as 3, also poison the scratch cg vector and count unwritten reads. */
+     *  dependents the value of the node's owner (what zip + unzip does in ETS):
+     *  by the per-block plan (OwnPlan, owner values exchanged per node on more
+     *  than one rank), or per element where the plan is unavailable. */
     static int ownerSync() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_OWNER_SYNC");
-            return e ? std::atoi(e) : 0;
+            const int m   = e ? std::atoi(e) : 0;
+            if (m != 0 && m != 1) {
+                std::cerr << "[enuts] DENDRO_ENUTS_OWNER_SYNC is 0 or 1 (modes 2 "
+                             "and 3 were removed)" << std::endl;
+                MPI_Abort(MPI_COMM_WORLD, 1);
+            }
+            return m;
         }();
         return v;
     }
@@ -5176,8 +5180,8 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 
     const unsigned int dof = m_uiEVar.get_dof();
     const int ownSync   = (rk_s >= 1 && !isIGTSync) ? ts::EnutsProf::ownerSync() : 0;
-    // ownSync 1 runs the plan (below, once the dependents are known); here it
-    // is the per-element form: modes 2 / 3, or 1 where the plan is unavailable
+    // ownSync runs the plan (below, once the dependents are known), or the
+    // per-element form where the plan is unavailable
     const bool syncFast = ts::EnutsProf::syncFast() && !ownSync;
     const bool ifxEq  = (ts::EnutsProf::ifaceFix() & 1) && rk_s >= 1 && !isIGTSync;
     const bool ifxAll = (ts::EnutsProf::ifaceFix() & 2) && rk_s >= 1 && !isIGTSync;
@@ -5607,13 +5611,6 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
                 std::memcpy(dgWVec + v * dgSz + elem * nPe,
                             dgStages[rk_s - 1] + v * dgSz + elem * nPe,
                             sizeof(T) * nPe);
-        }
-        if (ownSync == 2) {
-            for (size_t q = 0; q < (size_t)dof * cgSz; q++)
-                cgW[q] = std::numeric_limits<T>::quiet_NaN();
-            // nan left by the rhs itself (padding outside the domain) is not ours
-            for (size_t q = 0; q < (size_t)dof * lx * ly * lz; q++)
-                if (std::isnan(m_uiVec[q])) m_uiVec[q] = 0;
         }
         for (const unsigned int ele : es)
             for (unsigned int q = 0; q < nPe; q++) {
@@ -6101,18 +6098,6 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
         }
     }
 
-    if (ownSync == 2) {
-        // [ENUTS_OMP edit 5/5] atomic: blocks may run concurrently
-        static std::atomic<unsigned long long> nanTot{0}, calls{0};
-        unsigned long long nn = 0;
-        for (size_t q = 0; q < (size_t)dof * lx * ly * lz; q++)
-            nn += std::isnan(m_uiVec[q]);
-        nanTot += nn;
-        if (nn && calls++ < 20)
-            std::cout << "[owner-sync] blk " << blk << " rk " << rk_s << " lev " << bLev
-                      << " nan " << nn << " of " << (size_t)dof * lx * ly * lz
-                      << " total " << nanTot << std::endl;
-    }
     if (sprof) {
         const double tend = ts::EnutsProf::now();
         ts::EnutsProf::get().t[ts::EnutsProf::SY_OWN] += tend - town0;
