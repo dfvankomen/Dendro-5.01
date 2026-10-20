@@ -1648,8 +1648,7 @@ const std::vector<unsigned int> &Mesh::getStageCopyGhostSlots() {
                        3 * m_uiScatterMapActualNodeRecv.size() +
                        5 * m_uiZipLocalDupSrc.size() +
                        7 * m_uiZipSyncSendCg.size() +
-                       13 * m_uiZipNonPrimaryToGhostCg.size() +
-                       17 * m_uiZipGhostToLocalAtConsensus.size();
+                       13 * m_uiZipNonPrimaryToGhostCg.size();
     if (sig == m_uiStageCopySig) return m_uiStageCopySlots;
     m_uiStageCopySig = sig;
     m_uiStageCopySlots.clear();
@@ -1673,7 +1672,6 @@ const std::vector<unsigned int> &Mesh::getStageCopyGhostSlots() {
     for (auto cg : m_uiZipLocalDupSrc) add(ex, cg);
     for (auto cg : m_uiZipSyncSendCg) add(ex, cg);
     for (auto &kv : m_uiZipNonPrimaryToGhostCg) add(ex, kv.second);
-    for (auto &kv : m_uiZipGhostToLocalAtConsensus) add(ex, kv.second);
     for (auto cg : m_uiScatterMapActualNodeRecv) add(m_uiRecvGhostSlots, cg);
     std::sort(m_uiRecvGhostSlots.begin(), m_uiRecvGhostSlots.end());
     m_uiRecvGhostSlots.erase(
@@ -8344,18 +8342,18 @@ bool Mesh::zipFastFinish() {
 }
 
 void Mesh::zipFastCompare() {
-    unsigned long long d[8] = {
+    unsigned long long d[7] = {
         m_uiZipPlanCg != m_uiZipFastStashCg, m_uiZipPlanUnzipIdx != m_uiZipFastStashIdx,
         !m_uiZipSyncSendCg.empty() || !m_uiZipSyncRecvCg.empty(),
         !m_uiZipLocalDupSrc.empty() || !m_uiZipLocalDupDst.empty(),
-        !m_uiZipNonPrimaryToGhostCg.empty(), !m_uiZipGhostToLocalAtConsensus.empty(),
+        !m_uiZipNonPrimaryToGhostCg.empty(),
         !m_uiLocalNonPrimaryCg.empty(),
         (unsigned long long)m_uiZipSyncGlobalActive};
-    MPI_Allreduce(MPI_IN_PLACE, d, 8, MPI_UNSIGNED_LONG_LONG, MPI_SUM, m_uiCommActive);
+    MPI_Allreduce(MPI_IN_PLACE, d, 7, MPI_UNSIGNED_LONG_LONG, MPI_SUM, m_uiCommActive);
     if (!m_uiActiveRank)
         std::printf("[zipplan-fast-check] ranks differing: plan_cg=%llu plan_idx=%llu sync=%llu "
-                    "local_dup=%llu znp=%llu fixup=%llu passd/nonprimary=%llu active=%llu\n",
-                    d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7]);
+                    "local_dup=%llu znp=%llu nonprimary=%llu active=%llu\n",
+                    d[0], d[1], d[2], d[3], d[4], d[5], d[6]);
     m_uiZipFastCheck = false;
     m_uiZipFastStashCg.clear();
     m_uiZipFastStashIdx.clear();
@@ -8884,10 +8882,8 @@ void Mesh::buildZipPlanCore() {
             const char* pc = std::getenv("DENDRO_ZIPSYNC_CHECK");
             const char* cf = std::getenv("DENDRO_ZIPPLAN_CLAIM_FILTER");
             const char* pz = std::getenv("DENDRO_ZIPSYNC_PRUNE_LABELLED");
-            const char* ef = std::getenv("DENDRO_ENABLE_ELEM_READ_FIXUP");
             return (pl ? std::atoi(pl) : 2) >= 2 && !(pc && pc[0] == '1') &&
                    !(cf && cf[0] == '0') && !(pz && pz[0] == '0') &&
-                   !(ef && ef[0] == '1') && !std::getenv("DENDRO_ZIPPLAN_STATS") &&
                    !DENDRO_PROBE_GETENV("DENDRO_DUP_PROBE_DIR");
         }();
         const unsigned int nAll = m_uiNumActualNodes;
@@ -8980,7 +8976,6 @@ void Mesh::buildZipPlanCore() {
                 m_uiZipLocalDupSrc.clear();
                 m_uiZipLocalDupDst.clear();
                 m_uiZipNonPrimaryToGhostCg.clear();
-                m_uiZipGhostToLocalAtConsensus.clear();
                 this->unifyE2NCgAcrossTNInstances();
                 if (__zp_on && !m_uiActiveRank)
                     std::printf("[zipplan-prof] fast total=%.1f ms (allreduce wait=%.1f, plan=%zu)\n",
@@ -9733,11 +9728,6 @@ void Mesh::buildZipPlanCore() {
 
     if (__zp_on) __zp_inv = MPI_Wtime();
 
-    // zip-plan stats (DENDRO_ZIPPLAN_STATS=1): how the mirror pairing
-    // degrades under a reduced scatter map (minimal-scatter debugging)
-    size_t zpsNonPrimary = 0, zpsInvMiss = 0;
-    std::vector<unsigned int> zpsMissCgs;
-
     // For each LOCAL cg where I'm the primary, build a plan entry.
     // The writer (elem, sub) is the smallest-TN local elem at this
     // phys_pos (lookup via myMin).
@@ -9765,7 +9755,6 @@ void Mesh::buildZipPlanCore() {
         const bool this_is_primary_cg = i_am_primary_rank
             && (wit->cg == cg);
         if (!this_is_primary_cg) {
-            zpsNonPrimary++;
             const uint64_t key =
                 (uint64_t(wit->rank) << 32)
                 | uint64_t(wit->cg);
@@ -9776,10 +9765,6 @@ void Mesh::buildZipPlanCore() {
             auto iit = invScatter.find(key);
             if (iit != invScatter.end())
                 m_uiZipNonPrimaryToGhostCg[cg] = iit->second;
-            else {
-                zpsInvMiss++;
-                zpsMissCgs.push_back(cg);
-            }
             continue;
         }
         // Primary path falls through to plan-entry construction.
@@ -9845,142 +9830,12 @@ void Mesh::buildZipPlanCore() {
             const unsigned int g = ans[q.second];
             if (g != LOOK_UP_TABLE_DEFAULT)
                 m_uiZipNonPrimaryToGhostCg[q.first] = g;
-            else {
-                zpsInvMiss++;
-                zpsMissCgs.push_back(q.first);
-            }
         }
     }
 
     if (__zp_on) __zp_plan = MPI_Wtime();
 
     if (__zp_on) __zp_clean2 = MPI_Wtime();
-
-    // ---- Build element-read fixup map ----
-    //
-    // The unzip / getElementNodalValues path reads vec[E2N_CG[e*npe+sub]]
-    // for every local element's sub-node. At level-transition consensus
-    // phys_pos, cascade redirects can route different elements' subs to
-    // different cgs (some are ghosts on this rank with stale values
-    // because the rebuilt scatter map sources them from a wrong rank
-    // or doesn't cover them). The standard ghost exchange + Stage 3
-    // mirror + syncZipNonPrimary handle some cgs but not all.
-    //
-    // For each local element, every sub at a consensus phys_pos: get
-    // cgIdx = E2N_CG[e*npe+sub]. The cgIdx MUST hold the primary's
-    // post-sync value (otherwise unzip/getElementNodalValues read
-    // stale data, which propagates through the RHS stencil).
-    //
-    // Build cgIdx → local_primary_or_synced_cg on this rank for every
-    // such cgIdx (LOCAL or GHOST on this rank). Apply post-sync to
-    // ensure cgIdx holds the consensus value.
-    m_uiZipGhostToLocalAtConsensus.clear();
-    static const char* erfix_env =
-        std::getenv("DENDRO_ENABLE_ELEM_READ_FIXUP");
-    static const bool erfix_on =
-        erfix_env && erfix_env[0] == '1' && erfix_env[1] == '\0';
-    const bool buildElemReadFixup =
-        erfix_on || std::getenv("DENDRO_ZIPPLAN_STATS");
-    if (buildElemReadFixup) {
-        // Map phys_pos → a local cg on this rank that holds the
-        // primary's post-sync value. Prefer the cascade winner if
-        // it's me; else any local at the phys_pos that's in the
-        // syncZipNonPrimary recv list (so it gets the primary's
-        // value via direct alltoallv).
-        std::unordered_set<unsigned int> recvCgSet;
-        recvCgSet.reserve(m_uiZipSyncRecvCg.size());
-        for (unsigned int recv_cg : m_uiZipSyncRecvCg)
-            recvCgSet.insert(recv_cg);
-
-        std::unordered_map<PhysKey3, unsigned int, PhysKey3Hash>
-            posToLocalCg;
-        posToLocalCg.reserve(zpDist ? winByClaim.size() : winners.size());
-        for (unsigned int cg = nLB; cg < nLE; cg++) {
-            unsigned int dg = m_uiCG2DG[cg];
-            if (dg == LOOK_UP_TABLE_DEFAULT) continue;
-            unsigned int e = dg / npe;
-            unsigned int n = dg % npe;
-            if (e >= nElTot) continue;
-            unsigned long long x, y, z;
-            encodeKey(e, n, x, y, z);
-            PhysKey3 k{x, y, z};
-            const Winner* wit = findWinner(cg, k);
-            if (!wit) continue;
-            const bool i_am_primary =
-                (wit->rank == m_uiActiveRank && wit->cg == cg);
-            const bool i_will_get_synced =
-                recvCgSet.count(cg) > 0;
-            // Only consider cgs that will hold the consensus value
-            // post-sync chain.
-            if (!i_am_primary && !i_will_get_synced) continue;
-            auto pit = posToLocalCg.find(k);
-            if (pit == posToLocalCg.end() || i_am_primary)
-                posToLocalCg[k] = cg;
-        }
-
-        // Walk every local element. For each sub, get cgIdx via E2N_CG.
-        // If cgIdx's phys_pos has a winner AND we have a local mirror
-        // for that phys_pos AND cgIdx isn't already that local mirror,
-        // add cgIdx → local_mirror.
-        for (unsigned int e = m_uiElementLocalBegin;
-             e < m_uiElementLocalEnd; e++) {
-            for (unsigned int n = 0; n < npe; n++) {
-                unsigned int cgIdx = m_uiE2NMapping_CG[e * npe + n];
-                if (cgIdx >= m_uiNumActualNodes) continue;
-                if (cgIdx >= m_uiCG2DG.size()) continue;
-                unsigned int dg = m_uiCG2DG[cgIdx];
-                if (dg == LOOK_UP_TABLE_DEFAULT) continue;
-                unsigned int oe = dg / npe;
-                unsigned int os = dg % npe;
-                if (oe >= nElTot) continue;
-                unsigned long long x, y, z;
-                encodeKey(oe, os, x, y, z);
-                PhysKey3 k{x, y, z};
-                auto pit = posToLocalCg.find(k);
-                if (pit == posToLocalCg.end()) continue;
-                if (cgIdx == pit->second) continue;  // already correct
-                // Don't overwrite cgs that the primary's cleanup
-                // categories already manage correctly.
-                const Winner* wfind = findWinner(cgIdx, k);
-                if (wfind && cgIdx == wfind->cg
-                    && wfind->rank == m_uiActiveRank) continue;
-                m_uiZipGhostToLocalAtConsensus[cgIdx] = pit->second;
-            }
-        }
-    }
-
-    if (std::getenv("DENDRO_ZIPPLAN_STATS")) {
-        // targets outside the active recv SM never get refreshed by the
-        // per-step exchange -> mirroring from them reads stale data
-        std::unordered_set<unsigned int> recvSet(
-            m_uiScatterMapActualNodeRecv.begin(),
-            m_uiScatterMapActualNodeRecv.end());
-        size_t stage3Stale = 0;
-        for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
-            if (!recvSet.count(kv.second)) stage3Stale++;
-        // a pairless non-primary cg is fine if the zip-sync alltoallv
-        // delivers the primary's value to it; count the ones it doesn't
-        std::unordered_set<unsigned int> syncRecvSet(
-            m_uiZipSyncRecvCg.begin(), m_uiZipSyncRecvCg.end());
-        size_t zpsUnprotected = 0;
-        for (unsigned int cg : zpsMissCgs) {
-            const bool synced = syncRecvSet.count(cg) > 0;
-            if (!synced) zpsUnprotected++;
-            fprintf(stderr,
-                    "[zipplan-stats r%d]   invMiss cg=%u inZipSyncRecv=%d "
-                    "inFixup=%d\n",
-                    m_uiActiveRank, cg, (int)synced,
-                    (int)(m_uiZipGhostToLocalAtConsensus.count(cg) > 0));
-        }
-        fprintf(stderr,
-                "[zipplan-stats r%d] nonPrimary=%zu mirrorPairs=%zu "
-                "invMiss=%zu unprotected=%zu stage3TargetNotInRecvSM=%zu "
-                "recvSM=%zu\n",
-                m_uiActiveRank, zpsNonPrimary,
-                m_uiZipNonPrimaryToGhostCg.size(), zpsInvMiss,
-                zpsUnprotected, stage3Stale,
-                m_uiScatterMapActualNodeRecv.size());
-    }
 
     // ---- E2N_CG cross-instance unification ----
     // hoisted into Mesh::unifyE2NCgAcrossTNInstances (runs eagerly at

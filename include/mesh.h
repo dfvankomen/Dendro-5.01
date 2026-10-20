@@ -690,20 +690,6 @@ class Mesh {
     std::unordered_map<unsigned int, unsigned int>
         m_uiZipNonPrimaryToGhostCg;
 
-    /** Forward-direction post-sync fixup: ghost cgs at consensus
-     *  phys_pos → a local cg holding the primary's value (on this
-     *  rank). Built by buildZipPlan(): for each ghost cg whose
-     *  cg2dg maps to a phys_pos that has a winner in `winners`, find
-     *  a local cg at the same phys_pos and store ghost_cg → local_cg.
-     *  After the standard ghost exchange + syncZipNonPrimary, the
-     *  local cg holds the primary's post-axpy value (or got it via
-     *  Alltoallv). Copying from local_cg into ghost_cg makes the
-     *  ghost reflect the consensus value. Without this, ghost cgs at
-     *  level-transition corners stay at the IC values (the standard
-     *  scatter map's source for some ghost cgs doesn't reach the
-     *  primary's local through the post-fastpart consolidation). */
-    std::unordered_map<unsigned int, unsigned int>
-        m_uiZipGhostToLocalAtConsensus;
 
     /** Side-channel non-primary sync via direct MPI_Alltoallv.
      *

@@ -776,15 +776,6 @@ void Mesh::performGhostExchange(T* vec) {
             vec[kv.first] = vec[kv.second];
         }
     }
-    static const char* erfix_env_a =
-        std::getenv("DENDRO_ENABLE_ELEM_READ_FIXUP");
-    static const bool erfix_a =
-        erfix_env_a && erfix_env_a[0] == '1' && erfix_env_a[1] == '\0';
-    if (erfix_a && !m_uiZipGhostToLocalAtConsensus.empty()) {
-        for (auto& kv : m_uiZipGhostToLocalAtConsensus) {
-            vec[kv.first] = vec[kv.second];
-        }
-    }
 }
 
 /**@brief Side-channel sync: Alltoallv that delivers each primary
@@ -1893,18 +1884,6 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
                 }
             }
         }
-        static const char* erfix_env_b =
-            std::getenv("DENDRO_ENABLE_ELEM_READ_FIXUP");
-        static const bool erfix_b =
-            erfix_env_b && erfix_env_b[0] == '1' && erfix_env_b[1] == '\0';
-        if (erfix_b && !m_uiZipGhostToLocalAtConsensus.empty()) {
-            for (unsigned int var = 0; var < dof; var++) {
-                T* vptr = vec + var * m_uiNumActualNodes;
-                for (auto& kv : m_uiZipGhostToLocalAtConsensus) {
-                    vptr[kv.first] = vptr[kv.second];
-                }
-            }
-        }
 
         if (xp) xprofMark(8);
         cctx.deAllocateSendBuffer();
@@ -2411,18 +2390,6 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
             this->syncZipNonPrimary(vec, dof);
         }
 
-        static const char* erfix_env_c =
-            std::getenv("DENDRO_ENABLE_ELEM_READ_FIXUP");
-        static const bool erfix_c =
-            erfix_env_c && erfix_env_c[0] == '1' && erfix_env_c[1] == '\0';
-        if (erfix_c && !m_uiZipGhostToLocalAtConsensus.empty()) {
-            for (unsigned int var = 0; var < dof; var++) {
-                T* vptr = vec + var * m_uiNumActualNodes;
-                for (auto& kv : m_uiZipGhostToLocalAtConsensus) {
-                    vptr[kv.first] = vptr[kv.second];
-                }
-            }
-        }
     }
     if (m_xpActive && m_xpVec == (const void*)vec) {
         xprofMark(8);
