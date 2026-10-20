@@ -196,13 +196,6 @@ struct EnutsProf {
      *  ghost rows is formed locally from stage slots the exchange only partly
      *  delivered, and the result depends on the partition. */
     static bool gXch() { return options().g_exchange; }
-    /** DENDRO_ENUTS_WPART_LATE=1 (default off): register the LTS work weight
-     *  and repartition only in init(), after the context's initialize(), not
-     *  in the constructor. The constructor's early registration makes the
-     *  context's initial-grid iterations run on work-weighted partitions, so
-     *  a weighted run converges to a different initial octree than the
-     *  unweighted twin (7050 vs 7036 elements on q1); with this knob both
-     *  start from the same octree and only the partition differs. */
     /** DENDRO_ENUTS_OWNER_SYNC_LABELLED=1 (default off): build the owner-sync
      *  plan on labelled meshes too. Allowed only when the labelled rebuild
      *  joined on the SFC source's canonical ownership keys (K6): then every
@@ -324,13 +317,6 @@ struct EnutsProf {
             return (size_t)(e ? std::atol(e) : 2048) << 20;
         }();
         return v;
-    }
-    static bool wpartLate() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_WPART_LATE");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
     }
     static bool ifaceNL() { return (ifaceFix() & 7) == 7; }
     static bool ifaceShift() { return (ifaceFix() & 8) != 0; }
@@ -1511,22 +1497,6 @@ ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart,
 #endif
     ts::EnutsProf::options().ratio_cap = ts::snap_ratio_cap(opts.ratio_cap);
     m_uiUseWeightedPart                = useWpart;
-    // WPART_LATE: leave the weight unregistered until init(), after the
-    // context's initialize(), so the initial grid is the unweighted one
-    if (m_uiUseWeightedPart && !ts::EnutsProf::wpartLate()) {
-        ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
-        pMesh->computeMinMaxLevel(m_uiLevMin, m_uiLevMax);
-
-        update_wpart_metadata();
-
-        if (!m_uiAppCtx->is_wpart_func_set())
-            m_uiAppCtx->set_wpart_function(getOctWeight);
-
-        // the ctx path is virtual: solvers with a labelled mesh route it
-        // through their SFC-twin sandwich
-        m_uiAppCtx->remesh_and_gridtransfer();
-        m_uiAppCtx->on_mesh_changed(false);
-    }
     this->init_data_structures();
 }
 
@@ -2227,38 +2197,14 @@ void ExplicitNUTS<T, Ctx>::init() {
         DendroIntL oldElements = pMesh->getNumLocalMeshElements(), oldElements_g = 0;
         par::Mpi_Reduce(&oldElements, &oldElements_g, 1, MPI_SUM, 0,
                         pMesh->getMPIGlobalCommunicator());
-        // DENDRO_ENUTS_WPART_GHOST_SYNC=1: ghost-exchange the evolution vector
-        // before the weighted remesh. the IGT reads ghost cgs of local elements,
-        // and ctx initialize may end with a local-only init_grid after an IGT
-        // (which writes local cgs only), leaving those ghosts zero; elements that
-        // change rank then carry the zeros to their new owner.
-        static const bool wpartGhostSync = [] {
-            const char* e = std::getenv("DENDRO_ENUTS_WPART_GHOST_SYNC");
-            return e && e[0] == '1';
-        }();
-        if (wpartGhostSync && pMesh->isActive()) {
-            auto& ev            = m_uiAppCtx->get_evolution_vars();
-            T* evp              = ev.get_vec_ptr();
-            const unsigned int dof = ev.get_dof();
-            const unsigned int nn  = pMesh->getDegOfFreedom();
-            const unsigned int gb = pMesh->getNodeLocalBegin();
-            const unsigned int ge = pMesh->getNodeLocalEnd();
-            auto countGhostZeros = [&]() {
-                DendroIntL z = 0;
-                for (unsigned int v = 0; v < dof; v++)
-                    for (unsigned int n = 0; n < nn; n++)
-                        if ((n < gb || n >= ge) && evp[v * nn + n] == T(0)) z++;
-                return z;
-            };
-            DendroIntL z0 = countGhostZeros();
-            pMesh->readFromGhostBegin(evp, dof);
-            pMesh->readFromGhostEnd(evp, dof);
-            DendroIntL z1 = countGhostZeros(), z0g = 0, z1g = 0;
-            par::Mpi_Reduce(&z0, &z0g, 1, MPI_SUM, 0, pMesh->getMPICommunicator());
-            par::Mpi_Reduce(&z1, &z1g, 1, MPI_SUM, 0, pMesh->getMPICommunicator());
-            if (!pMesh->getMPIRank())
-                std::cout << "[LTS Init(Wpart)]: ghost sync, zero ghost entries "
-                          << z0g << " -> " << z1g << std::endl;
+        // the IGT reads ghost cgs of local elements, and the context's
+        // initialize may end on a local-only init_grid after an IGT, which
+        // leaves those ghosts zero: elements that change rank would carry the
+        // zeros to their new owner
+        if (pMesh->isActive()) {
+            auto& ev = m_uiAppCtx->get_evolution_vars();
+            pMesh->readFromGhostBegin(ev.get_vec_ptr(), ev.get_dof());
+            pMesh->readFromGhostEnd(ev.get_vec_ptr(), ev.get_dof());
         }
         m_uiAppCtx->remesh_and_gridtransfer();
         m_uiAppCtx->on_mesh_changed(false);
