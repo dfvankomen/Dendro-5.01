@@ -21683,7 +21683,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     }
     std::swap(m_uiAllElements, newAllElements);
     m_uiUnzipEleOrder.clear();
-    m_uiUnzipAllBlkIds.clear();
     std::swap(m_uiBlockInfo, newBlockInfo);
 
     // Update element ranges and counts

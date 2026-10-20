@@ -1311,8 +1311,6 @@ class Mesh {
     std::vector<unsigned int> m_uiUnzipCanonWriter;
     bool m_uiUnzipCanonWriterBuilt = false;
     std::vector<unsigned int> m_uiUnzipEleOrder;
-    std::vector<unsigned int> m_uiUnzipAllBlkIds;
-    bool m_uiUnzipBlockOk = false;
 
     PartitioningOptions m_partitionOption = PartitioningOptions::fastpart;
 
@@ -3666,13 +3664,6 @@ class Mesh {
         return false;
     }
 
-    /** Block-major form of unzip_scatter (DENDRO_UNZIP_BLOCK_MAJOR=1): walks
-     *  the local blocks in order and, per block, its feeding elements in
-     *  ascending element index, so every block buffer is written contiguously
-     *  and the last-writer order inside a block is the element-major one.
-     *  Elements feeding more than one block are gathered once per call. */
-    template <typename T>
-    void unzip_scatter_bm(const T *in, T *out, unsigned int dof = 1);
 
     /**@brief getElementNodalValues via the unzip plan (identical output). */
     template <typename T>
