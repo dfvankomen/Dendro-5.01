@@ -39,7 +39,8 @@
 #include "ts.h"
 #include "waveletAMR.h"
 
-// DENDRO_ENUTS_OMP=1 threads the block loops of partial_evolve; hybrid builds only
+// the block loops of partial_evolve run threaded in hybrid builds, for a context
+// that declares lts_thread_safe
 #if defined(DENDRO_HYBRID_OMP) && defined(_OPENMP)
 #include <omp.h>
 #define DENDRO_ENUTS_HAS_OMP 1
@@ -111,21 +112,15 @@ struct EnutsProf {
         }
 #endif
     }
-    /** DENDRO_ENUTS_OMP=1 (default off; needs a DENDRO_HYBRID_OMP build):
-     *  thread the per-block loops of partial_evolve (stage input + rhs_blk +
-     *  zipDG, sync_blk_timestep + post_stage_blk, final update) over the
-     *  active blocks, largest first, and the element-DG exchange pack/unpack */
-    static bool ompOn() {
-#ifdef DENDRO_ENUTS_HAS_OMP
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_OMP");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-#else
-        return false;
-#endif
+    /** the per-block loops of partial_evolve (stage input + rhs_blk + zipDG,
+     *  sync_blk_timestep + post_stage_blk, final update) run threaded over
+     *  the active blocks, largest first: a hybrid build and a context that
+     *  declares lts_thread_safe (set by the ExplicitNUTS constructor) */
+    static bool& threaded() {
+        static bool on = false;
+        return on;
     }
+    static bool ompOn() { return threaded(); }
     /** thread id inside an active parallel region, 0 otherwise */
     static int tid() {
 #ifdef DENDRO_ENUTS_HAS_OMP
@@ -1525,6 +1520,9 @@ ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart,
         MPI_Abort(MPI_COMM_WORLD, 1);
     }
     ts::EnutsProf::options()           = opts;
+#ifdef DENDRO_ENUTS_HAS_OMP
+    ts::EnutsProf::threaded() = ts::lts_thread_safe_v<Ctx>;
+#endif
     ts::EnutsProf::options().ratio_cap = ts::snap_ratio_cap(opts.ratio_cap);
     m_uiUseWeightedPart                = useWpart;
     // WPART_LATE: leave the weight unregistered until init(), after the
