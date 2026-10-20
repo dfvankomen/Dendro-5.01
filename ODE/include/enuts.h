@@ -207,17 +207,6 @@ struct EnutsProf {
      *  ghost rows is formed locally from stage slots the exchange only partly
      *  delivered, and the result depends on the partition. */
     static bool gXch() { return options().g_exchange; }
-    /** DENDRO_ENUTS_G_RESET_EVERY=1 (default off, test only): at the start
-     *  of every coarse step zero the stored g and mark every class unwritten,
-     *  exactly as a (re)allocation does, on an unchanged mesh: the oracle for
-     *  what carrying g through a remesh could recover (nothing, measured) */
-    static bool gResetEvery() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_G_RESET_EVERY");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-    }
     static bool stageTime() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_STAGE_TIME");
@@ -7328,21 +7317,6 @@ void ExplicitNUTS<T, Ctx>::evolve() {
             m_uiBVec[blk]._rks  = 0;
             m_uiBVec[blk]._vec[0].copyFromUnzip(
                 pMesh, m_uiEvarUzip.get_vec_ptr(), true, DOF);
-            // DENDRO_ENUTS_TEST_NEGZERO=1 (test only): every zero entry of the
-            // loaded block solution becomes -0.0, so the ring's sign mask has
-            // something to act on (ring = full storage, ring mode 2 differs)
-            {
-                static const bool nz = []() {
-                    const char* e = std::getenv("DENDRO_ENUTS_TEST_NEGZERO");
-                    return e && e[0] == '1';
-                }();
-                if (nz) {
-                    T* v = (T*)m_uiBVec[blk]._vec[0].data();
-                    const size_t n = (size_t)DOF * m_uiBVec[blk]._vec[0].getSz();
-                    for (size_t i = 0; i < n; i++)
-                        if (v[i] == (T)0) v[i] = -(T)0;
-                }
-            }
             m_uiBVec[blk]._vec[0].mark_synced();
             debug_blk_hash("init-unzip", blk, 0, 0, 0);
 
@@ -7367,13 +7341,6 @@ void ExplicitNUTS<T, Ctx>::evolve() {
         pMesh->readFromGhostEndElementVec(m_uiEleDT.data(), 1);
         ENUTS_EV_TOC(EV_ETIME);
 
-        if (m_uiStGOn && ts::EnutsProf::gResetEvery()) {
-            // G_RESET_EVERY: as after a (re)allocation
-            std::fill(m_uiStG.get_vec_ptr(), m_uiStG.get_vec_ptr() + m_uiStG.get_size(), (T)0);
-            std::fill(m_uiStGValid.begin(), m_uiStGValid.end(), 0);
-            std::fill(m_uiStGValidCls.begin(), m_uiStGValidCls.end(), 0);
-            if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_GRESET] += 1;
-        }
         for (unsigned int pt = 0; pt < coarset_t; pt++) {
             // unsigned int numBlkEvolved = 0;
             // for(unsigned int blk =0; blk < blkList.size(); blk++)
