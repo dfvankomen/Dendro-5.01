@@ -8,6 +8,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <iostream>
 #include <limits>
 #include <type_traits>
 #include <vector>
@@ -140,6 +141,100 @@ void for_each_enforced_node(const BlockView& b, F&& f) {
             for (unsigned int j = pw; j < b.sz[1] - pw; j++)
                 for (unsigned int i = pw; i < b.sz[0] - pw; i++)
                     f(k * b.sz[1] * b.sz[0] + j * b.sz[0] + i, true);
+    }
+}
+
+/**@brief When a driver event (output, remesh test, checkpoint) is due. Under
+ * the global stepper it fires every freq steps. Under LTS a step is a coarse
+ * step, so it fires at the first step at or past each multiple of freq fine
+ * steps in simulation time.*/
+struct Cadence {
+    double next = 0.0;  ///< LTS: time of the next event
+
+    /**@brief true if the event is due at this step; freq 0 = never*/
+    bool due(unsigned int freq, long long step, double time, double dt_fine,
+             bool lts) {
+        if (freq == 0) return false;
+        if (!lts) return (step % freq) == 0;
+        if (time < next - 1e-9 * std::max(1.0, time)) return false;
+        const double dt = freq * dt_fine;
+        next            = (std::floor(time / dt + 1e-9) + 1.0) * dt;
+        return true;
+    }
+
+    /**@brief restart under LTS: the next event is the first interval boundary
+     * after t_prev, the start of the coarse step that just ended*/
+    void resume(unsigned int freq, double t_prev, double dt_fine) {
+        const double dt = freq * dt_fine;
+        next = freq ? (std::floor(t_prev / dt + 1e-9) + 1.0) * dt : 0.0;
+    }
+};
+
+/**
+ * @brief Labels the mesh with the solver's partition method (once, after the
+ * initial data); then the solver rebuilds its per-mesh data and the stepper
+ * re-syncs. Returns true if the mesh changed.
+ */
+template <class Ctx, class Stepper>
+bool apply_partitioning(Ctx& ctx, Stepper& ets) {
+    if (!ctx.maybe_apply_partitioning()) return false;
+    ctx.on_mesh_changed(false);
+    ets.sync_with_mesh();
+    return true;
+}
+
+/**
+ * @brief Remesh test and remesh on any labelling. A labelled mesh goes to SFC
+ * for the refinement test and the remesh (both assume SFC element ranges)
+ * and is labelled again afterwards, remeshed or not; then the solver rebuilds
+ * its per-mesh data and the stepper re-syncs.
+ * @return true if the octree changed
+ */
+template <class Ctx, class Stepper>
+bool remesh_if_needed(Ctx& ctx, Stepper& ets, unsigned int grain_sz,
+                      double ld_tol, unsigned int sf_k) {
+    const ot::Mesh* m  = ctx.get_mesh();
+    const bool root    = !m->getMPIRankGlobal();
+    const bool labelled = ctx.is_labelled();
+    const double t0     = MPI_Wtime();
+    if (labelled) {
+        ctx.to_sfc_partition();
+        ctx.on_mesh_changed(false);
+    }
+    const double t1    = MPI_Wtime();
+    const bool remesh  = ctx.is_remesh();
+    if (remesh) {
+        if (root) std::cout << "[ETS] : Remesh is triggered." << std::endl;
+        ctx.remesh_and_gridtransfer(grain_sz, ld_tol, sf_k);
+    }
+    if (labelled) {
+        const double t2 = MPI_Wtime();
+        ctx.maybe_apply_partitioning();
+        if (root)
+            std::cout << "[labelled-remesh] to SFC " << (t1 - t0)
+                      << " s, relabel " << (MPI_Wtime() - t2) << " s, remesh "
+                      << (remesh ? 1 : 0) << std::endl;
+    }
+    if (remesh || labelled) {
+        ctx.on_mesh_changed(remesh);
+        ets.sync_with_mesh();
+    }
+    return remesh;
+}
+
+/**
+ * @brief Writes a checkpoint on SFC element ranges: a labelled mesh goes to
+ * SFC for write() and is labelled again afterwards.
+ */
+template <class Ctx, class Stepper, class Write>
+void checkpoint(Ctx& ctx, Stepper& ets, Write&& write) {
+    const bool labelled = ctx.is_labelled();
+    if (labelled) ctx.to_sfc_partition();
+    write();
+    if (labelled) {
+        ctx.maybe_apply_partitioning();
+        ctx.on_mesh_changed(false);
+        ets.sync_with_mesh();
     }
 }
 

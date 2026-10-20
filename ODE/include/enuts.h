@@ -1624,6 +1624,7 @@ ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart,
         // the ctx path is virtual: solvers with a labelled mesh route it
         // through their SFC-twin sandwich
         m_uiAppCtx->remesh_and_gridtransfer();
+        m_uiAppCtx->on_mesh_changed(false);
     }
     this->init_data_structures();
 }
@@ -2381,6 +2382,7 @@ void ExplicitNUTS<T, Ctx>::init() {
                           << z0g << " -> " << z1g << std::endl;
         }
         m_uiAppCtx->remesh_and_gridtransfer();
+        m_uiAppCtx->on_mesh_changed(false);
         pMesh = m_uiAppCtx->get_mesh();
         DendroIntL newElements = pMesh->getNumLocalMeshElements(), newElements_g = 0;
         par::Mpi_Reduce(&newElements, &newElements_g, 1, MPI_SUM, 0,

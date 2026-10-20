@@ -417,6 +417,38 @@ class Ctx {
     /**@brief: function execute after each step*/
     bool is_remesh() { return asLeaf().is_remesh(); };
 
+    /**@brief optional: rebuild what the solver keeps per mesh after the mesh
+     * object changed. remeshed is true when the octree changed, false when
+     * only the element-to-rank labelling did.*/
+    void on_mesh_changed(bool remeshed) {
+        if constexpr (overrides(&DerivedCtx::on_mesh_changed, &Ctx::on_mesh_changed))
+            asLeaf().on_mesh_changed(remeshed);
+    }
+
+    /**@brief optional: true while the mesh carries a non-SFC labelling*/
+    bool is_labelled() {
+        if constexpr (overrides(&DerivedCtx::is_labelled, &Ctx::is_labelled))
+            return asLeaf().is_labelled();
+        return false;
+    }
+
+    /**@brief optional: move a labelled mesh and its data to the SFC mesh with
+     * the same elements; false if the mesh is not labelled*/
+    bool to_sfc_partition() {
+        if constexpr (overrides(&DerivedCtx::to_sfc_partition, &Ctx::to_sfc_partition))
+            return asLeaf().to_sfc_partition();
+        return false;
+    }
+
+    /**@brief optional: label the mesh with the solver's partition method and
+     * move the data onto it; true if the mesh object changed*/
+    bool maybe_apply_partitioning() {
+        if constexpr (overrides(&DerivedCtx::maybe_apply_partitioning,
+                                &Ctx::maybe_apply_partitioning))
+            return asLeaf().maybe_apply_partitioning();
+        return false;
+    }
+
     /**
      * @brief perform remesh and return the new mesh, (Note: mesh in the Ctx
      * class is not updated to the new mesh.) This just compute the new mesh and
