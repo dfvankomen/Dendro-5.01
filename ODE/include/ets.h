@@ -1412,17 +1412,11 @@ void ETS<T, Ctx>::evolve() {
     // RHS into local cgs, but plan-zip only fills RHS at PRIMARY cgs
     // (per phys position). Non-primary local cgs (duplicates created by
     // graph repartitioning) get RHS=0, so the axpy leaves them at last-
-    // step values while primaries advance. The drift compounds per step
-    // → 50× U_E2 residual at step 230. Force non-primary cgs to match
-    // primary's post-axpy value via the side-channel Alltoallv. Gated
-    // OFF by default to allow A/B testing — see project_corner_drift_*.
-    // env DENDRO_DISABLE_POST_AXPY_SYNC=1 disables.
+    // step values while primaries advance and drift apart. Force
+    // non-primary cgs to match the primary's post-axpy value via the
+    // side-channel Alltoallv.
     {
-        static const char* nps_env =
-            std::getenv("DENDRO_DISABLE_POST_AXPY_SYNC");
-        const bool skip_post_axpy_sync =
-            nps_env && nps_env[0] == '1' && nps_env[1] == '\0';
-        if (!skip_post_axpy_sync && pMesh->isActive()) {
+        if (pMesh->isActive()) {
             T* dvec_ptr = m_uiEVar.get_vec_ptr();
             const unsigned int DOFV = m_uiEVar.get_dof();
             ot::Mesh* pMeshMut = const_cast<ot::Mesh*>(pMesh);
