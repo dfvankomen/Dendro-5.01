@@ -20225,43 +20225,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         return ids;
     };
 
-    // RHS/unzip cost of an element = padded volume of its source block over the
-    // block's element count; (eOrder*m+1+2*pw)^3 / m^3 for a block of side m
-    const unsigned int padW = m_uiLocalBlockList.empty()
-                                  ? (m_uiElementOrder >> 1)
-                                  : m_uiLocalBlockList[0].get1DPadWidth();
-    auto paddedVolumeWeight = [&](const oct_data<D_INT_L>& oct) {
-        const unsigned int m = (oct.blkMeta >> 31) & 1u
-                                   ? 1u << (oct.level - oct.blkAnchorLevel)
-                                   : 1u;
-        const double side = (double)(m_uiElementOrder * m + 1u + 2u * padW);
-        return (fastpart_uint_t)std::llround(side * side * side /
-                                             (double)((size_t)m * m * m));
-    };
-
-    // weighted prefix split of the global Hilbert order: rank floor(W_prefix*np/W_total)
-    auto weightedPrefixLabels = [&](const std::vector<fastpart_uint_t>& w) {
-        unsigned long long loc = 0, tot = 0, off = 0;
-        for (size_t i = 0; i < localSz; ++i) loc += w[i];
-        // one round: the total and this rank's prefix both fall out of the
-        // per-rank sums
-        std::vector<unsigned long long> perRank(npes);
-        repartRound();
-        MPI_Allgather(&loc, 1, MPI_UNSIGNED_LONG_LONG, perRank.data(), 1,
-                      MPI_UNSIGNED_LONG_LONG, commActive);
-        for (int p = 0; p < npes; ++p) {
-            if (p < rank) off += perRank[p];
-            tot += perRank[p];
-        }
-        std::vector<unsigned int> lab(localSz);
-        for (size_t i = 0; i < localSz; ++i) {
-            const unsigned int p = (unsigned int)((off * (unsigned long long)npes) / tot);
-            lab[i] = (p >= (unsigned int)npes) ? npes - 1 : p;
-            off += w[i];
-        }
-        return lab;
-    };
-
     // k-th of the n_L elements at level L (global Hilbert order) -> rank floor(k*np/n_L)
     auto levelwiseLabels = [&]() {
         unsigned int lmin = 0, lmax = 0;
@@ -20689,82 +20652,45 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         std::vector<unsigned int> parts(localSz, 0);
         static_assert(sizeof(fastpart_uint_t) == sizeof(unsigned int), "fastpart int width");
 
-        // LTS-weighted graph partition (DENDRO_GRAPH_VTX_WEIGHTED):
-        //   unset/0 -> the octree wrapper, element-count balance (default).
-        //   1       -> fastpart_partgraph_octree_ex with per-element vertex
-        //              weights = oct_work_weight(level) so the partition
-        //              balances sub-cycled work under adaptive time stepping.
-        //   2       -> _ex with NULL opts: neutrality gate, must equal mode 0.
-        // Routed through the fastpart `_ex` API (docs/ATS_PARTITIONING_PROPOSAL)
-        // so it reuses dgraph_from_octree's proven boundary-pair symmetrization
-        // (the earlier hand-built CSR truncated in the remesh sandwich). vwgt is
-        // aligned to temp_oct_data[i] as the _ex contract requires.
-        const char *wpartEnv = std::getenv("DENDRO_GRAPH_VTX_WEIGHTED");
-        const int wpartMode  = (wpartEnv) ? atoi(wpartEnv) : 0;
-        // DENDRO_GRAPH_FULL_STENCIL=1: partition the FULL FD-stencil adjacency
-        // (faces + 12 edges + 8 corners) instead of just the 6 faces, so the
-        // cut tracks the ghost-node surface that is actually communicated.
-        const char *fsEnv      = std::getenv("DENDRO_GRAPH_FULL_STENCIL");
-        const bool fullStencil = (fsEnv && fsEnv[0] == '1');
-        // DENDRO_GRAPH_REFINE: 1 = start from the SFC split, 2 = start from the
-        // levelwise split with per-level capacities; both then run fastpart's
-        // gain refinement on the 26-stencil graph moving whole blocks.
+        // DENDRO_GRAPH_REFINE=1: start from the SFC split and run fastpart's
+        // gain refinement on the 26-stencil graph moving whole blocks; 0 (the
+        // default): partition the face graph from scratch
         const char *refEnv   = std::getenv("DENDRO_GRAPH_REFINE");
         const int refineMode = (refEnv) ? atoi(refEnv) : 0;
+        if (refineMode != 0 && refineMode != 1) {
+            if (!rank)
+                std::cerr << "DENDRO_GRAPH_REFINE is 0 or 1 (modes 2 and 3 were removed)"
+                          << std::endl;
+            MPI_Abort(commActive, 1);
+        }
         {
             unsigned int lmin = 0, lmax = 0;
             this->computeMinMaxLevel(lmin, lmax);
-
             const size_t n = oct_connectivity_map.size();
-            std::vector<fastpart_uint_t> vwgt(n, 1);
-            if (wpartMode == 1)
-                for (size_t i = 0; i < n; ++i)
-                    vwgt[i] = (fastpart_uint_t)ot::oct_work_weight(
-                        oct_connectivity_map[i].level, lmin, lmax);
-            else if (wpartMode == 2)
-                for (size_t i = 0; i < n; ++i)
-                    vwgt[i] = paddedVolumeWeight(oct_connectivity_map[i]);
 
             fastpart_oct_partopts opts;
             fastpart_oct_partopts_init(&opts);
-            opts.vwgt               = (wpartMode >= 1) ? vwgt.data() : nullptr;
-            opts.include_edge_corner = fullStencil;
+            opts.vwgt                = nullptr;
+            opts.include_edge_corner = false;
 
-            std::vector<unsigned int> initLab, groupIds, vcon;
-            if (refineMode > 0) {
-                initLab = (refineMode == 2)   ? levelwiseLabels()
-                          : (refineMode == 3) ? weightedPrefixLabels(vwgt)
-                                              : std::vector<unsigned int>(n, (unsigned int)rank);
+            std::vector<unsigned int> initLab, groupIds;
+            if (refineMode == 1) {
+                initLab  = std::vector<unsigned int>(n, (unsigned int)rank);
                 groupIds = blockIds();
-                const char *rEnv = std::getenv("DENDRO_GRAPH_REFINE_ROUNDS");
-                const char *iEnv = std::getenv("DENDRO_GRAPH_REFINE_IMB");
                 opts.init_labels          = initLab.data();
                 opts.group_ids            = groupIds.data();
                 opts.use_diffusion        = false;
                 opts.include_edge_corner  = true;
-                opts.refine_rounds        = rEnv ? atoi(rEnv) : 30;
-                opts.refine_max_imbalance = iEnv ? atof(iEnv) : 1.05;
-                const char *oEnv = std::getenv("DENDRO_GRAPH_REFINE_OBJ");
-                opts.refine_objective     = oEnv ? atoi(oEnv) : 0;
-                const char *bEnv  = std::getenv("DENDRO_GRAPH_BALANCE_ROUNDS");
-                const char *btEnv = std::getenv("DENDRO_GRAPH_BALANCE_TOL");
-                if (bEnv) opts.refine_balance_rounds = atoi(bEnv);
-                if (btEnv) opts.refine_balance_tol = atof(btEnv);
-                if (refineMode == 2) {
-                    vcon.resize(n);
-                    for (size_t i = 0; i < n; ++i)
-                        vcon[i] = oct_connectivity_map[i].level - lmin;
-                    opts.vcon = vcon.data();
-                    opts.ncon = (int)(lmax - lmin + 1);
-                }
+                opts.refine_rounds        = 30;
+                opts.refine_max_imbalance = 1.05;
+                opts.refine_objective     = 0;
             }
             opts.verbose = __phase_prof ? 1 : 0;
             fastpart_partgraph_octree_ex(vtx_dist, temp_oct_data.data(), &opts,
                                          parts.data(), &commActive);
 
             if (rank == 0)
-                std::cout << "[graph-part-ex] wmode=" << wpartMode
-                          << " full_stencil=" << (fullStencil ? 1 : 0)
+                std::cout << "[graph-part-ex] refine=" << refineMode
                           << " lmin=" << lmin << " lmax=" << lmax << std::endl;
         }
 
