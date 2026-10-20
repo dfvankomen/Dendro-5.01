@@ -170,8 +170,9 @@ struct EnutsProf {
      *  bit-identical sync_blk_timestep shortcuts (no same-time DG copy,
      *  per-stage correction reuse across blocks, padding-fill plan, per-pass
      *  store and shared sweeps of the parent-to-child interpolations) */
-    /** DENDRO_ENUTS_IFACE_FIX (bit mask, default 0 = unchanged): stage data a
-     *  block takes from a neighbour that steps with a different dt.
+    /** interface setting (LtsOptions::iface, 3 or 15), a bit mask: how a
+     *  block converts stage data it takes from a neighbour that steps with a
+     *  different dt.
      *  1: same time -> convert the neighbour's stages to this block's dt
      *     (the plain copy is first order in dt).
      *  2: neighbour ahead -> use all of its completed stages for the time
@@ -1518,6 +1519,11 @@ template <typename T, typename Ctx>
 ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart,
                                    const ts::LtsOptions& opts)
     : ETS<T, Ctx>(ctx) {
+    if (opts.iface != 3 && opts.iface != 15) {
+        std::cerr << "[enuts] LtsOptions::iface is 3 or 15, not " << opts.iface
+                  << std::endl;
+        MPI_Abort(MPI_COMM_WORLD, 1);
+    }
     ts::EnutsProf::options()           = opts;
     ts::EnutsProf::options().ratio_cap = ts::snap_ratio_cap(opts.ratio_cap);
     m_uiUseWeightedPart                = useWpart;
