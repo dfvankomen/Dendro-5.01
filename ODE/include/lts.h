@@ -1,10 +1,7 @@
-/**
- * @file lts.h
- * @brief The solver contract of local time stepping (LTS, ts::ExplicitNUTS):
- * the options that change the solution, and helpers for the per-block hooks
- * a solver context implements (rhs_blk, pre_stage_blk, post_stage_blk,
- * pre_timestep_blk, post_timestep_blk).
- */
+/// @file lts.h
+/// The solver contract of local time stepping (ts::ExplicitNUTS): the options
+/// that change the solution, the helpers for a context's block hooks, and the
+/// driver helpers for mesh changes and event cadence.
 #pragma once
 #include <algorithm>
 #include <cmath>
@@ -20,20 +17,21 @@
 
 namespace ts {
 
-/**@brief Settings that change the LTS solution. Everything else is fixed
- * library behavior.*/
+/// Settings that change the LTS solution; everything else is fixed library
+/// behavior. Given to the ExplicitNUTS constructor.
 struct LtsOptions {
-    /**@brief interface stage conversion: 3 (third order) or 15 (fourth order)*/
+    /// Interface stage conversion: 3 (third order) or 15 (fourth order).
     unsigned int iface     = 3;
-    /**@brief with iface 15: exchange the stored stage vector g, so the result
-     * does not depend on the rank count*/
+    /// With iface 15: exchange the stored stage vector g, so the result does
+    /// not depend on the rank count.
     bool g_exchange        = false;
-    /**@brief largest coarse-to-fine step ratio, snapped down to a power of two;
-     * 0 = no cap, 1 = every block takes the finest step*/
+    /// Largest coarse-to-fine step ratio, snapped down to a power of two;
+    /// 0 = no cap, 1 = every block takes the finest step.
     unsigned int ratio_cap = 0;
 };
 
-/**@brief ratio cap snapped down to a power of two (0 stays 0 = no cap)*/
+/// Ratio cap snapped down to a power of two; 0 stays 0 (no cap).
+/// Collective: no. Thread-safe: yes.
 inline unsigned int snap_ratio_cap(unsigned int cap) {
     if (cap <= 1) return cap;
     unsigned int p = 1u;
@@ -41,9 +39,13 @@ inline unsigned int snap_ratio_cap(unsigned int cap) {
     return p;
 }
 
-/**@brief Step of a block at level blev in units of the finest step: 1 on the
- * finest offset + 1 levels, doubling per level above them, at most cap
- * (0 = no cap).*/
+/// Step of a block at level `blev` in units of the finest step: 1 on the
+/// finest `offset + 1` levels, doubling per level above them.
+/// Collective: no. Thread-safe: yes.
+/// @param lmax  finest level of the mesh
+/// @param offset  level offset (see level_offset)
+/// @param cap  snapped ratio cap; 0 = no cap
+/// @return power of two in [1, cap]
 inline unsigned int step_ratio(unsigned int blev, unsigned int lmax,
                                unsigned int offset, unsigned int cap) {
     unsigned int fac =
@@ -52,10 +54,9 @@ inline unsigned int step_ratio(unsigned int blev, unsigned int lmax,
     return fac;
 }
 
-/**@brief true when the context declares
- * `static constexpr bool lts_thread_safe = true;`, i.e. its block hooks may
- * run concurrently on different blocks. Without it the stepper's block loops
- * run on one thread.*/
+/// True when the context declares `static constexpr bool lts_thread_safe =
+/// true;`: its block hooks may run concurrently on different blocks. Without
+/// it the stepper's block loops run on one thread.
 template <class Ctx, class = void>
 struct lts_thread_safe : std::false_type {};
 template <class Ctx>
@@ -64,7 +65,7 @@ struct lts_thread_safe<Ctx, std::void_t<decltype(Ctx::lts_thread_safe)>>
 template <class Ctx>
 inline constexpr bool lts_thread_safe_v = lts_thread_safe<Ctx>::value;
 
-/**@brief Geometry of one padded block in the solver's coordinates.*/
+/// Geometry of one padded block in the solver's coordinates.
 struct BlockView {
     unsigned int sz[3];  ///< allocation size (padded points per direction)
     unsigned int nn;     ///< points per variable, sz[0] * sz[1] * sz[2]
@@ -76,13 +77,9 @@ struct BlockView {
     double ptmin[3];     ///< lower corner of the padded box
     double ptmax[3];     ///< upper corner of the padded box
 
-    /**
-     * @param b : the block
-     * @param oct_min, oct_max : octree box; grid coordinates map linearly from
-     * it onto the domain box
-     * @param dom_min, dom_max : domain box
-     * @param pad : the solver's padding width, used for the padded box
-     */
+    /// Geometry of block `b`; grid coordinates map linearly from the octree
+    /// box onto the domain box, in the solver's own expression order.
+    /// @param pad  the solver's padding width, used for the padded box
     BlockView(const ot::Block& b, const Point& oct_min, const Point& oct_max,
               const Point& dom_min, const Point& dom_max, unsigned int pad)
         : sz{b.getAllocationSzX(), b.getAllocationSzY(), b.getAllocationSzZ()},
@@ -110,23 +107,23 @@ struct BlockView {
         }
     }
 
-    /**@brief points vars[v] at variable v of a block-local buffer of dof
-     * variables*/
+    /// Points `vars[v]` at variable v of a block-local buffer of `dof`
+    /// variables.
     template <class T>
     void split(T* buf, T** vars, unsigned int dof) const {
         for (unsigned int v = 0; v < dof; v++) vars[v] = buf + v * nn;
     }
 
-    /**@brief true for a node of the block interior (outside the padding)*/
+    /// True for a node of the block interior (outside the padding).
     bool interior(unsigned int i, unsigned int j, unsigned int k) const {
         return i >= pw && i < sz[0] - pw && j >= pw && j < sz[1] - pw &&
                k >= pw && k < sz[2] - pw;
     }
 };
 
-/**@brief Calls f(node, interior) on every node that pointwise enforcement
- * applies to: the whole padded block, or only the interior of a block on the
- * domain boundary.*/
+/// Calls `f(node, interior)` once on every node that pointwise enforcement
+/// applies to: the whole padded block, or only the interior of a block on the
+/// domain boundary. Collective: no. Thread-safe: if f is.
 template <class F>
 void for_each_enforced_node(const BlockView& b, F&& f) {
     const unsigned int pw = b.pw;
@@ -144,14 +141,15 @@ void for_each_enforced_node(const BlockView& b, F&& f) {
     }
 }
 
-/**@brief When a driver event (output, remesh test, checkpoint) is due. Under
- * the global stepper it fires every freq steps. Under LTS a step is a coarse
- * step, so it fires at the first step at or past each multiple of freq fine
- * steps in simulation time.*/
+/// When a driver event (output, remesh test, checkpoint) is due. Under the
+/// global stepper it fires every `freq` steps; under LTS a step is a coarse
+/// step, so it fires at the first step at or past each multiple of `freq`
+/// fine steps in simulation time. One instance per event.
 struct Cadence {
     double next = 0.0;  ///< LTS: time of the next event
 
-    /**@brief true if the event is due at this step; freq 0 = never*/
+    /// True if the event is due at this step; `freq` 0 = never. Advances
+    /// `next` when it fires.
     bool due(unsigned int freq, long long step, double time, double dt_fine,
              bool lts) {
         if (freq == 0) return false;
@@ -162,19 +160,18 @@ struct Cadence {
         return true;
     }
 
-    /**@brief restart under LTS: the next event is the first interval boundary
-     * after t_prev, the start of the coarse step that just ended*/
+    /// After a restart under LTS: the next event is the first interval boundary
+    /// after `t_prev`, the start of the coarse step that just ended.
     void resume(unsigned int freq, double t_prev, double dt_fine) {
         const double dt = freq * dt_fine;
         next = freq ? (std::floor(t_prev / dt + 1e-9) + 1.0) * dt : 0.0;
     }
 };
 
-/**
- * @brief Labels the mesh with the solver's partition method (once, after the
- * initial data); then the solver rebuilds its per-mesh data and the stepper
- * re-syncs. Returns true if the mesh changed.
- */
+/// Labels the mesh with the solver's partition method (once, after the
+/// initial data); then the solver rebuilds its per-mesh data and the stepper
+/// re-syncs. Collective: yes. Invalidates: the mesh object, the stepper's
+/// per-mesh state. @return true if the mesh changed
 template <class Ctx, class Stepper>
 bool apply_partitioning(Ctx& ctx, Stepper& ets) {
     if (!ctx.maybe_apply_partitioning()) return false;
@@ -183,13 +180,12 @@ bool apply_partitioning(Ctx& ctx, Stepper& ets) {
     return true;
 }
 
-/**
- * @brief Remesh test and remesh on any labelling. A labelled mesh goes to SFC
- * for the refinement test and the remesh (both assume SFC element ranges)
- * and is labelled again afterwards, remeshed or not; then the solver rebuilds
- * its per-mesh data and the stepper re-syncs.
- * @return true if the octree changed
- */
+/// Remesh test and remesh on any labelling. A labelled mesh goes to SFC for
+/// the refinement test and the remesh (both assume SFC element ranges) and is
+/// labelled again afterwards, remeshed or not; then the solver rebuilds its
+/// per-mesh data and the stepper re-syncs. Collective: yes. Invalidates: the
+/// mesh object and the stepper's per-mesh state when the mesh is labelled or
+/// remeshed. @return true if the octree changed
 template <class Ctx, class Stepper>
 bool remesh_if_needed(Ctx& ctx, Stepper& ets, unsigned int grain_sz,
                       double ld_tol, unsigned int sf_k) {
@@ -222,10 +218,9 @@ bool remesh_if_needed(Ctx& ctx, Stepper& ets, unsigned int grain_sz,
     return remesh;
 }
 
-/**
- * @brief Writes a checkpoint on SFC element ranges: a labelled mesh goes to
- * SFC for write() and is labelled again afterwards.
- */
+/// Writes a checkpoint on SFC element ranges: a labelled mesh goes to SFC for
+/// `write()` and is labelled again afterwards. Collective: yes. Invalidates:
+/// the mesh object of a labelled mesh.
 template <class Ctx, class Stepper, class Write>
 void checkpoint(Ctx& ctx, Stepper& ets, Write&& write) {
     const bool labelled = ctx.is_labelled();
@@ -238,17 +233,13 @@ void checkpoint(Ctx& ctx, Stepper& ets, Write&& write) {
     }
 }
 
-/**
- * @brief Level offset of the step ladder: the number of levels below the
- * finest that step at the finest step. A block at level blev may step at
- * 2^(lmax - blev) dt_min (its CFL step); dt_stable(blk) bounds it further
- * (return infinity for no bound). Max-reduced over comm.
- * @param mesh : the mesh (its local blocks are visited)
- * @param lmax : finest level of the mesh
- * @param dt_min : the finest step
- * @param dt_stable : callable, local block id -> largest stable step
- * @param comm : communicator of the reduction (every rank calls it)
- */
+/// Level offset of the step ladder: the number of levels below the finest
+/// that step at the finest step. A block at level blev may step at
+/// 2^(lmax - blev) dt_min (its CFL step); `dt_stable(blk)` bounds it further
+/// (return infinity for no bound). Collective: yes, a max-reduction over
+/// `comm`. Thread-safe: no.
+/// @param dt_min  the finest step
+/// @param dt_stable  callable, local block id -> largest stable step
 template <class DtStable>
 unsigned int level_offset(const ot::Mesh& mesh, unsigned int lmax,
                           double dt_min, DtStable&& dt_stable, MPI_Comm comm) {
