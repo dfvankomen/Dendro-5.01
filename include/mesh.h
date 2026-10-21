@@ -4670,18 +4670,14 @@ class Mesh {
         this->readFromGhostEndElementVec(eid_vec, 1);
 
         // Resolve global IDs for round-2 ghost elements not covered
-        // by the element ghost exchange.  Uses an Allgatherv of local
-        // element coordinates to build a global lookup table.
+        // by the element ghost exchange, by a hash rendezvous on the
+        // element coordinates.
         {
             if (rank == 0)
                 std::cout << "[conn-map] referenced-missing ids (global): "
                           << numMissingGlobal << std::endl;
-            static const bool connSparse = [] {
-                const char* v = std::getenv("DENDRO_CONNMAP_SPARSE");
-                return !(v && v[0] == '0');
-            }();
-            if (numMissingGlobal > 0 && connSparse) {
-                // sparse path: hash rendezvous on (x,y,z,level). every rank
+            if (numMissingGlobal > 0) {
+                // hash rendezvous on (x,y,z,level): every rank
                 // ships its local (key,gid) to the key's directory rank, then
                 // asks the directory for the ids it lacks. O(local) memory,
                 // no global gather.
@@ -4792,73 +4788,6 @@ class Mesh {
                 if (rank == 0)
                     std::cout << "[connmap-tally] path=sparse rendezvous queries="
                               << tally[0] << " resolved=" << tally[1] << std::endl;
-            } else if (numMissingGlobal > 0) {
-                if (rank == 0)
-                    std::cout << "[connmap-tally] path=allgatherv (global gather of "
-                              << num_ele_global << " elements)" << std::endl;
-                // gather all local element descriptors globally
-                // each entry: (x, y, z, level, global_id) packed as
-                // 5 unsigned ints
-                const unsigned int PACK_SZ = 5;
-                std::vector<int> allLocalSizes(ele_counts.begin(), ele_counts.end());
-
-                std::vector<int> allLocalDispls(npes, 0);
-                for (int p = 1; p < npes; p++)
-                    allLocalDispls[p] =
-                        allLocalDispls[p - 1] + allLocalSizes[p - 1];
-                int totalGlobal =
-                    allLocalDispls[npes - 1] + allLocalSizes[npes - 1];
-
-                // pack local elements
-                std::vector<unsigned int> myPack(localSz * PACK_SZ);
-                for (unsigned int e = this->getElementLocalBegin();
-                     e < this->getElementLocalEnd(); e++) {
-                    unsigned int li = e - this->getElementLocalBegin();
-                    myPack[li * PACK_SZ + 0] = pNodes[e].getX();
-                    myPack[li * PACK_SZ + 1] = pNodes[e].getY();
-                    myPack[li * PACK_SZ + 2] = pNodes[e].getZ();
-                    myPack[li * PACK_SZ + 3] = pNodes[e].getLevel();
-                    myPack[li * PACK_SZ + 4] = eid_vec[e];
-                }
-
-                // scale counts and displacements for packed data
-                std::vector<int> sendCounts(npes), sendDispls(npes);
-                for (int p = 0; p < npes; p++) {
-                    sendCounts[p] = allLocalSizes[p] * PACK_SZ;
-                    sendDispls[p] = allLocalDispls[p] * PACK_SZ;
-                }
-
-                std::vector<unsigned int> allPack(totalGlobal * PACK_SZ);
-                repartRound();
-                MPI_Allgatherv(myPack.data(), localSz * PACK_SZ,
-                               MPI_UNSIGNED, allPack.data(),
-                               sendCounts.data(), sendDispls.data(),
-                               MPI_UNSIGNED, commActive);
-
-                // build coordinate lookup: (x,y,z,level) -> global_id
-                std::map<std::tuple<unsigned int, unsigned int,
-                                    unsigned int, unsigned int>,
-                         T>
-                    coordToGlobal;
-                for (int g = 0; g < totalGlobal; g++) {
-                    auto key = std::make_tuple(
-                        allPack[g * PACK_SZ + 0], allPack[g * PACK_SZ + 1],
-                        allPack[g * PACK_SZ + 2], allPack[g * PACK_SZ + 3]);
-                    coordToGlobal[key] = allPack[g * PACK_SZ + 4];
-                }
-
-                // resolve missing ghost element global IDs
-                for (unsigned int ele = 0; ele < m_uiNumTotalElements;
-                     ele++) {
-                    if (eid_vec[ele] != LOOK_UP_TABLE_DEFAULT) continue;
-                    auto key = std::make_tuple(
-                        pNodes[ele].getX(), pNodes[ele].getY(),
-                        pNodes[ele].getZ(), pNodes[ele].getLevel());
-                    auto it = coordToGlobal.find(key);
-                    if (it != coordToGlobal.end()) {
-                        eid_vec[ele] = it->second;
-                    }
-                }
             }
         }
 
