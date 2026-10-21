@@ -9366,15 +9366,9 @@ void Mesh::buildZipPlanCore() {
     // We exchange the send-cg index lists via Alltoallv so each rank
     // can build (source_rank, source_cg) -> ghost_cg.
     m_uiZipNonPrimaryToGhostCg.clear();
-    std::unordered_map<uint64_t, unsigned int> invScatter;
-    // DENDRO_ZIPPLAN_INV_QUERY (default on, =0 builds the whole inverse map):
     // only non-primary local cgs look up (source rank, source cg) -> ghost
     // cg; collect those keys and resolve them in one pass over the recv
-    // entries (same order, so the first occurrence still wins)
-    static const bool invQuery = [] {
-        const char* v = std::getenv("DENDRO_ZIPPLAN_INV_QUERY");
-        return !(v && v[0] == '0');
-    }();
+    // entries (same order, so the first occurrence wins)
     std::vector<unsigned int> invRecvSrc;  // src cg per recv entry
     std::vector<std::pair<unsigned int, uint64_t>> invAsk;  // (cg, key)
     if (m_uiActiveNpes > 1) {  // collective: every rank joins, empty maps send nothing
@@ -9410,23 +9404,7 @@ void Mesh::buildZipPlanCore() {
         MPI_Alltoallv(sendBuf.data(), sCounts.data(), sOffs.data(),
                       MPI_UNSIGNED, recvBuf.data(), rCounts.data(),
                       rOffs.data(), MPI_UNSIGNED, m_uiCommActive);
-        if (invQuery) invRecvSrc.swap(recvBuf);
-        if (!invQuery) invScatter.reserve(recvN);
-        for (int p = 0; p < m_uiActiveNpes && !invQuery; p++) {
-            const unsigned int base = m_uiRecvNodeOffset[p];
-            const unsigned int cnt  = m_uiRecvNodeCount[p];
-            for (unsigned int k = 0; k < cnt; k++) {
-                const unsigned int src_cg   = recvBuf[base + k];
-                const unsigned int ghost_cg =
-                    m_uiScatterMapActualNodeRecv[base + k];
-                const uint64_t key =
-                    (uint64_t(p) << 32) | uint64_t(src_cg);
-                // first occurrence wins (stable choice); duplicates
-                // shouldn't matter for correctness.
-                if (invScatter.find(key) == invScatter.end())
-                    invScatter[key] = ghost_cg;
-            }
-        }
+        invRecvSrc.swap(recvBuf);
     }
 
     if (__zp_on) __zp_inv = MPI_Wtime();
@@ -9461,13 +9439,7 @@ void Mesh::buildZipPlanCore() {
             const uint64_t key =
                 (uint64_t(wit->rank) << 32)
                 | uint64_t(wit->cg);
-            if (invQuery) {
-                invAsk.emplace_back(cg, key);
-                continue;
-            }
-            auto iit = invScatter.find(key);
-            if (iit != invScatter.end())
-                m_uiZipNonPrimaryToGhostCg[cg] = iit->second;
+            invAsk.emplace_back(cg, key);
             continue;
         }
         // Primary path falls through to plan-entry construction.
@@ -9513,7 +9485,7 @@ void Mesh::buildZipPlanCore() {
         m_uiZipPlanCg.push_back(cg);
         m_uiZipPlanUnzipIdx.push_back(unzip_idx);
     }
-    if (invQuery && !invAsk.empty()) {
+    if (!invAsk.empty()) {
         std::unordered_map<uint64_t, unsigned int> ans;  // key -> ghost cg
         ans.reserve(invAsk.size());
         for (const auto& q : invAsk) ans.emplace(q.second, LOOK_UP_TABLE_DEFAULT);
