@@ -140,16 +140,9 @@ struct EnutsProf {
         }
         return MPI_Wtime();
     }
-    /** level-scoped element-DG ghost exchange, default on (bit-identical
-     *  off/on); DENDRO_ENUTS_SCOPED_EXCH=0 reverts to the full exchange;
-     *  verification via DENDRO_ENUTS_SCOPED_EXCH_CHECK=1 */
-    static bool scoped() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_SCOPED_EXCH");
-            return (e && e[0] == '0') ? 0 : 1;
-        }();
-        return v == 1;
-    }
+    /** DENDRO_ENUTS_SCOPED_EXCH_CHECK=1: the level-scoped element-DG ghost
+     *  exchange (per-element sync path) also runs the full exchange into a
+     *  shadow and compares every ghost slot (output only) */
     static bool scopedCheck() {
         static const int v = []() {
             const char* e = std::getenv("DENDRO_ENUTS_SCOPED_EXCH_CHECK");
@@ -608,7 +601,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
      * elements and of its dependents (DENDRO_ENUTS_OWNER_SYNC) */
     std::vector<std::vector<unsigned int>> m_uiBlkOwnEid;
 
-    /**@brief level-scoped element-DG exchange plan (DENDRO_ENUTS_SCOPED_EXCH);
+    /**@brief level-scoped element-DG exchange plan;
      * rebuilt per mesh, cleared with m_uiBlkDepEid. m_uiScopedOk false =
      * preconditions failed (divisibility chain, level range), full exchange. */
     ot::EleDGScopedPlan m_uiScopedPlan;
@@ -5685,8 +5678,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
             }
         }
     }
-    const bool scopedOn = !ownPlan && ts::EnutsProf::scoped() &&
-                          prepare_scoped_exchange(pMesh);
+    const bool scopedOn = !ownPlan && prepare_scoped_exchange(pMesh);
     const bool scopedChk = scopedOn && ts::EnutsProf::scopedCheck();
     const unsigned int* scSend = nullptr;
     const unsigned int* scRecv = nullptr;
