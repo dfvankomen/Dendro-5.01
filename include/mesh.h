@@ -650,6 +650,9 @@ class Mesh {
     /** set by ReMesh when it has already made the final (weighted, sibling-safe)
      * cut, so the ctor must not repartition its input (DENDRO_FEEDBACK_BALANCE) */
     static bool s_uiNextCtorKeepCut;
+    /** setMinFineBlocks */
+    static unsigned int s_uiMinFineBlocks;
+    static unsigned int s_uiMinFineBlocksLev;
     // zip-plan entries grouped by block (for block-local zips on labelled meshes)
     bool m_uiBlkZipPlanBuilt = false;
     std::vector<unsigned int> m_uiBlkZipPlanStart;
@@ -2176,6 +2179,18 @@ class Mesh {
      * set this on their graph twins; default off. */
     inline void setPosBcastEnabled(bool on) { m_uiPosBcastEnabled = on; }
     inline bool isPosBcastEnabled() const { return m_uiPosBcastEnabled; }
+
+    /// Minimum block count per rank on the fine levels of every later labelled
+    /// block build (process-wide; 0 = off, the default).
+    ///
+    /// A rank whose share of a level >= fromLev (0: its finest level) forms
+    /// fewer than n blocks splits them into their eight children, down to two
+    /// elements per side, so the level's sub-steps have blocks for its threads.
+    /// Changes the block decomposition, so the solution changes at round-off.
+    static void setMinFineBlocks(unsigned int n, unsigned int fromLev = 0) {
+        s_uiMinFineBlocks    = n;
+        s_uiMinFineBlocksLev = fromLev;
+    }
 
     /**@brief Register per-var phantom-cg fill values (see
      * m_uiPhantomFill). Solvers with a non-zero physical vacuum (BSSN

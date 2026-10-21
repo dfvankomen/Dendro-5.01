@@ -120,6 +120,8 @@ double t_e2n_sort_g[3];
 namespace ot {
 bool Mesh::s_uiNextCtorLazyZipPlan = false;
 bool Mesh::s_uiNextCtorKeepCut = false;
+unsigned int Mesh::s_uiMinFineBlocks    = 0;
+unsigned int Mesh::s_uiMinFineBlocksLev = 0;
 
 namespace {
 // scaled-int (x, y, z) phys-position key used by audit, buildZipPlan,
@@ -6529,92 +6531,89 @@ size_t Mesh::buildBlocksFromCanonicalInfo() {
 
     if (blockGroups.empty()) return 0;
 
-    // DENDRO_OCT2BLK_MIN_BLOCKS=<n>[:<L>] (default off): a rank whose share
-    // of a level >= L (default: its finest level) forms fewer than n blocks
-    // splits those blocks into their eight children (anchor one level
-    // finer, same regular grid) until it holds n of them or they are single
-    // elements, so the level's sub-steps have enough blocks for the rank's
-    // threads. Blocks are not split below 2 elements per side (1-element
-    // blocks cost more per element in padding and sync than they return in
-    // idle threads: q24). Local to the rank: the
-    // decomposition is no longer the source mesh's (roundoff at block faces
-    // changes). _DRY=1 reports only, _CHECK=1 aborts when a level ends short
-    // with splittable blocks left.
-    if (const char* env = std::getenv("DENDRO_OCT2BLK_MIN_BLOCKS")) {
-        unsigned int n = 0, L = 0;
-        const int got  = std::sscanf(env, "%u:%u", &n, &L);
+    // setMinFineBlocks(n, L): a rank whose share of a level >= L (0: its
+    // finest level) forms fewer than n blocks splits those blocks into their
+    // eight children (anchor one level finer, same regular grid) until it
+    // holds n of them or they are two elements per side, so the level's
+    // sub-steps have enough blocks for the rank's threads (1-element blocks
+    // cost more per element in padding and sync than they return in idle
+    // threads: q24). Local to the rank: the decomposition is no longer the
+    // source mesh's (roundoff at block faces changes).
+    // DENDRO_OCT2BLK_MIN_BLOCKS_DRY=1 reports only, _CHECK=1 aborts when a
+    // level ends short with splittable blocks left.
+    if (s_uiMinFineBlocks > 0) {
+        const unsigned int n = s_uiMinFineBlocks;
+        unsigned int L       = s_uiMinFineBlocksLev;
         const char* d  = std::getenv("DENDRO_OCT2BLK_MIN_BLOCKS_DRY");
         const char* c  = std::getenv("DENDRO_OCT2BLK_MIN_BLOCKS_CHECK");
         const bool dry = d && d[0] == '1', chk = c && c[0] == '1';
-        if (got >= 1 && n > 0) {
-            unsigned int lmax = 0;
-            for (auto& kv : blockGroups)
-                lmax = std::max(lmax, blockMetaForAnchor[kv.first] & 0xFFu);
-            if (got < 2) L = lmax;
-            std::vector<unsigned int> cnt0(lmax + 2, 0);
-            for (auto& kv : blockGroups) cnt0[blockMetaForAnchor[kv.first] & 0xFFu]++;
-            std::vector<unsigned int> cnt = cnt0;
-            std::vector<unsigned char> stuck(lmax + 2, 0);
-            for (unsigned int l = L; l <= lmax; l++) {
-                while (cnt[l] && cnt[l] < n) {
-                    std::vector<std::pair<AnchorKey, std::vector<DendroIntL>>> add;
-                    std::vector<std::pair<AnchorKey, uint32_t>> addMeta;
-                    std::vector<AnchorKey> del;
-                    for (auto& kv : blockGroups) {
-                        const uint32_t meta = blockMetaForAnchor[kv.first];
-                        const AnchorKey& k  = kv.first;
-                        if ((meta & 0xFFu) != l || k.lev + 1 >= l) continue;
-                        const uint32_t cs  = 1u << (m_uiMaxDepth - k.lev - 1);
-                        const uint32_t rot = (meta >> 8) & 0xFFu;
-                        std::vector<DendroIntL> ch[8];
-                        for (const DendroIntL el : kv.second) {
-                            const ot::TreeNode& t = m_uiAllElements[el];
-                            const unsigned int m  = (unsigned int)(t.getX() - k.x >= cs) |
-                                                   ((unsigned int)(t.getY() - k.y >= cs) << 1) |
-                                                   ((unsigned int)(t.getZ() - k.z >= cs) << 2);
-                            ch[m].push_back(el);
-                        }
-                        for (unsigned int m = 0; m < 8; m++) {
-                            if (ch[m].empty()) continue;
-                            const AnchorKey ck{k.x + ((m & 1u) ? cs : 0u), k.y + ((m & 2u) ? cs : 0u),
-                                               k.z + ((m & 4u) ? cs : 0u), k.lev + 1};
-                            const uint32_t crot = (uint32_t)(unsigned char)HILBERT_TABLE[rot * 8 + m];
-                            add.emplace_back(ck, std::move(ch[m]));
-                            addMeta.emplace_back(ck, l | (crot << 8) | (1u << 31));
-                        }
-                        del.push_back(k);
+        unsigned int lmax = 0;
+        for (auto& kv : blockGroups)
+            lmax = std::max(lmax, blockMetaForAnchor[kv.first] & 0xFFu);
+        if (L == 0) L = lmax;
+        std::vector<unsigned int> cnt0(lmax + 2, 0);
+        for (auto& kv : blockGroups) cnt0[blockMetaForAnchor[kv.first] & 0xFFu]++;
+        std::vector<unsigned int> cnt = cnt0;
+        std::vector<unsigned char> stuck(lmax + 2, 0);
+        for (unsigned int l = L; l <= lmax; l++) {
+            while (cnt[l] && cnt[l] < n) {
+                std::vector<std::pair<AnchorKey, std::vector<DendroIntL>>> add;
+                std::vector<std::pair<AnchorKey, uint32_t>> addMeta;
+                std::vector<AnchorKey> del;
+                for (auto& kv : blockGroups) {
+                    const uint32_t meta = blockMetaForAnchor[kv.first];
+                    const AnchorKey& k  = kv.first;
+                    if ((meta & 0xFFu) != l || k.lev + 1 >= l) continue;
+                    const uint32_t cs  = 1u << (m_uiMaxDepth - k.lev - 1);
+                    const uint32_t rot = (meta >> 8) & 0xFFu;
+                    std::vector<DendroIntL> ch[8];
+                    for (const DendroIntL el : kv.second) {
+                        const ot::TreeNode& t = m_uiAllElements[el];
+                        const unsigned int m  = (unsigned int)(t.getX() - k.x >= cs) |
+                                               ((unsigned int)(t.getY() - k.y >= cs) << 1) |
+                                               ((unsigned int)(t.getZ() - k.z >= cs) << 2);
+                        ch[m].push_back(el);
                     }
-                    if (add.empty()) { stuck[l] = 1; break; }
-                    if (dry) { stuck[l] = 1; break; }
-                    for (const AnchorKey& k : del) {
-                        blockGroups.erase(k);
-                        blockMetaForAnchor.erase(k);
+                    for (unsigned int m = 0; m < 8; m++) {
+                        if (ch[m].empty()) continue;
+                        const AnchorKey ck{k.x + ((m & 1u) ? cs : 0u), k.y + ((m & 2u) ? cs : 0u),
+                                           k.z + ((m & 4u) ? cs : 0u), k.lev + 1};
+                        const uint32_t crot = (uint32_t)(unsigned char)HILBERT_TABLE[rot * 8 + m];
+                        add.emplace_back(ck, std::move(ch[m]));
+                        addMeta.emplace_back(ck, l | (crot << 8) | (1u << 31));
                     }
-                    for (size_t q = 0; q < add.size(); q++) {
-                        blockGroups[add[q].first]         = std::move(add[q].second);
-                        blockMetaForAnchor[addMeta[q].first] = addMeta[q].second;
-                    }
-                    cnt[l] = 0;
-                    for (auto& kv : blockGroups)
-                        if ((blockMetaForAnchor[kv.first] & 0xFFu) == l) cnt[l]++;
+                    del.push_back(k);
                 }
+                if (add.empty()) { stuck[l] = 1; break; }
+                if (dry) { stuck[l] = 1; break; }
+                for (const AnchorKey& k : del) {
+                    blockGroups.erase(k);
+                    blockMetaForAnchor.erase(k);
+                }
+                for (size_t q = 0; q < add.size(); q++) {
+                    blockGroups[add[q].first]         = std::move(add[q].second);
+                    blockMetaForAnchor[addMeta[q].first] = addMeta[q].second;
+                }
+                cnt[l] = 0;
+                for (auto& kv : blockGroups)
+                    if ((blockMetaForAnchor[kv.first] & 0xFFu) == l) cnt[l]++;
             }
-            bool bad = false;
-            for (unsigned int l = L; l <= lmax; l++) {
-                if (!cnt0[l]) continue;
-                const bool shortL = cnt[l] < n;
-                if (cnt[l] != cnt0[l] || (dry && shortL))
-                    std::cout << "[oct2blk-min] rank " << m_uiActiveRank << ": level " << l
-                              << " blocks " << cnt0[l] << " -> " << cnt[l]
-                              << (shortL ? (stuck[l] && !dry ? " (at the span floor)" : " (short)") : "")
-                              << std::endl;
-                if (chk && shortL && !(stuck[l] && !dry)) bad = true;
-            }
-            if (chk && bad) {
-                std::cout << "[oct2blk-min] rank " << m_uiActiveRank << ": a level ends below " << n
-                          << " blocks with splittable blocks left; aborting" << std::endl;
-                MPI_Abort(m_uiCommActive, 16);
-            }
+        }
+        bool bad = false;
+        for (unsigned int l = L; l <= lmax; l++) {
+            if (!cnt0[l]) continue;
+            const bool shortL = cnt[l] < n;
+            if (cnt[l] != cnt0[l] || (dry && shortL))
+                std::cout << "[oct2blk-min] rank " << m_uiActiveRank << ": level " << l
+                          << " blocks " << cnt0[l] << " -> " << cnt[l]
+                          << (shortL ? (stuck[l] && !dry ? " (at the span floor)" : " (short)") : "")
+                          << std::endl;
+            if (chk && shortL && !(stuck[l] && !dry)) bad = true;
+        }
+        if (chk && bad) {
+            std::cout << "[oct2blk-min] rank " << m_uiActiveRank << ": a level ends below " << n
+                      << " blocks with splittable blocks left; aborting" << std::endl;
+            MPI_Abort(m_uiCommActive, 16);
         }
     }
 
