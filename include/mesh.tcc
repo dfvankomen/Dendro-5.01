@@ -8298,23 +8298,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     std::vector<std::vector<ot::TreeNode>> sendTN(npes);
     std::vector<std::vector<T>> sendDG(npes);
     std::vector<std::vector<unsigned char>> sendLocalFlag(npes);
-    // DENDRO_REDIST_PROBE=1: classify every source ghost-slot read of step 2
-    // (delivered by the scatter map or not, finite or not) and every
-    // destination slot that ends non-finite by the write path that produced it
-    static const bool rprobe = std::getenv("DENDRO_REDIST_PROBE") != nullptr;
-    static int rprobeCall = 0;
-    struct RProbe {
-        size_t gRead = 0, gUndel = 0, gNan = 0, gUndelNan = 0, lNan = 0;
-        size_t gZero = 0, gUndelZero = 0, lZero = 0;
-        size_t dLocNanAuth = 0, dLocNanNonAuth = 0, dLocNanOrph = 0,
-               dLocNanRes = 0, dGhostNanNonAuth = 0, dGhostNanAuth = 0;
-        size_t dLocZero[4] = {0, 0, 0, 0}, dGhostZero[4] = {0, 0, 0, 0};
-        std::vector<std::string> samples;
-    } rp;
-    std::unordered_set<unsigned int> rpDelivered;
-    if (rprobe && m_uiIsActive)
-        rpDelivered.insert(m_uiScatterMapActualNodeRecv.begin(),
-                           m_uiScatterMapActualNodeRecv.end());
     auto packSend = [&]() {
     if (m_uiIsActive) {
         const auto* pNO = m_uiAllElements.data();
@@ -8330,40 +8313,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                 unsigned int cg = e2nO[e * npe + n];
                 bool isLocal = (cg >= m_uiNodeLocalBegin &&
                                 cg < m_uiNodeLocalEnd);
-                if (rprobe) {
-                    bool nan = false, zero = true;
-                    for (unsigned int v = 0; v < dof; v++) {
-                        const double x = (double)vecIn[v * srcCgSz + cg];
-                        if (!std::isfinite(x)) nan = true;
-                        if (x != 0.0) zero = false;
-                    }
-                    if (isLocal) { if (nan) rp.lNan++; if (zero) rp.lZero++; }
-                    else {
-                        rp.gRead++;
-                        const bool undel = !rpDelivered.count(cg);
-                        if (undel) rp.gUndel++;
-                        if (zero) {
-                            rp.gZero++;
-                            if (undel) rp.gUndelZero++;
-                            if (rp.samples.size() < 6) {
-                                char b[256];
-                                std::snprintf(b, sizeof(b), "src-ghost-allzero cg=%u undelivered=%d elem=%u lev=%u xyz=%u,%u,%u n=%u",
-                                    cg, (int)undel, e, (unsigned)pNO[e].getLevel(), pNO[e].getX(), pNO[e].getY(), pNO[e].getZ(), n);
-                                rp.samples.emplace_back(b);
-                            }
-                        }
-                        if (nan) {
-                            rp.gNan++;
-                            if (undel) rp.gUndelNan++;
-                            if (rp.samples.size() < 4) {
-                                char b[256];
-                                std::snprintf(b, sizeof(b), "src-ghost-nan cg=%u undelivered=%d elem=%u lev=%u xyz=%u,%u,%u n=%u",
-                                    cg, (int)undel, e, (unsigned)pNO[e].getLevel(), pNO[e].getX(), pNO[e].getY(), pNO[e].getZ(), n);
-                                rp.samples.emplace_back(b);
-                            }
-                        }
-                    }
-                }
                 sendLocalFlag[target].push_back(isLocal ? 1 : 0);
                 // dof values for this node, contiguous (layout [node][dof]).
                 for (unsigned int v = 0; v < dof; v++)
@@ -8596,9 +8545,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     // initial swap; root cause of the 2026-06-12 BSSN BBH tracker NaN).
     std::vector<unsigned char> cgWrittenAny(
         dstNodeLocalEnd - dstNodeLocalBegin, 0);
-    // probe only: last write path per dst slot (1 auth, 2 non-auth, 3 orphan)
-    std::vector<unsigned char> rpPath;
-    if (rprobe) rpPath.assign(dstCgSz, 0);
     // DENDRO_REDIST_CANON_FILL (default on, =0 reverts): every dst slot the transport is responsible
     // for gets its value from a src LOCAL slot at the same canonical position.
     // Source ghost slots are never trusted: the source vector may not have had
@@ -8675,7 +8621,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                 if (cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd)
                     cgWrittenAuth[cg - dstNodeLocalBegin] = 1;
                 authAll[cg] = 1;
-                if (rprobe) rpPath[cg] = 1;
                 markWritten(cg);
             }
         }
@@ -8694,13 +8639,11 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                     if (!cgWrittenAuth[cg - dstNodeLocalBegin]) {
                         for (unsigned int v = 0; v < dof; v++)
                             vecOut[v * dstCgSz + cg] = recvDG[base + v];
-                        if (rprobe) rpPath[cg] = 2;
                     }
                     markWritten(cg);
                 } else {
                     for (unsigned int v = 0; v < dof; v++)
                         vecOut[v * dstCgSz + cg] = recvDG[base + v];
-                    if (rprobe && rpPath[cg] != 1) rpPath[cg] = 2;
                 }
             }
         }
@@ -8803,60 +8746,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             oTotal += oCounts[p];
         }
     }
-    auto rpReport = [&]() {
-        if (!rprobe) return;
-        const unsigned int dstCgTot = (unsigned int)dstCgSz;
-        for (unsigned int cg = 0; cg < dstCgTot; cg++) {
-            bool nan = false, zero = true;
-            for (unsigned int v = 0; v < dof; v++) {
-                const double x = (double)vecOut[v * dstCgSz + cg];
-                if (!std::isfinite(x)) nan = true;
-                if (x != 0.0) zero = false;
-            }
-            const bool loc = cg >= dstNodeLocalBegin && cg < dstNodeLocalEnd;
-            const unsigned char pth = rpPath[cg];
-            if (zero) {
-                (loc ? rp.dLocZero : rp.dGhostZero)[pth & 3]++;
-                if (loc && rp.samples.size() < 14) {
-                    char b[160];
-                    std::snprintf(b, sizeof(b), "dst-local-allzero cg=%u path=%u", cg, (unsigned)pth);
-                    rp.samples.emplace_back(b);
-                }
-            }
-            if (!nan) continue;
-            if (loc) {
-                if (pth == 1) rp.dLocNanAuth++;
-                else if (pth == 2) rp.dLocNanNonAuth++;
-                else if (pth == 3) rp.dLocNanOrph++;
-                else rp.dLocNanRes++;
-                if (rp.samples.size() < 12) {
-                    char b[160];
-                    std::snprintf(b, sizeof(b), "dst-local-nan cg=%u path=%u", cg, (unsigned)pth);
-                    rp.samples.emplace_back(b);
-                }
-            } else {
-                if (pth == 1) rp.dGhostNanAuth++;
-                else if (pth == 2) rp.dGhostNanNonAuth++;
-            }
-        }
-        std::cout << "[redist-probe r" << rank << "] call=" << rprobeCall
-                  << " dof=" << dof << " src_ghost_reads=" << rp.gRead
-                  << " undelivered=" << rp.gUndel << " nan=" << rp.gNan
-                  << " undelivered_nan=" << rp.gUndelNan
-                  << " src_local_nan=" << rp.lNan
-                  << " src_ghost_allzero=" << rp.gZero << " (undelivered " << rp.gUndelZero << ")"
-                  << " src_local_allzero=" << rp.lZero
-                  << " | dst_local_allzero none/auth/nonauth/orphan=" << rp.dLocZero[0] << "/" << rp.dLocZero[1] << "/" << rp.dLocZero[2] << "/" << rp.dLocZero[3]
-                  << " dst_ghost_allzero none/auth/nonauth/orphan=" << rp.dGhostZero[0] << "/" << rp.dGhostZero[1] << "/" << rp.dGhostZero[2] << "/" << rp.dGhostZero[3]
-                  << " | dst_local_nan auth=" << rp.dLocNanAuth
-                  << " nonauth=" << rp.dLocNanNonAuth << " orphan=" << rp.dLocNanOrph
-                  << " residual=" << rp.dLocNanRes
-                  << " dst_ghost_nan auth=" << rp.dGhostNanAuth
-                  << " nonauth=" << rp.dGhostNanNonAuth << std::endl;
-        for (const auto& l : rp.samples)
-            std::cout << "[redist-probe r" << rank << "]   " << l << std::endl;
-        rprobeCall++;
-    };
     {
         static bool announced = false;
         if (!rank && !announced) {
@@ -8866,7 +8755,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                       << " total_keys=" << oTotal << std::endl;
         }
     }
-    if (needOrphCount && oTotal == 0) { rpReport(); prof.mark(4); return; }  // no orphans anywhere, done
+    if (needOrphCount && oTotal == 0) { prof.mark(4); return; }  // no orphans anywhere, done
 
     // DENDRO_REDIST_ORPHAN_P2P (default on, =0 reverts): no global gather of the orphans. every rank
     // publishes a 32^3 occupancy bitmap of its src-local cg positions (O(P)
@@ -8968,7 +8857,7 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                           MPI_UINT64_T, comm);
             unsigned long long tot = 0;
             for (int p = 0; p < npes; p++) tot += allBits[(size_t)p * (GW + 1)];
-            if (tot == 0) { rpReport(); prof.mark(4); return; }
+            if (tot == 0) { prof.mark(4); return; }
             for (int k = 0; k < myOrphCount; k++) {
                 const auto& o = myOrphans[k];
                 const int c   = cellOf(o.x, o.y, o.z);
@@ -9050,7 +8939,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             if (it->second == LOOK_UP_TABLE_DEFAULT) continue;
             for (unsigned int v = 0; v < dof; v++)
                 vecOut[v * dstCgSz + myOrphans[k].cg] = vecIn[v * srcCgSz + it->second];
-            if (rprobe) rpPath[myOrphans[k].cg] = 3;
             markWritten(myOrphans[k].cg);
         }
         // positional replies: one flag byte + dof values per query, in query order, no count exchange
@@ -9104,7 +8992,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                 const unsigned int cg = qCg[p][i];
                 for (unsigned int v = 0; v < dof; v++)
                     vecOut[v * dstCgSz + cg] = vals[i * dof + v];
-                if (rprobe) rpPath[cg] = 3;
                 markWritten(cg);
             }
         }
@@ -9238,7 +9125,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
             for (unsigned int v = 0; v < dof; v++)
                 vecOut[v * dstCgSz + myOrphans[k].cg] =
                     vecIn[v * srcCgSz + it->second];
-            if (rprobe) rpPath[myOrphans[k].cg] = 3;
             markWritten(myOrphans[k].cg);
         }
         // answer the remote queries: (dst cg, dof values) back per asker
@@ -9288,7 +9174,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         for (int i = 0; i < trC; i++) {
             for (unsigned int v = 0; v < dof; v++)
                 vecOut[v * dstCgSz + rC2[i]] = rV[(size_t)i * dof + v];
-            if (rprobe) rpPath[rC2[i]] = 3;
             markWritten(rC2[i]);
         }
         if (rprof) {
@@ -9407,7 +9292,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
         if (it == srcPosToLocalCG.end()) continue;
         for (unsigned int v = 0; v < dof; v++)
             vecOut[v * dstCgSz + oAllCG[t]] = vecIn[v * srcCgSz + it->second];
-        if (rprobe) rpPath[oAllCG[t]] = 3;
         markWritten(oAllCG[t]);
     }
 
@@ -9469,7 +9353,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
     for (int i = 0; i < totRCGO; i++) {
         for (unsigned int v = 0; v < dof; v++)
             vecOut[v * dstCgSz + recvCGO[i]] = recvValO[(size_t)i * dof + v];
-        if (rprobe) rpPath[recvCGO[i]] = 3;
         markWritten(recvCGO[i]);
     }
     }  // orphan gather path
@@ -9514,7 +9397,6 @@ void Mesh::redistributeVec(ot::Mesh* dstMesh, const T* vecIn, T* vecOut,
                       << " physical vacua should repatch via unfilledOut)"
                       << std::endl;
     }
-    rpReport();
     prof.mark(4);
 }
 
