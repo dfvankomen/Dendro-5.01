@@ -182,20 +182,6 @@ struct EnutsProf {
      *  ghost rows is formed locally from stage slots the exchange only partly
      *  delivered, and the result depends on the partition. */
     static bool gXch() { return options().g_exchange; }
-    /** DENDRO_ENUTS_OWNER_SYNC_LABELLED=1 (default off): build the owner-sync
-     *  plan on labelled meshes too. Allowed only when the labelled rebuild
-     *  joined on the SFC source's canonical ownership keys (K6): then every
-     *  node has one owner element (cg2dg), locally owned nodes have a local
-     *  owner element and the send map holds cg indices, which is the model the
-     *  plan assumes; the checks below verify it and the decision is collective.
-     *  The end-of-step zip then takes the same owner (cg2dg) as the plan. */
-    static bool ownerSyncLabelled() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_OWNER_SYNC_LABELLED");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-    }
     /** DENDRO_ENUTS_XCH_CENSUS=1 (prof-only, with DENDRO_ENUTS_PROF=1): of the
      *  owner-exchange doubles received, count at the next overwrite of each
      *  (stage, DG slot) whether a local plan read it since (rows: read / in a
@@ -2085,9 +2071,9 @@ void ExplicitNUTS<T, Ctx>::build_cg_owner_map() {
     // slots no element references (or only hanging ones): keep the mesh's own canonical
     for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd(); cg++)
         if (m_uiCgOwnerDG[cg] == LOOK_UP_TABLE_DEFAULT && cg < cg2dg.size()) m_uiCgOwnerDG[cg] = cg2dg[cg];
-    if (ts::EnutsProf::ownerSyncLabelled() && pMesh->canonKeysBuilt()) {
-        // OWNER_SYNC_LABELLED: the plan reads owners through cg2dg; the zip
-        // must take the same copy. count where the by-position pick differs
+    if (pMesh->canonKeysBuilt()) {
+        // labelled owner plan: it reads owners through cg2dg; the zip must
+        // take the same copy. count where the by-position pick differs
         size_t diff = 0;
         for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd() && cg < cg2dg.size(); cg++) {
             if (m_uiCgOwnerDG[cg] != cg2dg[cg]) diff++;
@@ -2561,11 +2547,15 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
         return e && e[0] == '1';
     }();
     const bool labelled = pMesh->useLabelledUnzip();
-    // OWNER_SYNC_LABELLED: like the probe, every check runs and records; the
-    // outcome is then agreed collectively (the per-element fallback must be
-    // taken by every rank or none: the two paths use different exchanges)
-    const bool lab   = labelled && !probeOn && ts::EnutsProf::ownerSyncLabelled();
-    const bool probe = (probeOn && labelled) || lab;
+    // labelled meshes build the plan too. Allowed only when the labelled
+    // rebuild joined on the SFC source's canonical ownership keys (K6): then
+    // every node has one owner element (cg2dg), locally owned nodes have a
+    // local owner element and the send map holds cg indices, which is the
+    // model the plan assumes. Like the probe, every check runs and records;
+    // the outcome is then agreed collectively (the per-element fallback must
+    // be taken by every rank or none: the two paths use different exchanges)
+    const bool lab   = labelled && !probeOn;
+    const bool probe = labelled;
     bool probeBad    = false;
     // one rank: fall back to the per-element form; more: there is no fallback
     auto fail = [&](const char* why, size_t n) -> bool {
@@ -2580,7 +2570,6 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
         if (npes > 1) MPI_Abort(pMesh->getMPICommunicator(), 11);
         return false;
     };
-    if (labelled && !probe) return fail("labelled mesh", 0);
     if (lab && !pMesh->canonKeysBuilt()) fail("labelled mesh without canonical ownership keys", 0);
     if (lab) {
         // the plan's model needs one owner slot per node and cg-indexed sends
