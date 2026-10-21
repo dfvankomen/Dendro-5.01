@@ -21112,25 +21112,14 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // an R1 element via canonical chain), master's 1:1 mirror
         // convention ensures the physical positions coincide and
         // values match.
-        // DENDRO_SM_FUSED (default on, =0 reverts): walk + dedup in one pass. CG requests are deduped as
-        // they are walked (first peer per slot in a stamp, a second peer in a set), DG requests
-        // are kept aside and appended after, so each per-peer list comes out in the two-pass
-        // order; no per-node division. _CHECK=1 also runs the two-pass path and aborts (89) if
-        // any per-peer list differs (_PERTURB=1 drops one entry on rank 0 to prove it bites)
-        static const int smFused = [] {
-            const char* e = std::getenv("DENDRO_SM_FUSED");
-            const char* c = std::getenv("DENDRO_SM_FUSED_CHECK");
-            return (e && e[0] == '0' ? 0 : 1) | (c && c[0] == '1' ? 2 : 0);
-        }();
-        static const bool smFusedPerturb = [] {
-            const char* e = std::getenv("DENDRO_SM_FUSED_PERTURB");
-            return e && e[0] == '1';
-        }();
-        const bool fusedChk = smFused == 3;
-        const bool runOld   = !(smFused & 1) || fusedChk;
+        // walk + dedup in one pass: CG requests are deduped as they are walked
+        // (first peer per slot in a stamp, a second peer in a set), DG
+        // requests are kept aside and appended after, so each per-peer list
+        // comes out CG entries first, then the DG entries for slots not yet
+        // seen; no per-node division
         std::vector<std::vector<unsigned int>> fSM, fDGG;
         std::vector<std::vector<unsigned char>> fIsDG;
-        if (smFused & 1) {
+        {
             fSM.resize(npes);
             fDGG.resize(npes);
             fIsDG.resize(npes);
@@ -21197,156 +21186,19 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     fDGG[p].push_back(dgDGG[p][i]);
                     fIsDG[p].push_back(1);
                 }
-            if (smFusedPerturb && !rank)
-                for (int p = 0; p < npes; p++)
-                    if (!fSM[p].empty()) {
-                        fSM[p].pop_back();
-                        fDGG[p].pop_back();
-                        fIsDG[p].pop_back();
-                        break;
-                    }
             if (!rank) {
                 size_t ent = 0;
                 for (int p = 0; p < npes; p++) ent += fSM[p].size();
                 std::printf("[sm-fused] r0 entries=%zu second-peer=%zu\n", ent, coll.size());
             }
-            if (!fusedChk)
-                for (int p = 0; p < npes; p++) {
-                    std::swap(recvNodeSM_r[p], fSM[p]);
-                    std::swap(recvNodeDGG[p], fDGG[p]);
-                    std::swap(recvNodeIsDG[p], fIsDG[p]);
-                    recvCount[p] = recvNodeSM_r[p].size();
-                }
-        }
-        const unsigned int eOrd_s = m_uiElementOrder;
-        for (unsigned int ele_id = 0; runOld && ele_id < m_uiNumTotalElements;
-             ele_id++) {
-            const bool isR2 = new_oct_connectivity_map[ele_id].isGhostTwo;
-            if (ckUse && ckOff[ele_id] == SIZE_MAX) continue;  // K6: topology-only row
-
-            for (unsigned int n = 0; n < m_uiNpE; ++n) {
-                unsigned int ni = n % (eOrd_s + 1);
-                unsigned int nj = (n / (eOrd_s + 1)) % (eOrd_s + 1);
-                unsigned int nk = n / ((eOrd_s + 1) * (eOrd_s + 1));
-                bool onBoundary = (ni == 0) || (ni == eOrd_s) ||
-                                  (nj == 0) || (nj == eOrd_s) ||
-                                  (nk == 0) || (nk == eOrd_s);
-
-                unsigned int cgIdx = m_uiE2NMapping_CG[ele_id * m_uiNpE + n];
-
-                if (cgIdx >= m_uiNodeLocalBegin &&
-                    cgIdx < m_uiNodeLocalEnd)
-                    continue;
-
-                // shrink pass: drop slots no consumer reads
-
-                unsigned int ownerGid;
-                unsigned int ownerTrank;
-                unsigned int sub;
-                unsigned char isDG;
-
-                unsigned int ownerDG =
-                    m_uiE2NMapping_DG[ele_id * m_uiNpE + n];
-                unsigned int ownerLocal = ownerDG / m_uiNpE;
-                unsigned int ownerSub   = ownerDG % m_uiNpE;
-                const bool selfOwned =
-                    (ownerLocal == ele_id && ownerSub == n);
-
-                if (isR2 && onBoundary && !ckUse) {
-                    // R2/R3 boundary: always DG path. The DG buffer on
-                    // the owner's rank holds f at that element's own
-                    // sub physical — rank-independent and matches what
-                    // receiver's cgIdx represents (via 1:1 mirror
-                    // convention, owner's sub physical coincides with
-                    // child's at shared physical positions for
-                    // same-level, or is the hanging-interpolation basis
-                    // for coarser-level cases which master's cascade
-                    // would read the same way).
-                    if (selfOwned) {
-                        ownerGid   = new_oct_connectivity_map[ele_id].eid;
-                        ownerTrank = new_oct_connectivity_map[ele_id].trank;
-                        sub        = n;
-                    } else {
-                        ownerGid =
-                            new_oct_connectivity_map[ownerLocal].eid;
-                        ownerTrank =
-                            new_oct_connectivity_map[ownerLocal].trank;
-                        sub = ownerSub;
-                    }
-                    isDG = 1;
-                } else {
-                    sub      = ownerSub;
-                    ownerGid = new_oct_connectivity_map[ownerLocal].eid;
-                    ownerTrank =
-                        new_oct_connectivity_map[ownerLocal].trank;
-                    isDG = 0;
-                }
-
-                if (ownerTrank == rank) continue;
-
-                recvNodeSM_r[ownerTrank].push_back(cgIdx);
-                recvNodeDGG[ownerTrank].push_back(
-                    ownerGid * m_uiNpE + sub);
-                recvNodeIsDG[ownerTrank].push_back(isDG);
+            for (int p = 0; p < npes; p++) {
+                std::swap(recvNodeSM_r[p], fSM[p]);
+                std::swap(recvNodeDGG[p], fDGG[p]);
+                std::swap(recvNodeIsDG[p], fIsDG[p]);
+                recvCount[p] = recvNodeSM_r[p].size();
             }
         }
-
         __phase("  sm: walk");
-        // Dedup per-rank: prefer CG entry over DG entry for the same
-        // cgIdx. CG path goes via the canonical owner (which is the
-        // physical "source of truth" for the CG slot under master's
-        // cascade + 1:1 mirror convention). DG path delivers
-        // f(element's own sub) — only correct when receiver's E2N
-        // self-owns this CG, otherwise it'd deliver the wrong physical
-        // value for hanging cases.
-        std::vector<unsigned int> smStamp(runOld ? m_uiNumActualNodes : 0u, 0u);
-        for (unsigned int p = 0; runOld && p < npes; p++) {
-            std::vector<unsigned int> outSM;
-            std::vector<unsigned int> outDGG;
-            std::vector<unsigned char> outIsDG;
-            outSM.reserve(recvNodeSM_r[p].size());
-            outDGG.reserve(recvNodeSM_r[p].size());
-            outIsDG.reserve(recvNodeSM_r[p].size());
-            // first time slot c is kept for peer p (stamp = p+1, no reset
-            // between peers)
-            auto firstSeen = [&](unsigned int c) {
-                if (c >= smStamp.size()) smStamp.resize(c + 1, 0u);
-                if (smStamp[c] == (unsigned int)p + 1u) return false;
-                smStamp[c] = (unsigned int)p + 1u;
-                return true;
-            };
-            // First pass: keep CG entries
-            for (size_t i = 0; i < recvNodeSM_r[p].size(); i++) {
-                if (!recvNodeIsDG[p][i] &&
-                    firstSeen(recvNodeSM_r[p][i])) {
-                    outSM.push_back(recvNodeSM_r[p][i]);
-                    outDGG.push_back(recvNodeDGG[p][i]);
-                    outIsDG.push_back(recvNodeIsDG[p][i]);
-                }
-            }
-            // Second pass: keep DG entries for cgIdx not already seen
-            for (size_t i = 0; i < recvNodeSM_r[p].size(); i++) {
-                if (recvNodeIsDG[p][i] &&
-                    firstSeen(recvNodeSM_r[p][i])) {
-                    outSM.push_back(recvNodeSM_r[p][i]);
-                    outDGG.push_back(recvNodeDGG[p][i]);
-                    outIsDG.push_back(recvNodeIsDG[p][i]);
-                }
-            }
-            std::swap(recvNodeSM_r[p], outSM);
-            std::swap(recvNodeDGG[p], outDGG);
-            std::swap(recvNodeIsDG[p], outIsDG);
-            recvCount[p] = recvNodeSM_r[p].size();
-        }
-        if (fusedChk) {
-            unsigned long long bad = 0;
-            for (int p = 0; p < npes; p++)
-                bad += fSM[p] != recvNodeSM_r[p] || fDGG[p] != recvNodeDGG[p] ||
-                       fIsDG[p] != recvNodeIsDG[p];
-            MPI_Allreduce(MPI_IN_PLACE, &bad, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
-            if (!rank) std::printf("[sm-fused-check] differing per-peer lists: %llu\n", bad);
-            if (bad) MPI_Abort(commActive, 89);
-        }
 
         __phase("  sm: dedup");
         // Offsets
