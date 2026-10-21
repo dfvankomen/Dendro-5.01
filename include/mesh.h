@@ -643,8 +643,8 @@ class Mesh {
      *  (graph meshes need the sync side-channels before first ghost
      *  exchange). */
     bool m_uiZipPlanBuilt = false;
-    /** one-shot: the next constructor defers its zip plan like DENDRO_LAZY_ZIPPLAN
-     *  (set by ReMesh under DENDRO_LAZY_ZIPPLAN_SUCCESSOR; the remesh successor is
+    /** one-shot: the next constructor defers its canon-writer table and zip
+     *  plan to the first unzip/zip (set by ReMesh: the remesh successor is
      *  only the s2g transport source in the sandwich solvers) */
     static bool s_uiNextCtorLazyZipPlan;
     /** set by ReMesh when it has already made the final (weighted, sibling-safe)
