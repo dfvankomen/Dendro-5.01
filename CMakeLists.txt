@@ -733,6 +733,20 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS} 4 4)
   set_tests_properties(testETSErrorControl testETSErrorControl_2rank
                        PROPERTIES TIMEOUT 300)
+  dendro_add_example(testLtsContract test/src/testLtsContract.cpp)
+  add_test(NAME testLtsContract COMMAND testLtsContract 8 1e-3)
+  add_test(NAME testLtsContract_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testLtsContract>
+                   ${MPIEXEC_POSTFLAGS} 8 1e-3)
+  set_tests_properties(testLtsContract testLtsContract_2rank PROPERTIES TIMEOUT 300)
+  # each sabotage build breaks one helper (see the file header), so must fail
+  foreach(SAB 1 2 3 4 5)
+    dendro_add_example(testLtsContract_sabotage${SAB} test/src/testLtsContract.cpp)
+    target_compile_definitions(testLtsContract_sabotage${SAB} PRIVATE LTS_CONTRACT_SABOTAGE=${SAB})
+    add_test(NAME testLtsContract_sabotage${SAB} COMMAND testLtsContract_sabotage${SAB} 8 1e-3)
+    set_tests_properties(testLtsContract_sabotage${SAB} PROPERTIES TIMEOUT 300 WILL_FAIL TRUE)
+  endforeach()
 
   # compile-checks GR/ and pins the Lebedev/SWSH table invariants
   if(TARGET dendro_gr)
@@ -833,8 +847,15 @@ if(BUILD_DENDRO_EXAMPLES)
     testGhostPackExact_sabotage1 testGhostPackExact_sabotage2 testGhostPackExact_sabotage3
     testUnzipPlanExact_sabotage1 testUnzipPlanExact_sabotage2 testUnzipPlanExact_sabotage3)
   dendro_test_labels(LABELS unit TESTS testETSErrorControl testMixedSetTrim)
+  dendro_test_labels(LABELS unit lts TESTS testLtsContract testLtsContract_sabotage1
+    testLtsContract_sabotage2 testLtsContract_sabotage3 testLtsContract_sabotage4
+    testLtsContract_sabotage5)
+  dendro_test_labels(LABELS lts TESTS testLtsContract_2rank)
+  dendro_test_labels(LABELS sabotage TESTS testLtsContract_sabotage1 testLtsContract_sabotage2
+    testLtsContract_sabotage3 testLtsContract_sabotage4 testLtsContract_sabotage5)
   dendro_test_labels(LABELS order TESTS testDerivConvergence_orderGate)
   dendro_test_mpi(2 testOctreeStructure_2rank testMeshInvariants_2rank testETSErrorControl_2rank
+    testLtsContract_2rank
     testGhostPackExact_2rank testGhostPackExact_sabotage1 testGhostPackExact_sabotage2
     testGhostPackExact_sabotage3)
   dendro_test_mpi(3 testVTKHDF_3rank)
