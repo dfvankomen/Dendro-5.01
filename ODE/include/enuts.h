@@ -208,19 +208,6 @@ struct EnutsProf {
         }();
         return v == 1;
     }
-    /** DENDRO_ENUTS_OWN_NO_ETIME_XCH=1 (default off): with the owner plan
-     *  the per-sub-step exchange of the element time vector and the barrier
-     *  after it are skipped. The owner path reads element times of local
-     *  elements only (the block's first element; owner times come from the
-     *  sub-step counter); the ghost entries feed the per-element sync path.
-     *  Bitwise. */
-    static bool ownNoEtimeXch() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_OWN_NO_ETIME_XCH");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-    }
     /** DENDRO_ENUTS_OWN_XCH_OMP=1 (default off; hybrid builds, with
      *  DENDRO_ENUTS_OMP): the pack and unpack of the owner exchange run
      *  threaded over the variables (plain indexed copies). Bitwise. */
@@ -6218,8 +6205,8 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     ENUTS_TOC(AXPY_ELETS);
     ENUTS_TIC();
 
-    // OWN_NO_ETIME_XCH: the owner path never reads a ghost element time
-    const bool skipEt = ownPlan && ts::EnutsProf::ownNoEtimeXch();
+    // the owner path never reads a ghost element time
+    const bool skipEt = ownPlan;
     if (!skipEt) {
         pMesh->readFromGhostBeginElementVec(m_uiEleTime.data(), 1);
         pMesh->readFromGhostEndElementVec(m_uiEleTime.data(), 1);
