@@ -180,6 +180,23 @@ set(NUM_NPES_THRESHOLD 2 CACHE STRING "NPES Threshold")
 include(FetchContent)
 
 # ctest registration (only populated when BUILD_DENDRO_EXAMPLES is on)
+#
+# labels (set at the end of the BUILD_DENDRO_EXAMPLES block):
+#   unit       serial, self-checking, seconds
+#   mesh       octree, mesh, zip/unzip and ghost-exchange exactness
+#   mpi        runs under mpiexec (PROCESSORS = its rank count, RESOURCE_LOCK mpi)
+#   lts        the local time stepper and its solver contract
+#   partition  labelled / repartitioned meshes
+#   order      measured convergence order against a floor
+#   sabotage   a deliberately broken build that must fail (WILL_FAIL)
+#   slow       more than ~60 s
+#   gpu        CUDA builds only
+# running a subset:
+#   ctest -LE slow            everything but the slow tests (the checkpoint run)
+#   ctest -L unit             the unit tests
+#   ctest -L sabotage         only the must-fail builds
+#   ctest -R testZipExact     by name (regex)
+#   ./testTensorKernels -tc="<case>"   one doctest case by name
 enable_testing()
 
 # OpenMP
@@ -641,7 +658,7 @@ if(BUILD_DENDRO_EXAMPLES)
   function(dendro_add_doctest TARGET_NAME)
     add_executable(${TARGET_NAME} ${ARGN})
     target_link_libraries(${TARGET_NAME} PRIVATE dendro5 MPI::MPI_CXX doctest::doctest quadmath m)
-    doctest_discover_tests(${TARGET_NAME})
+    doctest_discover_tests(${TARGET_NAME} PROPERTIES LABELS unit)
   endfunction()
 
   dendro_add_doctest(testTensorKernels test/src/testTensorKernels.cpp)
@@ -785,6 +802,42 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testCloneNewSize test/src/testCloneNewSize.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
   dendro_add_deriv_test(testMeshTimeIntegrator test/src/testMeshTimeIntegrator.cpp)
+
+  # labels (see the list at enable_testing); appended, so labels set above stay
+  function(dendro_test_labels)
+    cmake_parse_arguments(L "" "" "TESTS;LABELS" ${ARGN})
+    foreach(T ${L_TESTS})
+      if(TEST ${T})
+        set_property(TEST ${T} APPEND PROPERTY LABELS ${L_LABELS})
+      endif()
+    endforeach()
+  endfunction()
+  function(dendro_test_mpi NP)
+    foreach(T ${ARGN})
+      if(TEST ${T})
+        set_property(TEST ${T} APPEND PROPERTY LABELS mpi)
+        set_tests_properties(${T} PROPERTIES PROCESSORS ${NP} RESOURCE_LOCK mpi)
+      endif()
+    endforeach()
+  endfunction()
+  dendro_test_labels(LABELS mesh TESTS
+    testOctreeStructure testOctreeStructure_2rank testMeshInvariants testMeshInvariants_2rank
+    testVTKHDF testVTKHDF_3rank testUnzipExact testUnzipScatterKernels testStabilityEvolution_eO8
+    testZipExact_eO4 testZipExact_eO6 testZipExact_eO8 testZipExact_sabotage1 testZipExact_sabotage2
+    testZipExact_sabotage3 testGhostPackExact_2rank testGhostPackExact_sabotage1
+    testGhostPackExact_sabotage2 testGhostPackExact_sabotage3 testUnzipPlanExact_eO4
+    testUnzipPlanExact_eO6 testUnzipPlanExact_eO8 testUnzipPlanExact_sabotage1
+    testUnzipPlanExact_sabotage2 testUnzipPlanExact_sabotage3)
+  dendro_test_labels(LABELS sabotage TESTS
+    testZipExact_sabotage1 testZipExact_sabotage2 testZipExact_sabotage3
+    testGhostPackExact_sabotage1 testGhostPackExact_sabotage2 testGhostPackExact_sabotage3
+    testUnzipPlanExact_sabotage1 testUnzipPlanExact_sabotage2 testUnzipPlanExact_sabotage3)
+  dendro_test_labels(LABELS unit TESTS testETSErrorControl testMixedSetTrim)
+  dendro_test_labels(LABELS order TESTS testDerivConvergence_orderGate)
+  dendro_test_mpi(2 testOctreeStructure_2rank testMeshInvariants_2rank testETSErrorControl_2rank
+    testGhostPackExact_2rank testGhostPackExact_sabotage1 testGhostPackExact_sabotage2
+    testGhostPackExact_sabotage3)
+  dendro_test_mpi(3 testVTKHDF_3rank)
 
   if(WITH_CUDA)
     # cuda GPU tests
