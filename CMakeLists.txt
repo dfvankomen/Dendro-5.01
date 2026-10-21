@@ -733,6 +733,16 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS} 4 4)
   set_tests_properties(testETSErrorControl testETSErrorControl_2rank
                        PROPERTIES TIMEOUT 300)
+  dendro_add_example(testCtxHooks test/src/testCtxHooks.cpp)
+  add_test(NAME testCtxHooks COMMAND testCtxHooks)
+  set_tests_properties(testCtxHooks PROPERTIES TIMEOUT 60)
+  dendro_add_example(testLtsClock test/src/testLtsClock.cpp)
+  dendro_add_example(testLtsClock_sabotage1 test/src/testLtsClock.cpp)
+  target_compile_definitions(testLtsClock_sabotage1 PRIVATE LTS_CLOCK_SABOTAGE=1)
+  add_test(NAME testLtsClock COMMAND testLtsClock)
+  add_test(NAME testLtsClock_sabotage1 COMMAND testLtsClock_sabotage1)
+  set_tests_properties(testLtsClock testLtsClock_sabotage1 PROPERTIES TIMEOUT 60)
+  set_tests_properties(testLtsClock_sabotage1 PROPERTIES WILL_FAIL TRUE)
   dendro_add_example(testLtsContract test/src/testLtsContract.cpp)
   add_test(NAME testLtsContract COMMAND testLtsContract 8 1e-3)
   add_test(NAME testLtsContract_2rank
@@ -768,6 +778,21 @@ if(BUILD_DENDRO_EXAMPLES)
   # partitioning tests (ours)
   dendro_add_example(newPartitioning test/src/test_new_partitioning.cpp)
   dendro_add_example(testPartitioning test/src/partitioningMeshTests.cpp)
+  # reports by color and exits 0: pass = it finishes and prints no red line;
+  # TEST 10o (labelled one-hop remesh vs the sandwich) runs under DENDRO_REMESH_ONEHOP=1
+  string(ASCII 27 DENDRO_ESC)
+  file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/testPartitioning_wd/vtu)
+  foreach(ARM plain onehop)
+    add_test(NAME testPartitioning_np4_${ARM}
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testPartitioning>
+                     ${MPIEXEC_POSTFLAGS} 3 7 1e-3 0.1 4 50 4
+             WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/testPartitioning_wd)
+    set_tests_properties(testPartitioning_np4_${ARM} PROPERTIES TIMEOUT 1200
+                         PASS_REGULAR_EXPRESSION "FINISHED"
+                         FAIL_REGULAR_EXPRESSION "${DENDRO_ESC}\\[1;31m")
+  endforeach()
+  set_tests_properties(testPartitioning_np4_onehop PROPERTIES ENVIRONMENT "DENDRO_REMESH_ONEHOP=1")
   dendro_add_example(testPartitioningEvolve test/src/partitioningEvolveTest.cpp)
   dendro_add_example(edgeCutCompare test/src/edgeCutCompare.cpp)
 
@@ -867,6 +892,10 @@ if(BUILD_DENDRO_EXAMPLES)
     testGhostPackExact_sabotage1 testGhostPackExact_sabotage2 testGhostPackExact_sabotage3
     testUnzipPlanExact_sabotage1 testUnzipPlanExact_sabotage2 testUnzipPlanExact_sabotage3)
   dendro_test_labels(LABELS unit TESTS testETSErrorControl testMixedSetTrim)
+  dendro_test_labels(LABELS unit lts TESTS testCtxHooks testLtsClock testLtsClock_sabotage1)
+  dendro_test_labels(LABELS sabotage TESTS testLtsClock_sabotage1)
+  dendro_test_labels(LABELS mesh partition TESTS testPartitioning_np4_plain testPartitioning_np4_onehop)
+  dendro_test_mpi(4 testPartitioning_np4_plain testPartitioning_np4_onehop)
   dendro_test_labels(LABELS unit lts TESTS testLtsContract testLtsContract_sabotage1
     testLtsContract_sabotage2 testLtsContract_sabotage3 testLtsContract_sabotage4
     testLtsContract_sabotage5)
