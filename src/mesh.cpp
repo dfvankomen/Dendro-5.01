@@ -4839,17 +4839,12 @@ void Mesh::buildE2NWithSMRepartitioned(unsigned int eleOrder) {
     t_e2nC_sortonly = MPI_Wtime();
     {
         // sorted unique dg indices: they are dense below nPe * elements, so
-        // mark and read in order (DENDRO_E2N_SORT_UNIQUE=1 or any index out
-        // of range falls back to the sort)
-        static const bool sortUnique = [] {
-            const char* v = std::getenv("DENDRO_E2N_SORT_UNIQUE");
-            return v && v[0] == '1';
-        }();
+        // mark and read in order (any index out of range falls back to the
+        // sort)
         const size_t dgN = (size_t)nPe_3d * m_uiNumTotalElements;
-        bool inRange = !sortUnique;
-        if (inRange)
-            for (const unsigned int v : e2n_dg)
-                if (v >= dgN) { inRange = false; break; }
+        bool inRange = true;
+        for (const unsigned int v : e2n_dg)
+            if (v >= dgN) { inRange = false; break; }
         if (inRange) {
             std::vector<char> used(dgN, 0);
             for (const unsigned int v : e2n_dg) used[v] = 1;
@@ -5710,15 +5705,10 @@ void Mesh::buildE2NMap() {
     t_e2n3_sortDG = MPI_Wtime();
     {
         // sorted unique, by marking (see buildE2NWithSMRepartitioned)
-        static const bool sortUnique = [] {
-            const char* v = std::getenv("DENDRO_E2N_SORT_UNIQUE");
-            return v && v[0] == '1';
-        }();
         const size_t dgN = m_uiAllElements.size() * m_uiNpE;
-        bool inRange = !sortUnique;
-        if (inRange)
-            for (const unsigned int v : E2N_DG_Sorted)
-                if (v >= dgN) { inRange = false; break; }
+        bool inRange = true;
+        for (const unsigned int v : E2N_DG_Sorted)
+            if (v >= dgN) { inRange = false; break; }
         if (inRange) {
             std::vector<char> used(dgN, 0);
             for (const unsigned int v : E2N_DG_Sorted) used[v] = 1;
