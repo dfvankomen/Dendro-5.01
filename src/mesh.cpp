@@ -21299,10 +21299,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         // f(element's own sub) — only correct when receiver's E2N
         // self-owns this CG, otherwise it'd deliver the wrong physical
         // value for hanging cases.
-        static const bool smSetDedup = [] {
-            const char* e = std::getenv("DENDRO_SM_SET_DEDUP");
-            return e && e[0] == '1';
-        }();
         std::vector<unsigned int> smStamp(runOld ? m_uiNumActualNodes : 0u, 0u);
         for (unsigned int p = 0; runOld && p < npes; p++) {
             std::vector<unsigned int> outSM;
@@ -21311,11 +21307,9 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             outSM.reserve(recvNodeSM_r[p].size());
             outDGG.reserve(recvNodeSM_r[p].size());
             outIsDG.reserve(recvNodeSM_r[p].size());
-            std::set<unsigned int> seen;
             // first time slot c is kept for peer p (stamp = p+1, no reset
-            // between peers); DENDRO_SM_SET_DEDUP=1 keeps the std::set
+            // between peers)
             auto firstSeen = [&](unsigned int c) {
-                if (smSetDedup) return seen.insert(c).second;
                 if (c >= smStamp.size()) smStamp.resize(c + 1, 0u);
                 if (smStamp[c] == (unsigned int)p + 1u) return false;
                 smStamp[c] = (unsigned int)p + 1u;
