@@ -7082,26 +7082,8 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
     const unsigned int lnE    = lNew->getNodeLocalEnd();
     const auto& lcg2dg        = lNew->getCG2DGMap();
     const auto* pL            = lNew->getAllElements().data();
-    struct Pos3Hash {
-        size_t operator()(const std::array<std::uint64_t, 3>& k) const noexcept {
-            uint64_t h = k[0] * 0x9E3779B97F4A7C15ull ^
-                         k[1] * 0xC2B2AE3D27D4EB4Full ^
-                         k[2] * 0x165667B19E3779F9ull;
-            h ^= h >> 29;
-            return (size_t)h;
-        }
-    };
-    // DENDRO_ONEHOP_FLAT_INDEX (default on, =0 reverts): flat chained index over the local cg positions instead of
-    // the node-based multimap (same matches, same writes). _CHECK=1 also runs the multimap
-    // into a scratch vector and aborts (75) on any differing local value or write count
-    static const bool flatIdx = [] {
-        const char* v = std::getenv("DENDRO_ONEHOP_FLAT_INDEX");
-        return !(v && v[0] == '0');
-    }();
-    static const bool flatChk = [] {
-        const char* v = std::getenv("DENDRO_ONEHOP_FLAT_INDEX_CHECK");
-        return v && v[0] == '1';
-    }();
+    // a flat chained index over the local cg positions (not a node-based
+    // multimap) finds each position's local cgs
     const size_t nLoc = lnE - lnB;
     auto cgPos = [&](unsigned int cg, std::uint64_t* p) {
         const unsigned int dg = lcg2dg[cg];
@@ -7119,32 +7101,6 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
         std::fill(o, o + lnB, (T)0);
         std::fill(o + lnE, o + dstSz, (T)0);
     }
-    // multimap path: writes into out, counts writes per local cg into w
-    auto writeMultimap = [&](T* out, std::vector<unsigned char>& w) {
-        std::unordered_multimap<std::array<std::uint64_t, 3>, unsigned int, Pos3Hash>
-            posCg;
-        posCg.reserve(nLoc);
-        for (unsigned int cg = lnB; cg < lnE; cg++) {
-            std::array<std::uint64_t, 3> p;
-            cgPos(cg, p.data());
-            posCg.emplace(p, cg);
-        }
-        unsigned long long ms = 0;
-        for (size_t r = 0; r < rdBuf.size(); r += rw) {
-            auto rng = posCg.equal_range({rdBuf[r], rdBuf[r + 1], rdBuf[r + 2]});
-            if (rng.first == rng.second) {
-                ms++;
-                continue;
-            }
-            for (auto it = rng.first; it != rng.second; ++it) {
-                const unsigned int cg = it->second;
-                for (unsigned int v = 0; v < dof; v++)
-                    std::memcpy(&out[v * dstSz + cg], &rdBuf[r + 3 + v], 8);
-                if (w[cg - lnB] < 255) w[cg - lnB]++;
-            }
-        }
-        return ms;
-    };
     auto writeFlat = [&](T* out, std::vector<unsigned char>& w) {
         auto mix = [](const std::uint64_t* p) {
             std::uint64_t h = p[0] * 0x9E3779B97F4A7C15ull;
@@ -7185,26 +7141,8 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
         return ms;
     };
     std::vector<unsigned char> nW(nLoc, 0);
-    const unsigned long long miss =
-        flatIdx ? writeFlat(vecOut, nW) : writeMultimap(vecOut, nW);
+    const unsigned long long miss = writeFlat(vecOut, nW);
     tph[6] = MPI_Wtime() - tlast;
-    if (flatIdx && flatChk) {
-        std::vector<T> ref((size_t)dof * dstSz, (T)0);
-        std::vector<unsigned char> wRef(nLoc, 0);
-        unsigned long long c[3] = {writeMultimap(ref.data(), wRef) != miss ? 1ull : 0ull,
-                                   0, 0};
-        for (unsigned int v = 0; v < dof; v++)
-            for (unsigned int cg = lnB; cg < lnE; cg++)
-                c[1] += std::memcmp(&ref[(size_t)v * dstSz + cg],
-                                    &vecOut[(size_t)v * dstSz + cg], sizeof(T)) != 0;
-        for (size_t i = 0; i < nLoc; i++) c[2] += wRef[i] != nW[i];
-        MPI_Allreduce(MPI_IN_PLACE, c, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
-        if (!rank)
-            std::cout << "[onehop-flat-check] miss_diff_ranks=" << c[0]
-                      << " value_mismatches=" << c[1] << " count_mismatches=" << c[2]
-                      << std::endl;
-        if (c[0] || c[1] || c[2]) MPI_Abort(comm, 75);
-    }
     if (grpChk) {
         unsigned long long c[4] = {(unsigned long long)((gErr != 0) != (err != 0)),
                                    gMiss != miss ? 1ull : 0ull, 0, 0};
