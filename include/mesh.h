@@ -757,7 +757,7 @@ class Mesh {
      *  values. Indexed by dof var; vars beyond the vector size fill 0. */
     std::vector<double> m_uiPhantomFill;
 
-    /** Transport hints kept by repartitionMeshGlobal (DENDRO_REDIST_HINT=1):
+    /** Transport hints kept by repartitionMeshGlobal:
      *  the pre-partition local elements on this rank with their labels,
      *  and for each new local element the rank it came from (sorted by
      *  x,y,z,level). redistributeVec routes by them instead of the TN-hash

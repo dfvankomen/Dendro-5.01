@@ -20156,18 +20156,14 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     }
     __phase("partition-decision");
 
-    // DENDRO_REDIST_HINT: keep what the transport would otherwise ask a
+    // transport hint: keep what the transport would otherwise ask a
     // directory for (pre-partition local elements + their labels here, the
     // origin rank of every new local element below)
-    static const bool redistHint = [] {
-        const char* e = std::getenv("DENDRO_REDIST_HINT");
-        return !(e && e[0] == '0');
-    }();
     m_uiRepartHint = false;
     m_uiRepartPreTN.clear();
     m_uiRepartPreLabel.clear();
     m_uiRepartOrigin.clear();
-    const bool keepHint = redistHint && pushPath &&
+    const bool keepHint = pushPath &&
                           npes == (int)this->getMPICommSizeGlobal();
     if (keepHint) {
         m_uiRepartPreTN.assign(m_uiAllElements.begin() + m_uiElementLocalBegin,
