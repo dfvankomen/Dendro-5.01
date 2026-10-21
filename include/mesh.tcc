@@ -867,38 +867,6 @@ void Mesh::syncZipNonPrimary(T* vec, unsigned int dof) {
         s_uiCommStatSyncBytesAll += (DendroIntL)(sendN * dof * sizeof(T));
         s_uiCommStatSyncCallsAll++;
     }
-    if (!m_uiZipSyncCheckKeep.empty() && m_uiZipSyncCheckKeep.size() == recvN) {
-        static int calls = 0;
-        size_t dropped = 0, differ = 0, nanBefore = 0, differDeliv = 0, differUnread = 0;
-        unsigned int sampleCg = 0; bool haveSample = false;
-        for (size_t k = 0; k < recvN; k++) {
-            if (m_uiZipSyncCheckKeep[k]) continue;
-            dropped++;
-            const unsigned int cg = m_uiZipSyncRecvCg[k];
-            bool d = false, isnanb = false;
-            for (unsigned int v = 0; v < dof; v++) {
-                const T before = vec[v * m_uiNumActualNodes + cg];
-                const T after  = recvBuf[k * dof + v];
-                if (std::isnan((double)before)) isnanb = true;
-                if (!(before == after)) d = true;
-            }
-            if (isnanb) nanBefore++;
-            if (d) {
-                differ++;
-                if (m_uiZipSyncCheckDelivered[k]) differDeliv++;
-                if (!m_uiZipSyncCheckRead[k]) differUnread++;
-                if (!haveSample) { sampleCg = cg; haveSample = true; }
-            }
-        }
-        if (calls < 12 || differ)
-            std::cout << "[zipsync-check r" << m_uiActiveRank << "] call=" << calls
-                      << " dof=" << dof << " dropped=" << dropped << " differ=" << differ
-                      << " differ_delivered=" << differDeliv << " differ_unread=" << differUnread
-                      << " nan_before=" << nanBefore
-                      << (haveSample ? " sample_cg=" : "") << (haveSample ? std::to_string(sampleCg) : "")
-                      << std::endl;
-        calls++;
-    }
     dendro::stepprof::Scope spUnpack(dendro::stepprof::SYNC_UNPACK);
     for (size_t k = 0; k < recvN; k++) {
         const unsigned int cg = m_uiZipSyncRecvCg[k];
