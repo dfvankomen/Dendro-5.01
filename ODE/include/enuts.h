@@ -236,34 +236,6 @@ struct EnutsProf {
         return (d.empty() || !on()) ? nullptr : d.c_str();
     }
     static bool xchTrace() { return xchTraceDir() != nullptr; }
-    /** DENDRO_ENUTS_OWN_P2C_SHARED=1 (default off): before each stage's sync
-     *  loop, the unique children (parent element, child) of every active
-     *  block are listed once, each gets a slot in one shared pool, and a
-     *  threaded pass over the unique parent rows builds each row once and
-     *  interpolates its children into the pool; the block loop then only
-     *  copies. Same row build and interpolation code as the per-block path,
-     *  so bitwise. Removes the cross-thread duplicates and the per-thread
-     *  pool-cap recomputes. DENDRO_ENUTS_P2C_SHARED_MB (default 2048) caps
-     *  the shared pool; children past the cap take the per-block path. */
-    static bool ownP2cShared() { return ownP2cSharedMode() != 0; }
-    /** 1 = shared pool, block loop copies from it; 2 = the pre-pass writes
-     *  each child's outputs straight into every reader block (no pool, no
-     *  second copy; the child slots have no other writer). Both bitwise. */
-    static int ownP2cSharedMode() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_OWN_P2C_SHARED");
-            const int i   = e ? std::atoi(e) : 0;
-            return (i == 1 || i == 2) ? i : 0;
-        }();
-        return v;
-    }
-    static size_t p2cSharedBytes() {
-        static const size_t v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_P2C_SHARED_MB");
-            return (size_t)(e ? std::atol(e) : 2048) << 20;
-        }();
-        return v;
-    }
     static bool ifaceNL() { return (ifaceFix() & 7) == 7; }
     static bool ifaceShift() { return (ifaceFix() & 8) != 0; }
     /** DENDRO_ENUTS_OWNER_SYNC=1: before a block takes its stage data, give
@@ -694,15 +666,15 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     unsigned long long m_uiP2cPoolPass = 0;
     unsigned int p2c_index(unsigned int ele, unsigned int cnum);
     T* p2c_slot(unsigned int idx, const SyncTag& key, size_t stride, bool& hit);
-    /** OWN_P2C_SHARED: shared-pool bookkeeping of the current pass */
-    bool m_uiP2cSharedOn = false;            // this pass used the shared pool
+    /** own_p2c_prepass bookkeeping of the current pass */
+    bool m_uiP2cSharedOn = false;            // this pass ran the pre-pass
     std::vector<unsigned int> m_uiP2cWorkRow;   // unique rows of the pass
     std::vector<unsigned int> m_uiP2cWorkBlk;   // a reader block per row
     std::vector<unsigned int> m_uiP2cWorkOff;   // children offsets per row
     std::vector<unsigned int> m_uiP2cWorkStore; // store idx per child
     std::vector<unsigned char> m_uiP2cWorkCnum; // child number per child
-    std::vector<unsigned int> m_uiP2cWorkRdr, m_uiP2cWorkOutB, m_uiP2cWorkOutE;  // mode 2: reader block + its runs
-    std::vector<T> m_uiOwnRowBuf2;              // mode 2: one child's values
+    std::vector<unsigned int> m_uiP2cWorkRdr, m_uiP2cWorkOutB, m_uiP2cWorkOutE;  // reader block + its runs
+    std::vector<T> m_uiOwnRowBuf2;              // one child's values
     std::vector<unsigned long long> m_uiP2cRowPass;  // row -> pass it was listed in
     std::vector<unsigned int> m_uiP2cRowAt;          // row -> index in the work list
     std::vector<SyncTag> m_uiSyncTag;
@@ -786,7 +758,12 @@ class ExplicitNUTS : public ETS<T, Ctx> {
      *  faces and edges) in the frame of a reader block of class rows cv */
     void own_row_build(unsigned int row, unsigned int rk_s, const OwnConv* cv,
                        T* rowBuf, T* g, T* pin, T* pout, double* im1, double* im2);
-    /** OWN_P2C_SHARED: list the pass's unique children and interpolate them */
+    /** before each stage's sync loop (owner plan): list the unique children
+     *  (parent element, child) of the active blocks once; a threaded pass over
+     *  the unique parent rows builds each row once and writes each child's
+     *  outputs straight into every reader block (the child slots have no other
+     *  writer), so the block loop skips them. Same row build and interpolation
+     *  code as the per-block path, so bitwise. */
     void own_p2c_prepass(unsigned int rk_s, const unsigned int* actIds, unsigned int nAct,
                          bool thr);
     const ot::Mesh* m_uiOwnMesh = nullptr;
@@ -2555,14 +2532,13 @@ T* ExplicitNUTS<T, Ctx>::p2c_slot(unsigned int idx, const SyncTag& key,
     std::vector<T>& m_uiP2cPool                    = thr_ ? thr_->p2cPool : this->m_uiP2cPool;
     hit = false;
     if (m_uiP2cSharedOn) {
-        // OWN_P2C_SHARED: the pre-pass filled one shared pool; read-only here
+        // the pre-pass wrote every child of this pass into its reader blocks
         if (this->m_uiP2cPassOf[idx] == m_uiSyncPass && this->m_uiP2cTagOf[idx] == key) {
             hit = true;
-            if (this->m_uiP2cSlotOf[idx] == ~0u) return nullptr;  // written into the blocks already
-            return this->m_uiP2cPool.data() + (size_t)this->m_uiP2cSlotOf[idx] * stride;
+            return nullptr;
         }
         if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_OVF] += 1;
-        return nullptr;  // past the shared cap: computed, not stored
+        return nullptr;  // not listed by the pre-pass: computed, not stored
     }
     if (m_uiP2cPoolPass != m_uiSyncPass) {
         m_uiP2cPoolPass = m_uiSyncPass;
@@ -3415,7 +3391,6 @@ void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int
     const unsigned int dof   = m_uiEVar.get_dof();
     const size_t stride      = (size_t)dof * nPe;
     const unsigned int nCls  = m_uiOwnDTs.size();
-    const size_t cap = std::max<size_t>(64, ts::EnutsProf::p2cSharedBytes() / (stride * sizeof(T)));
     m_uiP2cSharedOn = false;
     if (m_uiOwnPlan.size() != pMesh->getLocalBlockList().size())
         m_uiOwnPlan.assign(pMesh->getLocalBlockList().size(), OwnPlan());
@@ -3423,11 +3398,10 @@ void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int
     key.pass = m_uiSyncPass;
     key.rk   = rk_s;
     key.fut  = 3;
-    // 1. the unique children of the active blocks, one shared slot each, grouped by parent row
-    const bool direct = ts::EnutsProf::ownP2cSharedMode() == 2;
+    // 1. the children of the active blocks, one entry per reader block, grouped by parent row
     struct Item { unsigned int row, store, blk, outB, outE; unsigned char cnum; };
     std::vector<Item> items;
-    size_t slots = 0, over = 0;
+    size_t slots = 0;
     for (unsigned int bb = 0; bb < nAct; bb++) {
         const unsigned int blk = actIds[bb];
         OwnPlan& op            = m_uiOwnPlan[blk];
@@ -3437,18 +3411,14 @@ void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int
         }
         for (const typename OwnPlan::Child& w : op.ch) {
             if (m_uiP2cPassOf[w.store] != m_uiSyncPass) {
-                if (!direct && slots >= cap) { over++; continue; }
                 m_uiP2cPassOf[w.store] = m_uiSyncPass;
-                m_uiP2cSlotOf[w.store] = direct ? ~0u : (unsigned int)slots;
+                m_uiP2cSlotOf[w.store] = ~0u;
                 m_uiP2cTagOf[w.store]  = key;
                 slots++;
-            } else if (!direct) {
-                continue;  // pool mode: one entry per unique child
             }
             items.push_back({w.row, w.store, blk, w.outB, w.outE, w.cnum});
         }
     }
-    if (ts::EnutsProf::on() && over) ts::EnutsProf::get().t[ts::EnutsProf::CN_P2C_OVF] += (double)over;
     if (ts::EnutsProf::on()) {
         // distinct children of this coarse step and the store a hoisted p2c
         // (one interpolated child per contributing class and stage) would need
@@ -3493,13 +3463,11 @@ void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int
         m_uiP2cWorkOutE[i]  = items[i].outE;
     }
     m_uiP2cWorkOff.push_back((unsigned int)items.size());
-    if (!direct && m_uiP2cPool.size() < slots * stride) m_uiP2cPool.resize(slots * stride);
     m_uiP2cPoolPass  = m_uiSyncPass;
-    m_uiP2cUsed      = direct ? 0 : slots;
+    m_uiP2cUsed      = 0;
     m_uiP2cSharedOn  = true;
-    T* pool          = direct ? nullptr : m_uiP2cPool.data();
     const unsigned int nRows = (unsigned int)m_uiP2cWorkRow.size();
-    // 2. each unique row once: its reconciled row, then its children into the pool
+    // 2. each unique row once: its reconciled row, then its children into the reader blocks
 #ifdef DENDRO_ENUTS_HAS_OMP
 #pragma omp parallel for schedule(dynamic, 1) if (thr)
 #endif
@@ -3530,47 +3498,37 @@ void ExplicitNUTS<T, Ctx>::own_p2c_prepass(unsigned int rk_s, const unsigned int
         own_row_build(m_uiP2cWorkRow[r], rk_s, cv, rowBufV.data(), g, pin, pout, im1, im2);
         if (pprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_ROW] += ts::EnutsProf::now() - tr0;
         std::fill(sweepOkV.begin(), sweepOkV.end(), 0);
-        if (!direct) {
-            for (unsigned int i = m_uiP2cWorkOff[r]; i < m_uiP2cWorkOff[r + 1]; i++) {
-                T* sd = pool + (size_t)m_uiP2cSlotOf[m_uiP2cWorkStore[i]] * stride;
-                for (unsigned int v = 0; v < dof; v++)
-                    p2c3_shared(pMesh, rowBufV.data() + (size_t)v * nPe, sd + (size_t)v * nPe,
-                                m_uiP2cWorkCnum[i], sweepV.data() + (size_t)v * 6 * nPe,
-                                sweepOkV.data() + (size_t)v * 6);
-            }
-        } else {
-            // one child at a time into pout, then its output runs into every reader block
-            std::vector<T>& childV = thr_ ? thr_->ownRowBuf2 : this->m_uiOwnRowBuf2;
-            if (childV.size() < stride) childV.resize(stride);
-            unsigned int i = m_uiP2cWorkOff[r];
-            while (i < m_uiP2cWorkOff[r + 1]) {
-                const unsigned int st = m_uiP2cWorkStore[i];
-                const double tp0 = pprof ? ts::EnutsProf::now() : 0.0;
-                for (unsigned int v = 0; v < dof; v++)
-                    p2c3_shared(pMesh, rowBufV.data() + (size_t)v * nPe, childV.data() + (size_t)v * nPe,
-                                m_uiP2cWorkCnum[i], sweepV.data() + (size_t)v * 6 * nPe,
-                                sweepOkV.data() + (size_t)v * 6);
-                const double tc0 = pprof ? ts::EnutsProf::now() : 0.0;
-                if (pprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_P2C] += tc0 - tp0;
-                for (; i < m_uiP2cWorkOff[r + 1] && m_uiP2cWorkStore[i] == st; i++) {
-                    const unsigned int rb = m_uiP2cWorkRdr[i];
-                    const OwnPlan& rop    = m_uiOwnPlan[rb];
-                    T* blkVec = (T*)m_uiBVec[rb]._vec[stage_slot(rk_s)].data();
-                    const size_t lxyz = (size_t)blkList[rb].getAllocationSzX() *
-                                        blkList[rb].getAllocationSzY() *
-                                        blkList[rb].getAllocationSzZ();
-                    for (unsigned int v = 0; v < dof; v++) {
-                        T* dv       = blkVec + (size_t)v * lxyz;
-                        const T* pv = childV.data() + (size_t)v * nPe;
-                        for (unsigned int q = m_uiP2cWorkOutB[i]; q < m_uiP2cWorkOutE[i]; q++) {
-                            const T* sp = pv + rop.cT[q];
-                            T* dp       = dv + rop.cDst[q];
-                            for (unsigned int k = 0; k < rop.cLen[q]; k++) dp[k] = sp[k];
-                        }
+        // one child at a time into pout, then its output runs into every reader block
+        std::vector<T>& childV = thr_ ? thr_->ownRowBuf2 : this->m_uiOwnRowBuf2;
+        if (childV.size() < stride) childV.resize(stride);
+        unsigned int i = m_uiP2cWorkOff[r];
+        while (i < m_uiP2cWorkOff[r + 1]) {
+            const unsigned int st = m_uiP2cWorkStore[i];
+            const double tp0 = pprof ? ts::EnutsProf::now() : 0.0;
+            for (unsigned int v = 0; v < dof; v++)
+                p2c3_shared(pMesh, rowBufV.data() + (size_t)v * nPe, childV.data() + (size_t)v * nPe,
+                            m_uiP2cWorkCnum[i], sweepV.data() + (size_t)v * 6 * nPe,
+                            sweepOkV.data() + (size_t)v * 6);
+            const double tc0 = pprof ? ts::EnutsProf::now() : 0.0;
+            if (pprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_P2C] += tc0 - tp0;
+            for (; i < m_uiP2cWorkOff[r + 1] && m_uiP2cWorkStore[i] == st; i++) {
+                const unsigned int rb = m_uiP2cWorkRdr[i];
+                const OwnPlan& rop    = m_uiOwnPlan[rb];
+                T* blkVec = (T*)m_uiBVec[rb]._vec[stage_slot(rk_s)].data();
+                const size_t lxyz = (size_t)blkList[rb].getAllocationSzX() *
+                                    blkList[rb].getAllocationSzY() *
+                                    blkList[rb].getAllocationSzZ();
+                for (unsigned int v = 0; v < dof; v++) {
+                    T* dv       = blkVec + (size_t)v * lxyz;
+                    const T* pv = childV.data() + (size_t)v * nPe;
+                    for (unsigned int q = m_uiP2cWorkOutB[i]; q < m_uiP2cWorkOutE[i]; q++) {
+                        const T* sp = pv + rop.cT[q];
+                        T* dp       = dv + rop.cDst[q];
+                        for (unsigned int k = 0; k < rop.cLen[q]; k++) dp[k] = sp[k];
                     }
                 }
-                if (pprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_CPY] += ts::EnutsProf::now() - tc0;
             }
+            if (pprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_CPY] += ts::EnutsProf::now() - tc0;
         }
         (void)nCls;
     }
@@ -3774,7 +3732,7 @@ void ExplicitNUTS<T, Ctx>::own_sync_fill(unsigned int blk, unsigned int rk_s,
         bool hit = false;
         T* sd    = m_uiSyncPassOpen ? p2c_slot(w.store, key, stride, hit) : nullptr;
         nhit += hit;
-        if (hit && !sd) continue;  // OWN_P2C_SHARED=2: the pre-pass wrote this child
+        if (hit && !sd) continue;  // the pre-pass wrote this child
         if (!hit && !(m_uiOwnRowBufRow == w.row && m_uiOwnRowBufPass == m_uiSyncPass &&
                       m_uiSyncPassOpen)) {
             const double tr0 = sprof ? ts::EnutsProf::now() : 0.0;
@@ -6002,7 +5960,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         ENUTS_TIC();
         m_uiSyncPass++;
         m_uiSyncPassOpen = true;
-        if (ownPlan && ts::EnutsProf::ownP2cShared()) {
+        if (ownPlan) {
             const double tpre = prof ? ts::EnutsProf::now() : 0.0;
             own_p2c_prepass(BLK_S, actIds, nAct, thr);
             if (prof) ts::EnutsProf::get().t[ts::EnutsProf::SY_PRE] += ts::EnutsProf::now() - tpre;
