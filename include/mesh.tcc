@@ -468,7 +468,8 @@ T* Mesh::createUnZippedVector(unsigned int dof) const {
     T* uvec = NULL;
 
     try {
-        uvec = new T[dof * m_uiUnZippedVecSz];
+        // zeroed: unzip never writes the padding outside the domain
+        uvec = new T[dof * m_uiUnZippedVecSz]();
 
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__

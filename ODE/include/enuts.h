@@ -4301,8 +4301,9 @@ void ExplicitNUTS<T, Ctx>::sync_thread_setup(bool cgScratch) {
     for (size_t t = 1; t < nt; t++) {
         SyncThr& st = m_uiSyncThr[t];
         if (!st.op) st.op = new ENUTSOp(m_uiType);
-        if (!st.dgW) st.dgW.reset(new T[dgN]);
-        if (cgScratch && !st.cgW) st.cgW.reset(new T[cgN]);
+        // zeroed like the shared scratch they mirror
+        if (!st.dgW) st.dgW.reset(new T[dgN]());
+        if (cgScratch && !st.cgW) st.cgW.reset(new T[cgN]());
         // mirrors of the shared per-pass caches, sized like them
         if (st.p2cPassOf.size() != m_uiP2cPassOf.size()) {
             st.p2cPassOf.assign(m_uiP2cPassOf.size(), 0);
