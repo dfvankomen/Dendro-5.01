@@ -20190,17 +20190,14 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // the cascade (collective agreement) when no SFC E2N source exists.
     // _CHECK=1 also runs the cascade + audit and compares it with the keys
     // (canonical phys per slot must match in local/R1 rows, else abort 77).
-    // DENDRO_REPART_EXACT_GHOST (default on, =0 reverts; needs K6 keys, else rings): push every element
-    // once to its exact destination set (computeExactGhostDest: label, labels
-    // of touching elements incl. finer ones, K6 owner closure) instead of the
-    // R1-R3 claim rounds and the owner-target fetch.
+    // exact ghosts (needs K6 keys on every rank and more than one rank, else
+    // the R1-R3 rings): push every element once to its exact destination set
+    // (computeExactGhostDest: label, labels of touching elements incl. finer
+    // ones, K6 owner closure) instead of the R1-R3 claim rounds and the
+    // owner-target fetch.
     // DENDRO_REPART_EXACT_GHOST_CHECK=1 compares the exact sets with what the
     // rebuild delivers and checks shell/padding coverage; =2 also aborts (78)
     // on anything missing
-    static const bool exactGhostEnv = [] {
-        const char* e = std::getenv("DENDRO_REPART_EXACT_GHOST");
-        return !(e && e[0] == '0');   // default on; =0 reverts to the ring path
-    }();
     static const int exactGhostCheck = exactGhostCheckLevel();
     std::vector<std::uint64_t> ckRecv;
     bool ckHave = false, ckUse = false;
@@ -20262,7 +20259,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
 
         // exact owner-side destinations: computed for the exact push and
         // for its checker (which compares them with what the rings deliver)
-        const bool exactUse = exactGhostEnv && ckAll && npes > 1;
+        const bool exactUse = ckAll && npes > 1;
         std::vector<size_t> exOff;
         std::vector<unsigned int> exDst;
         std::vector<unsigned char> exCls;
