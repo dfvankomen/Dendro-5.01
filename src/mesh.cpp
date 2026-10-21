@@ -21303,23 +21303,18 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
     // The expansion code produced empty scatter maps (we zeroed the
     // inputs). Build them from the now-correct member E2N by iterating
     // over ghost element nodes and checking DG ownership.
-    // DENDRO_MINIMAL_SCATTER: shrink the per-step nodal scatter map to
-    // the slots its consumers actually read. The map is always built FULL
-    // first (so buildZipPlan derives the same mirror pairs / send decodes
-    // as the default path), then rebuilt post-zip-plan keeping only slots
-    // in the keep-set: local-element E2N ghost reads, unzip block-padding
-    // reads, and Stage-3/Pass-D mirror sources. Kept entries resolve to
-    // the identical sender decode as the full map, so every surviving
-    // exchange effect is byte-identical to the default path. (NOTE:
-    // isGhostTwo is a fetch-round label, not a geometric ring — an
-    // element-level R2 skip starves the unzip; see the coverage check.)
-    const char* minScatterEnv = std::getenv("DENDRO_MINIMAL_SCATTER");
-    const bool minimalScatter = !(minScatterEnv && minScatterEnv[0] == '0');
-    if (minimalScatter && rank == 0)
-        std::cout << "[minimal-scatter] shrinking per-step nodal scatter "
-                     "map to consumer-read slots"
-                  << std::endl;
-    auto buildNodalSM = [&](const SlotFlags* keepSlots) {
+    // minimal scatter: the per-step nodal scatter map is shrunk to the
+    // slots its consumers actually read. The map is built FULL first (so
+    // buildZipPlan derives its mirror pairs / send decodes from the full
+    // map), then filtered post-zip-plan keeping only slots in the keep-set:
+    // local-element E2N ghost reads, unzip block-padding reads, and
+    // Stage-3/Pass-D mirror sources. Kept entries resolve to the identical
+    // sender decode as the full map, so every surviving exchange effect is
+    // the full map's. The full map alone is wrong: it aborts at start-up
+    // (NaN metric determinant, rm case). (NOTE: isGhostTwo is a fetch-round
+    // label, not a geometric ring — an element-level R2 skip starves the
+    // unzip; see the coverage check.)
+    auto buildNodalSM = [&]() {
         std::vector<unsigned int> recvNodeSM_r[npes];
         std::vector<unsigned int> recvNodeDGG[npes];
         std::vector<unsigned char> recvNodeIsDG[npes];
@@ -21380,7 +21375,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 for (unsigned int n = 0; n < m_uiNpE; ++n) {
                     const unsigned int cgIdx = e2nCG[eb + n];
                     if (cgIdx >= m_uiNodeLocalBegin && cgIdx < m_uiNodeLocalEnd) continue;
-                    if (keepSlots && !keepSlots->count(cgIdx)) continue;
                     const unsigned int ownerDG    = e2nDG[eb + n];
                     const unsigned int ownerLocal = ownerDG / m_uiNpE;
                     const unsigned int ownerSub   = ownerDG % m_uiNpE;
@@ -21467,7 +21461,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                     continue;
 
                 // shrink pass: drop slots no consumer reads
-                if (keepSlots && !keepSlots->count(cgIdx)) continue;
 
                 unsigned int ownerGid;
                 unsigned int ownerTrank;
@@ -21874,15 +21867,14 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             if (m_uiRecvNodeCount[p] != 0) m_uiRecvProcList.push_back(p);
         }
     };
-    buildNodalSM(nullptr);
+    buildNodalSM();
     __phase("nodal-scatter-map");
 
-    // DENDRO_MINIMAL_SCATTER_FILTER (default on, =0 reverts): shrink the full map in place instead of
-    // rebuilding it. the rebuild drops a recv entry iff its slot is outside
-    // the keep set, before a per-peer dedup that is per slot and keeps order,
-    // so the kept lists are the full lists filtered; each sender learns which
-    // of its entries survive from one byte per entry. _CHECK=1 also rebuilds
-    // and compares every list
+    // shrink the full map in place to the keep set: a rebuild would drop a
+    // recv entry iff its slot is outside the keep set, before a per-peer
+    // dedup that is per slot and keeps order, so the kept lists are the full
+    // lists filtered; each sender learns which of its entries survive from
+    // one byte per entry
     auto filterNodalSM = [&](const SlotFlags& keepSlots) {
         const size_t totR = m_uiScatterMapActualNodeRecv.size();
         const size_t totS = m_uiScatterMapActualNodeSend.size();
@@ -22127,13 +22119,13 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             buildZipPlan();
             __phase("  blk: buildZipPlan");
 
-            // minimal-scatter shrink: rebuild the nodal SM keeping only
+            // minimal-scatter shrink: filter the nodal SM to the
             // consumer-read slots. Runs AFTER buildZipPlan so the mirror
             // pairs were derived from the FULL map and their source slots
             // land in the keep-set (identical last-writer semantics to
-            // the default path). Collective — every active rank passes
+            // the full map). Collective — every active rank passes
             // through here.
-            if (minimalScatter) {
+            {
                 SlotFlags keepSlots(m_uiNumActualNodes);
                 // (1) ghost slots read via local elements' E2N (shared
                 // faces / hanging interpolation / elemental loops)
@@ -22250,51 +22242,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 // non-primary local cgs must keep full-map semantics
                 for (const auto& kv : m_uiZipNonPrimaryToGhostCg)
                     keepSlots.insert(kv.second);
-                static const bool smFilter = [] {
-                    const char* e = std::getenv("DENDRO_MINIMAL_SCATTER_FILTER");
-                    return !(e && e[0] == '0');
-                }();
-                static const bool smFilterCheck = [] {
-                    const char* e = std::getenv("DENDRO_MINIMAL_SCATTER_FILTER_CHECK");
-                    return e && e[0] == '1';
-                }();
-                if (smFilter && smFilterCheck) {
-                    auto sSend = m_uiScatterMapActualNodeSend;
-                    auto sRecv = m_uiScatterMapActualNodeRecv;
-                    auto sDG = m_uiScatterMapSendIsDG;
-                    auto sSC = m_uiSendNodeCount, sRC = m_uiRecvNodeCount;
-                    auto sSO = m_uiSendNodeOffset, sRO = m_uiRecvNodeOffset;
-                    buildNodalSM(&keepSlots);
-                    const auto rSend = m_uiScatterMapActualNodeSend;
-                    const auto rRecv = m_uiScatterMapActualNodeRecv;
-                    const auto rDG = m_uiScatterMapSendIsDG;
-                    const auto rSC = m_uiSendNodeCount, rRC = m_uiRecvNodeCount;
-                    const auto rSO = m_uiSendNodeOffset, rRO = m_uiRecvNodeOffset;
-                    std::swap(m_uiScatterMapActualNodeSend, sSend);
-                    std::swap(m_uiScatterMapActualNodeRecv, sRecv);
-                    std::swap(m_uiScatterMapSendIsDG, sDG);
-                    m_uiSendNodeCount = sSC; m_uiRecvNodeCount = sRC;
-                    m_uiSendNodeOffset = sSO; m_uiRecvNodeOffset = sRO;
-                    filterNodalSM(keepSlots);
-                    unsigned long long bad[2] = {0, (unsigned long long)m_uiScatterMapActualNodeRecv.size()};
-                    bad[0] = (rSend != m_uiScatterMapActualNodeSend) + (rRecv != m_uiScatterMapActualNodeRecv)
-                             + (rDG != m_uiScatterMapSendIsDG) + (rSC != m_uiSendNodeCount)
-                             + (rRC != m_uiRecvNodeCount) + (rSO != m_uiSendNodeOffset)
-                             + (rRO != m_uiRecvNodeOffset);
-                    MPI_Allreduce(MPI_IN_PLACE, bad, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, commActive);
-                    if (!rank)
-                        std::cout << "[sm-filter-check] differing lists=" << bad[0]
-                                  << " (recv entries " << bad[1] << ")" << std::endl;
-                } else if (smFilter) {
-                    filterNodalSM(keepSlots);
-                } else {
-                    buildNodalSM(&keepSlots);
-                }
-                static bool smfAnnounced = false;
-                if (smFilter && !rank && !smfAnnounced) {
-                    smfAnnounced = true;
-                    std::cout << "[sm-filter] minimal scatter by in-place filter" << std::endl;
-                }
+                filterNodalSM(keepSlots);
             }
 
             // coverage check (DENDRO_SM_COVERAGE_CHECK=1): does the recv
