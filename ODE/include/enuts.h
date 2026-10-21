@@ -151,11 +151,6 @@ struct EnutsProf {
         return v == 1;
     }
     unsigned long long chk_cmp = 0, chk_bad = 0;
-    /** DENDRO_ENUTS_SYNC_FAST=1 (default off = the original loops, until the
-     *  gate covers labelled meshes, NLSM and BSSN):
-     *  bit-identical sync_blk_timestep shortcuts (no same-time DG copy,
-     *  per-stage correction reuse across blocks, padding-fill plan, per-pass
-     *  store and shared sweeps of the parent-to-child interpolations) */
     /** interface setting (LtsOptions::iface, 3 or 15), a bit mask: how a
      *  block converts stage data it takes from a neighbor that steps with a
      *  different dt.
@@ -248,13 +243,6 @@ struct EnutsProf {
             return m;
         }();
         return v;
-    }
-    static bool syncFast() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_SYNC_FAST");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
     }
     /** DENDRO_ENUTS_OWNER_SYNC_CHECK=1: verify the hanging-node recipes of the
      *  owner-sync plan against Mesh::getElementNodalValues once per mesh */
@@ -675,7 +663,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     bool m_uiSyncPassOpen           = false;
     std::vector<T> m_uiSyncCVec;
 
-    /** per local block, the padding-fill copy plan (DENDRO_ENUTS_SYNC_FAST):
+    /** per local block, the padding-fill copy plan (per-element sync, fast form):
      *  per dependent element, (src node, dst block index) pairs in the exact
      *  write order of the coordinate loops; cnum >= 0 = coarse parent, p2c
      *  interpolate child cnum first */
@@ -4421,7 +4409,11 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     const int ownSync   = (rk_s >= 1 && !isIGTSync) ? ts::EnutsProf::ownerSync() : 0;
     // ownSync runs the plan (below, once the dependents are known), or the
     // per-element form where the plan is unavailable
-    const bool syncFast = ts::EnutsProf::syncFast() && !ownSync;
+    // the per-element sync takes the bit-identical shortcuts (no same-time DG
+    // copy, per-stage correction reuse across blocks, padding-fill plan,
+    // per-pass store and shared sweeps of the parent-to-child interpolations)
+    // except in the per-element owner-sync form
+    const bool syncFast = !ownSync;
     const bool ifxEq  = (ts::EnutsProf::ifaceFix() & 1) && rk_s >= 1 && !isIGTSync;
     const bool ifxAll = (ts::EnutsProf::ifaceFix() & 2) && rk_s >= 1 && !isIGTSync;
     // [ENUTS_OMP edit 1/5 begin] worker threads (tid >= 1) of the threaded sync
@@ -5719,7 +5711,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         // everything sync_blk_timestep builds on first use, and the scratch
         // of the worker threads, before any parallel region
         const int own = ts::EnutsProf::ownerSync();
-        sync_prebuild(ownPlan, own && !ownPlan, ts::EnutsProf::syncFast() && !own);
+        sync_prebuild(ownPlan, own && !ownPlan, !own);
         sync_thread_setup(own && !ownPlan);
         if (!ownPlan) ensure_evar_dg();  // before the parallel loops
     }
