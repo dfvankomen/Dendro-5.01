@@ -2111,11 +2111,6 @@ class Mesh {
         this->syncZipNonPrimary(vec, dof);
     }
 
-    /** DENDRO_GHOSTREAD_CHECK=1 probe: after a ghost exchange, report unzip-read
-     *  cg slots that are non-finite or all-zero across dof (ghost and local). */
-    template <typename T>
-    void ghostReadCheck(const T* vec, unsigned int dof, const char* tag);
-
     /** DENDRO_GHOST_POS_CHECK=1 probe: fill a test vector with a function of
      *  each cg slot's cg2dg position, run the side-channel sync and the plain
      *  ghost exchange on it, and report slots whose value no longer matches

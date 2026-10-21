@@ -1605,7 +1605,6 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
     // send-buffer pack and propagated to ghost cgs transitively.
     if (!m_xpActive && m_uiMPIContexts.empty() && xprofBegin()) m_xpVec = vec;
     const bool xpb = m_xpActive && m_xpVec == (const void*)vec;
-    ghostReadCheck(vec, dof, "pre");
     ghostPosCheck("plain");
     syncZipNonPrimary(vec, dof);
     if (xpb) xprofMark(1);
@@ -1899,7 +1898,6 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
     }
 
     return;
-    ghostReadCheck(vec, dof, "plain");
 }
 
 template <typename T>
@@ -1911,7 +1909,6 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
     // exchange (see performGhostExchange comment for rationale).
     if (!m_xpActive && xprofBegin()) m_xpVec = vec;
     const bool xpb = m_xpActive && m_xpVec == (const void*)vec;
-    ghostReadCheck(vec, dof, "pre");
     ghostPosCheck("ctx");
     {
         dendro::stepprof::Scope spSyncPre(dendro::stepprof::GB_SYNC_PRE);
@@ -2386,7 +2383,6 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
         xprofRecord(1, dof, m_uiScatterMapActualNodeSend.size(),
                     m_uiScatterMapActualNodeRecv.size());
     }
-    ghostReadCheck(vec, dof, "ctx");
 
     return;
 }
@@ -18049,68 +18045,6 @@ void Mesh::unzip_scatter_batch_ref(const T* const* ins, T* const* outs,
         }
     }  // omp parallel
 #endif
-}
-
-template <typename T>
-void Mesh::ghostReadCheck(const T* vec, unsigned int dof, const char* tag) {
-    static const bool on = std::getenv("DENDRO_GHOSTREAD_CHECK") != nullptr;
-    if (!on || !m_uiIsActive) return;
-    static std::map<const Mesh*, int> calls;
-    const int call = calls[this]++;
-    if (call >= 6) return;
-    std::vector<unsigned char> planW(m_uiNumActualNodes, 0);
-    for (unsigned int c : m_uiZipPlanCg) if (c < m_uiNumActualNodes) planW[c] = 1;
-    std::vector<unsigned char> refLocal(m_uiNumActualNodes, 0);
-    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++)
-        for (unsigned int n = 0; n < m_uiNpE; n++) {
-            const unsigned int cg = m_uiE2NMapping_CG[e * m_uiNpE + n];
-            if (cg < m_uiNumActualNodes) refLocal[cg] = 1;
-        }
-    std::vector<unsigned char> readMask(m_uiNumActualNodes, 0);
-    std::vector<unsigned int> readElem(m_uiNumActualNodes, 0);
-    if (m_e2b_unzip_counts.size() == m_uiNumTotalElements)
-        for (unsigned int e = 0; e < m_uiNumTotalElements; e++) {
-            if (m_e2b_unzip_counts[e] == 0) continue;
-            for (unsigned int n = 0; n < m_uiNpE; n++) {
-                const unsigned int cg = m_uiE2NMapping_CG[e * m_uiNpE + n];
-                if (cg < m_uiNumActualNodes && !readMask[cg]) { readMask[cg] = 1; readElem[cg] = e; }
-            }
-        }
-    std::unordered_set<unsigned int> deliv(m_uiScatterMapActualNodeRecv.begin(), m_uiScatterMapActualNodeRecv.end());
-    std::unordered_set<unsigned int> synced(m_uiZipSyncRecvCg.begin(), m_uiZipSyncRecvCg.end());
-    size_t gRead = 0, gNan = 0, gZero = 0, lRead = 0, lNan = 0, lZero = 0, gZeroDeliv = 0, gZeroSync = 0;
-    std::vector<std::string> samples;
-    for (unsigned int cg = 0; cg < m_uiNumActualNodes; cg++) {
-        if (!readMask[cg]) continue;
-        const bool loc = cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd;
-        bool nan = false, zero = true;
-        for (unsigned int v = 0; v < dof; v++) {
-            const double x = (double)vec[v * m_uiNumActualNodes + cg];
-            if (!std::isfinite(x)) nan = true;
-            if (x != 0.0) zero = false;
-        }
-        if (loc) { lRead++; if (nan) lNan++; if (zero) lZero++; }
-        else {
-            gRead++; if (nan) gNan++;
-            if (zero) { gZero++; if (deliv.count(cg)) gZeroDeliv++; if (synced.count(cg)) gZeroSync++; }
-        }
-        if ((nan || zero) && samples.size() < 16) {
-            const unsigned int e = readElem[cg];
-            char b[256];
-            std::snprintf(b, sizeof(b), "%s cg=%u %s delivered=%d synced=%d planwriter=%d mirrordst=%d reflocal=%d elem=%u lev=%u xyz=%u,%u,%u",
-                nan ? "nonfinite" : "allzero", cg, loc ? "LOCAL" : "ghost", (int)deliv.count(cg), (int)synced.count(cg),
-                (int)planW[cg], (int)m_uiZipNonPrimaryToGhostCg.count(cg), (int)refLocal[cg],
-                e, (unsigned)m_uiAllElements[e].getLevel(), m_uiAllElements[e].getX(), m_uiAllElements[e].getY(), m_uiAllElements[e].getZ());
-            samples.emplace_back(b);
-        }
-    }
-    std::cout << "[ghostread-check r" << m_uiActiveRank << " " << tag << "] mesh=" << (const void*)this << " call=" << call
-              << " dof=" << dof << " labelled=" << (int)m_uiIsLabelledRebuild << " pruned=" << (int)m_uiZipSyncPruned
-              << " ghost_read=" << gRead << " nonfinite=" << gNan << " allzero=" << gZero
-              << " (delivered=" << gZeroDeliv << " synced=" << gZeroSync << ")"
-              << " local_read=" << lRead << " nonfinite=" << lNan << " allzero=" << lZero << std::endl;
-    for (const auto& l : samples)
-        std::cout << "[ghostread-check r" << m_uiActiveRank << "]   " << l << std::endl;
 }
 
 template <typename T>
