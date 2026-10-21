@@ -2008,18 +2008,15 @@ void ExplicitNUTS<T, Ctx>::build_cg_owner_map() {
                         cur = e * nPe + nd;
                 }
     }
-    // DENDRO_ENUTS_OWNER_BYPOS (default on, =0 reverts): pick the owner per grid
-    // POSITION over every local and received-ghost element, not per cg slot. on a
-    // labelled mesh the sharers of one position are split across a primary slot,
-    // its duplicate slots and ghost slots, so the per-slot pick above can land on
-    // a finer sharer's copy than the SFC owner (and differ between a primary and
-    // its dups); after sub-cycling those copies differ well above rounding
-    static const bool byPos = [] {
-        const char* e = std::getenv("DENDRO_ENUTS_OWNER_BYPOS");
-        return !(e && e[0] == '0');
-    }();
+    // pick the owner per grid POSITION over every local and received-ghost
+    // element, not per cg slot (the slot pick above stays where no position
+    // pick lands). on a labelled mesh the sharers of one position are split
+    // across a primary slot, its duplicate slots and ghost slots, so the
+    // per-slot pick can land on a finer sharer's copy than the SFC owner (and
+    // differ between a primary and its dups); after sub-cycling those copies
+    // differ well above rounding
     const std::vector<unsigned int>& cg2dg = pMesh->getCG2DGMap();
-    if (byPos) {
+    {
         const unsigned int md = m_uiMaxDepth;
         struct KeyHash {
             size_t operator()(const unsigned __int128& k) const {
