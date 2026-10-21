@@ -4263,10 +4263,6 @@ bool Mesh::isReMeshUnzip(
         // size of im_vec1/im_vec2 the refEl needs for I3D_Parent2Child
         const unsigned int nPe = (eOrder + 1) * (eOrder + 1) * (eOrder + 1);
 
-        unsigned int wpEle = 0, wpBlk = 0;
-        std::vector<unsigned int> wpSlots;
-        const bool wpOn = waveProbeTarget(wpEle, wpBlk, wpSlots);
-
 #if defined(DENDRO_UNZIP_OMP)
 // Block-parallel: each thread owns its own WaveletEl (which has its
 // own m_uiVIn/m_uiNVec/m_uiVOut workspaces) and its own im1/im2
@@ -4332,65 +4328,6 @@ bool Mesh::isReMeshUnzip(
                         this->getUnzipElementalNodalValues(
                             unzippedVec[vid], blk, ele,
                             blkIn_tls.data() + v * sz_per_dof, true);
-                    }
-
-                    if (wpOn && ele == wpEle) {
-                        static int wpCall = 0;
-                        const char* d = std::getenv("DENDRO_WAVE_PROBE_DIR");
-                        char fn[1024];
-                        std::snprintf(fn, sizeof(fn), "%s/wprobe_r%d_c%d.txt", d ? d : ".",
-                                      (int)m_uiActiveRank, wpCall++);
-                        if (FILE* fp = std::fopen(fn, "w")) {
-                            const ot::Block& B = blkList[blk];
-                            const ot::TreeNode bn = B.getBlockNode();
-                            const ot::TreeNode& t = pNodes[ele];
-                            std::fprintf(fp,
-                                "# rank=%d labelled=%d ele=%u blk=%u probeBlk=%u bnode=%u,%u,%u,%u regLev=%u "
-                                "elemSz1D=%u nonSFC=%d nElem=%zu alloc=%u,%u,%u offset=%u bdy=%d tol=%.17e\n",
-                                (int)m_uiActiveRank, (int)m_uiIsLabelledRebuild, ele, blk, wpBlk,
-                                bn.minX(), bn.minY(), bn.minZ(), bn.getLevel(), B.getRegularGridLev(),
-                                B.getElemSz1D(), (int)B.isNonSFC(), B.numElements(),
-                                B.getAllocationSzX(), B.getAllocationSzY(), B.getAllocationSzZ(),
-                                B.getOffset(), (int)isBdyOct, tol_ele);
-                            const unsigned int n1 = 2 * eOrder + 1, sz = n1 * n1 * n1;
-                            std::vector<double> wc(sz);
-                            for (unsigned int v = 0; v < numVars; v++) {
-                                wrefEl_tls.compute_wavelets_3D((double*)(blkIn_tls.data() + v * sz), isz_uniform, wc, isBdyOct);
-                                unsigned int am = 0;
-                                for (unsigned int q = 0; q < sz; q++)
-                                    if (std::fabs(wc[q]) > std::fabs(wc[am])) am = q;
-                                std::fprintf(fp, "V %u var=%u lmax=%.17e argmax=%u wc=%.17e\n", v, varIds[v],
-                                             normL2(wc.data(), wc.size()) / sqrt(wc.size()), am, wc[am]);
-                            }
-                            const unsigned int len = 1u << (m_uiMaxDepth - t.getLevel());
-                            for (unsigned int q = 0; q < sz; q++) {
-                                const long long i = q % n1, j = (q / n1) % n1, k = q / (n1 * n1);
-                                std::fprintf(fp, "S %u %lld %lld %lld %u", q,
-                                             (long long)t.minX() * eOrder + (i - (long long)pw) * len,
-                                             (long long)t.minY() * eOrder + (j - (long long)pw) * len,
-                                             (long long)t.minZ() * eOrder + (k - (long long)pw) * len,
-                                             blk == wpBlk ? wpSlots[q] : 0u);
-                                for (unsigned int v = 0; v < numVars; v++) {
-                                    const double x = (double)blkIn_tls[v * sz + q];
-                                    uint64_t h = 0;
-                                    std::memcpy(&h, &x, 8);
-                                    std::fprintf(fp, " %016lx", (unsigned long)h);
-                                }
-                                std::fprintf(fp, "\n");
-                            }
-                            for (unsigned int g = 0; g < m_uiAllElements.size(); g++) {
-                                const ot::TreeNode& o = pNodes[g];
-                                if (g == ele || o.maxX() < t.minX() || o.minX() > t.maxX() ||
-                                    o.maxY() < t.minY() || o.minY() > t.maxY() ||
-                                    o.maxZ() < t.minZ() || o.minZ() > t.maxZ())
-                                    continue;
-                                std::fprintf(fp, "T %u %u %u %u %c\n", o.minX(), o.minY(), o.minZ(),
-                                             o.getLevel(),
-                                             (g >= m_uiElementLocalBegin && g < m_uiElementLocalEnd) ? 'L' : 'G');
-                            }
-                            std::fputs(m_uiWaveProbeLog.c_str(), fp);
-                            std::fclose(fp);
-                        }
                     }
 
                     double wMax = 0.0;
@@ -16860,40 +16797,9 @@ void Mesh::unzip_scatter_labelled(const T* in, T* out, unsigned int dof) {
         for (unsigned int i = 0; i < unSz; i++) std::memcpy(&out[i], &wcBits, 8);
     }
 
-    // DENDRO_WAVE_PROBE_TN: log every commit into the target's wavelet slots
-    unsigned int wpEle = 0, wpBlk = 0;
-    std::vector<unsigned int> wpSlots;
-    const bool wpOn = (sizeof(T) == 8) && waveProbeTarget(wpEle, wpBlk, wpSlots);
-    std::vector<T> wpSave(wpSlots.size());
-    std::vector<unsigned int> wpHit(wpSlots.size(), 0);
-    std::ostringstream wpLog;
-    T wpSent{};
-    if (wpOn) {
-        const uint64_t b = 0x7ff8deadbeef0002ULL;
-        std::memcpy(&wpSent, &b, 8);
-        wpLog << "# unzip writers: blk " << wpBlk << " dof " << dof << "\n";
-    }
-    auto wpHex = [](T v) {
-        uint64_t h = 0;
-        std::memcpy(&h, &v, sizeof(T) < 8 ? sizeof(T) : 8);
-        char b[24];
-        std::snprintf(b, sizeof(b), "%016lx", (unsigned long)h);
-        return std::string(b);
-    };
-
     for (unsigned int e_idx = 0; e_idx < m_uiNumTotalElements; e_idx++) {
         const unsigned int ele = ele_order ? ele_order[e_idx] : e_idx;
         if (m_e2b_unzip_counts[ele] == 0) continue;
-
-        bool wpTouch = false;
-        if (wpOn)
-            for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++)
-                if (m_e2b_unzip_map[m_e2b_unzip_offset[ele] + i] == wpBlk) wpTouch = true;
-        if (wpTouch)
-            for (size_t s = 0; s < wpSlots.size(); s++) {
-                wpSave[s]           = uzWVec[wpSlots[s]];
-                uzWVec[wpSlots[s]] = wpSent;
-            }
 
         for (unsigned int ii = 0; ii < NUM_CHILDREN; ii++)
             p2c_interp_valid[ii] = false;
@@ -17384,41 +17290,6 @@ void Mesh::unzip_scatter_labelled(const T* in, T* out, unsigned int dof) {
                 }
             }
         }
-        if (wpTouch) {
-            const unsigned int bl = blkList[wpBlk].getRegularGridLev();
-            const unsigned int el = pNodes[ele].getLevel();
-            const bool loc = ele >= m_uiElementLocalBegin && ele < m_uiElementLocalEnd;
-            unsigned int nw = 0;
-            for (size_t s = 0; s < wpSlots.size(); s++) {
-                if (std::memcmp(&uzWVec[wpSlots[s]], &wpSent, sizeof(T)) == 0) {
-                    uzWVec[wpSlots[s]] = wpSave[s];
-                    continue;
-                }
-                nw++;
-                wpHit[s]++;
-                wpLog << "W " << s << " " << ele << " " << pNodes[ele].minX() << " "
-                      << pNodes[ele].minY() << " " << pNodes[ele].minZ() << " " << el << " "
-                      << (loc ? 'L' : 'G') << " "
-                      << (el == bl ? "same" : (el > bl ? "finer" : "coarser"));
-                for (unsigned int v = 0; v < dof; v++)
-                    wpLog << " " << wpHex(uzWVec[v * unSz + wpSlots[s]]);
-                wpLog << "\n";
-            }
-            if (nw) {
-                wpLog << "E " << ele << " " << pNodes[ele].minX() << " " << pNodes[ele].minY()
-                      << " " << pNodes[ele].minZ() << " " << el << " " << (loc ? 'L' : 'G')
-                      << " hang=" << (int)has_hanging_face_or_edge(ele) << " writes=" << nw << "\n";
-                for (unsigned int n = 0; n < nPe; n++) {
-                    const unsigned int cg = e2n[ele * nPe + n];
-                    const unsigned int ii = n % (eOrder + 1), jj = (n / (eOrder + 1)) % (eOrder + 1),
-                                       kk = n / ((eOrder + 1) * (eOrder + 1));
-                    wpLog << "N " << ele << " " << n << " " << cg << " "
-                          << ((cg >= m_uiNodeLocalBegin && cg < m_uiNodeLocalEnd) ? 'L' : 'G') << " "
-                          << (int)this->isNodeHanging(ele, ii, jj, kk) << " " << wpHex(dgWVec[n]) << " "
-                          << (cg < cgSz ? wpHex(in[cg]) : std::string("-")) << "\n";
-                }
-            }
-        }
     }
     if (wcChk && sizeof(T) == 8) {
         unsigned long long miss = 0, missEle = 0;
@@ -17466,11 +17337,6 @@ void Mesh::unzip_scatter_labelled(const T* in, T* out, unsigned int dof) {
             std::cout << "[wave-cover-check r" << m_uiActiveRank << "] labelled="
                       << (int)m_uiIsLabelledRebuild << " unwritten_stencil_slots=" << miss
                       << " elements=" << missEle << sample << std::endl;
-    }
-    if (wpOn) {
-        for (size_t s = 0; s < wpSlots.size(); s++)
-            if (!wpHit[s]) wpLog << "U " << s << "\n";
-        m_uiWaveProbeLog = wpLog.str();
     }
     if (uzprobe_fp) {
         std::fclose(uzprobe_fp);
