@@ -18050,38 +18050,7 @@ void Mesh::unzip_scatter_batch_ref(const T* const* ins, T* const* outs,
 template <typename T>
 void Mesh::unzip(const T* in, T* out, unsigned int dof, int blk_filter) {
     if ((!m_uiIsActive) || (m_uiLocalBlockList.empty())) return;
-    // DENDRO_UNZIP_FILLCHK=1 probe: sentinel the padded buffer and report the
-    // slots the unzip leaves unwritten (padding vs interior, per block)
-    static const bool fillChk = std::getenv("DENDRO_UNZIP_FILLCHK") != nullptr;
-    static std::map<const Mesh*, int> fillCalls;
-    const bool doFill = fillChk && fillCalls[this]++ < 2;
-    const uint64_t sentinelBits = 0x7ff8deadbeef0001ULL;
-    T sentinel; std::memset(&sentinel, 0, sizeof(T));
-    if (doFill) {
-        if (sizeof(T) == 8) std::memcpy(&sentinel, &sentinelBits, 8);
-        for (size_t i = 0; i < (size_t)dof * m_uiUnZippedVecSz; i++) out[i] = sentinel;
-    }
-    auto fillReport = [&]() {
-        if (!doFill || sizeof(T) != 8) return;
-        size_t unwPad = 0, unwInt = 0; std::vector<std::string> samples;
-        for (unsigned int b = 0; b < m_uiLocalBlockList.size(); b++) {
-            const auto& blk = m_uiLocalBlockList[b];
-            const unsigned int off = blk.getOffset(), Lx = blk.getAllocationSzX(), Ly = blk.getAllocationSzY(), Lz = blk.getAllocationSzZ(), pw = blk.get1DPadWidth();
-            for (unsigned int k = 0; k < Lz; k++) for (unsigned int j = 0; j < Ly; j++) for (unsigned int i = 0; i < Lx; i++) {
-                const size_t idx = (size_t)off + k * Lx * Ly + j * Lx + i;
-                if (std::memcmp(&out[idx], &sentinelBits, 8) != 0) continue;
-                const bool pad = i < pw || i >= Lx - pw || j < pw || j >= Ly - pw || k < pw || k >= Lz - pw;
-                if (pad) unwPad++; else unwInt++;
-                if (samples.size() < 6) { char s[160]; std::snprintf(s, sizeof(s), "unwritten idx=%zu blk=%u lev=%u ijk=%u,%u,%u %s", idx, b, blk.getRegularGridLev(), i, j, k, pad ? "pad" : "INTERIOR"); samples.emplace_back(s); }
-            }
-        }
-        std::cout << "[unzip-fillchk r" << m_uiActiveRank << "] mesh=" << (const void*)this << " labelled=" << (int)m_uiIsLabelledRebuild
-                  << " unwritten_pad=" << unwPad << " unwritten_interior=" << unwInt << " (dof 0 scan, buffer " << m_uiUnZippedVecSz << ")" << std::endl;
-        for (const auto& l : samples) std::cout << "[unzip-fillchk r" << m_uiActiveRank << "]   " << l << std::endl;
-    };
-
     this->unzip_scatter(in, out, dof, blk_filter);
-    fillReport();
 }
 
 #if 0
