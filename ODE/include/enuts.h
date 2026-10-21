@@ -226,24 +226,6 @@ struct EnutsProf {
     static bool xchTrace() { return xchTraceDir() != nullptr; }
     static bool ifaceNL() { return (ifaceFix() & 7) == 7; }
     static bool ifaceShift() { return (ifaceFix() & 8) != 0; }
-    /** DENDRO_ENUTS_OWNER_SYNC=1: before a block takes its stage data, give
-     *  every shared or hanging node of the block's elements and of its unzip
-     *  dependents the value of the node's owner (what zip + unzip does in ETS):
-     *  by the per-block plan (OwnPlan, owner values exchanged per node on more
-     *  than one rank), or per element where the plan is unavailable. */
-    static int ownerSync() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_OWNER_SYNC");
-            const int m   = e ? std::atoi(e) : 0;
-            if (m != 0 && m != 1) {
-                std::cerr << "[enuts] DENDRO_ENUTS_OWNER_SYNC is 0 or 1 (modes 2 "
-                             "and 3 were removed)" << std::endl;
-                MPI_Abort(MPI_COMM_WORLD, 1);
-            }
-            return m;
-        }();
-        return v;
-    }
     /** DENDRO_ENUTS_OWNER_SYNC_CHECK=1: verify the hanging-node recipes of the
      *  owner-sync plan against Mesh::getElementNodalValues once per mesh */
     static bool ownerSyncCheck() {
@@ -586,7 +568,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief per local block, its unzip dependent elements (SFC order); rebuilt per mesh */
     std::vector<std::vector<unsigned int>> m_uiBlkDepEid;
     /** per block: m_uiBlkDepEid plus the owners of the nodes of the block's
-     * elements and of its dependents (DENDRO_ENUTS_OWNER_SYNC) */
+     * elements and of its dependents (owner sync) */
     std::vector<std::vector<unsigned int>> m_uiBlkOwnEid;
 
     /**@brief level-scoped element-DG exchange plan;
@@ -682,7 +664,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     void build_sync_plan(unsigned int blk, const std::vector<unsigned int>& eid,
                          SyncPlan& pl);
 
-    /** per local block, the owner-sync fill (DENDRO_ENUTS_OWNER_SYNC=1): every
+    /** per local block, the owner-sync fill: every
      *  block slot the padding fill and the interior copy write, with the one
      *  source that survives (their last writer), read through the owner of
      *  the source node. Three kinds of source:
@@ -873,6 +855,12 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     bool m_uiXchScoped = false;
    private:
     bool xch_scope_build(ot::Mesh* pMesh);
+    /** owner sync: before a block takes its stage data, give every shared or
+     *  hanging node of the block's elements and of its unzip dependents the
+     *  value of the node's owner (what zip + unzip does in ETS): by the
+     *  per-block plan (OwnPlan, owner values exchanged per node on more than
+     *  one rank), or per element where the plan is unavailable. True when the
+     *  plan is built for the current mesh. */
     bool prepare_owner_sync(ot::Mesh* pMesh);
     void build_own_plan(unsigned int blk, const std::vector<unsigned int>& eid,
                         OwnPlan& op);
@@ -1643,13 +1631,8 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
     free_sync_threads();
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
-    // the DG copy of the solution is read by the element-wise sync path (owner
-    // sync off) and the labelled zip; with the owner plan it is allocated
-    // where those paths start (ensure_evar_dg)
-    if (ts::EnutsProf::ownerSync() != 1)
-        m_uiEvarDG.create_vector(m_uiAppCtx->get_mesh(),
-                                 ot::DVEC_TYPE::OCT_LOCAL_NODES,
-                                 ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
+    // the DG copy of the solution (element-wise sync path, labelled zip) is
+    // allocated where those paths start (ensure_evar_dg)
 
     const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
     if (pMesh->isActive()) {
@@ -1769,8 +1752,7 @@ void ExplicitNUTS<T, Ctx>::mem_report() {
         m_uiLevMin <= m_uiLevMax) {
         const std::vector<ot::TreeNode>& all  = pMesh->getAllElements();
         const std::vector<ot::Block>& blkList = pMesh->getLocalBlockList();
-        const bool own = ts::EnutsProf::ownerSync() != 0;
-        sync_lazy_build(own);  // same lists partial_evolve builds lazily
+        sync_lazy_build(true);  // same lists partial_evolve builds lazily
         std::vector<unsigned int> dtOf(all.size(), 0);
         for (size_t e = 0; e < all.size(); e++)
             dtOf[e] = step_ratio(all[e].getLevel());
@@ -1778,7 +1760,7 @@ void ExplicitNUTS<T, Ctx>::mem_report() {
         for (unsigned int b = 0; b < blkList.size(); b++) {
             const unsigned int bdt = dtOf[blkList[b].firstElementID()];
             const std::vector<unsigned int>& R =
-                (own && b < m_uiBlkOwnEid.size()) ? m_uiBlkOwnEid[b]
+                (b < m_uiBlkOwnEid.size()) ? m_uiBlkOwnEid[b]
                                                   : m_uiBlkDepEid[b];
             bool jump = false;
             for (const unsigned int e : R) {
@@ -4406,7 +4388,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     unsigned int echild[2];
 
     const unsigned int dof = m_uiEVar.get_dof();
-    const int ownSync   = (rk_s >= 1 && !isIGTSync) ? ts::EnutsProf::ownerSync() : 0;
+    const bool ownSync  = rk_s >= 1 && !isIGTSync;
     // ownSync runs the plan (below, once the dependents are known), or the
     // per-element form where the plan is unavailable
     // the per-element sync takes the bit-identical shortcuts (no same-time DG
@@ -4459,7 +4441,7 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
     sync_lazy_build(false);
     const std::vector<unsigned int>& eid = m_uiBlkDepEid[blk];
     if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::CN_EID] += eid.size();
-    if (ownSync == 1 && m_uiSyncPassOpen && prepare_owner_sync(pMesh)) {
+    if (ownSync && m_uiSyncPassOpen && prepare_owner_sync(pMesh)) {
         own_sync_fill(blk, rk_s, eid);
         if (sprof) ts::EnutsProf::get().t[ts::EnutsProf::SY_BLK] += ts::EnutsProf::now() - tsy0;
 #ifdef __PROFILE_ENUTS__
@@ -5651,8 +5633,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     // (DT | pt) are the plan's prefix; row d = largest distinct DT dividing pt
     // owner-sync plan: a block reads owner values only, so the exchange is
     // per node (the owner's rank sends), not per ghost element
-    const bool ownPlan =
-        ts::EnutsProf::ownerSync() == 1 && prepare_owner_sync(pMesh);
+    const bool ownPlan = prepare_owner_sync(pMesh);
     m_uiOwnPt = pt;
     if (ownPlan) {
         // the plan takes an owner's time from its dt: every block must sit at
@@ -5710,9 +5691,8 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
         actIds = m_uiActiveOrder.data();
         // everything sync_blk_timestep builds on first use, and the scratch
         // of the worker threads, before any parallel region
-        const int own = ts::EnutsProf::ownerSync();
-        sync_prebuild(ownPlan, own && !ownPlan, !own);
-        sync_thread_setup(own && !ownPlan);
+        sync_prebuild(ownPlan, !ownPlan, false);
+        sync_thread_setup(!ownPlan);
         if (!ownPlan) ensure_evar_dg();  // before the parallel loops
     }
 #endif
