@@ -9528,7 +9528,7 @@ void Mesh::zip(const T* unzippedVec, T* zippedVec) {
     // implicit "E2N_DG self-owned scan" inside zip with an O(N)
     // data-driven loop.
     // the plan pairs with unzip_scatter_labelled, so it follows the same
-    // routing: labelled meshes, or every mesh under DENDRO_UNZIP_LABELLED_PATH=1
+    // routing: labelled meshes
     if (useLabelledUnzip()) {
         ensureZipPlanBuilt();
         const size_t N = m_uiZipPlanCg.size();
@@ -16201,7 +16201,6 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
     // labelled meshes (any non-SFC block) take the plan-aware scatter, which
     // has no blk_filter: an overlap-split call does the full unzip both times,
     // and the second (post-exchange) one is the result.
-    // DENDRO_UNZIP_LABELLED_PATH=1 forces it on SFC meshes too (A/B).
     if (useLabelledUnzip()) {
         this->unzip_scatter_labelled(in, out, dof);
         return;

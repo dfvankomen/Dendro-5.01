@@ -3633,14 +3633,9 @@ class Mesh {
     void unzip_scatter_labelled(const T *in, T *out, unsigned int dof = 1);
 
 
-    /** true when the mesh has a non-SFC block (a labelled mesh), or
-     * DENDRO_UNZIP_LABELLED_PATH=1 forces the labelled scatter everywhere */
+    /** true when the mesh has a non-SFC block (a labelled mesh) */
     inline bool useLabelledUnzip() const {
-        static const bool force = [] {
-            const char *e = std::getenv("DENDRO_UNZIP_LABELLED_PATH");
-            return e && e[0] == '1';
-        }();
-        if (force || m_uiIsLabelledRebuild) return true;
+        if (m_uiIsLabelledRebuild) return true;
         for (const ot::Block &b : m_uiLocalBlockList)
             if (b.isNonSFC()) return true;
         return false;
