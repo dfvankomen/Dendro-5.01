@@ -7217,13 +7217,8 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
     }();
     const double auT0 = auProf ? MPI_Wtime() : 0.0;
     size_t auLookups = 0;
-    // DENDRO_E2N_AUDIT_LAZY (default on, =0 builds eagerly): most audits make
-    // no position lookup at all, so the sorted (pos, cg) array is built on
-    // the first one
-    static const bool auLazy = [] {
-        const char* e = std::getenv("DENDRO_E2N_AUDIT_LAZY");
-        return !(e && e[0] == '0');
-    }();
+    // most audits make no position lookup at all, so the sorted (pos, cg)
+    // array is built on the first one
     std::vector<CgAtPos> cgsByPos;
     std::once_flag byPosOnce;
     auto buildByPos = [&]() {
@@ -7241,7 +7236,6 @@ size_t Mesh::auditAndRepairE2NCgPhysPos() {
                       return a.cg < b.cg;
                   });
     };
-    if (!auLazy) std::call_once(byPosOnce, buildByPos);
     const double auT1 = auProf ? MPI_Wtime() : 0.0;
     auto findCgAtPos = [&](const PhysKey3& k, bool canonOnly) -> unsigned int {
         auLookups++;
