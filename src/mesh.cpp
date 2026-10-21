@@ -8583,14 +8583,10 @@ void Mesh::buildZipPlanCore() {
         return ((unsigned __int128)x << 84) | ((unsigned __int128)y << 42) |
                (unsigned __int128)z;
     };
-    // DENDRO_ZIPPLAN_MYMIN_HASH (default on, =0 reverts to the sort): the fold
-    // is a strict total order over distinct elements (interior, owner, TN), so
-    // its result does not depend on visiting order; group by an open-addressing
-    // table on the packed position instead of sorting every (e, n)
-    static const bool mmHash = [] {
-        const char* e = std::getenv("DENDRO_ZIPPLAN_MYMIN_HASH");
-        return !(e && e[0] == '0');
-    }();
+    // the fold is a strict total order over distinct elements (interior,
+    // owner, TN), so its result does not depend on visiting order; group by
+    // an open-addressing table on the packed position instead of sorting
+    // every (e, n)
     std::vector<unsigned __int128> mmKey;
     std::vector<int> mmVal;
     size_t mmMask = 0;
@@ -8608,145 +8604,92 @@ void Mesh::buildZipPlanCore() {
         return tnLT(c.elem, w.elem);
     };
     std::vector<LocalClaim> myMin;
-    // hash path: group of every local (e, n) slot; nodes strictly inside an
-    // element sit at a position no other element has, so they skip the table
+    // group of every local (e, n) slot; nodes strictly inside an element sit
+    // at a position no other element has, so they skip the table
     std::vector<int> slotGrp;
-    if (mmHash) {
-        const size_t numElem =
-            (size_t)(m_uiElementLocalEnd - m_uiElementLocalBegin);
-        size_t cap = 16;
-        while (cap < numElem * npe + numElem * npe / 3) cap <<= 1;
-        mmMask = cap - 1;
-        mmKey.assign(cap, 0);
-        mmVal.assign(cap, -1);
-        myMin.reserve(numElem * npe / 2);
-        slotGrp.assign(numElem * npe, -1);
-        for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
-            // isInteriorWriter's block lookup, once per element
-            bool blkOk = false;
-            unsigned int bI0 = 0, bJ0 = 0, bK0 = 0, bLx = 0, bLy = 0, bLz = 0, bPW = 0;
-            if ((e - m_uiElementLocalBegin) < m_uiE2BlkMap.size()) {
-                const unsigned int blk = m_uiE2BlkMap[e - m_uiElementLocalBegin];
-                if (blk != LOOK_UP_TABLE_DEFAULT && blk < m_uiLocalBlockList.size()) {
-                    const auto& block          = m_uiLocalBlockList[blk];
-                    const ot::TreeNode blkNode = block.getBlockNode();
-                    const unsigned int regLev  = block.getRegularGridLev();
-                    bLx = block.getAllocationSzX();
-                    bLy = block.getAllocationSzY();
-                    bLz = block.getAllocationSzZ();
-                    bPW = block.get1DPadWidth();
-                    bI0 = ((pNodes[e].getX() - blkNode.getX()) >> (m_uiMaxDepth - regLev)) * eOrd + bPW;
-                    bJ0 = ((pNodes[e].getY() - blkNode.getY()) >> (m_uiMaxDepth - regLev)) * eOrd + bPW;
-                    bK0 = ((pNodes[e].getZ() - blkNode.getZ()) >> (m_uiMaxDepth - regLev)) * eOrd + bPW;
-                    blkOk = true;
-                }
-            }
-            for (unsigned int n = 0; n < npe; n++) {
-                const size_t sl = (size_t)(e - m_uiElementLocalBegin) * npe + n;
-                const unsigned int ni = n % (eOrd + 1);
-                const unsigned int nj = (n / (eOrd + 1)) % (eOrd + 1);
-                const unsigned int nk = n / ((eOrd + 1) * (eOrd + 1));
-                const bool inner = ni > 0 && ni < eOrd && nj > 0 && nj < eOrd &&
-                                   nk > 0 && nk < eOrd;
-                LocalClaim c;
-                unsigned long long x, y, z;
-                encodeKey(e, n, x, y, z);
-                c.pos      = packPos(x, y, z);
-                c.elem     = e;
-                c.sub      = n;
-                if (blkOk) {
-                    const unsigned int bi = bI0 + ni, bj = bJ0 + nj, bk = bK0 + nk;
-                    c.interior = (bi >= bPW && bi <= (bLx - 1 - bPW)) &&
-                                 (bj >= bPW && bj <= (bLy - 1 - bPW)) &&
-                                 (bk >= bPW && bk <= (bLz - 1 - bPW));
-                } else {
-                    c.interior = false;
-                }
-                c.is_owner = isCascadeOwner(e, n);
-                if (inner) {
-                    slotGrp[sl] = (int)myMin.size();
-                    myMin.push_back(c);
-                    continue;
-                }
-                size_t h = mmSlot(c.pos);
-                while (mmVal[h] >= 0 && mmKey[h] != c.pos) h = (h + 1) & mmMask;
-                if (mmVal[h] < 0) {
-                    mmKey[h] = c.pos;
-                    mmVal[h] = (int)myMin.size();
-                    myMin.push_back(c);
-                } else if (better(c, myMin[mmVal[h]])) {
-                    myMin[mmVal[h]] = c;
-                }
-                slotGrp[sl] = mmVal[h];
+    const size_t numElem =
+        (size_t)(m_uiElementLocalEnd - m_uiElementLocalBegin);
+    size_t cap = 16;
+    while (cap < numElem * npe + numElem * npe / 3) cap <<= 1;
+    mmMask = cap - 1;
+    mmKey.assign(cap, 0);
+    mmVal.assign(cap, -1);
+    myMin.reserve(numElem * npe / 2);
+    slotGrp.assign(numElem * npe, -1);
+    for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++) {
+        // isInteriorWriter's block lookup, once per element
+        bool blkOk = false;
+        unsigned int bI0 = 0, bJ0 = 0, bK0 = 0, bLx = 0, bLy = 0, bLz = 0, bPW = 0;
+        if ((e - m_uiElementLocalBegin) < m_uiE2BlkMap.size()) {
+            const unsigned int blk = m_uiE2BlkMap[e - m_uiElementLocalBegin];
+            if (blk != LOOK_UP_TABLE_DEFAULT && blk < m_uiLocalBlockList.size()) {
+                const auto& block          = m_uiLocalBlockList[blk];
+                const ot::TreeNode blkNode = block.getBlockNode();
+                const unsigned int regLev  = block.getRegularGridLev();
+                bLx = block.getAllocationSzX();
+                bLy = block.getAllocationSzY();
+                bLz = block.getAllocationSzZ();
+                bPW = block.get1DPadWidth();
+                bI0 = ((pNodes[e].getX() - blkNode.getX()) >> (m_uiMaxDepth - regLev)) * eOrd + bPW;
+                bJ0 = ((pNodes[e].getY() - blkNode.getY()) >> (m_uiMaxDepth - regLev)) * eOrd + bPW;
+                bK0 = ((pNodes[e].getZ() - blkNode.getZ()) >> (m_uiMaxDepth - regLev)) * eOrd + bPW;
+                blkOk = true;
             }
         }
-    } else {
-        const size_t numElem =
-            (size_t)(m_uiElementLocalEnd - m_uiElementLocalBegin);
-        std::vector<LocalClaim> claims(numElem * npe);
-        DENDRO_OMP_PRAGMA(omp parallel for schedule(static))
-        for (unsigned int e = m_uiElementLocalBegin;
-             e < m_uiElementLocalEnd; e++) {
-            for (unsigned int n = 0; n < npe; n++) {
-                LocalClaim& c =
-                    claims[(size_t)(e - m_uiElementLocalBegin) * npe + n];
-                unsigned long long x, y, z;
-                encodeKey(e, n, x, y, z);
-                c.pos      = packPos(x, y, z);
-                c.elem     = e;
-                c.sub      = n;
-                c.interior = isInteriorWriter(e, n);
-                c.is_owner = isCascadeOwner(e, n);
+        for (unsigned int n = 0; n < npe; n++) {
+            const size_t sl = (size_t)(e - m_uiElementLocalBegin) * npe + n;
+            const unsigned int ni = n % (eOrd + 1);
+            const unsigned int nj = (n / (eOrd + 1)) % (eOrd + 1);
+            const unsigned int nk = n / ((eOrd + 1) * (eOrd + 1));
+            const bool inner = ni > 0 && ni < eOrd && nj > 0 && nj < eOrd &&
+                               nk > 0 && nk < eOrd;
+            LocalClaim c;
+            unsigned long long x, y, z;
+            encodeKey(e, n, x, y, z);
+            c.pos      = packPos(x, y, z);
+            c.elem     = e;
+            c.sub      = n;
+            if (blkOk) {
+                const unsigned int bi = bI0 + ni, bj = bJ0 + nj, bk = bK0 + nk;
+                c.interior = (bi >= bPW && bi <= (bLx - 1 - bPW)) &&
+                             (bj >= bPW && bj <= (bLy - 1 - bPW)) &&
+                             (bk >= bPW && bk <= (bLz - 1 - bPW));
+            } else {
+                c.interior = false;
             }
-        }
-        // an element's own subs sit at distinct positions, so (pos, elem)
-        // already orders a position's claims in scan order
-        std::sort(claims.begin(), claims.end(),
-                  [](const LocalClaim& a, const LocalClaim& b) {
-                      return a.pos != b.pos ? a.pos < b.pos : a.elem < b.elem;
-                  });
-        for (size_t i = 0; i < claims.size();) {
-            LocalClaim w = claims[i];
-            size_t j     = i + 1;
-            for (; j < claims.size() && claims[j].pos == w.pos; j++) {
-                const LocalClaim& c = claims[j];
-                bool replace        = false;
-                if (c.interior && !w.interior) {
-                    replace = true;
-                } else if (c.interior == w.interior) {
-                    if (c.is_owner && !w.is_owner)
-                        replace = true;
-                    else if (c.is_owner == w.is_owner && tnLT(c.elem, w.elem))
-                        replace = true;
-                }
-                if (replace) w = c;
+            c.is_owner = isCascadeOwner(e, n);
+            if (inner) {
+                slotGrp[sl] = (int)myMin.size();
+                myMin.push_back(c);
+                continue;
             }
-            myMin.push_back(w);
-            i = j;
+            size_t h = mmSlot(c.pos);
+            while (mmVal[h] >= 0 && mmKey[h] != c.pos) h = (h + 1) & mmMask;
+            if (mmVal[h] < 0) {
+                mmKey[h] = c.pos;
+                mmVal[h] = (int)myMin.size();
+                myMin.push_back(c);
+            } else if (better(c, myMin[mmVal[h]])) {
+                myMin[mmVal[h]] = c;
+            }
+            slotGrp[sl] = mmVal[h];
         }
     }
     const double __zp_tMin = __zp_on ? MPI_Wtime() : 0.0;
     auto findMyMin = [&](const PhysKey3& k) -> const LocalClaim* {
         const unsigned __int128 pos = packPos(k.x, k.y, k.z);
-        if (mmHash) {
-            if (myMin.empty()) return nullptr;
-            size_t h = mmSlot(pos);
-            while (mmVal[h] >= 0) {
-                if (mmKey[h] == pos) return &myMin[mmVal[h]];
-                h = (h + 1) & mmMask;
-            }
-            return nullptr;
+        if (myMin.empty()) return nullptr;
+        size_t h = mmSlot(pos);
+        while (mmVal[h] >= 0) {
+            if (mmKey[h] == pos) return &myMin[mmVal[h]];
+            h = (h + 1) & mmMask;
         }
-        auto it = std::lower_bound(
-            myMin.begin(), myMin.end(), pos,
-            [](const LocalClaim& c, unsigned __int128 p) { return c.pos < p; });
-        if (it == myMin.end() || it->pos != pos) return nullptr;
-        return &*it;
+        return nullptr;
     };
     // the group at the position of element node (e, n); every lookup here is
     // a cg's cg2dg node, and for a local element that is a slot read
     auto findMyMinDg = [&](unsigned int e, unsigned int n) -> const LocalClaim* {
-        if (mmHash && e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd) {
+        if (e >= m_uiElementLocalBegin && e < m_uiElementLocalEnd) {
             const int g = slotGrp[(size_t)(e - m_uiElementLocalBegin) * npe + n];
             return g < 0 ? nullptr : &myMin[g];
         }
