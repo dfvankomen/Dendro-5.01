@@ -169,7 +169,7 @@ if(DENDRO_HYBRID_OMP)
 else()
   set(_oct2blk_max_span_default 31)
 endif()
-set(OCT2BLK_MAX_SPAN ${_oct2blk_max_span_default} CACHE STRING "Max levels a merged block spans (2^s elements per side); 31 = no cap. Default 2 with DENDRO_HYBRID_OMP, 31 otherwise; override with -DOCT2BLK_MAX_SPAN=<s> or DENDRO_OCT2BLK_MAX_SPAN at run time")
+set(OCT2BLK_MAX_SPAN ${_oct2blk_max_span_default} CACHE STRING "Max levels a merged block spans (2^s elements per side); 31 = no cap. Default 2 with DENDRO_HYBRID_OMP, 31 otherwise; override with -DOCT2BLK_MAX_SPAN=<s>; printed once at start-up")
 set(NUM_NPES_THRESHOLD 2 CACHE STRING "NPES Threshold")
 
 

@@ -14700,6 +14700,18 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
     // sorted otherwise this will chnage the order of elements in
     // m_uiAllElements.
     assert(seq::test::isUniqueAndSorted(m_uiAllElements));
+    static bool spanShown = false;
+    if (!spanShown && !m_uiActiveRank) {
+        spanShown = true;
+        const unsigned int sp = oct2BlkMaxSpan();
+        if (sp < 31)
+            std::cout << "[oct2blk] blocks span at most " << sp << " levels ("
+                      << (1u << sp) << " elements per side; CMake OCT2BLK_MAX_SPAN)"
+                      << std::endl;
+        else
+            std::cout << "[oct2blk] block span uncapped (CMake OCT2BLK_MAX_SPAN 31)"
+                      << std::endl;
+    }
     octree2BlockDecomposition(m_uiAllElements, m_uiLocalBlockList, m_uiMaxDepth,
                               m_uiDmin, m_uiDmax, m_uiElementLocalBegin,
                               m_uiElementLocalEnd, m_uiElementOrder,

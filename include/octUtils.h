@@ -144,6 +144,10 @@ void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
  * @param [out] blockList finite sequence of blocks.
  * */
 
+/// Most levels a merged block spans (2^s elements per side), fixed at build
+/// time by the CMake option OCT2BLK_MAX_SPAN; 31 means no cap.
+unsigned int oct2BlkMaxSpan();
+
 void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                                std::vector<ot::Block>& blockList,
                                unsigned int maxDepth, unsigned int& d_min,
