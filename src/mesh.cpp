@@ -22137,27 +22137,6 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }
     };
 
-    if (const char* e = std::getenv("DENDRO_UNREF_CHECK"); e && e[0] == '1') {
-        std::vector<char> ref(m_uiNumActualNodes, 0);
-        for (unsigned int el = m_uiElementPreGhostBegin; el < m_uiElementPostGhostEnd; el++)
-            for (unsigned int k = 0; k < m_uiNpE; k++) {
-                const unsigned int cg = m_uiE2NMapping_CG[el * m_uiNpE + k];
-                if (cg < m_uiNumActualNodes) ref[cg] = 1;
-            }
-        std::vector<char> sentCG(m_uiNumActualNodes, 0), sentDG(m_uiNumActualNodes, 0);
-        for (size_t k = 0; k < m_uiScatterMapActualNodeSend.size(); k++) {
-            const unsigned int idx = m_uiScatterMapActualNodeSend[k];
-            const bool dg = k < m_uiScatterMapSendIsDG.size() && m_uiScatterMapSendIsDG[k];
-            if (!dg && idx < m_uiNumActualNodes) sentCG[idx] = 1;
-            if (dg) sentDG[0] = 1;
-        }
-        unsigned int unref = 0, unrefSent = 0;
-        for (unsigned int cg = m_uiNodeLocalBegin; cg < m_uiNodeLocalEnd; cg++)
-            if (!ref[cg]) { unref++; if (sentCG[cg]) unrefSent++; }
-        std::cout << "[unref-check r" << rank << "] local=" << (m_uiNodeLocalEnd - m_uiNodeLocalBegin)
-                  << " unreferenced=" << unref << " of_which_sent_as_cg=" << unrefSent << std::endl;
-    }
-
     // -----
     // ELEMENT SCATTERMAP
     // Each rank pulls the 26-closure of its local elements from the owners,
