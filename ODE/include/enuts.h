@@ -236,20 +236,6 @@ struct EnutsProf {
         return (d.empty() || !on()) ? nullptr : d.c_str();
     }
     static bool xchTrace() { return xchTraceDir() != nullptr; }
-    /** DENDRO_ENUTS_XCH_SCOPED=1 (default off; owner plan, chained classes):
-     *  once every block's plan exists (after the first sync pass) each rank
-     *  tells each sender, per shared node, the class of the finest local
-     *  block that reads it (255: none), and both sides re-sort the node list
-     *  by max(owner class, reader class): a stage is sent only at sub-steps
-     *  where a reader of it steps, never-read nodes never. Bitwise: a slot
-     *  not sent is not read before it is sent again. */
-    static bool xchScoped() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_XCH_SCOPED");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-    }
     /** DENDRO_ENUTS_OWN_P2C_SHARED=1 (default off): before each stage's sync
      *  loop, the unique children (parent element, child) of every active
      *  block are listed once, each gets a slot in one shared pool, and a
@@ -866,7 +852,7 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<unsigned int> m_uiOwnSendSlot, m_uiOwnRecvSlot;
     std::vector<unsigned int> m_uiOwnSendOff, m_uiOwnRecvOff;
     std::vector<unsigned int> m_uiOwnSendCum, m_uiOwnRecvCum;
-    /** G_XCH with XCH_SCOPED: the unscoped lists, kept at the re-sort (the
+    /** G_XCH with the scoped exchange: the unscoped lists, kept at the re-sort (the
      *  scoped order sends a slot only when a class that reads it is
      *  stepping, which a g written at a step end would miss) */
     std::vector<unsigned int> m_uiOwnSendSlotU, m_uiOwnRecvSlotU, m_uiOwnSendCumU, m_uiOwnRecvCumU;
@@ -918,7 +904,14 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<XchRec> m_uiXchRec;
     void xch_calibrate(ot::Mesh* pMesh);
     void xch_dump();
-    /** DENDRO_ENUTS_XCH_SCOPED: lists re-sorted by reader class (done once per mesh) */
+    /** owner exchange scoped by reader (owner plan, chained classes): once
+     *  every block's plan exists (after the first sync pass) each rank tells
+     *  each sender, per shared node, the class of the finest local block that
+     *  reads it (255: none), and both sides re-sort the node list by
+     *  max(owner class, reader class): a stage is sent only at sub-steps where
+     *  a reader of it steps, never-read nodes never. Bitwise: a slot not sent
+     *  is not read before it is sent again. True once the lists are re-sorted
+     *  (once per mesh). */
     bool m_uiXchScoped = false;
    private:
     bool xch_scope_build(ot::Mesh* pMesh);
@@ -3872,7 +3865,7 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
     const int tag = 7153;
     m_uiOwnReq.assign(sPr.size() + rPr.size(), MPI_REQUEST_NULL);
     if (j < 0) return;
-    if (ts::EnutsProf::xchScoped() && !m_uiXchScoped && m_uiOwnChain) xch_scope_build(pMesh);
+    if (!m_uiXchScoped && m_uiOwnChain) xch_scope_build(pMesh);
     auto nn = [&](const unsigned int* cum) { return cum[j]; };
     if (ts::EnutsProf::xchCensus() && !m_uiXchFlag.empty()) {
         // what became of the previous message into these slots (this stage):
@@ -4092,7 +4085,7 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
 
 template <typename T, typename Ctx>
 bool ExplicitNUTS<T, Ctx>::xch_scope_build(ot::Mesh* pMesh) {
-    // XCH_SCOPED: every rank must have every block's plan (sync_prebuild
+    // scoped exchange: every rank must have every block's plan (sync_prebuild
     // builds them all in the first sync pass); until then, unscoped
     const unsigned int nBlk = pMesh->getLocalBlockList().size();
     int ok = (m_uiOwnPlan.size() == nBlk);
