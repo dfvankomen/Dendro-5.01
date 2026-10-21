@@ -2541,24 +2541,14 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
     const unsigned int* e2nDG           = pMesh->getE2NMapping_DG().data();
     const std::vector<unsigned int>& c2d = pMesh->getCG2DGMap();
 
-    // DENDRO_ENUTS_OWNER_SYNC_PROBE=1 (default off): on a labelled mesh run
-    // every consistency check of the plan, print what breaks and how often,
-    // and fall back to the per-element sync instead of aborting (diagnostic
-    // for building the plan on labelled meshes; the values are unchanged)
-    static const bool probeOn = [] {
-        const char* e = std::getenv("DENDRO_ENUTS_OWNER_SYNC_PROBE");
-        return e && e[0] == '1';
-    }();
-    const bool labelled = pMesh->useLabelledUnzip();
     // labelled meshes build the plan too. Allowed only when the labelled
     // rebuild joined on the SFC source's canonical ownership keys (K6): then
     // every node has one owner element (cg2dg), locally owned nodes have a
     // local owner element and the send map holds cg indices, which is the
-    // model the plan assumes. Like the probe, every check runs and records;
-    // the outcome is then agreed collectively (the per-element fallback must
-    // be taken by every rank or none: the two paths use different exchanges)
-    const bool lab   = labelled && !probeOn;
-    const bool probe = labelled;
+    // model the plan assumes. On a labelled mesh every check runs and records
+    // (probe), and the outcome is agreed collectively (the per-element fallback
+    // must be taken by every rank or none: the two paths use different exchanges)
+    const bool probe = pMesh->useLabelledUnzip();
     bool probeBad    = false;
     // one rank: fall back to the per-element form; more: there is no fallback
     auto fail = [&](const char* why, size_t n) -> bool {
@@ -2573,8 +2563,8 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
         if (npes > 1) MPI_Abort(pMesh->getMPICommunicator(), 11);
         return false;
     };
-    if (lab && !pMesh->canonKeysBuilt()) fail("labelled mesh without canonical ownership keys", 0);
-    if (lab) {
+    if (probe && !pMesh->canonKeysBuilt()) fail("labelled mesh without canonical ownership keys", 0);
+    if (probe) {
         // the plan's model needs one owner slot per node and cg-indexed sends
         pMesh->ensureZipPlanBuiltPublic();
         const size_t nonPrim = pMesh->getLocalNonPrimaryNodes().size();
@@ -2729,7 +2719,7 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
             if (badCls) fail("ghost nodes without an owner class", badCls);
             if (clsDiff) fail("ghost node class differs from the owner's", clsDiff);
         }
-        if (lab) {
+        if (probe) {
             int okl = probeBad ? 0 : 1, okg = 0;
             MPI_Allreduce(&okl, &okg, 1, MPI_INT, MPI_MIN, pMesh->getMPICommunicator());
             if (!okg) {
@@ -2739,18 +2729,8 @@ bool ExplicitNUTS<T, Ctx>::prepare_owner_sync(ot::Mesh* pMesh) {
                 m_uiOwnPlan.clear();
                 return false;
             }
-        } else if (probe && !lab) {
-            std::cout << "[enuts-owner-sync r" << pMesh->getMPIRankGlobal()
-                      << "] probe: labelled mesh, elems " << nEle << " local "
-                      << (ee - eb) << " cg " << cgSz << " local " << (ne - nb)
-                      << " nonprimary " << pMesh->getLocalNonPrimaryNodes().size()
-                      << " clsDiff " << clsDiff << " classes " << nCls
-                      << (probeBad ? " -> plan NOT buildable" : " -> all checks pass")
-                      << std::endl;
-            m_uiOwnPlan.clear();
-            return false;  // per-element sync for this run
         }
-        if (lab && npes == 1 && probeBad) {
+        if (probe && npes == 1 && probeBad) {
             m_uiOwnPlan.clear();
             return false;
         }
