@@ -208,17 +208,6 @@ struct EnutsProf {
         }();
         return v == 1;
     }
-    /** DENDRO_ENUTS_OWN_NO_SELFCOPY=1 (default off): the owner plan does not
-     *  copy, onto the block's own element slots, nodes that element itself
-     *  owns: the source is that element's DG row, which the zip just filled
-     *  from this very block, so the copy is a no-op. Bitwise. */
-    static bool ownNoSelfCopy() {
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_OWN_NO_SELFCOPY");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1;
-    }
     /** DENDRO_ENUTS_OWN_NO_ETIME_XCH=1 (default off): with the owner plan
      *  the per-sub-step exchange of the element time vector and the barrier
      *  after it are skipped. The owner path reads element times of local
@@ -3078,7 +3067,6 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
                     wOwn[d]  = 1;
                 }
     }
-    const bool noSelf = ts::EnutsProf::ownNoSelfCopy();
     size_t nSelf      = 0;  // self-copy slots dropped (reported with OWNER_SYNC_INFO)
 
     size_t uncovered = 0, badNode = 0;
@@ -3148,9 +3136,9 @@ void ExplicitNUTS<T, Ctx>::build_own_plan(unsigned int blk,
         }
         if (o < 0) {
             const unsigned int cg = e2n[(size_t)e * nPe + n];
-            // OWN_NO_SELFCOPY: the element owns this node, so the source is
-            // its own DG row = this block's value (zipped from it): skip
-            if (noSelf && wOwn[d] && cg < cgSz && c2d[cg] == (size_t)e * nPe + n) {
+            // the element owns this node, so the source is its own DG row =
+            // this block's value (zipped from it): skip
+            if (wOwn[d] && cg < cgSz && c2d[cg] == (size_t)e * nPe + n) {
                 nSelf++;
                 continue;
             }
