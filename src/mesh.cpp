@@ -7797,7 +7797,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
     // ---- route claims to their home rank ------------------------------
     // bucket PRESERVING original per-rank order: the default path's tie-break
     // depends on claim order within a rank, not just on rank order.
-    // localGrp (DENDRO_ZIPPLAN_LOCAL_ARB): claims with a group id >= 0 sit at a
+    // localGrp (local arbitration): claims with a group id >= 0 sit at a
     // position no other rank claims; they are folded here per group in claim
     // order (what the home would do with only this rank's claims) and never
     // routed
@@ -8871,14 +8871,10 @@ void Mesh::buildZipPlanCore() {
             if (idx < nTotal_cg) ghostKeep[idx] = 1;  // send source: kept
         }
     }
-    // DENDRO_ZIPPLAN_LOCAL_ARB (default on, =0 routes every claim): a position where this rank holds every claim
-    // (no slot of it is remote-visible) is arbitrated here, not routed
-    static const bool localArbEnv = [] {
-        const char* e = std::getenv("DENDRO_ZIPPLAN_LOCAL_ARB");
-        return !(e && e[0] == '0');
-    }();
+    // local arbitration: a position where this rank holds every claim (no
+    // slot of it is remote-visible) is arbitrated here, not routed
     std::vector<int> myGrp;  // myMin index of each claim's position, or -1
-    if (localArbEnv) myGrp.reserve(reserveN);
+    myGrp.reserve(reserveN);
     size_t __zp_nGhostSkipped = 0;
     const double __zp_tKeep = __zp_on ? MPI_Wtime() : 0.0;
     for (unsigned int cg = 0; cg < nTotal_cg; cg++) {
@@ -8902,13 +8898,13 @@ void Mesh::buildZipPlanCore() {
         encodeKey(e, n, x, y, z);
         unsigned int tnX = 0, tnY = 0, tnZ = 0, tnLev = TN_LEV_NONE;
         unsigned int interior = 0u;
-        if (localArbEnv && !is_local) {
+        if (!is_local) {
             const LocalClaim* w = findMyMinDg(e, n);
             myGrp.push_back(w ? (int)(w - myMin.data()) : -1);
         }
         if (is_local) {
             const LocalClaim* w = findMyMinDg(e, n);
-            if (localArbEnv) myGrp.push_back(w ? (int)(w - myMin.data()) : -1);
+            myGrp.push_back(w ? (int)(w - myMin.data()) : -1);
             if (w) {
                 unsigned int we = w->elem;
                 unsigned int wn = w->sub;
@@ -9053,7 +9049,7 @@ void Mesh::buildZipPlanCore() {
         std::vector<unsigned int> winCg, winTNX, winTNY, winTNZ, winTNLev,
             winInterior;
         std::vector<int> localGrp;
-        const bool localArb = localArbEnv && (int)myGrp.size() == myCount;
+        const bool localArb = (int)myGrp.size() == myCount;
         const double __zp_tMark = __zp_on ? MPI_Wtime() : 0.0;
         if (localArb) {
             // a group is local unless another rank can hold a local slot at its
