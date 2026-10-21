@@ -5,6 +5,7 @@
 #pragma once
 #include <algorithm>
 #include <cmath>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <type_traits>
@@ -178,6 +179,37 @@ struct Cadence {
     void resume(unsigned int freq, double t_prev, double dt_fine) {
         const double dt = freq * dt_fine;
         next = freq ? (std::floor(t_prev / dt + 1e-9) + 1.0) * dt : 0.0;
+    }
+};
+
+/// The driver's event rules in one place: reads the finest step through a
+/// getter at every call (a remesh changes it), so no cadence keeps a stale
+/// step. One per driver; one Cadence per event.
+struct Clock {
+    std::function<double()> dt_fine;  ///< the current finest step
+    bool lts = false;                 ///< LTS: events by simulation time
+
+    /// True if the event is due at this step (see Cadence::due).
+    bool due(Cadence& c, unsigned int freq, long long step, double time) const {
+        return c.due(freq, step, time, dt_fine(), lts);
+    }
+
+    /// The remesh event: its test skips step 0, so its first interval starts
+    /// there (unseeded, it would fire at the first coarse step).
+    void seed_remesh(Cadence& c, unsigned int freq) const { c.next = freq * dt_fine(); }
+
+    /// After a restart under LTS: `t_prev` is the start of the coarse step that
+    /// just ended (current time minus the coarsest step).
+    void resume(Cadence& c, unsigned int freq, double t_prev) const {
+        c.resume(freq, t_prev, dt_fine());
+    }
+
+    /// Checkpoint slot (0 or 1): under LTS the interval index, since the
+    /// coarse step count need not alternate; -1 under the global stepper (the
+    /// solver's own step-parity rule).
+    int checkpoint_slot(unsigned int freq, double time) const {
+        if (!lts) return -1;
+        return (int)((long long)std::floor(time / (freq * dt_fine()) + 1e-9) % 2);
     }
 };
 
