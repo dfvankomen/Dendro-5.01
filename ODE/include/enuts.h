@@ -208,20 +208,6 @@ struct EnutsProf {
         }();
         return v == 1;
     }
-    /** DENDRO_ENUTS_OWN_XCH_OMP=1 (default off; hybrid builds, with
-     *  DENDRO_ENUTS_OMP): the pack and unpack of the owner exchange run
-     *  threaded over the variables (plain indexed copies). Bitwise. */
-    static bool ownXchOmp() {
-#ifdef DENDRO_ENUTS_HAS_OMP
-        static const int v = []() {
-            const char* e = std::getenv("DENDRO_ENUTS_OWN_XCH_OMP");
-            return (e && e[0] == '1') ? 1 : 0;
-        }();
-        return v == 1 && ompOn();
-#else
-        return false;
-#endif
-    }
     /** DENDRO_ENUTS_XCH_CENSUS=1 (prof-only, with DENDRO_ENUTS_PROF=1): of the
      *  owner-exchange doubles received, count at the next overwrite of each
      *  (stage, DG slot) whether a local plan read it since (rows: read / in a
@@ -3953,7 +3939,7 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_begin(T* stv, unsigned int dof,
         if (!cnt) continue;
         const unsigned int* sl = m_uiOwnSendSlot.data() + m_uiOwnSendOff[i];
         T* b                   = m_uiOwnSendBuf.data() + off + xt;
-        const bool thr         = ts::EnutsProf::ownXchOmp();
+        const bool thr         = ts::EnutsProf::ompOn();
 #ifdef DENDRO_ENUTS_HAS_OMP
 #pragma omp parallel for schedule(static) if (thr && !omp_in_parallel())
 #endif
@@ -4089,7 +4075,7 @@ void ExplicitNUTS<T, Ctx>::own_node_exchange_end(T* stv, unsigned int dof,
         if (!cnt) continue;
         const unsigned int* sl = m_uiOwnRecvSlot.data() + m_uiOwnRecvOff[i];
         const T* b             = m_uiOwnRecvBuf.data() + off + xt;
-        const bool thr         = ts::EnutsProf::ownXchOmp();
+        const bool thr         = ts::EnutsProf::ompOn();
 #ifdef DENDRO_ENUTS_HAS_OMP
 #pragma omp parallel for schedule(static) if (thr && !omp_in_parallel())
 #endif
