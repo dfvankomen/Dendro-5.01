@@ -104,39 +104,6 @@ T lagrangeInterpElementToCoord(const ot::Mesh* mesh, const T* in,
 
     mesh->getElementNodalValues(in, &(*(nodalValues.begin())), elementID);
 
-    // probe (DENDRO_INTERP_PROBE=1): are the gathered nodal values finite?
-    {
-        static const char* ipb = std::getenv("DENDRO_INTERP_PROBE");
-        if (ipb && ipb[0] == '1') {
-            unsigned int bad = 0, firstBad = 0;
-            for (unsigned int n = 0; n < nPe; n++)
-                if (!std::isfinite((double)nodalValues[n])) {
-                    if (!bad) firstBad = n;
-                    bad++;
-                }
-            if (bad) {
-                // locate the first nonfinite direct INPUT read for this
-                // element: which cg, vs the per-var size, and the pointer.
-                const unsigned int cgSz = mesh->getDegOfFreedom();
-                unsigned int badCg = 0xFFFFFFFFu;
-                const unsigned int* e2n =
-                    mesh->getE2NMapping().data() + (size_t)elementID * nPe;
-                for (unsigned int n = 0; n < nPe; n++) {
-                    const unsigned int cg = e2n[n];
-                    if (cg < cgSz && !std::isfinite((double)in[cg])) {
-                        badCg = cg;
-                        break;
-                    }
-                }
-                std::printf(
-                    "[interp-nodal r%u elem=%u local=[%u,%u) badNodal=%u "
-                    "first=n%u val=%.6e badInputCg=%u cgSz=%u in=%p]\n",
-                    rankActive, elementID, localBegin, localEnd, bad, firstBad,
-                    (double)nodalValues[firstBad], badCg, cgSz, (void*)in);
-            }
-        }
-    }
-
     const double x              = domain_coord[0];
     const double y              = domain_coord[1];
     const double z              = domain_coord[2];
@@ -592,18 +559,6 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
                     mesh, in, c, r_min, r_max, bestE,
                     mesh->getElementOrder());
                 if (outLev) (*outLev)[i] = (int)bestLev;
-                {
-                    static const char* ipb =
-                        std::getenv("DENDRO_INTERP_PROBE");
-                    if (ipb && ipb[0] == '1')
-                        std::printf(
-                            "[interp-probe r%u DEEPEST pt=%u c=(%.17g,"
-                            "%.17g,%.17g) elem=%u lev=%u box=(%g,%g,%g)-"
-                            "(%g,%g,%g) val=%.6e]\n",
-                            rankActive, i, c[0], c[1], c[2], bestE, bestLev,
-                            r_min.x(), r_min.y(), r_min.z(), r_max.x(),
-                            r_max.y(), r_max.z(), (double)out[i]);
-                }
                 validIndices.push_back(i);
             }
         }
