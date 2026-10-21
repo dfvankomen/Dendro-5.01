@@ -1382,7 +1382,7 @@ MatrixDiagonalEntries* BYUDerivsP6R32DiagonalsSecondOrder(
 		double t1 = -2.0 * (a1/1.0);
 		// diagonal elements for Q matrix for 2nd derivative
 		std::vector<double> Q2DiagInterior{
-			-a1/1.0, t1, a1/1.0
+			a1/1.0, t1, a1/1.0
 		};
 
 		// store the entries for matrix creation
@@ -1559,7 +1559,7 @@ MatrixDiagonalEntries* BYUDerivsP6R2DiagonalsSecondOrder(
 		double t1 = -2.0 * (a1/1.0);
 		// diagonal elements for Q matrix for 2nd derivative
 		std::vector<double> Q2DiagInterior{
-			-a1/1.0, t1, a1/1.0
+			a1/1.0, t1, a1/1.0
 		};
 
 		// store the entries for matrix creation
@@ -1613,10 +1613,10 @@ MatrixDiagonalEntries* BYUDerivsT6R2DiagonalsSecondOrder(
 			{a10, a11, a12, a13, a14, a15, a16, a17}
 		};
 
-		double t1 = -2.0 * (a1/1.0, a2/4.0);
+		double t1 = -2.0 * (a1/1.0 + a2/4.0);
 		// diagonal elements for Q matrix for 2nd derivative
 		std::vector<double> Q2DiagInterior{
-			-a2/4.0, -a1/1.0, t1, a1/1.0, a2/4.0
+			a2/4.0, a1/1.0, t1, a1/1.0, a2/4.0
 		};
 
 		// store the entries for matrix creation

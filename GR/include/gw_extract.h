@@ -179,7 +179,7 @@ void extractFarFieldPsi4(const ot::Mesh* mesh, const T** cVar,
 
     // reduce across all MPI ranks
     MPI_Reduce(swsh_coeff, swsh_coeff_g, numRadii * TOTAL_MODES,
-               MPI_DOUBLE_COMPLEX, MPI_SUM, 0, commActive);
+               MPI_CXX_DOUBLE_COMPLEX, MPI_SUM, 0, commActive);
     MPI_Reduce(psi4L2R.data(), psi4L2R_g.data(), numRadii,
                MPI_DOUBLE, MPI_SUM, 0, commActive);
     MPI_Reduce(psi4L2I.data(), psi4L2I_g.data(), numRadii,

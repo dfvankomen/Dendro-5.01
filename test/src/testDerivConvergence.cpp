@@ -18,7 +18,7 @@
 // The test uses fixed eleorder = 6 (i.e. padding width pw = 3). The active
 // region within each block is (n - 2*pw)^3 cells; the boundary stencils
 // from the scheme apply to the first/last few active cells along each
-// axis.
+// axis. The E8 family needs pw >= 4 and is swept again at eleorder 8 and 10.
 //
 // To keep the test function's smoothness independent of h, the spatial
 // extent of the active region is held fixed at L = 1; only the number of
@@ -32,6 +32,7 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -42,8 +43,8 @@
 using namespace dendroderivs;
 
 // fixed configuration for the test
-static constexpr unsigned int ELEORDER = 6;
-static constexpr unsigned int PW       = ELEORDER / 2;            // = 3
+static unsigned int ELEORDER           = 6;
+static unsigned int PW                 = ELEORDER / 2;            // = 3
 static constexpr double L_ACTIVE       = 1.0;                     // active extent
 
 // active block sizes to sweep. n_active = n - 2*pw is the matrix dimension.
@@ -58,7 +59,7 @@ static constexpr double L_ACTIVE       = 1.0;                     // active exte
 //   49 |   43     | 1/42  = 0.02381
 //
 // six h values spanning ~7x, enough for a robust log-log slope fit.
-static const std::vector<unsigned int> N_SWEEP = {13, 17, 21, 25, 33, 49};
+static std::vector<unsigned int> N_SWEEP = {13, 17, 21, 25, 33, 49};
 
 // width (in cells) of the "boundary" region for splitting RMSE. Active
 // cells within K_BDRY of any active face count as boundary; the rest are
@@ -67,7 +68,7 @@ static const std::vector<unsigned int> N_SWEEP = {13, 17, 21, 25, 33, 49};
 // explicit schemes use biased stencils up to PW cells from the boundary,
 // so picking PW guarantees "interior" cells use only the centered stencil
 // for every scheme in the registry.
-static constexpr unsigned int K_BDRY = PW;
+static unsigned int K_BDRY = PW;
 
 // 3D test function:  u(x,y,z) = sin(2*pi*x) sin(2*pi*y) sin(2*pi*z)
 //   du/dx     =  2*pi cos(2*pi*x) sin(2*pi*y) sin(2*pi*z)
@@ -243,6 +244,12 @@ static const std::vector<double> &coeffs_for(const std::string &name,
     // these coefficients.
     static const std::vector<double> ZERO_ONE = {0.0};
     if (name.rfind("BYU_A6_2ND_R", 0) == 0) return ZERO_ONE;
+    // BYU_A6_1ST and BYU_C6_2nd: zero perturbation is the base scheme
+    if (name.rfind("BYU_A6_1ST_R", 0) == 0 ||
+        name.rfind("BYU_C6_2nd_r_", 0) == 0) return ZERO_ONE;
+    // R2 variants: zero perturbation is the base scheme
+    static const std::vector<double> ZERO_THREE = {0.0, 0.0, 0.0};
+    if (name == "BYUT6R2" || name == "BYUP6R2") return ZERO_THREE;
     return PLACEHOLDER;
 }
 
@@ -537,11 +544,13 @@ static void print_mixed_row(const MixedResult &r) {
 // than taken from the scheme names. The name digit corroborates all of these,
 // except that pw 3 cannot resolve an 8th-order stencil -- E8Matrix and BYUP8 are
 // therefore left out -- and the parameterized BYU_A6/BYU_C6/KIM4xx families need
-// coefficients supplied via coeffs_for() and are garbage here.
+// coefficients supplied via coeffs_for(); BYU_A6_1ST and BYU_C6_2nd are gated
+// only where the measured order clears 5.0.
 struct OrderBaseline {
     const char *name;
     int deriv;
     double floor;
+    double bdy_floor = 0.0;  // 0: boundary order not gated
 };
 
 static const OrderBaseline kBaseline[] = {
@@ -555,23 +564,126 @@ static const OrderBaseline kBaseline[] = {
     {"JTT4", 2, 3.5},      {"BYUT4", 2, 3.5},     {"E6", 2, 5.5},
     {"E6Matrix", 2, 5.5},  {"E6Simd", 2, 5.5},    {"JTT6", 2, 5.5},
     {"JTP6", 2, 5.5},      {"CCFD6", 2, 5.5},     {"BYUP6", 2, 5.0},
-    {"BYUT6", 2, 4.5},
+    {"BYUT6", 2, 4.5},     {"BYUT6R2", 2, 5.5},   {"BYUP6R2", 2, 5.5},
+    {"BYU_A6_1ST_R060_OP1", 1, 5.0}, {"BYU_A6_1ST_R060_OP10", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP11", 1, 5.0}, {"BYU_A6_1ST_R060_OP12", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP15", 1, 5.0}, {"BYU_A6_1ST_R060_OP16", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP17", 1, 5.0}, {"BYU_A6_1ST_R060_OP2", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP22", 1, 5.0}, {"BYU_A6_1ST_R060_OP23", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP24", 1, 5.0}, {"BYU_A6_1ST_R060_OP26", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP27", 1, 5.0}, {"BYU_A6_1ST_R060_OP28", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP3", 1, 5.0}, {"BYU_A6_1ST_R060_OP5", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP6", 1, 5.0}, {"BYU_A6_1ST_R060_OP7", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP8", 1, 5.0}, {"BYU_A6_1ST_R060_OP9", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP1", 1, 5.0}, {"BYU_A6_1ST_R065_OP11", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP12", 1, 5.0}, {"BYU_A6_1ST_R065_OP13", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP14", 1, 5.0}, {"BYU_A6_1ST_R065_OP15", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP16", 1, 5.0}, {"BYU_A6_1ST_R065_OP18", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP19", 1, 5.0}, {"BYU_A6_1ST_R065_OP2", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP20", 1, 5.0}, {"BYU_A6_1ST_R065_OP21", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP23", 1, 5.0}, {"BYU_A6_1ST_R065_OP24", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP3", 1, 5.0}, {"BYU_A6_1ST_R065_OP4", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP5", 1, 5.0}, {"BYU_A6_1ST_R065_OP6", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP7", 1, 5.0}, {"BYU_A6_1ST_R065_OP8", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP9", 1, 5.0}, {"BYU_A6_1ST_R070_OP1", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP10", 1, 5.0}, {"BYU_A6_1ST_R070_OP11", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP12", 1, 5.0}, {"BYU_A6_1ST_R070_OP13", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP14", 1, 5.0}, {"BYU_A6_1ST_R070_OP15", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP16", 1, 5.0}, {"BYU_A6_1ST_R070_OP17", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP18", 1, 5.0}, {"BYU_A6_1ST_R070_OP19", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP2", 1, 5.0}, {"BYU_A6_1ST_R070_OP20", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP21", 1, 5.0}, {"BYU_A6_1ST_R070_OP23", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP24", 1, 5.0}, {"BYU_A6_1ST_R070_OP25", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP26", 1, 5.0}, {"BYU_A6_1ST_R070_OP3", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP4", 1, 5.0}, {"BYU_A6_1ST_R070_OP5", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP6", 1, 5.0}, {"BYU_A6_1ST_R070_OP8", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP9", 1, 5.0}, {"BYU_A6_1ST_R075_OP1", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP10", 1, 5.0}, {"BYU_A6_1ST_R075_OP11", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP12", 1, 5.0}, {"BYU_A6_1ST_R075_OP13", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP14", 1, 5.0}, {"BYU_A6_1ST_R075_OP15", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP16", 1, 5.0}, {"BYU_A6_1ST_R075_OP17", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP18", 1, 5.0}, {"BYU_A6_1ST_R075_OP19", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP2", 1, 5.0}, {"BYU_A6_1ST_R075_OP20", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP21", 1, 5.0}, {"BYU_A6_1ST_R075_OP22", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP23", 1, 5.0}, {"BYU_A6_1ST_R075_OP24", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP25", 1, 5.0}, {"BYU_A6_1ST_R075_OP26", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP27", 1, 5.0}, {"BYU_A6_1ST_R075_OP28", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP3", 1, 5.0}, {"BYU_A6_1ST_R075_OP30", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP4", 1, 5.0}, {"BYU_A6_1ST_R075_OP6", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP7", 1, 5.0}, {"BYU_A6_1ST_R075_OP8", 1, 5.0},
+    {"BYU_A6_1ST_R075_OP9", 1, 5.0}, {"BYU_A6_1ST_R080_OP1", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP10", 1, 5.0}, {"BYU_A6_1ST_R080_OP11", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP12", 1, 5.0}, {"BYU_A6_1ST_R080_OP13", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP3", 1, 5.0}, {"BYU_A6_1ST_R080_OP4", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP5", 1, 5.0}, {"BYU_A6_1ST_R080_OP6", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP7", 1, 5.0}, {"BYU_A6_1ST_R085_OP1", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP11", 1, 5.0}, {"BYU_A6_1ST_R085_OP12", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP13", 1, 5.0}, {"BYU_A6_1ST_R085_OP14", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP15", 1, 5.0}, {"BYU_A6_1ST_R085_OP16", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP17", 1, 5.0}, {"BYU_A6_1ST_R085_OP18", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP19", 1, 5.0}, {"BYU_A6_1ST_R085_OP20", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP21", 1, 5.0}, {"BYU_A6_1ST_R085_OP22", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP23", 1, 5.0}, {"BYU_A6_1ST_R085_OP25", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP26", 1, 5.0}, {"BYU_A6_1ST_R085_OP27", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP28", 1, 5.0}, {"BYU_A6_1ST_R085_OP29", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP3", 1, 5.0}, {"BYU_A6_1ST_R085_OP30", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP4", 1, 5.0}, {"BYU_A6_1ST_R085_OP5", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP7", 1, 5.0}, {"BYU_A6_1ST_R085_OP8", 1, 5.0},
+    {"BYU_A6_1ST_R085_OP9", 1, 5.0}, {"BYU_C6_2nd_r_060_Op1", 2, 5.0},
+    {"BYU_C6_2nd_r_060_Op2", 2, 5.0}, {"BYU_C6_2nd_r_060_Op3", 2, 5.0},
+    {"BYU_C6_2nd_r_060_Op5", 2, 5.0}, {"BYU_C6_2nd_r_060_Op6", 2, 5.0},
+    {"BYU_C6_2nd_r_065_Op1", 2, 5.0}, {"BYU_C6_2nd_r_065_Op2", 2, 5.0},
+    {"BYU_C6_2nd_r_065_Op3", 2, 5.0}, {"BYU_C6_2nd_r_065_Op4", 2, 5.0},
+    {"BYU_C6_2nd_r_065_Op5", 2, 5.0}, {"BYU_C6_2nd_r_065_Op6", 2, 5.0},
+    {"BYU_C6_2nd_r_070_Op1", 2, 5.0}, {"BYU_C6_2nd_r_070_Op2", 2, 5.0},
+    {"BYU_C6_2nd_r_070_Op3", 2, 5.0}, {"BYU_C6_2nd_r_070_Op4", 2, 5.0},
+    {"BYU_C6_2nd_r_070_Op5", 2, 5.0}, {"BYU_C6_2nd_r_070_Op6", 2, 5.0},
+    {"BYU_C6_2nd_r_075_Op1", 2, 5.0}, {"BYU_C6_2nd_r_075_Op2", 2, 5.0},
+    {"BYU_C6_2nd_r_075_Op3", 2, 5.0}, {"BYU_C6_2nd_r_075_Op4", 2, 5.0},
+    {"BYU_C6_2nd_r_075_Op5", 2, 5.0}, {"BYU_C6_2nd_r_080_Op1", 2, 5.0},
+    {"BYU_C6_2nd_r_080_Op2", 2, 5.0}, {"BYU_C6_2nd_r_080_Op3", 2, 5.0},
+    {"BYU_C6_2nd_r_080_Op4", 2, 5.0}, {"BYU_C6_2nd_r_080_Op5", 2, 5.0},
+    {"BYU_C6_2nd_r_085_Op1", 2, 5.0}, {"BYU_C6_2nd_r_085_Op2", 2, 5.0},
+    {"BYU_C6_2nd_r_085_Op3", 2, 5.0}, {"BYU_C6_2nd_r_085_Op4", 2, 5.0},
+    {"BYU_C6_2nd_r_085_Op5", 2, 5.0},
+    {"BYU_A6_1ST_R060_OP25", 1, 5.0}, {"BYU_A6_1ST_R060_OP29", 1, 5.0},
+    {"BYU_A6_1ST_R060_OP4", 1, 5.0}, {"BYU_A6_1ST_R065_OP10", 1, 5.0},
+    {"BYU_A6_1ST_R065_OP17", 1, 5.0}, {"BYU_A6_1ST_R065_OP22", 1, 5.0},
+    {"BYU_A6_1ST_R070_OP22", 1, 5.0}, {"BYU_A6_1ST_R070_OP7", 1, 5.0},
+    {"BYU_A6_1ST_R080_OP14", 1, 5.0}, {"BYU_A6_1ST_R080_OP9", 1, 5.0},
 };
+
+// E8 family at eleorder 8 and 10: 8th-order interior, 6th-order closure rows.
+static const OrderBaseline kBaselineO8[] = {
+    {"E8", 1, 7.5, 5.0},       {"E8Simd", 1, 7.5, 5.0},
+    {"E8Matrix", 1, 7.5, 5.0}, {"E8", 2, 7.5, 5.0},
+    {"E8Simd", 2, 7.5, 5.0},   {"E8Matrix", 2, 7.5, 5.0},
+};
+
+static std::span<const OrderBaseline> g_baseline = kBaseline;
 
 static bool g_gate = false;
 static unsigned int g_gate_checked = 0, g_gate_failed = 0;
 
-static void gate_order(const SchemeResult &r, double p_int) {
+static void gate_order(const SchemeResult &r, double p_int, double p_bdy) {
     if (!g_gate) return;
-    for (const OrderBaseline &b : kBaseline) {
+    for (const OrderBaseline &b : g_baseline) {
         if (r.name != b.name || (int)r.deriv_order != b.deriv) continue;
         g_gate_checked++;
+        bool failed = false;
         if (!(p_int >= b.floor)) {
-            g_gate_failed++;
+            failed = true;
             std::cout << "  GATE FAIL " << b.name << " "
                       << (b.deriv == 1 ? "1st" : "2nd") << " interior order "
                       << p_int << " below floor " << b.floor << "\n";
         }
+        if (b.bdy_floor > 0.0 && !(p_bdy >= b.bdy_floor)) {
+            failed = true;
+            std::cout << "  GATE FAIL " << b.name << " "
+                      << (b.deriv == 1 ? "1st" : "2nd") << " boundary order "
+                      << p_bdy << " below floor " << b.bdy_floor << "\n";
+        }
+        if (failed) g_gate_failed++;
         return;
     }
 }
@@ -596,7 +708,7 @@ static void print_summary_row(const SchemeResult &r) {
               << std::setw(10) << p_all
               << (r.any_failure ? "  (had failures)" : "")
               << "\n";
-    gate_order(r, p_int);
+    gate_order(r, p_int, p_bdy);
 }
 
 int main(int argc, char **argv) {
@@ -657,6 +769,8 @@ int main(int argc, char **argv) {
         // coefficient sets are supplied via coeffs_for().
         if (s == "BYUT6") return false;
         if (s == "BYUP6") return false;
+        if (s == "BYUT6R2") return false;
+        if (s == "BYUP6R2") return false;
         if (s.rfind("BYUT4R", 0) == 0) return true;
         if (s.rfind("BYUT6", 0) == 0) return true;  // R1/R2/.. variants only
         if (s.rfind("BYUP6R", 0) == 0) return true;
@@ -749,6 +863,24 @@ int main(int argc, char **argv) {
             print_mixed_row(r_wrong);
         }
         std::cout << std::string(85, '-') << "\n";
+    }
+
+    g_baseline = kBaselineO8;
+    N_SWEEP    = {25, 33, 41, 49, 57};
+    for (unsigned int eo : {8u, 10u}) {
+        ELEORDER = eo;
+        PW       = eo / 2;
+        K_BDRY   = PW;
+        std::cout << "\n" << std::string(75, '=') << "\n"
+                  << "E8 family at eleorder " << ELEORDER << ", pw " << PW
+                  << " (K_BDRY = " << K_BDRY << ")\n"
+                  << std::string(75, '=') << "\n";
+        for (const OrderBaseline &b : kBaselineO8) {
+            auto r = (b.deriv == 1)
+                         ? run_sweep(b.name, first_reg.at(b.name), 1, csv)
+                         : run_sweep(b.name, second_reg.at(b.name), 2, csv);
+            print_summary_row(r);
+        }
     }
 
     csv.close();

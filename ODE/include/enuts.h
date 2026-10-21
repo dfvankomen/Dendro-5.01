@@ -1349,6 +1349,9 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief: update the element timestep (all blocks, or the given ones)*/
     void update_ele_timestep(const std::vector<unsigned int>* blks = nullptr);
 
+    /**@brief: per-block stepping rules out embedded error control. */
+    bool supports_error_control() const override { return false; }
+
    public:
     /// LTS stepper over the context's mesh. Blocks of the octree-to-block
     /// decomposition must be 2:1 balanced. Collective: no (init() is).
