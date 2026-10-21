@@ -73,10 +73,6 @@ option(WITH_CUDA "Build dendro with CUDA" OFF)
 option(BUILD_WITH_PETSC "Build dendro with PETSc" OFF)
 option(USE_FD_INTERP_FOR_UNZIP "Use FD style interpolation for unzip" OFF)
 option(MPIX_CUDA_AWARE_SUPPORT "Allow MPI to be aware of CUDA support" OFF)
-# Default ON: matrix-form/compact derivs read the full block including the
-# never-filled boundary-ghost padding, so un-zeroed alloc -> NaN. Hybrid-OMP
-# zeros via first-touch; pure-MPI builds rely on this. Turn OFF only for perf A/B.
-option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" ON)
 # ---------------------------------------------------------------------------
 # Unzip/zip speedup toggles
 #
@@ -367,7 +363,6 @@ dendro_add_def(PROFILE_TREE_SORT PROFILE_TREE_SORT)
 dendro_add_def(ALLTOALL_SPARSE ALLTOALL_SPARSE)
 dendro_add_def(RK_SOLVER_OVERLAP_COMM_AND_COMP RK_SOLVER_OVERLAP_COMM_AND_COMP)
 dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
-dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 dendro_add_def(DENDRO_UNZIP_SCATTER_FAST DENDRO_UNZIP_SCATTER_FAST)
 dendro_add_def(DENDRO_UNZIP_OMP DENDRO_UNZIP_OMP)
 
