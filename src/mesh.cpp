@@ -1967,10 +1967,11 @@ unsigned int feedbackWeight(const ot::TreeNode* t) {
                      g_fbSplit.begin();
     return g_fbW[std::min(r, g_fbW.size() - 1)];
 }
-double fbEnvD(const char* n, double d) {
-    const char* e = std::getenv(n);
-    return e ? std::atof(e) : d;
-}
+// tuning (fixed): correction gain, busy-time imbalance that forces a
+// rebalance, forced rebalances allowed between two flag-driven remeshes
+constexpr double kFbGain   = 0.5;
+constexpr double kFbTol    = 0.05;
+constexpr int kFbMaxForced = 3;
 }  // namespace
 
 double Mesh::feedbackBusyNow() {
@@ -1984,17 +1985,15 @@ double Mesh::feedbackBusyNow() {
 bool Mesh::feedbackRebalanceDue() {
     if (feedbackBalanceMode() == 0 || !m_uiIsActive || m_uiActiveNpes < 2)
         return false;
-    static const double tol   = fbEnvD("DENDRO_FEEDBACK_TOL", 0.05);
-    static const int maxForce = (int)fbEnvD("DENDRO_FEEDBACK_MAX_FORCED", 3);
     double busy = feedbackBusyNow() - g_fbSnap;
     double mx = 0, sum = 0;
     par::Mpi_Allreduce(&busy, &mx, 1, MPI_MAX, m_uiCommActive);
     par::Mpi_Allreduce(&busy, &sum, 1, MPI_SUM, m_uiCommActive);
     const double mean = sum / m_uiActiveNpes;
-    const bool due    = mean > 1e-3 && mx > (1.0 + tol) * mean && g_fbForced < maxForce;
+    const bool due    = mean > 1e-3 && mx > (1.0 + kFbTol) * mean && g_fbForced < kFbMaxForced;
     if (!m_uiActiveRank)
         std::cout << "[feedback-balance] check: busy max/mean=" << (mean > 0 ? mx / mean : 0.0)
-                  << " mean=" << mean << "s forced=" << g_fbForced << "/" << maxForce
+                  << " mean=" << mean << "s forced=" << g_fbForced << "/" << kFbMaxForced
                   << (due ? " -> rebalance" : " -> keep") << std::endl;
     if (!due) return false;
     for (unsigned int e = m_uiElementLocalBegin; e < m_uiElementLocalEnd; e++)
@@ -16348,7 +16347,6 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                 cSum += all[2 * r] / std::max(1.0, all[2 * r + 1]);
             }
             const double cMean = cSum / m_uiActiveNpes;
-            static const double fbGain = fbEnvD("DENDRO_FEEDBACK_GAIN", 0.5);
             // no measured window yet (initial grid loop): leave the cut alone
             if (busySum / m_uiActiveNpes > 1e-3 && cMean > 0) {
                 fbOn = true;
@@ -16359,7 +16357,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                     const double c = all[2 * r] / std::max(1.0, all[2 * r + 1]);
                     // half the measured correction, capped: a region's cost per
                     // element is not uniform, so the full step overshoots
-                    const double rel = std::min(1.25, std::max(0.8, 1.0 + fbGain * (c / cMean - 1.0)));
+                    const double rel = std::min(1.25, std::max(0.8, 1.0 + kFbGain * (c / cMean - 1.0)));
                     g_fbW[r] = (unsigned int)std::max(1.0, std::round(1000.0 * rel));
                     wMin = std::min(wMin, g_fbW[r]);
                     wMax = std::max(wMax, g_fbW[r]);

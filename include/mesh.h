@@ -3277,25 +3277,25 @@ class Mesh {
     /**@brief DENDRO_FEEDBACK_BALANCE=1: the SFC cut of every ReMesh weights each
      * element by the measured busy time per element (the whole step minus the
      * ghost and barrier waits, since the previous ReMesh) of the rank that owned
-     * its region; DENDRO_FEEDBACK_GAIN (default 0.5) scales the correction.
-     * _CHECK=1 also verifies the weighted cut and aborts (code 97) on a miss. */
+     * its region, with gain 0.5 on the correction. With balancing on,
+     * DENDRO_FEEDBACK_BALANCE_CHECK=1 also verifies the weighted cut and
+     * aborts (code 97) on a miss. 0 off, 1 on, 2 on with the check. */
 #define DENDRO_HAS_FEEDBACK_BALANCE 1
     static int feedbackBalanceMode() {
         static const int m = [] {
-            const char* c = std::getenv("DENDRO_FEEDBACK_BALANCE_CHECK");
-            if (c && c[0] == '1') return 2;
             const char* e = std::getenv("DENDRO_FEEDBACK_BALANCE");
-            return (e && e[0] == '1') ? 1 : 0;
+            if (!(e && e[0] == '1')) return 0;
+            const char* c = std::getenv("DENDRO_FEEDBACK_BALANCE_CHECK");
+            return (c && c[0] == '1') ? 2 : 1;
         }();
         return m;
     }
     /** this rank's busy seconds accumulated so far */
     static double feedbackBusyNow();
     /** collective over the active comm. True when feedback balancing is on and
-     * the busy-time max/mean since the last ReMesh exceeds 1 + DENDRO_FEEDBACK_TOL
-     * (default 0.05); it then clears the local refinement flags so a ReMesh keeps
-     * the elements and only moves the cut. At most DENDRO_FEEDBACK_MAX_FORCED
-     * (default 3) such rebalances between two flag-driven remeshes. */
+     * the busy-time max/mean since the last ReMesh exceeds 1.05; it then clears
+     * the local refinement flags so a ReMesh keeps the elements and only moves
+     * the cut. At most 3 such rebalances between two flag-driven remeshes. */
     bool feedbackRebalanceDue();
     static bool partStatsEnabled() {
         static const bool on = [] {
