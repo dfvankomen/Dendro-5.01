@@ -21214,60 +21214,20 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             return std::uint64_t(recvNodeDGG[p][i]) |
                    (recvNodeIsDG[p][i] ? kIsDGBit : 0);
         };
-        std::vector<std::uint64_t> recvBuf;
-        auto packRecv = [&]() {
-            if (recvBuf.size() == (size_t)totalRecv) return;
-            recvBuf.resize(totalRecv);
-            int off = 0;
-            for (int p = 0; p < npes; p++)
-                for (size_t i = 0; i < recvNodeDGG[p].size(); i++)
-                    recvBuf[off++] = reqWord(p, i);
-        };
 
         // request round: each receiver sends its requested DG globals to the
         // owner; the owner gets per-peer lists in rank order.
-        // DENDRO_SM_RUNS (default on, =0 reverts): send each per-peer list as runs of
-        // consecutive globals, one word per run (start | len-1 << 32, isDG
-        // bit kept); requests come element by element, so ~9x fewer words,
-        // and the owner decodes straight from the runs (one lookup per run).
-        // _CHECK=1 also runs the plain round + decode and aborts 86 if any
-        // send list differs (_PERTURB=1 flips one entry to prove it bites).
+        // each per-peer list goes as runs of consecutive globals, one word per
+        // run (start | len-1 << 32, isDG bit kept); requests come element by
+        // element, so ~9x fewer words, and the owner decodes straight from
+        // the runs (one lookup per run).
         // DENDRO_SM_PROF=1: entry barrier + per-round timers and sizes
-        static const int smRuns = [] {
-            const char* e = std::getenv("DENDRO_SM_RUNS");
-            const char* c = std::getenv("DENDRO_SM_RUNS_CHECK");
-            return (e && e[0] == '0' ? 0 : 1) | (c && c[0] == '1' ? 2 : 0);
-        }();
-        static const bool smPerturb = [] {
-            const char* e = std::getenv("DENDRO_SM_RUNS_PERTURB");
-            return e && e[0] == '1';
-        }();
         static const bool smProf = [] {
             const char* e = std::getenv("DENDRO_SM_PROF");
             return e && e[0] == '1';
         }();
         double smT[5] = {0, 0, 0, 0, 0};  // wait, round, counts, payload, encode
         size_t smWords = 0;               // words this rank put on the wire
-        auto plainRound = [&](std::vector<int>& sc,
-                              std::vector<std::uint64_t>& sb) {
-            packRecv();
-            sc.assign(npes, 0);
-            const double t0 = MPI_Wtime();
-            repartRound();
-            MPI_Alltoall(recvCount.data(), 1, MPI_INT, sc.data(), 1, MPI_INT,
-                         commActive);
-            const double t1 = MPI_Wtime();
-            std::vector<int> so(npes, 0);
-            for (int p = 1; p < npes; p++) so[p] = so[p - 1] + sc[p - 1];
-            sb.resize((size_t)so[npes - 1] + sc[npes - 1]);
-            repartRound();
-            MPI_Alltoallv(recvBuf.data(), recvCount.data(), recvOff.data(),
-                          MPI_UINT64_T, sb.data(), sc.data(), so.data(),
-                          MPI_UINT64_T, commActive);
-            smT[2] = t1 - t0;
-            smT[3] = MPI_Wtime() - t1;
-            smWords = (size_t)totalRecv;
-        };
         auto runsRound = [&](std::vector<int>& sc,
                              std::vector<std::uint64_t>& w) {
             constexpr std::uint64_t kLo = 0xffffffffull, kMaxLen = 0x7fffffffull;
@@ -21320,8 +21280,7 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
         }
         {
             const double t0 = MPI_Wtime();
-            if (smRuns & 1) runsRound(sendCount, sendBuf);
-            else plainRound(sendCount, sendBuf);
+            runsRound(sendCount, sendBuf);
             smT[1] = MPI_Wtime() - t0;
         }
         if (smProf) {
@@ -21336,11 +21295,11 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
             MPI_Reduce(v, mx, 9, MPI_DOUBLE, MPI_MAX, 0, commActive);
             MPI_Reduce(v, sm, 9, MPI_DOUBLE, MPI_SUM, 0, commActive);
             if (!rank)
-                std::printf("[sm-prof] np=%d runs=%d wait max/avg %.2f/%.2f ms "
+                std::printf("[sm-prof] np=%d wait max/avg %.2f/%.2f ms "
                             "round %.2f/%.2f counts %.2f/%.2f payload %.2f/%.2f "
                             "encode %.2f/%.2f | requests max/avg %.0f/%.0f "
                             "wire words %.0f/%.0f peers req %.0f/%.1f served %.0f/%.1f\n",
-                            npes, smRuns & 1, mx[0] * 1e3, sm[0] * 1e3 / npes,
+                            npes, mx[0] * 1e3, sm[0] * 1e3 / npes,
                             mx[1] * 1e3, sm[1] * 1e3 / npes, mx[2] * 1e3,
                             sm[2] * 1e3 / npes, mx[3] * 1e3, sm[3] * 1e3 / npes,
                             mx[8] * 1e3, sm[8] * 1e3 / npes, mx[4], sm[4] / npes,
@@ -21399,67 +21358,26 @@ void Mesh::repartitionMeshGlobal(bool do_block_creation,
                 outDG = 0;
             }
         };
-        // one entry per request, in place on the plain buffer
-        auto decodePlain = [&](std::vector<std::uint64_t>& buf,
-                               std::vector<unsigned int>& outSM,
-                               std::vector<unsigned char>& outDG) {
-            const int n = (int)buf.size();
-            std::vector<unsigned char> isDGBuf(n);
-            for (int i = 0; i < n; i++) {
-                isDGBuf[i] = (buf[i] & kIsDGBit) ? 1 : 0;
-                buf[i] &= ~kIsDGBit;
-            }
-            outSM.assign(n, 0);
-            outDG.assign(n, 0);
-            for (int i = 0; i < n; i++) {
-                unsigned int gid = static_cast<unsigned int>(buf[i] / m_uiNpE);
-                unsigned int nid = static_cast<unsigned int>(buf[i] % m_uiNpE);
-                decodeOne(lookupEle(gid), nid, isDGBuf[i], outSM[i], outDG[i]);
-            }
-        };
         std::vector<unsigned int> sendSM;
         std::vector<unsigned char> sendIsDG;
-        if (smRuns & 1) {
-            // straight from the runs: one lookup per element, no request buffer
-            sendSM.assign(totalSend, 0);
-            sendIsDG.assign(totalSend, 0);
-            int i = 0;
-            for (const std::uint64_t x : sendBuf) {
-                const bool f = (x & kIsDGBit) != 0;
-                const std::uint64_t s = x & 0xffffffffull;
-                const std::uint64_t len = ((x & ~kIsDGBit) >> 32) + 1;
-                unsigned int gid = (unsigned int)(s / m_uiNpE);
-                unsigned int nid = (unsigned int)(s % m_uiNpE);
-                unsigned int le  = lookupEle(gid);
-                for (std::uint64_t j = 0; j < len; j++, i++) {
-                    decodeOne(le, nid, f, sendSM[i], sendIsDG[i]);
-                    if (++nid == m_uiNpE) {
-                        nid = 0;
-                        le  = lookupEle(++gid);
-                    }
+        // straight from the runs: one lookup per element, no request buffer
+        sendSM.assign(totalSend, 0);
+        sendIsDG.assign(totalSend, 0);
+        int i = 0;
+        for (const std::uint64_t x : sendBuf) {
+            const bool f = (x & kIsDGBit) != 0;
+            const std::uint64_t s = x & 0xffffffffull;
+            const std::uint64_t len = ((x & ~kIsDGBit) >> 32) + 1;
+            unsigned int gid = (unsigned int)(s / m_uiNpE);
+            unsigned int nid = (unsigned int)(s % m_uiNpE);
+            unsigned int le  = lookupEle(gid);
+            for (std::uint64_t j = 0; j < len; j++, i++) {
+                decodeOne(le, nid, f, sendSM[i], sendIsDG[i]);
+                if (++nid == m_uiNpE) {
+                    nid = 0;
+                    le  = lookupEle(++gid);
                 }
             }
-        } else {
-            decodePlain(sendBuf, sendSM, sendIsDG);
-        }
-        if ((smRuns & 3) == 3) {
-            // old round + old per-request decode, compared list by list
-            std::vector<int> c2;
-            std::vector<std::uint64_t> b2;
-            std::vector<unsigned int> sm2;
-            std::vector<unsigned char> dg2;
-            plainRound(c2, b2);
-            decodePlain(b2, sm2, dg2);
-            if (smPerturb && !sendSM.empty()) sendSM[0] ^= 1;
-            const unsigned long long bad =
-                (c2 != sendCount) || (sm2 != sendSM) || (dg2 != sendIsDG);
-            unsigned long long badAll = 0;
-            MPI_Allreduce(&bad, &badAll, 1, MPI_UNSIGNED_LONG_LONG, MPI_SUM,
-                          commActive);
-            if (!rank)
-                std::printf("[sm-runs-check] ranks with a different send map: "
-                            "%llu\n", badAll);
-            if (badAll) MPI_Abort(commActive, 86);
         }
 
         __phase("  sm: decode");
