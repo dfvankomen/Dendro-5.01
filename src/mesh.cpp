@@ -9116,13 +9116,11 @@ void Mesh::buildZipPlanCore() {
                         (__zp_claims - __zp_tKeep) * 1e3, myMin.size());
     }
 
-    // DENDRO_ZIPPLAN_DIST=1: arbitrate on home ranks instead of replicating
-    // the whole global picture on every rank. Same rule, same winners; the
-    // default path's O(total)=O(P*local) per-rank cost becomes O(local).
-    // See buildZipPlanArbitrateDistributed.
-    static const char* __zp_dist_env = std::getenv("DENDRO_ZIPPLAN_DIST");
-    const bool zpDist = !(__zp_dist_env && __zp_dist_env[0] == '0') &&
-                        m_uiActiveNpes > 1;
+    // more than one rank: arbitrate on home ranks instead of replicating the
+    // whole global picture on every rank. Same rule, same winners; the
+    // gather's O(total)=O(P*local) per-rank cost becomes O(local). See
+    // buildZipPlanArbitrateDistributed. One rank keeps the local gather.
+    const bool zpDist = m_uiActiveNpes > 1;
 
     int myCount = (int)myX.size();
     std::vector<int> counts(m_uiActiveNpes), offs(m_uiActiveNpes, 0);

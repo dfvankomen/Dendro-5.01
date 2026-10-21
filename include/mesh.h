@@ -1441,9 +1441,9 @@ class Mesh {
     bool m_uiZipFastNoRetry = false;
     std::vector<unsigned int> m_uiZipFastStashCg, m_uiZipFastStashIdx;
 
-    /**@brief DENDRO_ZIPPLAN_DIST=1: home-rank arbitration for buildZipPlan.
+    /**@brief Home-rank arbitration for buildZipPlan (multi-rank meshes).
      *
-     * The default path Allgathers every rank's claims to every rank, builds a
+     * The one-rank gather path Allgathers every rank's claims to every rank, builds a
      * global winners map, and sorts the whole thing — O(total)=O(P*local) work
      * and memory PER RANK, so it gets worse as ranks are added. This does the
      * same arbitration distributed: each claim is routed to home(phys) by hash,
@@ -1452,7 +1452,7 @@ class Mesh {
      *
      * Semantics are identical, which depends on two things:
      *  - homes iterate claims in ORIGIN-RANK-ASCENDING order, and within a rank
-     *    in the sender's original claim order. The default path's "smallest rank
+     *    in the sender's original claim order. The gather path's "smallest rank
      *    wins" tie-break is implicit in exactly that order (its explicit
      *    `p < w.rank` check is dead code — the outer loop already ascends).
      *  - send/recv lists are sorted by a TOTAL key (phys, cg) on both sides, so
