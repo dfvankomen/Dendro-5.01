@@ -4023,33 +4023,6 @@ class Mesh {
      */
     void interGridTransferSendRecvCompute(const ot::Mesh *pMesh);
 
-    /** @brief One IGT write candidate (probe record, DENDRO_IGT_WRITER_PROBE). */
-    struct IgtWriterRec {
-        unsigned long long px, py, pz;  // node position (x*order units)
-        unsigned long long gidx;        // global SFC index of the writer elem
-        unsigned long long bits;        // value bits
-        unsigned int var;
-        unsigned int flags;  // 1 = actual writer, 2 = cg local, 4 = cg owner elem
-    };
-
-    /**
-     * @brief Probe: records every IGT write candidate (local element of
-     * pMesh, non-hanging node) for one variable, with the received M2 DG
-     * values, flagging the element that the IGT write loop lets win.
-     */
-    static void igtWriterProbeCollect(const ot::Mesh *pMesh, const double *wm2,
-                                      unsigned int var,
-                                      unsigned long long gofs,
-                                      std::vector<IgtWriterRec> &recs);
-
-    /**
-     * @brief Probe: routes candidates by position, counts nodes whose
-     * candidate writers disagree bitwise and how the actual writer relates
-     * to partition-independent writer rules; rank 0 prints one line.
-     */
-    static void igtWriterProbeReport(std::vector<IgtWriterRec> &recs,
-                                     MPI_Comm comm);
-
     /**
      * @brief transfer a variable vector form old grid to new grid. Assumes the
      * ghost is synchronized in the old vector
