@@ -1212,6 +1212,18 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     ExplicitNUTS(Ctx* ctx, bool useWpart = true,
                  const ts::LtsOptions& opts = ts::LtsOptions());
 
+    using ETS<T, Ctx>::set_ets_coefficients;
+    /// The Runge-Kutta tableau; aborts unless ts::lts_tableau_supported
+    /// (RK3, RK4). Collective: no.
+    int set_ets_coefficients(ETSType type) {
+        if (!ts::lts_tableau_supported(type)) {
+            std::cerr << "[enuts] the LTS stepper runs RK3 or RK4, not ETSType "
+                      << (int)type << std::endl;
+            MPI_Abort(MPI_COMM_WORLD, 1);
+        }
+        return ETS<T, Ctx>::set_ets_coefficients(type);
+    }
+
     /// Step of a block at level `blev` in units of the finest step.
     /// Collective: no. Thread-safe: yes.
     unsigned int step_ratio(unsigned int blev) const {
@@ -1337,7 +1349,7 @@ template <typename T, typename Ctx>
 ExplicitNUTS<T, Ctx>::ExplicitNUTS(Ctx* ctx, bool useWpart,
                                    const ts::LtsOptions& opts)
     : ETS<T, Ctx>(ctx) {
-    if (opts.iface != 3 && opts.iface != 15) {
+    if (!ts::lts_options_valid(opts)) {
         std::cerr << "[enuts] LtsOptions::iface is 3 or 15, not " << opts.iface
                   << std::endl;
         MPI_Abort(MPI_COMM_WORLD, 1);

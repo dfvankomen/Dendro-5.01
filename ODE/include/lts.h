@@ -14,6 +14,7 @@
 #include "mesh.h"
 #include "parUtils.h"
 #include "point.h"
+#include "ts.h"
 
 namespace ts {
 
@@ -29,6 +30,18 @@ struct LtsOptions {
     /// 0 = no cap, 1 = every block takes the finest step.
     unsigned int ratio_cap = 0;
 };
+
+/// True when `opts` is a setting ExplicitNUTS accepts (iface 3 or 15).
+/// Collective: no. Thread-safe: yes.
+inline bool lts_options_valid(const LtsOptions& opts) {
+    return opts.iface == 3 || opts.iface == 15;
+}
+
+/// True for the tableaus ExplicitNUTS steps: RK3 and RK4, the ones its
+/// interface stage conversion is derived for. Collective: no. Thread-safe: yes.
+inline bool lts_tableau_supported(ETSType type) {
+    return type == ETSType::RK3 || type == ETSType::RK4;
+}
 
 /// Ratio cap snapped down to a power of two; 0 stays 0 (no cap).
 /// Collective: no. Thread-safe: yes.
@@ -236,8 +249,9 @@ void checkpoint(Ctx& ctx, Stepper& ets, Write&& write) {
 /// Level offset of the step ladder: the number of levels below the finest
 /// that step at the finest step. A block at level blev may step at
 /// 2^(lmax - blev) dt_min (its CFL step); `dt_stable(blk)` bounds it further
-/// (return infinity for no bound). Collective: yes, a max-reduction over
-/// `comm`. Thread-safe: no.
+/// (return infinity for no bound). A block whose feasible step is not above
+/// dt_min adds nothing: the finest step is the floor. Collective: yes, a
+/// max-reduction over `comm`. Thread-safe: no.
 /// @param dt_min  the finest step
 /// @param dt_stable  callable, local block id -> largest stable step
 template <class DtStable>
