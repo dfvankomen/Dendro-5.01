@@ -80,7 +80,9 @@ class BlockAsyncVector {
             return;
         }
 
-        m_uiVec = new T[m_uiDof * NN];
+        // zeroed: padding no sync writes (outside the domain) must not hold
+        // stale memory, which a solver operator reading it would turn into NaN
+        m_uiVec = new T[m_uiDof * NN]();
 
         return;
     }
