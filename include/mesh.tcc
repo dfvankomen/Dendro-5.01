@@ -6543,376 +6543,31 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
         return true;
     };
 
-    // DENDRO_ONEHOP_GROUPS (default 1, =0 reverts): the owner's reply and the records travel as
-    // per-(element, labelled owner) groups [x|y<<32, z|lev<<32, sub mask, values var-major]
-    // instead of npe ints per element and one (x,y,z) per node; the owner writes a group
-    // through lNew's E2N of the same element when that cg is local and sits at the node's
-    // position, else by position as before. =2 keeps the groups but always looks up by
-    // position. _CHECK=1 also runs the per-node path and aborts (88) on any differing value,
-    // write count, miss count or owner error
-    static const int grpMode = [] {
-        const char* v = std::getenv("DENDRO_ONEHOP_GROUPS");
-        return v ? std::atoi(v) : 1;
-    }();
-    static const bool grpChk = [] {
-        const char* v = std::getenv("DENDRO_ONEHOP_GROUPS_CHECK");
-        return v && v[0] == '1';
-    }();
+    // the owner's reply and the records travel as per-(element, labelled
+    // owner) groups [x|y<<32, z|lev<<32, sub mask, values var-major] (not npe
+    // ints per element and one (x,y,z) per node); the owner writes a group
+    // through lNew's E2N of the same element when that cg is local and sits at
+    // the node's position, else by position
     const size_t gDstSz     = lNew->getDegOfFreedom();
     const unsigned int gLnB = lNew->getNodeLocalBegin();
     const unsigned int gLnE = lNew->getNodeLocalEnd();
-    std::vector<T> gOut;
     std::vector<unsigned char> gW;
     unsigned long long gMiss = 0, gRec = 0, gTk[3] = {0, 0, 0};
     int gErr = 0;
-    if (grpMode > 0) {
-        T* out = vecOut;
-        if (grpChk) {
-            gOut.assign((size_t)dof * gDstSz, (T)0);
-            out = gOut.data();
+    T* out = vecOut;
+    gW.assign(gLnE - gLnB, 0);
+    const unsigned int W = (npe + 63) / 64;
+    struct GKeyHash {
+        size_t operator()(const std::array<unsigned int, 4>& k) const noexcept {
+            uint64_t h = ((uint64_t)k[0] << 32) ^ ((uint64_t)k[1] << 16) ^
+                         ((uint64_t)k[2]) ^ ((uint64_t)k[3] << 58);
+            h ^= h >> 33;
+            h *= 0xff51afd7ed558ccdULL;
+            h ^= h >> 33;
+            return (size_t)h;
         }
-        gW.assign(gLnE - gLnB, 0);
-        const unsigned int W = (npe + 63) / 64;
-        struct GKeyHash {
-            size_t operator()(const std::array<unsigned int, 4>& k) const noexcept {
-                uint64_t h = ((uint64_t)k[0] << 32) ^ ((uint64_t)k[1] << 16) ^
-                             ((uint64_t)k[2]) ^ ((uint64_t)k[3] << 58);
-                h ^= h >> 33;
-                h *= 0xff51afd7ed558ccdULL;
-                h ^= h >> 33;
-                return (size_t)h;
-            }
-        };
-        // query: same element keys to each M2' element's SFC owner
-        const auto& spl = sNew->getSplitterElements();
-        auto sfcOwner   = [&](const ot::TreeNode& t) {
-            int lo = 0, hi = npes - 1;
-            while (lo < hi) {
-                const int mid = (lo + hi + 1) / 2;
-                if (t < spl[2 * mid])
-                    hi = mid - 1;
-                else
-                    lo = mid;
-            }
-            return lo;
-        };
-        std::vector<int> qCnt(npes, 0), qOff(npes, 0), rqCnt(npes, 0), rqOff(npes, 0);
-        std::vector<size_t> xSlot(nx);
-        std::vector<unsigned int> qBuf(4 * nx);
-        {
-            std::vector<int> xOwner(nx);
-            for (size_t y = 0; y < nx; y++) qCnt[xOwner[y] = sfcOwner(xTN[y])]++;
-            for (int p = 1; p < npes; p++) qOff[p] = qOff[p - 1] + qCnt[p - 1];
-            std::vector<int> c = qOff;
-            for (size_t y = 0; y < nx; y++) {
-                const size_t s  = (size_t)c[xOwner[y]]++;
-                xSlot[y]        = s;
-                qBuf[4 * s]     = xTN[y].getX();
-                qBuf[4 * s + 1] = xTN[y].getY();
-                qBuf[4 * s + 2] = xTN[y].getZ();
-                qBuf[4 * s + 3] = xTN[y].getLevel();
-            }
-        }
-        MPI_Alltoall(qCnt.data(), 1, MPI_INT, rqCnt.data(), 1, MPI_INT, comm);
-        for (int p = 1; p < npes; p++) rqOff[p] = rqOff[p - 1] + rqCnt[p - 1];
-        const size_t nq = (size_t)rqOff[npes - 1] + rqCnt[npes - 1];
-        std::vector<unsigned int> rqBuf(4 * nq);
-        {
-            std::vector<int> sc(npes), so(npes), rc(npes), ro(npes);
-            for (int p = 0; p < npes; p++) {
-                sc[p] = 4 * qCnt[p];
-                so[p] = 4 * qOff[p];
-                rc[p] = 4 * rqCnt[p];
-                ro[p] = 4 * rqOff[p];
-            }
-            MPI_Alltoallv(qBuf.data(), sc.data(), so.data(), MPI_UNSIGNED,
-                          rqBuf.data(), rc.data(), ro.data(), MPI_UNSIGNED, comm);
-        }
-        // owner side: per queried element, nD then nD x (labelled owner, W mask words)
-        std::vector<std::uint64_t> rep;
-        std::vector<int> repCnt(npes, 0), rrCnt(npes, 0), repOff(npes, 0), rrOff(npes, 0);
-        {
-            const unsigned int sB    = sNew->getElementLocalBegin();
-            const unsigned int sE    = sNew->getElementLocalEnd();
-            const unsigned int snB   = sNew->getNodeLocalBegin();
-            const unsigned int snE   = sNew->getNodeLocalEnd();
-            const unsigned int* se2n = sNew->getE2NMapping().data();
-            const auto& scg2dg       = sNew->getCG2DGMap();
-            const auto* pS           = sNew->getAllElements().data();
-            const auto& lab          = lNew->m_uiRepartPreLabel;
-            std::unordered_map<std::array<unsigned int, 4>, unsigned int, GKeyHash> idx;
-            idx.reserve(sE - sB);
-            for (unsigned int e = sB; e < sE; e++)
-                idx.emplace(std::array<unsigned int, 4>{pS[e].getX(), pS[e].getY(),
-                                                        pS[e].getZ(), pS[e].getLevel()},
-                            e);
-            std::vector<unsigned int> lastW(snE - snB, UINT_MAX);
-            std::vector<unsigned char> nh((size_t)(sE - sB) * npe, 0);
-            for (unsigned int e = sB; e < sE; e++)
-                for (unsigned int k = 0; k <= eOrd; k++)
-                    for (unsigned int j = 0; j <= eOrd; j++)
-                        for (unsigned int i = 0; i <= eOrd; i++) {
-                            if (sNew->isNodeHanging(e, i, j, k)) continue;
-                            const unsigned int sub = (k * (eOrd + 1) + j) * (eOrd + 1) + i;
-                            nh[(size_t)(e - sB) * npe + sub] = 1;
-                            const unsigned int cg = se2n[e * npe + sub];
-                            if (cg >= snB && cg < snE) lastW[cg - snB] = e;
-                        }
-            rep.reserve(nq * (2 + W));
-            std::vector<int> dl;
-            std::vector<std::uint64_t> dm;
-            int p = 0;
-            for (size_t q = 0; q < nq; q++) {
-                while (p < npes - 1 && q >= (size_t)rqOff[p] + rqCnt[p]) p++;
-                const size_t r0 = rep.size();
-                dl.clear();
-                dm.clear();
-                auto it = idx.find({rqBuf[4 * q], rqBuf[4 * q + 1], rqBuf[4 * q + 2],
-                                    rqBuf[4 * q + 3]});
-                if (it == idx.end()) {
-                    gErr |= 1;
-                } else {
-                    const unsigned int e = it->second;
-                    for (unsigned int sub = 0; sub < npe; sub++) {
-                        if (!nh[(size_t)(e - sB) * npe + sub]) continue;
-                        const unsigned int cg = se2n[e * npe + sub];
-                        if (cg < snB || cg >= snE || lastW[cg - snB] != e) continue;
-                        const unsigned int oe = scg2dg[cg] / npe;
-                        if (oe < sB || oe >= sE) {
-                            gErr |= 2;
-                            continue;
-                        }
-                        const int d = (int)lab[oe - sB];
-                        size_t k = 0;
-                        while (k < dl.size() && dl[k] != d) k++;
-                        if (k == dl.size()) {
-                            dl.push_back(d);
-                            dm.resize(dm.size() + W, 0);
-                        }
-                        dm[k * W + sub / 64] |= 1ull << (sub % 64);
-                    }
-                }
-                rep.push_back(dl.size());
-                for (size_t k = 0; k < dl.size(); k++) {
-                    rep.push_back((std::uint64_t)dl[k]);
-                    rep.insert(rep.end(), dm.begin() + k * W, dm.begin() + (k + 1) * W);
-                }
-                repCnt[p] += (int)(rep.size() - r0);
-            }
-        }
-        MPI_Alltoall(repCnt.data(), 1, MPI_INT, rrCnt.data(), 1, MPI_INT, comm);
-        for (int p = 1; p < npes; p++) {
-            repOff[p] = repOff[p - 1] + repCnt[p - 1];
-            rrOff[p]  = rrOff[p - 1] + rrCnt[p - 1];
-        }
-        std::vector<std::uint64_t> myRep((size_t)rrOff[npes - 1] + rrCnt[npes - 1]);
-        MPI_Alltoallv(rep.data(), repCnt.data(), repOff.data(), MPI_UINT64_T, myRep.data(),
-                      rrCnt.data(), rrOff.data(), MPI_UINT64_T, comm);
-        std::vector<std::uint64_t>().swap(rep);
-        // replies arrive in query-slot order
-        std::vector<size_t> sRep(nx);
-        {
-            size_t at = 0;
-            for (size_t s = 0; s < nx; s++) {
-                sRep[s] = at;
-                at += 1 + myRep[at] * (1 + W);
-            }
-            if (at != myRep.size()) gErr |= 4;
-        }
-        mark(2);
-
-        // records: one group per (M2' element, labelled owner)
-        auto popc = [&](const std::uint64_t* m) {
-            unsigned int c = 0;
-            for (unsigned int i = 0; i < W; i++) c += (unsigned int)__builtin_popcountll(m[i]);
-            return c;
-        };
-        std::vector<int> dCnt(npes, 0), dOff(npes, 0), rdCnt(npes, 0), rdOff(npes, 0);
-        for (size_t y = 0; !(gErr & 4) && y < nx; y++) {
-            const std::uint64_t* g = &myRep[sRep[xSlot[y]]];
-            for (std::uint64_t k = 0; k < g[0]; k++) {
-                const std::uint64_t* m = g + 1 + k * (1 + W);
-                dCnt[m[0]] += (int)(2 + W + (size_t)popc(m + 1) * dof);
-            }
-        }
-        for (int p = 1; p < npes; p++) dOff[p] = dOff[p - 1] + dCnt[p - 1];
-        std::vector<std::uint64_t> dBuf((size_t)dOff[npes - 1] + dCnt[npes - 1]);
-        {
-            std::vector<int> c = dOff;
-            for (size_t y = 0; !(gErr & 4) && y < nx; y++) {
-                const std::uint64_t* g = &myRep[sRep[xSlot[y]]];
-                const ot::TreeNode& t  = xTN[y];
-                for (std::uint64_t k = 0; k < g[0]; k++) {
-                    const std::uint64_t* m = g + 1 + k * (1 + W);
-                    const unsigned int pc  = popc(m + 1);
-                    std::uint64_t* r       = &dBuf[(size_t)c[m[0]]];
-                    c[m[0]] += (int)(2 + W + (size_t)pc * dof);
-                    r[0] = (std::uint64_t)t.getX() | ((std::uint64_t)t.getY() << 32);
-                    r[1] = (std::uint64_t)t.getZ() | ((std::uint64_t)t.getLevel() << 32);
-                    std::memcpy(&r[2], m + 1, W * sizeof(std::uint64_t));
-                    std::uint64_t* o = r + 2 + W;
-                    for (unsigned int v = 0; v < dof; v++) {
-                        const T* xv = &xVal[(y * dof + v) * npe];
-                        for (unsigned int wi = 0; wi < W; wi++)
-                            for (std::uint64_t b = m[1 + wi]; b; b &= b - 1)
-                                std::memcpy(o++, &xv[wi * 64 + __builtin_ctzll(b)], 8);
-                    }
-                }
-            }
-        }
-        std::vector<std::uint64_t>().swap(myRep);
-        MPI_Alltoall(dCnt.data(), 1, MPI_INT, rdCnt.data(), 1, MPI_INT, comm);
-        for (int p = 1; p < npes; p++) rdOff[p] = rdOff[p - 1] + rdCnt[p - 1];
-        std::vector<std::uint64_t> rdBuf((size_t)rdOff[npes - 1] + rdCnt[npes - 1]);
-        MPI_Alltoallv(dBuf.data(), dCnt.data(), dOff.data(), MPI_UINT64_T, rdBuf.data(),
-                      rdCnt.data(), rdOff.data(), MPI_UINT64_T, comm);
-        std::vector<std::uint64_t>().swap(dBuf);
-        mark(3);
-
-        // write: E2N of the same lNew element, verified by canonical position
-        const auto& lcg2dg = lNew->getCG2DGMap();
-        const auto* pL     = lNew->getAllElements().data();
-        const unsigned int* le2n = lNew->getE2NMapping().data();
-        const size_t nLoc  = gLnE - gLnB;
-        auto cgPos = [&](unsigned int cg, std::uint64_t* p) {
-            const unsigned int dg = lcg2dg[cg];
-            const unsigned int e = dg / npe, sub = dg % npe;
-            const unsigned int i = sub % (eOrd + 1);
-            const unsigned int j = (sub / (eOrd + 1)) % (eOrd + 1);
-            const unsigned int k = sub / ((eOrd + 1) * (eOrd + 1));
-            const std::uint64_t len = 1ull << (m_uiMaxDepth - pL[e].getLevel());
-            p[0] = (std::uint64_t)pL[e].getX() * eOrd + i * len;
-            p[1] = (std::uint64_t)pL[e].getY() * eOrd + j * len;
-            p[2] = (std::uint64_t)pL[e].getZ() * eOrd + k * len;
-        };
-        for (unsigned int v = 0; v < dof; v++) {
-            T* o = out + v * gDstSz;
-            std::fill(o, o + gLnB, (T)0);
-            std::fill(o + gLnE, o + gDstSz, (T)0);
-        }
-        std::unordered_map<std::array<unsigned int, 4>, unsigned int, GKeyHash> eIdx;
-        if (grpMode == 1) {
-            const unsigned int lB = lNew->getElementLocalBegin();
-            const unsigned int lE = lNew->getElementLocalEnd();
-            const unsigned int lT = lNew->m_uiNumTotalElements;
-            eIdx.reserve(lT);
-            auto add = [&](unsigned int e) {
-                eIdx.emplace(std::array<unsigned int, 4>{pL[e].getX(), pL[e].getY(),
-                                                         pL[e].getZ(), pL[e].getLevel()},
-                             e);
-            };
-            for (unsigned int e = lB; e < lE; e++) add(e);
-            for (unsigned int e = 0; e < lT; e++)
-                if (e < lB || e >= lE) add(e);
-        }
-        // flat position index, built on first need
-        auto mix = [](const std::uint64_t* p) {
-            std::uint64_t h = p[0] * 0x9E3779B97F4A7C15ull;
-            h ^= (p[1] + 0x632BE59BD9B4E019ull) * 0xC2B2AE3D27D4EB4Full;
-            h ^= (p[2] + 0x8CB92BA72F3D8DD7ull) * 0x165667B19E3779F9ull;
-            h ^= h >> 31;
-            h *= 0xBF58476D1CE4E5B9ull;
-            h ^= h >> 29;
-            return h;
-        };
-        std::vector<unsigned int> head, nxt;
-        std::vector<std::uint64_t> key;
-        std::uint64_t hmask = 0;
-        auto buildIdx = [&] {
-            size_t cap = 16;
-            while (cap < 2 * nLoc) cap <<= 1;
-            hmask = cap - 1;
-            head.assign(cap, UINT_MAX);
-            nxt.assign(nLoc, UINT_MAX);
-            key.resize(3 * nLoc);
-            for (size_t c = 0; c < nLoc; c++) {
-                std::uint64_t* p = &key[3 * c];
-                cgPos(gLnB + (unsigned int)c, p);
-                const size_t b = mix(p) & hmask;
-                nxt[c]  = head[b];
-                head[b] = (unsigned int)c;
-            }
-        };
-        for (size_t r = 0; r < rdBuf.size();) {
-            const std::uint64_t* g = &rdBuf[r];
-            const unsigned int tx = (unsigned int)g[0], ty = (unsigned int)(g[0] >> 32);
-            const unsigned int tz = (unsigned int)g[1], tl = (unsigned int)(g[1] >> 32);
-            const unsigned int pc = popc(g + 2);
-            const std::uint64_t* val = g + 2 + W;
-            r += 2 + W + (size_t)pc * dof;
-            unsigned int eL = UINT_MAX;
-            if (grpMode == 1) {
-                auto it = eIdx.find({tx, ty, tz, tl});
-                if (it != eIdx.end()) eL = it->second;
-            }
-            gTk[0]++;
-            gRec += pc;
-            const std::uint64_t len = 1ull << (m_uiMaxDepth - tl);
-            unsigned int kk = 0;
-            for (unsigned int wi = 0; wi < W; wi++)
-                for (std::uint64_t b = g[2 + wi]; b; b &= b - 1, kk++) {
-                    const unsigned int sub = wi * 64 + __builtin_ctzll(b);
-                    const unsigned int i = sub % (eOrd + 1);
-                    const unsigned int j = (sub / (eOrd + 1)) % (eOrd + 1);
-                    const unsigned int k = sub / ((eOrd + 1) * (eOrd + 1));
-                    const std::uint64_t q[3] = {(std::uint64_t)tx * eOrd + i * len,
-                                                (std::uint64_t)ty * eOrd + j * len,
-                                                (std::uint64_t)tz * eOrd + k * len};
-                    if (eL != UINT_MAX) {
-                        const unsigned int cg = le2n[(size_t)eL * npe + sub];
-                        std::uint64_t p[3];
-                        if (cg >= gLnB && cg < gLnE &&
-                            (cgPos(cg, p), p[0] == q[0] && p[1] == q[1] && p[2] == q[2])) {
-                            for (unsigned int v = 0; v < dof; v++)
-                                std::memcpy(&out[v * gDstSz + cg], &val[(size_t)v * pc + kk], 8);
-                            if (gW[cg - gLnB] < 255) gW[cg - gLnB]++;
-                            gTk[1]++;
-                            continue;
-                        }
-                    }
-                    gTk[2]++;
-                    if (head.empty()) buildIdx();
-                    bool hit = false;
-                    for (unsigned int c = head[mix(q) & hmask]; c != UINT_MAX; c = nxt[c]) {
-                        const std::uint64_t* p = &key[3 * (size_t)c];
-                        if (p[0] != q[0] || p[1] != q[1] || p[2] != q[2]) continue;
-                        hit = true;
-                        const unsigned int cg = gLnB + c;
-                        for (unsigned int v = 0; v < dof; v++)
-                            std::memcpy(&out[v * gDstSz + cg], &val[(size_t)v * pc + kk], 8);
-                        if (gW[c] < 255) gW[c]++;
-                    }
-                    if (!hit) gMiss++;
-                }
-        }
-        tph[6] = MPI_Wtime() - tlast;
-        {
-            // test knob: flip one bit on rank 0 so the _CHECK can be shown to bite
-            static const bool perturb = [] {
-                const char* v = std::getenv("DENDRO_ONEHOP_GROUPS_PERTURB");
-                return v && v[0] == '1';
-            }();
-            if (perturb && !rank && nLoc > 0) {
-                std::uint64_t b;
-                std::memcpy(&b, &out[gLnB], 8);
-                b ^= 1;
-                std::memcpy(&out[gLnB], &b, 8);
-            }
-        }
-        {
-            unsigned long long t[3] = {gTk[0], gTk[1], gTk[2]};
-            MPI_Reduce(t, gTk, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, comm);
-            if (!rank)
-                std::cout << "[onehop-groups] mode=" << grpMode << " groups=" << gTk[0]
-                          << " direct=" << gTk[1] << " hashed=" << gTk[2] << std::endl;
-        }
-        if (!grpChk) return finish(gMiss, gW, gErr, gRec);
-    }
-
-    // ---- 2. ask each new element's SFC owner which of its nodes it writes
-    //         (last local writer on the node's SFC owner rank, the IGT rule)
-    //         and the labelled owner of each such node (K6: label of the
-    //         node's SFC owner element)
+    };
+    // query: same element keys to each M2' element's SFC owner
     const auto& spl = sNew->getSplitterElements();
     auto sfcOwner   = [&](const ot::TreeNode& t) {
         int lo = 0, hi = npes - 1;
@@ -6925,18 +6580,17 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
         }
         return lo;
     };
-    std::vector<int> qCnt(npes, 0), qOff(npes, 0), rqCnt(npes, 0),
-        rqOff(npes, 0);
-    std::vector<int> xOwner(nx);
-    for (size_t y = 0; y < nx; y++) qCnt[xOwner[y] = sfcOwner(xTN[y])]++;
-    for (int p = 1; p < npes; p++) qOff[p] = qOff[p - 1] + qCnt[p - 1];
-    std::vector<size_t> xSlot(nx);  // position in the query buffer
+    std::vector<int> qCnt(npes, 0), qOff(npes, 0), rqCnt(npes, 0), rqOff(npes, 0);
+    std::vector<size_t> xSlot(nx);
     std::vector<unsigned int> qBuf(4 * nx);
     {
+        std::vector<int> xOwner(nx);
+        for (size_t y = 0; y < nx; y++) qCnt[xOwner[y] = sfcOwner(xTN[y])]++;
+        for (int p = 1; p < npes; p++) qOff[p] = qOff[p - 1] + qCnt[p - 1];
         std::vector<int> c = qOff;
         for (size_t y = 0; y < nx; y++) {
-            const size_t s = (size_t)c[xOwner[y]]++;
-            xSlot[y]       = s;
+            const size_t s  = (size_t)c[xOwner[y]]++;
+            xSlot[y]        = s;
             qBuf[4 * s]     = xTN[y].getX();
             qBuf[4 * s + 1] = xTN[y].getY();
             qBuf[4 * s + 2] = xTN[y].getZ();
@@ -6958,34 +6612,23 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
         MPI_Alltoallv(qBuf.data(), sc.data(), so.data(), MPI_UNSIGNED,
                       rqBuf.data(), rc.data(), ro.data(), MPI_UNSIGNED, comm);
     }
-    struct Key4Hash {
-        size_t operator()(const std::array<unsigned int, 4>& k) const noexcept {
-            uint64_t h = ((uint64_t)k[0] << 32) ^ ((uint64_t)k[1] << 16) ^
-                         ((uint64_t)k[2]) ^ ((uint64_t)k[3] << 58);
-            h ^= h >> 33;
-            h *= 0xff51afd7ed558ccdULL;
-            h ^= h >> 33;
-            return (size_t)h;
-        }
-    };
-    int err = 0;
-    std::vector<int> ans(nq * npe, -1);
+    // owner side: per queried element, nD then nD x (labelled owner, W mask words)
+    std::vector<std::uint64_t> rep;
+    std::vector<int> repCnt(npes, 0), rrCnt(npes, 0), repOff(npes, 0), rrOff(npes, 0);
     {
-        const unsigned int sB   = sNew->getElementLocalBegin();
-        const unsigned int sE   = sNew->getElementLocalEnd();
-        const unsigned int snB  = sNew->getNodeLocalBegin();
-        const unsigned int snE  = sNew->getNodeLocalEnd();
+        const unsigned int sB    = sNew->getElementLocalBegin();
+        const unsigned int sE    = sNew->getElementLocalEnd();
+        const unsigned int snB   = sNew->getNodeLocalBegin();
+        const unsigned int snE   = sNew->getNodeLocalEnd();
         const unsigned int* se2n = sNew->getE2NMapping().data();
         const auto& scg2dg       = sNew->getCG2DGMap();
         const auto* pS           = sNew->getAllElements().data();
         const auto& lab          = lNew->m_uiRepartPreLabel;
-        std::unordered_map<std::array<unsigned int, 4>, unsigned int, Key4Hash>
-            idx;
+        std::unordered_map<std::array<unsigned int, 4>, unsigned int, GKeyHash> idx;
         idx.reserve(sE - sB);
         for (unsigned int e = sB; e < sE; e++)
             idx.emplace(std::array<unsigned int, 4>{pS[e].getX(), pS[e].getY(),
-                                                    pS[e].getZ(),
-                                                    pS[e].getLevel()},
+                                                    pS[e].getZ(), pS[e].getLevel()},
                         e);
         std::vector<unsigned int> lastW(snE - snB, UINT_MAX);
         std::vector<unsigned char> nh((size_t)(sE - sB) * npe, 0);
@@ -6994,97 +6637,127 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
                 for (unsigned int j = 0; j <= eOrd; j++)
                     for (unsigned int i = 0; i <= eOrd; i++) {
                         if (sNew->isNodeHanging(e, i, j, k)) continue;
-                        const unsigned int sub =
-                            (k * (eOrd + 1) + j) * (eOrd + 1) + i;
+                        const unsigned int sub = (k * (eOrd + 1) + j) * (eOrd + 1) + i;
                         nh[(size_t)(e - sB) * npe + sub] = 1;
                         const unsigned int cg = se2n[e * npe + sub];
                         if (cg >= snB && cg < snE) lastW[cg - snB] = e;
                     }
+        rep.reserve(nq * (2 + W));
+        std::vector<int> dl;
+        std::vector<std::uint64_t> dm;
+        int p = 0;
         for (size_t q = 0; q < nq; q++) {
-            auto it = idx.find({rqBuf[4 * q], rqBuf[4 * q + 1],
-                                rqBuf[4 * q + 2], rqBuf[4 * q + 3]});
+            while (p < npes - 1 && q >= (size_t)rqOff[p] + rqCnt[p]) p++;
+            const size_t r0 = rep.size();
+            dl.clear();
+            dm.clear();
+            auto it = idx.find({rqBuf[4 * q], rqBuf[4 * q + 1], rqBuf[4 * q + 2],
+                                rqBuf[4 * q + 3]});
             if (it == idx.end()) {
-                err |= 1;
-                continue;
-            }
-            const unsigned int e = it->second;
-            for (unsigned int sub = 0; sub < npe; sub++) {
-                if (!nh[(size_t)(e - sB) * npe + sub]) continue;
-                const unsigned int cg = se2n[e * npe + sub];
-                if (cg < snB || cg >= snE || lastW[cg - snB] != e) continue;
-                const unsigned int oe = scg2dg[cg] / npe;
-                if (oe < sB || oe >= sE) {
-                    err |= 2;
-                    continue;
+                gErr |= 1;
+            } else {
+                const unsigned int e = it->second;
+                for (unsigned int sub = 0; sub < npe; sub++) {
+                    if (!nh[(size_t)(e - sB) * npe + sub]) continue;
+                    const unsigned int cg = se2n[e * npe + sub];
+                    if (cg < snB || cg >= snE || lastW[cg - snB] != e) continue;
+                    const unsigned int oe = scg2dg[cg] / npe;
+                    if (oe < sB || oe >= sE) {
+                        gErr |= 2;
+                        continue;
+                    }
+                    const int d = (int)lab[oe - sB];
+                    size_t k = 0;
+                    while (k < dl.size() && dl[k] != d) k++;
+                    if (k == dl.size()) {
+                        dl.push_back(d);
+                        dm.resize(dm.size() + W, 0);
+                    }
+                    dm[k * W + sub / 64] |= 1ull << (sub % 64);
                 }
-                ans[q * npe + sub] = (int)lab[oe - sB];
             }
+            rep.push_back(dl.size());
+            for (size_t k = 0; k < dl.size(); k++) {
+                rep.push_back((std::uint64_t)dl[k]);
+                rep.insert(rep.end(), dm.begin() + k * W, dm.begin() + (k + 1) * W);
+            }
+            repCnt[p] += (int)(rep.size() - r0);
         }
     }
-    std::vector<int> myAns(nx * npe);
+    MPI_Alltoall(repCnt.data(), 1, MPI_INT, rrCnt.data(), 1, MPI_INT, comm);
+    for (int p = 1; p < npes; p++) {
+        repOff[p] = repOff[p - 1] + repCnt[p - 1];
+        rrOff[p]  = rrOff[p - 1] + rrCnt[p - 1];
+    }
+    std::vector<std::uint64_t> myRep((size_t)rrOff[npes - 1] + rrCnt[npes - 1]);
+    MPI_Alltoallv(rep.data(), repCnt.data(), repOff.data(), MPI_UINT64_T, myRep.data(),
+                  rrCnt.data(), rrOff.data(), MPI_UINT64_T, comm);
+    std::vector<std::uint64_t>().swap(rep);
+    // replies arrive in query-slot order
+    std::vector<size_t> sRep(nx);
     {
-        std::vector<int> sc(npes), so(npes), rc(npes), ro(npes);
-        for (int p = 0; p < npes; p++) {
-            sc[p] = npe * rqCnt[p];
-            so[p] = npe * rqOff[p];
-            rc[p] = npe * qCnt[p];
-            ro[p] = npe * qOff[p];
+        size_t at = 0;
+        for (size_t s = 0; s < nx; s++) {
+            sRep[s] = at;
+            at += 1 + myRep[at] * (1 + W);
         }
-        MPI_Alltoallv(ans.data(), sc.data(), so.data(), MPI_INT, myAns.data(),
-                      rc.data(), ro.data(), MPI_INT, comm);
+        if (at != myRep.size()) gErr |= 4;
     }
     mark(2);
 
-    // ---- 3. send each written node's values straight to its labelled owner
-    const unsigned int rw = 3 + dof;  // words per record: x, y, z, dof values
-    std::vector<int> dCnt(npes, 0), dOff(npes, 0), rdCnt(npes, 0),
-        rdOff(npes, 0);
-    for (size_t y = 0; y < nx; y++)
-        for (unsigned int sub = 0; sub < npe; sub++) {
-            const int d = myAns[xSlot[y] * npe + sub];
-            if (d >= 0) dCnt[d] += rw;
+    // records: one group per (M2' element, labelled owner)
+    auto popc = [&](const std::uint64_t* m) {
+        unsigned int c = 0;
+        for (unsigned int i = 0; i < W; i++) c += (unsigned int)__builtin_popcountll(m[i]);
+        return c;
+    };
+    std::vector<int> dCnt(npes, 0), dOff(npes, 0), rdCnt(npes, 0), rdOff(npes, 0);
+    for (size_t y = 0; !(gErr & 4) && y < nx; y++) {
+        const std::uint64_t* g = &myRep[sRep[xSlot[y]]];
+        for (std::uint64_t k = 0; k < g[0]; k++) {
+            const std::uint64_t* m = g + 1 + k * (1 + W);
+            dCnt[m[0]] += (int)(2 + W + (size_t)popc(m + 1) * dof);
         }
+    }
     for (int p = 1; p < npes; p++) dOff[p] = dOff[p - 1] + dCnt[p - 1];
     std::vector<std::uint64_t> dBuf((size_t)dOff[npes - 1] + dCnt[npes - 1]);
     {
         std::vector<int> c = dOff;
-        for (size_t y = 0; y < nx; y++) {
-            const ot::TreeNode& t = xTN[y];
-            const std::uint64_t len = 1ull << (m_uiMaxDepth - t.getLevel());
-            for (unsigned int sub = 0; sub < npe; sub++) {
-                const int d = myAns[xSlot[y] * npe + sub];
-                if (d < 0) continue;
-                const unsigned int i = sub % (eOrd + 1);
-                const unsigned int j = (sub / (eOrd + 1)) % (eOrd + 1);
-                const unsigned int k = sub / ((eOrd + 1) * (eOrd + 1));
-                std::uint64_t* r = &dBuf[(size_t)c[d]];
-                c[d] += rw;
-                r[0] = (std::uint64_t)t.getX() * eOrd + i * len;
-                r[1] = (std::uint64_t)t.getY() * eOrd + j * len;
-                r[2] = (std::uint64_t)t.getZ() * eOrd + k * len;
-                for (unsigned int v = 0; v < dof; v++)
-                    std::memcpy(&r[3 + v], &xVal[(y * dof + v) * npe + sub], 8);
+        for (size_t y = 0; !(gErr & 4) && y < nx; y++) {
+            const std::uint64_t* g = &myRep[sRep[xSlot[y]]];
+            const ot::TreeNode& t  = xTN[y];
+            for (std::uint64_t k = 0; k < g[0]; k++) {
+                const std::uint64_t* m = g + 1 + k * (1 + W);
+                const unsigned int pc  = popc(m + 1);
+                std::uint64_t* r       = &dBuf[(size_t)c[m[0]]];
+                c[m[0]] += (int)(2 + W + (size_t)pc * dof);
+                r[0] = (std::uint64_t)t.getX() | ((std::uint64_t)t.getY() << 32);
+                r[1] = (std::uint64_t)t.getZ() | ((std::uint64_t)t.getLevel() << 32);
+                std::memcpy(&r[2], m + 1, W * sizeof(std::uint64_t));
+                std::uint64_t* o = r + 2 + W;
+                for (unsigned int v = 0; v < dof; v++) {
+                    const T* xv = &xVal[(y * dof + v) * npe];
+                    for (unsigned int wi = 0; wi < W; wi++)
+                        for (std::uint64_t b = m[1 + wi]; b; b &= b - 1)
+                            std::memcpy(o++, &xv[wi * 64 + __builtin_ctzll(b)], 8);
+                }
             }
         }
     }
-    std::vector<T>().swap(xVal);
+    std::vector<std::uint64_t>().swap(myRep);
     MPI_Alltoall(dCnt.data(), 1, MPI_INT, rdCnt.data(), 1, MPI_INT, comm);
     for (int p = 1; p < npes; p++) rdOff[p] = rdOff[p - 1] + rdCnt[p - 1];
     std::vector<std::uint64_t> rdBuf((size_t)rdOff[npes - 1] + rdCnt[npes - 1]);
-    MPI_Alltoallv(dBuf.data(), dCnt.data(), dOff.data(), MPI_UINT64_T,
-                  rdBuf.data(), rdCnt.data(), rdOff.data(), MPI_UINT64_T, comm);
+    MPI_Alltoallv(dBuf.data(), dCnt.data(), dOff.data(), MPI_UINT64_T, rdBuf.data(),
+                  rdCnt.data(), rdOff.data(), MPI_UINT64_T, comm);
     std::vector<std::uint64_t>().swap(dBuf);
     mark(3);
 
-    // ---- 4. write into lNew's local cgs by canonical position
-    const size_t dstSz        = lNew->getDegOfFreedom();
-    const unsigned int lnB    = lNew->getNodeLocalBegin();
-    const unsigned int lnE    = lNew->getNodeLocalEnd();
-    const auto& lcg2dg        = lNew->getCG2DGMap();
-    const auto* pL            = lNew->getAllElements().data();
-    // a flat chained index over the local cg positions (not a node-based
-    // multimap) finds each position's local cgs
-    const size_t nLoc = lnE - lnB;
+    // write: E2N of the same lNew element, verified by canonical position
+    const auto& lcg2dg = lNew->getCG2DGMap();
+    const auto* pL     = lNew->getAllElements().data();
+    const unsigned int* le2n = lNew->getE2NMapping().data();
+    const size_t nLoc  = gLnE - gLnB;
     auto cgPos = [&](unsigned int cg, std::uint64_t* p) {
         const unsigned int dg = lcg2dg[cg];
         const unsigned int e = dg / npe, sub = dg % npe;
@@ -7097,68 +6770,110 @@ bool Mesh::oneHopTransfer(const ot::Mesh* sNew, ot::Mesh* lNew, const T* vecIn,
         p[2] = (std::uint64_t)pL[e].getZ() * eOrd + k * len;
     };
     for (unsigned int v = 0; v < dof; v++) {
-        T* o = vecOut + v * dstSz;
-        std::fill(o, o + lnB, (T)0);
-        std::fill(o + lnE, o + dstSz, (T)0);
+        T* o = out + v * gDstSz;
+        std::fill(o, o + gLnB, (T)0);
+        std::fill(o + gLnE, o + gDstSz, (T)0);
     }
-    auto writeFlat = [&](T* out, std::vector<unsigned char>& w) {
-        auto mix = [](const std::uint64_t* p) {
-            std::uint64_t h = p[0] * 0x9E3779B97F4A7C15ull;
-            h ^= (p[1] + 0x632BE59BD9B4E019ull) * 0xC2B2AE3D27D4EB4Full;
-            h ^= (p[2] + 0x8CB92BA72F3D8DD7ull) * 0x165667B19E3779F9ull;
-            h ^= h >> 31;
-            h *= 0xBF58476D1CE4E5B9ull;
-            h ^= h >> 29;
-            return h;
-        };
+    std::unordered_map<std::array<unsigned int, 4>, unsigned int, GKeyHash> eIdx;
+    const unsigned int lB = lNew->getElementLocalBegin();
+    const unsigned int lE = lNew->getElementLocalEnd();
+    const unsigned int lT = lNew->m_uiNumTotalElements;
+    eIdx.reserve(lT);
+    auto add = [&](unsigned int e) {
+        eIdx.emplace(std::array<unsigned int, 4>{pL[e].getX(), pL[e].getY(),
+                                                 pL[e].getZ(), pL[e].getLevel()},
+                     e);
+    };
+    for (unsigned int e = lB; e < lE; e++) add(e);
+    for (unsigned int e = 0; e < lT; e++)
+        if (e < lB || e >= lE) add(e);
+    // flat position index, built on first need
+    auto mix = [](const std::uint64_t* p) {
+        std::uint64_t h = p[0] * 0x9E3779B97F4A7C15ull;
+        h ^= (p[1] + 0x632BE59BD9B4E019ull) * 0xC2B2AE3D27D4EB4Full;
+        h ^= (p[2] + 0x8CB92BA72F3D8DD7ull) * 0x165667B19E3779F9ull;
+        h ^= h >> 31;
+        h *= 0xBF58476D1CE4E5B9ull;
+        h ^= h >> 29;
+        return h;
+    };
+    std::vector<unsigned int> head, nxt;
+    std::vector<std::uint64_t> key;
+    std::uint64_t hmask = 0;
+    auto buildIdx = [&] {
         size_t cap = 16;
         while (cap < 2 * nLoc) cap <<= 1;
-        const std::uint64_t mask = cap - 1;
-        std::vector<unsigned int> head(cap, UINT_MAX), nxt(nLoc, UINT_MAX);
-        std::vector<std::uint64_t> key(3 * nLoc);
+        hmask = cap - 1;
+        head.assign(cap, UINT_MAX);
+        nxt.assign(nLoc, UINT_MAX);
+        key.resize(3 * nLoc);
         for (size_t c = 0; c < nLoc; c++) {
             std::uint64_t* p = &key[3 * c];
-            cgPos(lnB + (unsigned int)c, p);
-            const size_t b = mix(p) & mask;
+            cgPos(gLnB + (unsigned int)c, p);
+            const size_t b = mix(p) & hmask;
             nxt[c]  = head[b];
             head[b] = (unsigned int)c;
         }
-        unsigned long long ms = 0;
-        for (size_t r = 0; r < rdBuf.size(); r += rw) {
-            const std::uint64_t* q = &rdBuf[r];
-            bool hit = false;
-            for (unsigned int c = head[mix(q) & mask]; c != UINT_MAX; c = nxt[c]) {
-                const std::uint64_t* p = &key[3 * (size_t)c];
-                if (p[0] != q[0] || p[1] != q[1] || p[2] != q[2]) continue;
-                hit = true;
-                const unsigned int cg = lnB + c;
-                for (unsigned int v = 0; v < dof; v++)
-                    std::memcpy(&out[v * dstSz + cg], &q[3 + v], 8);
-                if (w[c] < 255) w[c]++;
-            }
-            if (!hit) ms++;
-        }
-        return ms;
     };
-    std::vector<unsigned char> nW(nLoc, 0);
-    const unsigned long long miss = writeFlat(vecOut, nW);
-    tph[6] = MPI_Wtime() - tlast;
-    if (grpChk) {
-        unsigned long long c[4] = {(unsigned long long)((gErr != 0) != (err != 0)),
-                                   gMiss != miss ? 1ull : 0ull, 0, 0};
-        for (unsigned int v = 0; v < dof; v++)
-            for (size_t cg = 0; cg < gDstSz; cg++)
-                c[2] += std::memcmp(&gOut[(size_t)v * gDstSz + cg],
-                                    &vecOut[(size_t)v * gDstSz + cg], sizeof(T)) != 0;
-        for (size_t i = 0; i < nLoc; i++) c[3] += gW[i] != nW[i];
-        MPI_Allreduce(MPI_IN_PLACE, c, 4, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
-        if (!rank)
-            std::cout << "[onehop-groups-check] err_diff_ranks=" << c[0]
-                      << " miss_diff_ranks=" << c[1] << " value_mismatches=" << c[2]
-                      << " count_mismatches=" << c[3] << std::endl;
-        if (c[0] || c[1] || c[2] || c[3]) MPI_Abort(comm, 88);
+    for (size_t r = 0; r < rdBuf.size();) {
+        const std::uint64_t* g = &rdBuf[r];
+        const unsigned int tx = (unsigned int)g[0], ty = (unsigned int)(g[0] >> 32);
+        const unsigned int tz = (unsigned int)g[1], tl = (unsigned int)(g[1] >> 32);
+        const unsigned int pc = popc(g + 2);
+        const std::uint64_t* val = g + 2 + W;
+        r += 2 + W + (size_t)pc * dof;
+        unsigned int eL = UINT_MAX;
+        auto it = eIdx.find({tx, ty, tz, tl});
+        if (it != eIdx.end()) eL = it->second;
+        gTk[0]++;
+        gRec += pc;
+        const std::uint64_t len = 1ull << (m_uiMaxDepth - tl);
+        unsigned int kk = 0;
+        for (unsigned int wi = 0; wi < W; wi++)
+            for (std::uint64_t b = g[2 + wi]; b; b &= b - 1, kk++) {
+                const unsigned int sub = wi * 64 + __builtin_ctzll(b);
+                const unsigned int i = sub % (eOrd + 1);
+                const unsigned int j = (sub / (eOrd + 1)) % (eOrd + 1);
+                const unsigned int k = sub / ((eOrd + 1) * (eOrd + 1));
+                const std::uint64_t q[3] = {(std::uint64_t)tx * eOrd + i * len,
+                                            (std::uint64_t)ty * eOrd + j * len,
+                                            (std::uint64_t)tz * eOrd + k * len};
+                if (eL != UINT_MAX) {
+                    const unsigned int cg = le2n[(size_t)eL * npe + sub];
+                    std::uint64_t p[3];
+                    if (cg >= gLnB && cg < gLnE &&
+                        (cgPos(cg, p), p[0] == q[0] && p[1] == q[1] && p[2] == q[2])) {
+                        for (unsigned int v = 0; v < dof; v++)
+                            std::memcpy(&out[v * gDstSz + cg], &val[(size_t)v * pc + kk], 8);
+                        if (gW[cg - gLnB] < 255) gW[cg - gLnB]++;
+                        gTk[1]++;
+                        continue;
+                    }
+                }
+                gTk[2]++;
+                if (head.empty()) buildIdx();
+                bool hit = false;
+                for (unsigned int c = head[mix(q) & hmask]; c != UINT_MAX; c = nxt[c]) {
+                    const std::uint64_t* p = &key[3 * (size_t)c];
+                    if (p[0] != q[0] || p[1] != q[1] || p[2] != q[2]) continue;
+                    hit = true;
+                    const unsigned int cg = gLnB + c;
+                    for (unsigned int v = 0; v < dof; v++)
+                        std::memcpy(&out[v * gDstSz + cg], &val[(size_t)v * pc + kk], 8);
+                    if (gW[c] < 255) gW[c]++;
+                }
+                if (!hit) gMiss++;
+            }
     }
-    return finish(miss, nW, err, rdBuf.size() / rw);
+    tph[6] = MPI_Wtime() - tlast;
+    {
+        unsigned long long t[3] = {gTk[0], gTk[1], gTk[2]};
+        MPI_Reduce(t, gTk, 3, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, comm);
+        if (!rank)
+            std::cout << "[onehop-groups] groups=" << gTk[0]
+                      << " direct=" << gTk[1] << " hashed=" << gTk[2] << std::endl;
+    }
+    return finish(gMiss, gW, gErr, gRec);
 }
 
 template <typename T>
