@@ -1547,9 +1547,6 @@ class Mesh {
     template <typename T>
     void broadcastCgValuesByPhysPos(T* vec, unsigned int dof);
 
-    /** per-call rebuild path (debug-probe builds with EM4_BCAST_PROBE_DIR). */
-    template <typename T>
-    void broadcastCgValuesByPhysPosLegacy(T* vec, unsigned int dof);
 
     /** cached-plan apply: one Alltoallv over all dof. */
     template <typename T>
