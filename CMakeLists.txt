@@ -816,6 +816,26 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testCloneNewSize test/src/testCloneNewSize.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
   dendro_add_deriv_test(testMeshTimeIntegrator test/src/testMeshTimeIntegrator.cpp)
+  add_test(NAME testTimeIntegratorOrder COMMAND testTimeIntegratorOrder)
+  foreach(M decay adv)
+    add_test(NAME testMeshTimeIntegrator_${M} COMMAND testMeshTimeIntegrator 4 6 ${M})
+  endforeach()
+  set_tests_properties(testTimeIntegratorOrder testMeshTimeIntegrator_decay
+                       testMeshTimeIntegrator_adv PROPERTIES TIMEOUT 600)
+  # LTS temporal order across a level interface; the sabotage builds (frozen
+  # stage time, first-order interface conversion) must fail
+  dendro_add_deriv_test(testEnutsOrder test/src/testEnutsOrder.cpp)
+  add_test(NAME testEnutsOrder COMMAND testEnutsOrder)
+  add_test(NAME testEnutsOrder_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testEnutsOrder> ${MPIEXEC_POSTFLAGS})
+  set_tests_properties(testEnutsOrder testEnutsOrder_2rank PROPERTIES TIMEOUT 900)
+  foreach(SAB 1 2)
+    dendro_add_deriv_test(testEnutsOrder_sabotage${SAB} test/src/testEnutsOrder.cpp)
+    target_compile_definitions(testEnutsOrder_sabotage${SAB} PRIVATE DENDRO_ENUTS_TEST_SABOTAGE=${SAB})
+    add_test(NAME testEnutsOrder_sabotage${SAB} COMMAND testEnutsOrder_sabotage${SAB})
+    set_tests_properties(testEnutsOrder_sabotage${SAB} PROPERTIES TIMEOUT 900 WILL_FAIL TRUE)
+  endforeach()
 
   # labels (see the list at enable_testing); appended, so labels set above stay
   function(dendro_test_labels)
@@ -853,9 +873,13 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_test_labels(LABELS lts TESTS testLtsContract_2rank)
   dendro_test_labels(LABELS sabotage TESTS testLtsContract_sabotage1 testLtsContract_sabotage2
     testLtsContract_sabotage3 testLtsContract_sabotage4 testLtsContract_sabotage5)
-  dendro_test_labels(LABELS order TESTS testDerivConvergence_orderGate)
+  dendro_test_labels(LABELS order TESTS testDerivConvergence_orderGate testTimeIntegratorOrder
+    testMeshTimeIntegrator_decay testMeshTimeIntegrator_adv)
+  dendro_test_labels(LABELS lts order TESTS testEnutsOrder testEnutsOrder_2rank
+    testEnutsOrder_sabotage1 testEnutsOrder_sabotage2)
+  dendro_test_labels(LABELS sabotage TESTS testEnutsOrder_sabotage1 testEnutsOrder_sabotage2)
   dendro_test_mpi(2 testOctreeStructure_2rank testMeshInvariants_2rank testETSErrorControl_2rank
-    testLtsContract_2rank
+    testLtsContract_2rank testEnutsOrder_2rank
     testGhostPackExact_2rank testGhostPackExact_sabotage1 testGhostPackExact_sabotage2
     testGhostPackExact_sabotage3)
   dendro_test_mpi(3 testVTKHDF_3rank)

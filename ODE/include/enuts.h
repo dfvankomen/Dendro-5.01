@@ -174,7 +174,13 @@ struct EnutsProf {
         static ts::LtsOptions o;
         return o;
     }
+    // DENDRO_ENUTS_TEST_SABOTAGE=2 (test builds only): the original interface
+    // conversion, first order at level interfaces; testEnutsOrder must fail
+#if defined(DENDRO_ENUTS_TEST_SABOTAGE) && DENDRO_ENUTS_TEST_SABOTAGE == 2
+    static int ifaceFix() { return 0; }
+#else
     static int ifaceFix() { return (int)options().iface; }
+#endif
     /** with interface setting bit 4 and the owner sync, exchange the stored
      *  vector g of the classes that completed a step at this partial step
      *  (the owner-node exchange, on the unscoped lists when the stage exchange
@@ -5789,7 +5795,12 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
 
             // the RK stage time, as ETS passes it: a time-dependent RHS term
             // sees its forcing at the stage, not at the step start
+#if defined(DENDRO_ENUTS_TEST_SABOTAGE) && DENDRO_ENUTS_TEST_SABOTAGE == 1
+            // test builds only: the stage time frozen at the step start
+            const T t_stage = current_t + dt_finest * BLK_T;
+#else
             const T t_stage = current_t + dt_finest * BLK_T + m_uiCi[BLK_S - 1] * blk_dt;
+#endif
             m_uiAppCtx->pre_stage_blk((T*)sIn.data(), DOF, blk, t_stage);
             ENUTS_BLK_TOC(RL_PRE);
             debug_nan_check("pre-rhs-in", blk, m_uiNumStages + 1, pt, rk);
