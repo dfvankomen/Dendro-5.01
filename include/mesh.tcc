@@ -883,76 +883,42 @@ void Mesh::broadcastCgValuesByPhysPos(T* vec, unsigned int dof) {
     // since it costs an extra allgather + alltoallv per call).
     if (!posBcastGateOn()) return;
 
-    // DENDRO_BCAST_PLAN=0 reverts to the per-call rebuild; the probe
-    // (EM4_BCAST_PROBE_DIR) only exists on the legacy path.
-    static const char* plan_env  = std::getenv("DENDRO_BCAST_PLAN");
-    static const char* check_env = std::getenv("DENDRO_BCAST_PLAN_CHECK");
-    static const bool plan_on =
-        !(plan_env && plan_env[0] == '0') &&
-        DENDRO_PROBE_GETENV("EM4_BCAST_PROBE_DIR") == nullptr;
-    static const bool check_on = check_env && check_env[0] == '1';
-    if (!plan_on) {
+    // the probe (EM4_BCAST_PROBE_DIR, debug-probe builds only) exists on the
+    // per-call rebuild only
+    static const bool probe = DENDRO_PROBE_GETENV("EM4_BCAST_PROBE_DIR") != nullptr;
+    if (probe) {
         broadcastCgValuesByPhysPosLegacy(vec, dof);
         return;
     }
-    if (!check_on) {
-        // DENDRO_BCAST_PROF=1: plan build vs apply, max over ranks
-        static const bool prof = [] {
-            const char* e = std::getenv("DENDRO_BCAST_PROF");
-            return e && e[0] == '1';
-        }();
-        if (!prof) {
-            broadcastCgValuesByPhysPosPlanned(vec, dof);
-            return;
-        }
-        MPI_Barrier(m_uiCommActive);
-        const double t0 = MPI_Wtime();
-        const bool built = m_uiBcastPlanBuilt;
-        if (!built) buildBcastPlan();
-        const double t1 = MPI_Wtime();
+    // DENDRO_BCAST_PROF=1: plan build vs apply, max over ranks
+    static const bool prof = [] {
+        const char* e = std::getenv("DENDRO_BCAST_PROF");
+        return e && e[0] == '1';
+    }();
+    if (!prof) {
         broadcastCgValuesByPhysPosPlanned(vec, dof);
-        double loc[2] = {t1 - t0, MPI_Wtime() - t1}, mx[2];
-        MPI_Reduce(loc, mx, 2, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
-        unsigned long long n[2] = {m_uiBcastRecvDstCg.size(), m_uiBcastSendSrcCg.size()}, nm[2];
-        MPI_Reduce(n, nm, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, m_uiCommActive);
-        if (m_uiActiveRank == 0)
-            std::printf("[bcast-prof] dof=%u build=%.1f apply=%.1f ms (max) recv=%llu%s\n",
-                        dof, mx[0] * 1e3, mx[1] * 1e3, nm[0], built ? "" : " (new plan)");
         return;
     }
-    const size_t n = (size_t)dof * m_uiNumActualNodes;
-    std::vector<T> ref(vec, vec + n);
-    broadcastCgValuesByPhysPosLegacy(ref.data(), dof);
+    MPI_Barrier(m_uiCommActive);
+    const double t0 = MPI_Wtime();
+    const bool built = m_uiBcastPlanBuilt;
+    if (!built) buildBcastPlan();
+    const double t1 = MPI_Wtime();
     broadcastCgValuesByPhysPosPlanned(vec, dof);
-    if (std::memcmp(ref.data(), vec, n * sizeof(T)) != 0) {
-        for (size_t i = 0; i < n; i++) {
-            if (std::memcmp(&ref[i], &vec[i], sizeof(T)) == 0) continue;
-            std::fprintf(stderr,
-                "[bcast-plan-check] MISMATCH rank=%d var=%zu cg=%zu "
-                "legacy=%.17g plan=%.17g\n",
-                (int)m_uiActiveRank, i / m_uiNumActualNodes,
-                i % m_uiNumActualNodes, (double)ref[i], (double)vec[i]);
-            break;
-        }
-        std::fflush(stderr);
-        MPI_Abort(MPI_COMM_WORLD, 1);
-    }
+    double loc[2] = {t1 - t0, MPI_Wtime() - t1}, mx[2];
+    MPI_Reduce(loc, mx, 2, MPI_DOUBLE, MPI_MAX, 0, m_uiCommActive);
+    unsigned long long n[2] = {m_uiBcastRecvDstCg.size(), m_uiBcastSendSrcCg.size()}, nm[2];
+    MPI_Reduce(n, nm, 2, MPI_UNSIGNED_LONG_LONG, MPI_SUM, 0, m_uiCommActive);
+    if (m_uiActiveRank == 0)
+        std::printf("[bcast-prof] dof=%u build=%.1f apply=%.1f ms (max) recv=%llu%s\n",
+                    dof, mx[0] * 1e3, mx[1] * 1e3, nm[0], built ? "" : " (new plan)");
 }
 
 template <typename T>
 void Mesh::broadcastCgValuesByPhysPosStep(T* vec, unsigned int dof) {
-    static const int prune = [] {
-        const char* e = std::getenv("DENDRO_BCAST_STEP_PRUNE");
-        return e ? std::atoi(e) : 1;
-    }();
-    // the probe and the legacy/check paths only exist on the full plan
-    static const bool full = [] {
-        const char* p = std::getenv("DENDRO_BCAST_PLAN");
-        const char* c = std::getenv("DENDRO_BCAST_PLAN_CHECK");
-        return (p && p[0] == '0') || (c && c[0] == '1') ||
-               DENDRO_PROBE_GETENV("EM4_BCAST_PROBE_DIR") != nullptr;
-    }();
-    if (prune <= 0 || full) {
+    // the probe only exists on the full broadcast
+    static const bool full = DENDRO_PROBE_GETENV("EM4_BCAST_PROBE_DIR") != nullptr;
+    if (full) {
         broadcastCgValuesByPhysPos(vec, dof);
         return;
     }

@@ -779,7 +779,7 @@ class Mesh {
     std::vector<unsigned int> m_uiBcastSendSrcCg, m_uiBcastRecvDstCg;
     std::vector<unsigned int> m_uiBcastIntraDst, m_uiBcastIntraSrc;
     std::vector<unsigned int> m_uiBcastPhantomCg;
-    // per-step subset of the plan (DENDRO_BCAST_STEP_PRUNE, buildBcastStepPlan):
+    // per-step subset of the plan (buildBcastStepPlan):
     // only writes a later reader can see before the next ghost exchange
     bool m_uiBcastStepBuilt = false;
     std::vector<int> m_uiBcastStepSendCounts, m_uiBcastStepSendOffsets;
@@ -1547,7 +1547,7 @@ class Mesh {
     template <typename T>
     void broadcastCgValuesByPhysPos(T* vec, unsigned int dof);
 
-    /** original per-call rebuild path (DENDRO_BCAST_PLAN=0). */
+    /** per-call rebuild path (debug-probe builds with EM4_BCAST_PROBE_DIR). */
     template <typename T>
     void broadcastCgValuesByPhysPosLegacy(T* vec, unsigned int dof);
 
@@ -1557,9 +1557,7 @@ class Mesh {
 
     /** collective: builds the m_uiBcast* plan from the global claim set. */
     void buildBcastPlan();
-    void buildBcastPlanDist(int claimLevel = -1,
-                            const std::vector<unsigned long long>* forceRoute = nullptr);
-    void buildBcastPlanLegacy();
+    void buildBcastPlanDist(const std::vector<unsigned long long>* forceRoute = nullptr);
     /** collective: filters the built plan to its per-step subset (see
      *  broadcastCgValuesByPhysPosStep). */
     void buildBcastStepPlan();
@@ -2158,13 +2156,12 @@ class Mesh {
         this->broadcastCgValuesByPhysPos(vec, dof);
     }
 
-    /**@brief The consensus pos-bcast at the end of a time step. With
-     * DENDRO_BCAST_STEP_PRUNE (default 1) it applies only the plan entries whose
-     * destination is a local slot, a ghost slot the ghost exchange does not
-     * deliver but the unzip or a mirror reads, or a ghost-exchange send source
-     * (the pruneZipSync level-2 keep set); every other ghost slot is either
-     * overwritten by the next ghost exchange or never read. Otherwise the same
-     * as broadcastCgValuesByPhysPosPublic. Default on; =0 applies the full plan. */
+    /**@brief The consensus pos-bcast at the end of a time step. It applies
+     * only the plan entries whose destination is a local slot, a ghost slot
+     * the ghost exchange does not deliver but the unzip or a mirror reads, or
+     * a ghost-exchange send source (the pruneZipSync keep set); every other
+     * ghost slot is either overwritten by the next ghost exchange or never
+     * read. Otherwise the same as broadcastCgValuesByPhysPosPublic. */
     template <typename T>
     void broadcastCgValuesByPhysPosStep(T* vec, unsigned int dof);
 
