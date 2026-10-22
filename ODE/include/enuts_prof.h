@@ -173,6 +173,16 @@ struct EnutsProf {
         return (d.empty() || !on()) ? nullptr : d.c_str();
     }
     static bool xchTrace() { return xchTraceDir() != nullptr; }
+    /** DENDRO_ENUTS_G_CARRY_STRICT=1 (test gates): abort when the iface-15 g
+     *  history cold-starts although the octree looks unchanged (same global
+     *  element count), or when a restart cannot read it */
+    static bool gCarryStrict() {
+        static const bool v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_G_CARRY_STRICT");
+            return e && e[0] == '1';
+        }();
+        return v;
+    }
     static bool ifaceNL() { return (ifaceFix() & 7) == 7; }
     static bool ifaceShift() { return (ifaceFix() & 8) != 0; }
     /** DENDRO_ENUTS_OWNER_SYNC_CHECK=1: verify the hanging-node recipes of the

@@ -46,14 +46,22 @@ int ExplicitNUTS<T, Ctx>::allocate_internal_vars() {
 
     m_uiStGOn = ts::EnutsProf::ifaceNL() && m_uiType == ETSType::RK4;
     if (m_uiStGOn) {
-        m_uiStG.create_vector(m_uiAppCtx->get_mesh(),
-                              ot::DVEC_TYPE::OCT_LOCAL_NODES, ot::DVEC_LOC::HOST,
-                              m_uiEVar.get_dof(), true);
+        const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+        m_uiStG.create_vector(pMesh, ot::DVEC_TYPE::OCT_LOCAL_NODES,
+                              ot::DVEC_LOC::HOST, m_uiEVar.get_dof(), true);
         std::fill(m_uiStG.get_vec_ptr(),
                   m_uiStG.get_vec_ptr() + m_uiStG.get_size(), (T)0);
-        m_uiStGValid.assign(m_uiAppCtx->get_mesh()->getAllElements().size(), 0);
+        m_uiStGValid.assign(pMesh->getAllElements().size(), 0);
         m_uiStGValidCls.assign(m_uiOwnDTs.size(), 0);
-        if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_GRESET] += 1;
+        m_uiStGKeys   = pMesh->getAllElements();
+        m_uiStGClsDT  = m_uiOwnDTs;
+        m_uiStGDof    = m_uiEVar.get_dof();
+        m_uiStGNPe    = pMesh->getNumNodesPerElement();
+        m_uiStGNLocal = pMesh->isActive() ? pMesh->getNumLocalMeshElements() : 0;
+        if (m_uiStGHeld.on)
+            stg_carry("sync_with_mesh");
+        else if (ts::EnutsProf::on())
+            ts::EnutsProf::get().t[ts::EnutsProf::CN_GRESET] += 1;
     }
 
     m_uiEvarUzip.create_vector(m_uiAppCtx->get_mesh(),
@@ -287,6 +295,8 @@ int ExplicitNUTS<T, Ctx>::sync_with_mesh() {
     // the level offset belongs to the new mesh, and the ladder built below reads it
     m_uiLevOffset = m_uiAppCtx->compute_lts_ts_offset();
 
+    // iface 15: keep g for allocate_internal_vars to carry (stg_carry)
+    if (m_uiStGOn) stg_hold();
     this->deallocate_internal_vars();
     this->free_data_structures();
 
@@ -428,6 +438,244 @@ bool ExplicitNUTS<T, Ctx>::isRemeshEvars(
     if (isMeshGlobalChanged) pMesh->setMeshRefinementFlags(refine_flags);
 
     return isMeshGlobalChanged;
+}
+
+template <typename T, typename Ctx>
+void ExplicitNUTS<T, Ctx>::stg_hold() {
+    StGHeld& h   = m_uiStGHeld;
+    const T* g   = m_uiStG.get_vec_ptr();
+    const auto n = m_uiStG.get_size();
+    h.g.assign(g, g + (g ? n : 0));
+    h.keys.swap(m_uiStGKeys);
+    h.valid.swap(m_uiStGValid);
+    h.validCls.swap(m_uiStGValidCls);
+    h.clsDT.swap(m_uiStGClsDT);
+    h.dof    = m_uiStGDof;
+    h.nPe    = m_uiStGNPe;
+    h.nLocal = m_uiStGNLocal;
+    h.on     = true;
+}
+
+template <typename T, typename Ctx>
+bool ExplicitNUTS<T, Ctx>::stg_carry(const char* where) {
+    // Carry g when every element (local and ghost) of the new mesh is in the
+    // held set on every rank: the octree did not change (a checkpoint, a remesh
+    // test without a remesh, a relabel, a restart on the same ranks). Ghost
+    // rows are carried as they are, which is right because on the same octree
+    // and labelling an uninterrupted run holds the same ghost elements with the
+    // same g at this point; with the g exchange on, its next use rewrites the
+    // owner slots with the same values. Anything else, e.g. a real remesh, is a
+    // cold start: g = 0 as at t = 0. The decision reduces over the global
+    // communicator, the one computeMinMaxLevel already uses in sync_with_mesh,
+    // so inactive ranks take part too.
+    StGHeld& h            = m_uiStGHeld;
+    const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+    const MPI_Comm comm   = pMesh->getMPIGlobalCommunicator();
+    const bool root       = !pMesh->getMPIRankGlobal();
+    const std::vector<ot::TreeNode>& now = m_uiStGKeys;
+    const size_t nNew = now.size(), nOld = h.keys.size();
+    const size_t nPe  = m_uiStGNPe, dof = m_uiStGDof;
+
+    // per rank: elements not found, layout mismatch, local elements before /
+    // after, held elements with a g
+    std::vector<size_t> src(nNew);
+    unsigned long long loc[5] = {0, 0, (unsigned long long)h.nLocal,
+                                 (unsigned long long)m_uiStGNLocal, 0};
+    for (unsigned char v : h.valid) loc[4] += v ? 1 : 0;
+    unsigned long long glob[5];
+    if (nNew && (h.dof != dof || h.nPe != nPe || h.valid.size() != nOld ||
+                 h.g.size() != dof * nOld * nPe ||
+                 (size_t)m_uiStG.get_size() != dof * nNew * nPe)) {
+        loc[1] = 1;
+    } else if (nNew) {
+        std::vector<size_t> ord(nOld);
+        for (size_t i = 0; i < nOld; i++) ord[i] = i;
+        std::sort(ord.begin(), ord.end(),
+                  [&](size_t a, size_t b) { return h.keys[a] < h.keys[b]; });
+        for (size_t e = 0; e < nNew; e++) {
+            auto it = std::lower_bound(
+                ord.begin(), ord.end(), e,
+                [&](size_t i, size_t k) { return h.keys[i] < now[k]; });
+            if (it != ord.end() && h.keys[*it] == now[e])
+                src[e] = *it;
+            else
+                loc[0]++;
+        }
+    }
+    MPI_Allreduce(loc, glob, 5, MPI_UNSIGNED_LONG_LONG, MPI_SUM, comm);
+    // no element on any rank holds a g yet (the global SUM is 0, e.g. the
+    // labelling at t = 0): nothing to carry, and the fresh allocation is
+    // already g = 0 with every flag clear. A rank without valid g while others
+    // have some still goes through the carry / cold-start decision below.
+    if (glob[4] == 0) {
+        h = StGHeld();
+        return true;
+    }
+    const bool carry = glob[0] == 0 && glob[1] == 0;
+
+    if (carry) {
+        T* g             = m_uiStG.get_vec_ptr();
+        const size_t dgN = nNew * nPe, dgO = nOld * nPe;
+        for (size_t v = 0; v < dof; v++)
+            for (size_t e = 0; e < nNew; e++)
+                std::memcpy(g + v * dgN + e * nPe,
+                            h.g.data() + v * dgO + src[e] * nPe,
+                            nPe * sizeof(T));
+        for (size_t e = 0; e < nNew; e++) m_uiStGValid[e] = h.valid[src[e]];
+        for (size_t c = 0; c < m_uiStGClsDT.size(); c++) {
+            auto it = std::find(h.clsDT.begin(), h.clsDT.end(), m_uiStGClsDT[c]);
+            m_uiStGValidCls[c] =
+                (it != h.clsDT.end() && (size_t)(it - h.clsDT.begin()) < h.validCls.size())
+                    ? h.validCls[it - h.clsDT.begin()]
+                    : 0;
+        }
+    } else {
+        if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_GRESET] += 1;
+        // same global element count before and after: most likely the same
+        // octree, so the cold start is unexpected
+        const bool sameCount = glob[2] == glob[3];
+        if (root)
+            std::cout << "[enuts] iface-15 g history: COLD START at " << where << ": "
+                      << glob[0] << " elements not carried, layout mismatch on "
+                      << glob[1] << " ranks, global elements " << glob[2] << " -> "
+                      << glob[3] << (sameCount ? " (unchanged)" : " (remeshed)")
+                      << "; g = 0 as at t = 0" << std::endl;
+        if (sameCount && ts::EnutsProf::gCarryStrict()) {
+            if (root)
+                std::cout << "[enuts] DENDRO_ENUTS_G_CARRY_STRICT: cold start on an "
+                             "unchanged element count, aborting"
+                          << std::endl;
+            MPI_Abort(comm, 23);
+        }
+    }
+    h = StGHeld();
+    return carry;
+}
+
+namespace detail {
+/// header of the iface-15 g history file (56 bytes, no padding)
+struct StGFileHeader {
+    char magic[8];
+    std::uint32_t version, iface, dof, nPe;
+    std::uint64_t nEle, nLocal;
+    std::uint32_t nCls, tsize;
+    double time;
+};
+static_assert(sizeof(StGFileHeader) == 56, "StGFileHeader layout");
+}  // namespace detail
+
+template <typename T, typename Ctx>
+bool ExplicitNUTS<T, Ctx>::write_carried_g(const std::string& base) const {
+    if (!m_uiStGOn) return false;
+    const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+    const std::string f =
+        base + "_" + std::to_string(pMesh->getMPIRankGlobal()) + ".bin";
+    detail::StGFileHeader hd{};
+    std::memcpy(hd.magic, "ENUTSG01", 8);
+    hd.version = 1;
+    hd.iface   = (std::uint32_t)ts::EnutsProf::ifaceFix();
+    hd.dof     = m_uiStGDof;
+    hd.nPe     = m_uiStGNPe;
+    hd.nEle    = m_uiStGKeys.size();
+    hd.nLocal  = (std::uint64_t)m_uiStGNLocal;
+    hd.nCls    = (std::uint32_t)m_uiStGClsDT.size();
+    hd.tsize   = sizeof(T);
+    hd.time    = m_uiTimeInfo._m_uiT;
+    std::vector<std::uint32_t> k(4 * hd.nEle);
+    for (size_t e = 0; e < hd.nEle; e++) {
+        k[4 * e]     = m_uiStGKeys[e].getX();
+        k[4 * e + 1] = m_uiStGKeys[e].getY();
+        k[4 * e + 2] = m_uiStGKeys[e].getZ();
+        k[4 * e + 3] = m_uiStGKeys[e].getLevel();
+    }
+    const size_t ng = (size_t)hd.dof * hd.nEle * hd.nPe;
+    FILE* fp        = std::fopen(f.c_str(), "wb");
+    bool ok         = fp != nullptr;
+    ok = ok && std::fwrite(&hd, sizeof(hd), 1, fp) == 1;
+    ok = ok && std::fwrite(k.data(), sizeof(std::uint32_t), k.size(), fp) == k.size();
+    ok = ok && std::fwrite(m_uiStGValid.data(), 1, hd.nEle, fp) == hd.nEle;
+    ok = ok && std::fwrite(m_uiStGClsDT.data(), sizeof(unsigned int), hd.nCls, fp) == hd.nCls;
+    ok = ok && std::fwrite(m_uiStGValidCls.data(), 1, hd.nCls, fp) == hd.nCls;
+    ok = ok && (ng == 0 || std::fwrite(m_uiStG.get_vec_ptr(), sizeof(T), ng, fp) == ng);
+    if (fp) ok = (std::fclose(fp) == 0) && ok;
+    if (!ok)
+        std::cerr << "[enuts] could not write the iface-15 g history " << f << std::endl;
+    return ok;
+}
+
+template <typename T, typename Ctx>
+bool ExplicitNUTS<T, Ctx>::read_carried_g(const std::string& base) {
+    if (!m_uiStGOn) return false;
+    const ot::Mesh* pMesh = m_uiAppCtx->get_mesh();
+    const MPI_Comm comm   = pMesh->getMPIGlobalCommunicator();
+    const bool root       = !pMesh->getMPIRankGlobal();
+    const std::string f =
+        base + "_" + std::to_string(pMesh->getMPIRankGlobal()) + ".bin";
+
+    // 0 ok, 1 no file, 2 unreadable, 3 another iface / dof / layout, 4 another time
+    int code = 0;
+    StGHeld h;
+    FILE* fp = std::fopen(f.c_str(), "rb");
+    detail::StGFileHeader hd{};
+    if (!fp) {
+        code = 1;
+    } else if (std::fread(&hd, sizeof(hd), 1, fp) != 1 ||
+               std::memcmp(hd.magic, "ENUTSG01", 8) != 0 || hd.version != 1) {
+        code = 2;
+    } else if (hd.iface != (std::uint32_t)ts::EnutsProf::ifaceFix() ||
+               hd.dof != m_uiStGDof || hd.nPe != m_uiStGNPe || hd.tsize != sizeof(T)) {
+        code = 3;
+    } else if (std::fabs(hd.time - m_uiTimeInfo._m_uiT) >
+               1e-12 * std::max(1.0, std::fabs((double)m_uiTimeInfo._m_uiT))) {
+        code = 4;
+    } else {
+        std::vector<std::uint32_t> k(4 * hd.nEle);
+        const size_t ng = (size_t)hd.dof * hd.nEle * hd.nPe;
+        h.keys.resize(hd.nEle);
+        h.valid.resize(hd.nEle);
+        h.clsDT.resize(hd.nCls);
+        h.validCls.resize(hd.nCls);
+        h.g.resize(ng);
+        bool ok = std::fread(k.data(), sizeof(std::uint32_t), k.size(), fp) == k.size();
+        ok = ok && std::fread(h.valid.data(), 1, hd.nEle, fp) == hd.nEle;
+        ok = ok && std::fread(h.clsDT.data(), sizeof(unsigned int), hd.nCls, fp) == hd.nCls;
+        ok = ok && std::fread(h.validCls.data(), 1, hd.nCls, fp) == hd.nCls;
+        ok = ok && (ng == 0 || std::fread(h.g.data(), sizeof(T), ng, fp) == ng);
+        if (!ok) code = 2;
+        const unsigned int dim = m_uiStGKeys.empty() ? 3 : m_uiStGKeys[0].getDim();
+        for (size_t e = 0; ok && e < hd.nEle; e++)
+            h.keys[e] = ot::TreeNode(k[4 * e], k[4 * e + 1], k[4 * e + 2],
+                                     k[4 * e + 3], dim, m_uiMaxDepth);
+        h.dof    = hd.dof;
+        h.nPe    = hd.nPe;
+        h.nLocal = (DendroIntL)hd.nLocal;
+    }
+    if (fp) std::fclose(fp);
+
+    int codeMax = 0;
+    MPI_Allreduce(&code, &codeMax, 1, MPI_INT, MPI_MAX, comm);
+    if (codeMax) {
+        static const char* why[] = {
+            "", "no g file (an older checkpoint, or one written without iface 15)",
+            "unreadable g file", "g file from another iface, dof or layout",
+            "g file from another time (stale slot)"};
+        if (ts::EnutsProf::on()) ts::EnutsProf::get().t[ts::EnutsProf::CN_GRESET] += 1;
+        if (root)
+            std::cout << "[enuts] iface-15 g history: COLD START at restart: "
+                      << why[codeMax] << " (" << base << "_<rank>.bin); g = 0 as at t = 0"
+                      << std::endl;
+        if (ts::EnutsProf::gCarryStrict()) {
+            if (root)
+                std::cout << "[enuts] DENDRO_ENUTS_G_CARRY_STRICT: restart without the "
+                             "g history, aborting"
+                          << std::endl;
+            MPI_Abort(comm, 23);
+        }
+        return false;
+    }
+    h.on         = true;
+    m_uiStGHeld  = std::move(h);
+    return stg_carry("restart");
 }
 
 }  // namespace ts

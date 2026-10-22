@@ -25,6 +25,8 @@
 #include <cstdio>
 #include <cstring>
 #include <algorithm>
+#include <cstdint>
+#include <string>
 
 #include "blkAsync.h"
 #include "block.h"
@@ -390,12 +392,13 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief: temp vector of the DG scheme*/
     DVec m_uiDGTmp0;
 
-    /** DENDRO_ENUTS_IFACE_FIX bit 4: g = k4 - 2 k3 + k1 of every element's
-     *  latest completed step (DG, like the stage vectors); zero after every
-     *  (re)allocation */
+    /** iface bit 4: g = k4 - 2 k3 + k1 of every element's latest completed
+     *  step (DG over all elements, like the stage vectors). Carried across
+     *  sync_with_mesh on an unchanged octree and through checkpoints
+     *  (stg_carry); zero after a real remesh and at t = 0 */
     DVec m_uiStG;
     bool m_uiStGOn = false;
-    /** IFACE_FIX bit 4: per element, whether update_stage_g wrote its g since the last (re)allocation */
+    /** iface bit 4: per element, whether update_stage_g wrote its g */
     std::vector<unsigned char> m_uiStGValid;
     /** per class: whether the class completed a step since the (re)allocation
      *  (every element of a class completes together, so this is the same on
@@ -403,6 +406,28 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     std::vector<unsigned char> m_uiStGValidCls;
     bool gValidCls(unsigned int c) const { return c < m_uiStGValidCls.size() && m_uiStGValidCls[c]; }
     void update_stage_g(unsigned int pt);
+    /** the layout m_uiStG was allocated on: element keys (getAllElements
+     *  order), class dts, dof, nodes per element, local element count */
+    std::vector<ot::TreeNode> m_uiStGKeys;
+    std::vector<unsigned int> m_uiStGClsDT;
+    unsigned int m_uiStGDof = 0, m_uiStGNPe = 0;
+    DendroIntL m_uiStGNLocal = 0;
+    /** g and its layout held between deallocate and allocate (or read from a
+     *  checkpoint) until stg_carry maps it onto the new mesh */
+    struct StGHeld {
+        bool on = false;
+        std::vector<T> g;
+        std::vector<ot::TreeNode> keys;
+        std::vector<unsigned char> valid, validCls;
+        std::vector<unsigned int> clsDT;
+        unsigned int dof = 0, nPe = 0;
+        DendroIntL nLocal = 0;
+    } m_uiStGHeld;
+    /** moves m_uiStG and its layout into m_uiStGHeld (before deallocation) */
+    void stg_hold();
+    /** maps m_uiStGHeld onto the current allocation by element key, or cold
+     *  starts; collective over the global communicator. @return carried */
+    bool stg_carry(const char* where);
 
     /** per-element tag of the correction currently held in m_uiDGTmp0 */
     struct SyncTag {
@@ -974,6 +999,20 @@ class ExplicitNUTS : public ETS<T, Ctx> {
     /**@brief: update all the internal data strucutures, with a new mesh
      * pointer. */
     int sync_with_mesh();
+
+    /// Writes the iface-15 g history (m_uiStG with its element keys) for a
+    /// checkpoint: one file per rank, `<base>_<global rank>.bin`. Writes
+    /// nothing unless the g history is on. The keys are geometric, so it may
+    /// run while the context holds another partition of the same octree.
+    /// Collective: no. @return true if a file was written
+    bool write_carried_g(const std::string& base) const;
+
+    /// After a restart: reads `<base>_<global rank>.bin` and carries g onto
+    /// the current mesh by element key. A missing file, another iface, dof or
+    /// layout, another time, or a key not found cold-starts g (as at t = 0)
+    /// on every rank, with a message. Does nothing unless the g history is on.
+    /// Collective: yes, over the global communicator. @return carried
+    bool read_carried_g(const std::string& base);
 
     /**@brief returns the dt min value */
     T get_dt_min() const {
