@@ -1825,12 +1825,6 @@ int ExplicitNUTS<T, Ctx>::deallocate_internal_vars() {
     m_uiScopedMesh = nullptr;
     m_uiScopedOk   = false;
 
-    // deallocate m_uiStVec, which is based on the number of stages
-    for (unsigned int i = 0; i < m_uiNumStages; i++) {
-        m_uiStVec[i].destroy_vector();
-    }
-    m_uiStVec.clear();
-
     m_uiBlkTimeLevMinMax.clear();
 
     m_uiActiveBlkIDs.clear();

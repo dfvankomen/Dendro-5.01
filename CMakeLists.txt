@@ -845,6 +845,8 @@ if(BUILD_DENDRO_EXAMPLES)
   # LTS temporal order across a level interface; the sabotage builds (frozen
   # stage time, first-order interface conversion) must fail
   dendro_add_deriv_test(testEnutsOrder test/src/testEnutsOrder.cpp)
+  # bounds-checked std::vector::operator[] (the old ENUTS teardown indexed m_uiStVec after clearing it)
+  target_compile_definitions(testEnutsOrder PRIVATE _GLIBCXX_ASSERTIONS)
   add_test(NAME testEnutsOrder COMMAND testEnutsOrder)
   add_test(NAME testEnutsOrder_2rank
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
