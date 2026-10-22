@@ -1,0 +1,16 @@
+# testPartitioning np4 red lines (args 3 7 1e-3 0.1 4 50 4; the plain and onehop arms print the same set).
+# Known-benign diagnostic reds per the testPartitioning harness note (graph-vs-SFC asymmetry diagnostics, red by
+# design), not regressions. Recorded 2026-10-22 from pre-tidy, t4 and p5c, which print this set identically, counts
+# included. The real gates (2b, 8be, 10, 11a-c, COVERAGE) are checked separately by check_testPartitioning.sh and
+# may never appear here. Change a line only with a recorded WHY in docs/lts_tidy_gates.md.
+TEST 8bj [canonical phys_pos] 108 (e, sub) pairs route to different phys_pos on graph vs SFC, maxDiff=4
+TEST 8bk-SFC (20 cycles+rhs, async) mirror symmetry: 380328 cgs asymmetric (maxDiff=0.00650228)
+TEST 8bk-SFC (20 cycles+rhs, sync) mirror symmetry: 380328 cgs asymmetric (maxDiff=0.00650228)
+TEST 8bk-SFC (no cycles, sync) mirror symmetry: 3696 cgs asymmetric (maxDiff=0.00570049)
+TEST 8bk-graph (20 cycles+rhs, async) mirror symmetry: 354970 cgs asymmetric (maxDiff=0.00650228)
+TEST 8bk-graph (20 cycles+rhs, sync) mirror symmetry: 354970 cgs asymmetric (maxDiff=0.00650228)
+TEST 8bk-graph (no cycles, sync) mirror symmetry: 3868 cgs asymmetric (maxDiff=0.00570049)
+TEST 8bl (SFC→graph redistribute symmetry): 3868 cgs asymmetric, maxDiff=0.00570049
+TEST 8bu (EM4 graph twin): (rank,pos) with multiple cg-indices=48084 (max distinct cg per (rank,pos)=5)
+TEST 8bu (SFC)        : (rank,pos) with multiple cg-indices=48576 (max distinct cg per (rank,pos)=5)
+TEST 8bv (EM4 graph twin): positions with LOCAL cg slot on >1 rank=413 (max ranks per pos=2)

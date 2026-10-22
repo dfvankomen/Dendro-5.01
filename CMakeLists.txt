@@ -773,19 +773,24 @@ if(BUILD_DENDRO_EXAMPLES)
   # partitioning tests (ours)
   dendro_add_example(newPartitioning test/src/test_new_partitioning.cpp)
   dendro_add_example(testPartitioning test/src/partitioningMeshTests.cpp)
-  # reports by color and exits 0: pass = it finishes and prints no red line;
+  # reports by color and exits 0: the wrapper passes it when the real gates pass
+  # and its red diagnostic lines equal the baseline (see the script);
   # TEST 10o (labelled one-hop remesh vs the sandwich) runs under DENDRO_REMESH_ONEHOP=1
-  string(ASCII 27 DENDRO_ESC)
   file(MAKE_DIRECTORY ${CMAKE_BINARY_DIR}/testPartitioning_wd/vtu)
   foreach(ARM plain onehop)
+    if(ARM STREQUAL "onehop")
+      set(ONEHOP 1)
+    else()
+      set(ONEHOP 0)
+    endif()
     add_test(NAME testPartitioning_np4_${ARM}
-             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+             COMMAND bash ${CMAKE_CURRENT_SOURCE_DIR}/test/scripts/check_testPartitioning.sh
+                     ${CMAKE_CURRENT_SOURCE_DIR}/test/data/testPartitioning_np4_red.txt ${ONEHOP}
+                     ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
                      ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testPartitioning>
                      ${MPIEXEC_POSTFLAGS} 3 7 1e-3 0.1 4 50 4
              WORKING_DIRECTORY ${CMAKE_BINARY_DIR}/testPartitioning_wd)
-    set_tests_properties(testPartitioning_np4_${ARM} PROPERTIES TIMEOUT 1200
-                         PASS_REGULAR_EXPRESSION "FINISHED"
-                         FAIL_REGULAR_EXPRESSION "${DENDRO_ESC}\\[1;31m")
+    set_tests_properties(testPartitioning_np4_${ARM} PROPERTIES TIMEOUT 1200)
   endforeach()
   set_tests_properties(testPartitioning_np4_onehop PROPERTIES ENVIRONMENT "DENDRO_REMESH_ONEHOP=1")
   dendro_add_example(testPartitioningEvolve test/src/partitioningEvolveTest.cpp)
