@@ -194,9 +194,10 @@ struct Clock {
         return c.due(freq, step, time, dt_fine(), lts);
     }
 
-    /// The remesh event: its test skips step 0, so its first interval starts
-    /// there (unseeded, it would fire at the first coarse step).
-    void seed_remesh(Cadence& c, unsigned int freq) const { c.next = freq * dt_fine(); }
+    /// The remesh test and the checkpoint: the first event comes after `freq`
+    /// fine steps (unseeded, it would fire at the first coarse step). The
+    /// output events stay unseeded, so they fire at step 0.
+    void seed(Cadence& c, unsigned int freq) const { c.next = freq * dt_fine(); }
 
     /// After a restart under LTS: `t_prev` is the start of the coarse step that
     /// just ended (current time minus the coarsest step).

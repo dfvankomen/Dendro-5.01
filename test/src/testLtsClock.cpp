@@ -4,6 +4,8 @@
  *
  *   - the seeded remesh event fires at the coarse steps today's driver fires
  *     it at (the remesh test skips step 0; one interval = freq fine steps);
+ *   - the seeded checkpoint fires at the same steps (one rule for both): the
+ *     first after freq fine steps, none after the first coarse step;
  *   - a restart resumed from the start of the last coarse step fires at the
  *     same steps as the uninterrupted run;
  *   - the step size is read at every call: after it halves, intervals follow
@@ -11,8 +13,8 @@
  *   - the checkpoint slot alternates by interval index under LTS and is -1
  *     under the global stepper; the global stepper fires every freq steps.
  *
- * LTS_CLOCK_SABOTAGE=1 builds leave the remesh event unseeded (it then fires
- * at the first coarse step); that build must fail.
+ * LTS_CLOCK_SABOTAGE=1 / 2 builds leave the remesh / checkpoint event
+ * unseeded (it then fires at the first coarse step); both builds must fail.
  */
 
 #include <cstdio>
@@ -44,17 +46,17 @@ ts::Clock makeClock(bool lts) {
     return c;
 }
 
-void seed(const ts::Clock& clk, ts::Cadence& c, unsigned int freq) {
-#if LTS_CLOCK_SABOTAGE != 1
-    clk.seed_remesh(c, freq);
-#endif
+// event 1 = remesh, 2 = checkpoint; the sabotage build of that number skips its seed
+void seed(const ts::Clock& clk, ts::Cadence& c, unsigned int freq, int event) {
+    if (LTS_CLOCK_SABOTAGE == event) return;
+    clk.seed(c, freq);
 }
 
 // steps (1 .. nsteps) at which the remesh event fires; coarse step = ratio fine steps
 std::vector<long long> remeshSteps(unsigned int freq, unsigned int ratio, long long nsteps) {
     ts::Clock clk = makeClock(true);
     ts::Cadence c;
-    seed(clk, c, freq);
+    seed(clk, c, freq, 1);
     std::vector<long long> out;
     for (long long step = 0; step <= nsteps; step++) {
         const double time = step * ratio * g_dt;
@@ -63,11 +65,30 @@ std::vector<long long> remeshSteps(unsigned int freq, unsigned int ratio, long l
     return out;
 }
 
+// steps (0 .. nsteps) after which the checkpoint is written: the driver asks
+// after evolve() with the step and time from before it
+std::vector<long long> checkpointSteps(unsigned int freq, unsigned int ratio, long long nsteps) {
+    ts::Clock clk = makeClock(true);
+    ts::Cadence c;
+    seed(clk, c, freq, 2);
+    std::vector<long long> out;
+    for (long long step = 0; step <= nsteps; step++)
+        if (clk.due(c, freq, step, step * ratio * g_dt)) out.push_back(step);
+    return out;
+}
+
 void testSeeded() {
     // freq 10, coarse step 8: boundaries at 10, 20, 30, ... fine steps; a step
     // fires when its time reaches the next boundary at or after the last one
     const std::vector<long long> want = {2, 3, 4, 5, 7, 8, 9, 10, 12};
     check(remeshSteps(10, 8, 12) == want, "seeded remesh fires at today's steps 2 3 4 5 7 8 9 10 12");
+}
+
+void testCheckpoint() {
+    check(checkpointSteps(10, 8, 12) == remeshSteps(10, 8, 12),
+          "seeded checkpoint fires at the remesh event's steps");
+    check(checkpointSteps(1000000, 8, 12).empty(),
+          "no checkpoint after the first coarse step at freq 1e6");
 }
 
 void testResume() {
@@ -91,7 +112,7 @@ void testStepChange() {
     // the step halves before step 6: from then on an interval is 10 new steps
     ts::Clock clk = makeClock(true);
     ts::Cadence a, b;
-    clk.seed_remesh(a, 10);
+    clk.seed(a, 10);
     b.next          = a.next;
     const double d0 = g_dt;
     double time     = 0.0;
@@ -127,6 +148,7 @@ void testSlotsAndGlobal() {
 
 int main() {
     testSeeded();
+    testCheckpoint();
     testResume();
     testStepChange();
     testSlotsAndGlobal();
