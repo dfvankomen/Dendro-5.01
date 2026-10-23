@@ -173,6 +173,15 @@ struct EnutsProf {
         return (d.empty() || !on()) ? nullptr : d.c_str();
     }
     static bool xchTrace() { return xchTraceDir() != nullptr; }
+    /** DENDRO_ENUTS_NANCHK=1: per-block NaN checks of the stage data (debug;
+     *  also serializes the threaded block loop). One parse at every site. */
+    static bool nanChk() {
+        static const bool v = []() {
+            const char* e = std::getenv("DENDRO_ENUTS_NANCHK");
+            return e && e[0] == '1';
+        }();
+        return v;
+    }
     /** DENDRO_ENUTS_G_CARRY_STRICT=1 (test gates): abort when the iface-15 g
      *  history cold-starts although the octree looks unchanged (same global
      *  element count), or when a restart cannot read it */

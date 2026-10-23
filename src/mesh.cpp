@@ -408,8 +408,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
 
         {
             static const char* mprof_env = std::getenv("DENDRO_MESH_PROF");
-            const bool mprof_on =
-                mprof_env && mprof_env[0] == '1' && mprof_env[1] == '\0';
+            const bool mprof_on = mprof_env && mprof_env[0] == '1';
             if (mprof_on && !m_uiActiveRank)
                 std::printf(
                     "[mesh-prof] ctor sm=%d: e2e=%.1f e2n+sm=%.1f sm_dg=%.1f"
@@ -756,8 +755,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
 
         {
             static const char* mprof_env = std::getenv("DENDRO_MESH_PROF");
-            const bool mprof_on =
-                mprof_env && mprof_env[0] == '1' && mprof_env[1] == '\0';
+            const bool mprof_on = mprof_env && mprof_env[0] == '1';
             if (mprof_on && !m_uiActiveRank)
                 std::printf(
                     "[mesh-prof] ctor sm=%d: e2e=%.1f e2n+sm=%.1f sm_dg=%.1f"
@@ -7724,7 +7722,7 @@ void Mesh::buildZipPlanArbitrateDistributed(
     // DENDRO_ZIPPLAN_PROF=1: sub-phase split of this function, max over ranks
     static const bool arbProf = [] {
         const char* e = std::getenv("DENDRO_ZIPPLAN_PROF");
-        return e && e[0] == '1' && e[1] == '\0';
+        return e && e[0] == '1';
     }();
     double tArb[8] = {0, 0, 0, 0, 0, 0, 0, 0};
     auto tick = [&](int k) { if (arbProf) tArb[k] = MPI_Wtime(); };
@@ -8366,7 +8364,7 @@ void Mesh::buildZipPlanCore() {
     // stage timing: DENDRO_ZIPPLAN_PROF=1 (rank-0 wall times). buildZipPlan is
     // ~51% of repartitionMeshGlobal; this splits it so we know which part.
     static const char* __zp_env = std::getenv("DENDRO_ZIPPLAN_PROF");
-    const bool __zp_on = __zp_env && __zp_env[0] == '1' && __zp_env[1] == '\0';
+    const bool __zp_on = __zp_env && __zp_env[0] == '1';
     const double __zp_t0 = __zp_on ? MPI_Wtime() : 0.0;
     double __zp_claims = 0, __zp_coll = 0, __zp_win = 0;
     // sub-splits of what was one 'stage3' bucket (it was a 580-line bundle)

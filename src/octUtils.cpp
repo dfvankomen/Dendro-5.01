@@ -1024,10 +1024,9 @@ void octree2BlockDecompositionRepartitioned(
     int rank;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     treeNodesTovtk(pNodes, rank, "balOct_repartitioned");
-#endif
-
     std::cout << rank << ": localBegin - localEnd: " << localBegin << " "
               << localEnd << std::endl;
+#endif
 
     unsigned int x, y, z, hindex, hindexN, index;
 

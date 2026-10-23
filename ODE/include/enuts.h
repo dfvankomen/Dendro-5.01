@@ -11,16 +11,11 @@
 #include <assert.h>
 
 #include <time.h>
-#include <bitset>
 #include <fstream>
 #include <iomanip>
-#include <functional>
 #include <iostream>
-#include <atomic>
 #include <memory>
-#include <unordered_map>
 #include <functional>
-#include <map>
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -32,12 +27,8 @@
 #include "block.h"
 #include "ets.h"
 #include "lts.h"
-#include "mathMeshUtils.h"
 #include "mesh.h"
 #include "meshUtils.h"
-#include "oct2vtk.h"
-#include "point.h"
-#include "subSM.h"
 #include "ts.h"
 #include "waveletAMR.h"
 
@@ -63,7 +54,7 @@ struct WeightedPartitionData {
 };
 
 /**@brief:  wpart meta data, (only should be used in the LTS class. )*/
-static WeightedPartitionData wpart_meta;
+inline WeightedPartitionData wpart_meta;
 
 /**
  * @brief : simple structure to support storing of a single time step (explicit
@@ -1652,11 +1643,7 @@ template <typename T, typename Ctx>
 void ExplicitNUTS<T, Ctx>::debug_nan_check(const char* tag, unsigned int blk,
                                            unsigned int s, unsigned int pt,
                                            unsigned int rk) {
-    static const bool on = [] {
-        const char* e = std::getenv("DENDRO_ENUTS_NANCHK");
-        return e && e[0] == '1';
-    }();
-    if (!on) return;
+    if (!ts::EnutsProf::nanChk()) return;
     ot::Mesh* pMesh      = m_uiAppCtx->get_mesh();
     const T* v           = stage_vec_dbg(blk, s).data();
     const unsigned int n = m_uiEVar.get_dof() * stage_vec_dbg(blk, s).getSz();
@@ -1984,7 +1971,7 @@ void ExplicitNUTS<T, Ctx>::partial_evolve(unsigned int pt) {
     if (thr) {
         // the per-block debug probes share static state
         static const bool dbg = std::getenv("DENDRO_ENUTS_BLKHASH") ||
-                                std::getenv("DENDRO_ENUTS_NANCHK");
+                                ts::EnutsProf::nanChk();
         if (dbg || omp_in_parallel()) thr = false;
     }
     if (thr) {

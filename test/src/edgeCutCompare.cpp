@@ -149,7 +149,7 @@ struct Metrics {
  * work_imbalance above scores TOTAL LTS work per rank -- which any weighted
  * 1-D prefix split balances trivially and which does NOT predict LTS speedup.
  * What gates the ENUTS evolve is per-PARTIAL-STEP balance: partial_evolve(pt)
- * runs a collective DG ghost exchange per RK stage (enuts.h:1905), so every
+ * runs a collective DG ghost exchange per RK stage (ExplicitNUTS::partial_evolve), so every
  * rank waits on the busiest rank at every pt. A block at level L fires when
  * pt % 2^(lmax-L) == 0 (getBlkTimestepFac), each firing costing ~its element
  * count. So:
@@ -273,7 +273,7 @@ Metrics score(const std::vector<std::vector<unsigned int>>& adj,
     m.edge_cut_frac = sum[1] ? (double)sum[0] / (double)sum[1] : 0.0;
 
     // --- scoping prize: LTS comms with a per-active-block exchange vs the
-    // current full-ghost-layer-every-sub-step exchange (enuts.h:1905, which does
+    // current full-ghost-layer-every-sub-step exchange (ExplicitNUTS::partial_evolve, which does
     // NOT scope to m_uiActiveBlkIDs). Over one coarse step of coarset_t=2^(lmax-
     // lmin) sub-steps the current code pays coarset_t * full_volume (== GTS
     // comms; LTS saves compute but not comms). A scoped exchange sends a level-L

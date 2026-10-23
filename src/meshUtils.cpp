@@ -31,8 +31,7 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
 
     // runtime phase profiling: DENDRO_MESH_PROF=1 (rank-0 wall times)
     static const char* mprof_env = std::getenv("DENDRO_MESH_PROF");
-    const bool mprof_on =
-        mprof_env && mprof_env[0] == '1' && mprof_env[1] == '\0';
+    const bool mprof_on = mprof_env && mprof_env[0] == '1';
     double tp_start = MPI_Wtime();
     double tp_shrink = 0, tp_dedup = 0, tp_construct = 0, tp_balance = 0,
            tp_ctor = 0;

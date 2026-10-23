@@ -38,8 +38,6 @@ implementations are based on the previous implementation of dendro version 4.0
 #include "sfcSort.h"
 #include "skey.h"
 
-#define OCT2BLK_DEBUG_NEW
-#define OCT2BLK_DEBUG
 
 #define OCT2BLK_DECOMP_BLK_FILL_RATIO \
     0.5  // gurantees how fraction of the block covered by regular octants.

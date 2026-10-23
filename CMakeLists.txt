@@ -153,6 +153,7 @@ option(DENDRO_REPORT_BUILD_CONFIG
        "Emit #pragma message banners at compile time reporting which unzip/SIMD optimizations are active (diagnostic)"
        OFF)
 option(DENDRO_ENABLE_DEBUG_PROBES "Compile in env-gated debug probes (recv/send probes, remesh dump, cg trace, etc.) — only needed when actively bisecting" OFF)
+option(DENDRO_OCT2BLK_DEBUG "Block decomposition debug output: per-rank VTK dumps of the balanced octree and the block nodes (balOct_*.vtk, blockNodes_*.vtk, written into the working directory on every mesh build) and the block fill statistics. Default OFF." OFF)
 option(DENDRO_ENABLE_OPENMP_PARTITIONING "Use OpenMP threading in graph-partitioning hot paths (audit hash, audit phase-2 element loop, zip-plan myMin). Off by default — dendro is MPI-only by default." OFF)
 
 # Configuration Variables
@@ -356,6 +357,8 @@ target_compile_definitions(dendro_config INTERFACE -DOCT2BLK_COARSEST_LEV=${OCT2
 target_compile_definitions(dendro_config INTERFACE -DOCT2BLK_MAX_SPAN=${OCT2BLK_MAX_SPAN})
 
 dendro_add_def(USE_64BIT_INDICES USE_64BIT_INDICES)
+dendro_add_def(DENDRO_OCT2BLK_DEBUG OCT2BLK_DEBUG)
+dendro_add_def(DENDRO_OCT2BLK_DEBUG OCT2BLK_DEBUG_NEW)
 dendro_add_def(HILBERT_ORDERING HILBERT_ORDERING)
 dendro_add_def(RUN_WEAK_SCALING RUN_WEAK_SCALING)
 dendro_add_def(DIM_2 DIM_2)

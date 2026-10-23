@@ -113,7 +113,7 @@ void ExplicitNUTS<T, Ctx>::build_cg_owner_map() {
                   << "] end-of-step owner pinned to cg2dg; by-position pick differed at "
                   << diff << " local cgs" << std::endl;
     }
-    if (std::getenv("DENDRO_ENUTS_NANCHK")) {
+    if (ts::EnutsProf::nanChk()) {
         const unsigned int* e2nDG = pMesh->getE2NMapping_DG().data();
         unsigned int set = 0, agree = 0, disagree = 0;
         for (unsigned int cg = pMesh->getNodeLocalBegin(); cg < pMesh->getNodeLocalEnd(); cg++) {
