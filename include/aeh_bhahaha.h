@@ -621,7 +621,9 @@ class AEH_BHaHAHA {
         return common_horizon_found() ? qoi_[2].r_mean : -1.0;
     }
 
-    void create_checkpoint(
+    // collective over the active comm; nonzero on every active rank if the
+    // file was not fully written
+    int create_checkpoint(
         const ot::Mesh* mesh,
         const std::string& checkpoint_output = "aeh_bha_chkpt.json");
 
