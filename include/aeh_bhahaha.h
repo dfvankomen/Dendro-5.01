@@ -2,6 +2,7 @@
 
 #include <math.h>
 
+#include <cmath>
 #include <algorithm>
 #include <cstdlib>
 #include <functional>
@@ -174,6 +175,25 @@ class AEH_BHaHAHA {
     // rank 3 is only a valid root once there are more than 3 ranks
     static unsigned int checkpoint_root_rank(const unsigned int npesActive) {
         return npesActive > 3 ? 3u : 0u;
+    }
+
+    // AH3 search radius for a geometric reseed. After a failed AH3 find the
+    // radius may only grow: take the largest of the geometric estimate, the
+    // last good AH3 radius plus padding, and the previous guess, capped at the
+    // max search radius. Non-finite or non-positive inputs are ignored. The
+    // AH1/AH2 data behind r_geom are frozen after merger, so r_geom alone can
+    // shrink the search below a growing remnant.
+    static double common_horizon_reseed_radius(
+        const double r_geom, const bool after_failed_find,
+        const double r3_last_good, const double r_prev_guess,
+        const double padding, const double max_search_radius) {
+        auto ok = [](double v) { return std::isfinite(v) && v > 0.0; };
+        double r = ok(r_geom) ? r_geom : max_search_radius;
+        if (after_failed_find) {
+            if (ok(r3_last_good)) r = std::max(r, r3_last_good + padding);
+            if (ok(r_prev_guess)) r = std::max(r, r_prev_guess);
+        }
+        return std::min(r, max_search_radius);
     }
 
     // add more input types for data...
@@ -564,7 +584,7 @@ class AEH_BHaHAHA {
 
     void bah_sum_shared_arrays(const ot::Mesh* mesh);
 
-    void reseed_common_horizon_geometric_();
+    void reseed_common_horizon_geometric_(bool after_failed_find = false);
 
     void fill_domain_coords(const int which_horizon, const int n_r,
                             const int n_theta, const int n_phi,
