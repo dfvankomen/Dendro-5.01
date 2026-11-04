@@ -997,9 +997,9 @@ void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
         assert(in.size() >= sendCount);
         std::vector<ot::TreeNode> recvBuffer;
         recvBuffer.resize(recvCount);
-        par::Mpi_Sendrecv(&(*(in.begin())), sendCount, prev, 2,
-                          &(*(recvBuffer.begin())), recvCount, next, 2, comm,
-                          &status);
+        // recvBuffer is usually empty, so no &*begin()
+        par::Mpi_Sendrecv(in.data(), sendCount, prev, 2, recvBuffer.data(),
+                          recvCount, next, 2, comm, &status);
         // std::cout<<"rank: "<<m_uiActiveRank<<" send recv ended "<<std::endl;
 
         if (sendCount) {

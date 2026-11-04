@@ -5,7 +5,8 @@
 // on 2 ranks the rank-0 serial phase refines all the way to max_ref_level =
 // m_uiMaxDepth + 1 and on 1 rank the parallel phase does. Both overloads are
 // checked: every fx sample lies in the domain, and the result is sorted,
-// unique and covers the domain.
+// unique and covers the domain. enforceSiblingsAreNotPartitioned on the
+// result must keep it so (the zero-count exchange is the common case).
 //
 // Usage: testOctUtilsEdges [maxDepth=4]
 // Exit code 0 = pass.
@@ -90,6 +91,13 @@ int main(int argc, char** argv) {
                         MPI_COMM_WORLD);
         check(!outside, "vector overload samples inside the domain");
         check_tree(tree);
+
+        // a rank with no straddling sibling group receives zero octants
+        const std::vector<ot::TreeNode> before = tree;
+        enforceSiblingsAreNotPartitioned(tree, MPI_COMM_WORLD);
+        check_tree(tree);
+        if (npes == 1)
+            check(tree == before, "one rank: sibling enforcement is a no-op");
     }
 
     if (!rank) printf("testOctUtilsEdges: %s\n", failures ? "FAIL" : "PASS");
