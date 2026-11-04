@@ -7,6 +7,8 @@
 // checked: every fx sample lies in the domain, and the result is sorted,
 // unique and covers the domain. enforceSiblingsAreNotPartitioned on the
 // result must keep it so (the zero-count exchange is the common case).
+// octree2BlockDecomposition must treat a uniform tree the same at every
+// maxDepth.
 //
 // Usage: testOctUtilsEdges [maxDepth=4]
 // Exit code 0 = pass.
@@ -19,6 +21,7 @@
 #include <vector>
 
 #include "TreeNode.h"
+#include "block.h"
 #include "dendro.h"
 #include "octUtils.h"
 
@@ -99,6 +102,27 @@ int main(int argc, char** argv) {
         if (npes == 1)
             check(tree == before, "one rank: sibling enforcement is a no-op");
     }
+
+    // a uniform level-3 tiling is the same 8 level-1 blocks at any maxDepth;
+    // from 12 on a level-1 block's volume 2^(3*(maxDepth-1)) overflows 32 bits
+    const unsigned int savedDepth = m_uiMaxDepth;
+    for (unsigned int D : {10u, 11u, 12u}) {
+        m_uiMaxDepth = D;
+        std::vector<ot::TreeNode> tree;
+        createRegularOctree(tree, 3, m_uiDim, D, MPI_COMM_SELF);
+        std::vector<ot::Block> blocks;
+        unsigned int dmin, dmax;
+        octree2BlockDecomposition(tree, blocks, D, dmin, dmax, 0, tree.size(),
+                                  6);
+        char what[64];
+        std::snprintf(what, sizeof(what),
+                      "maxDepth %u: uniform tree is 8 blocks", D);
+        bool ok = blocks.size() == 8;
+        for (const ot::Block& b : blocks)
+            ok = ok && b.getBlockNode().getLevel() == 1;
+        check(ok, what);
+    }
+    m_uiMaxDepth = savedDepth;
 
     if (!rank) printf("testOctUtilsEdges: %s\n", failures ? "FAIL" : "PASS");
     MPI_Finalize();

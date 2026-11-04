@@ -735,7 +735,7 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
 
         numRegGridOcts     = 0;
         numIdealRegGridOct = (1u << (currRegGridLev - parent.getLevel()));
-        blockVolume        = 1u << ((maxDepth - parent.getLevel()) * 3);
+        blockVolume = DendroUInt_128(1) << ((maxDepth - parent.getLevel()) * 3);
         (m_uiDim == 3)
             ? numIdealRegGridOct =
                   numIdealRegGridOct* numIdealRegGridOct* numIdealRegGridOct
@@ -756,7 +756,8 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                 if (tag[nBegin - localBegin] != tag[elem - localBegin])
                     isTagValid = false;
 
-                octVolume += 1u << (3 * (maxDepth - pNodes[elem].getLevel()));
+                octVolume += DendroUInt_128(1)
+                             << (3 * (maxDepth - pNodes[elem].getLevel()));
             }
 
         } else {
@@ -769,7 +770,8 @@ void octree2BlockDecomposition(std::vector<ot::TreeNode>& pNodes,
                     break;
                 }
 
-                octVolume += 1u << (3 * (maxDepth - pNodes[elem].getLevel()));
+                octVolume += DendroUInt_128(1)
+                             << (3 * (maxDepth - pNodes[elem].getLevel()));
             }
         }
 
