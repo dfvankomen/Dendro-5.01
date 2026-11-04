@@ -199,7 +199,9 @@ int function2Octree(std::function<double(double, double, double)> fx,
 
             for (auto elem : nodes) {
                 splitOctant = false;
-                if (elem.getLevel() != depth) {
+                // max depth cannot split: the child shift would be -1
+                if (elem.getLevel() != depth ||
+                    elem.getLevel() >= m_uiMaxDepth) {
                     nodes_new.push_back(elem);
                     continue;
                 }
@@ -292,7 +294,8 @@ int function2Octree(std::function<double(double, double, double)> fx,
 
         for (auto elem : nodes) {
             splitOctant = false;
-            if (elem.getLevel() != depth) {
+            // max depth cannot split: the child shift would be -1
+            if (elem.getLevel() != depth || elem.getLevel() >= m_uiMaxDepth) {
                 nodes_new.push_back(elem);
                 continue;
             }
@@ -428,7 +431,9 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
 
             for (auto elem : nodes) {
                 splitOctant = false;
-                if (elem.getLevel() != depth) {
+                // max depth cannot split: the child shift would be -1
+                if (elem.getLevel() != depth ||
+                    elem.getLevel() >= m_uiMaxDepth) {
                     nodes_new.push_back(elem);
                     continue;
                 }
@@ -534,7 +539,8 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
 
         for (auto elem : nodes) {
             splitOctant = false;
-            if (elem.getLevel() != depth) {
+            // max depth cannot split: the child shift would be -1
+            if (elem.getLevel() != depth || elem.getLevel() >= m_uiMaxDepth) {
                 nodes_new.push_back(elem);
                 continue;
             }

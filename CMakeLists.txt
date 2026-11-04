@@ -708,6 +708,12 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS})
   set_tests_properties(testAehTrackedCenter testAehTrackedCenter_2rank
                        PROPERTIES TIMEOUT 300 ENVIRONMENT OMP_NUM_THREADS=2)
+  dendro_add_example(testOctUtilsEdges test/src/testOctUtilsEdges.cpp)
+  add_test(NAME testOctUtilsEdges COMMAND testOctUtilsEdges)
+  add_test(NAME testOctUtilsEdges_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testOctUtilsEdges>
+                   ${MPIEXEC_POSTFLAGS})
   dendro_add_example(testETSErrorControl test/src/testETSErrorControl.cpp)
   add_test(NAME testETSErrorControl COMMAND testETSErrorControl 4 4)
   add_test(NAME testETSErrorControl_2rank
