@@ -5,7 +5,7 @@
 
 namespace dendro_aeh {
 
-void AEH_BHaHAHA::reseed_common_horizon_geometric_() {
+void AEH_BHaHAHA::reseed_common_horizon_geometric_(bool after_failed_find) {
     const int inspiral_bh1   = 0;
     const int inspiral_bh2   = 1;
     const int common_horizon = 2;
@@ -23,9 +23,13 @@ void AEH_BHaHAHA::reseed_common_horizon_geometric_() {
     const double mid_x       = 0.5 * (x1 + x2);
     const double mid_y       = 0.5 * (y1 + y2);
     const double mid_z       = 0.5 * (z1 + z2);
-    const double r_geom =
-        std::min(0.5 * sep + std::max(r1, r2) + bah_ah3_radius_padding_,
-                 bah_max_search_radius_[common_horizon]);
+    // read before the AH3 history is wiped below
+    const double r3_last_good = r_max_m1_[common_horizon];
+    const double r_prev_guess = r_max_guess_[common_horizon];
+    const double r_geom       = common_horizon_reseed_radius(
+        0.5 * sep + std::max(r1, r2) + bah_ah3_radius_padding_,
+        after_failed_find, r3_last_good, r_prev_guess,
+        bah_ah3_radius_padding_, bah_max_search_radius_[common_horizon]);
 
     x_center_m1_[common_horizon] = mid_x;
     y_center_m1_[common_horizon] = mid_y;
@@ -442,6 +446,7 @@ void AEH_BHaHAHA::find_horizons(
         const bool bh_centers_valid =
             (t_m1_[inspiral_bh1] >= 0.0) && (t_m1_[inspiral_bh2] >= 0.0);
 
+        bool ah3_sanity_failed = false;
         if (common_active_now && ah3_ever_found && bh_centers_valid) {
             const double r3 = r_max_m1_[common_horizon];
             const double d31 =
@@ -456,6 +461,7 @@ void AEH_BHaHAHA::find_horizons(
 
             const bool insane = (r3 <= 0.0) || (d31 > k_r3) || (d32 > k_r3);
             if (insane) {
+                ah3_sanity_failed = true;
                 if (bah_verbosity_level_ > 0 && rankActive == 0) {
                     std::cout
                         << GRN << "BBH AH3 SANITY FAIL: r3=" << std::fixed
@@ -477,7 +483,9 @@ void AEH_BHaHAHA::find_horizons(
              failed_last_find_[common_horizon]);
 
         if (needs_reseed) {
-            reseed_common_horizon_geometric_();
+            // a real failed find (not a sanity wipe) may only grow the radius
+            reseed_common_horizon_geometric_(failed_last_find_[common_horizon] &&
+                                             !ah3_sanity_failed);
             // the struct was filled before the reseed, bring it up to date
             transfer_to_bhahaha_from_persistent(
                 &bha_param_data_[common_horizon]);
