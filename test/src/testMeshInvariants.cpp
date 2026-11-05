@@ -160,15 +160,9 @@ int main(int argc, char** argv) {
              i < mesh->getNodeLocalEnd(); i++)
             if (!std::isfinite(u[i])) cg_finite = false;
         failures += check("CG vector all finite", cg_finite, rank);
-        // Not gated. Its definition was unqualified, so ot::test::isDGGhostValid
-        // never linked and has never run; at eleOrder 6 on 2 ranks it reports
-        // values shifted by one node, which could as easily be the validator as
-        // the exchange. Reported until that is settled.
-        const bool dg_ghost =
-            ot::test::isDGGhostValid<double>(mesh, u_dg, f, 1e-10);
-        if (!rank)
-            std::printf("    %-34s %s (not gated)\n", "isDGGhostValid",
-                        dg_ghost ? "ok" : "reports mismatch");
+        failures += check("isDGGhostValid",
+                          ot::test::isDGGhostValid<double>(mesh, u_dg, f, 1e-10),
+                          rank);
 
         delete[] u;
         delete[] u_dg;
