@@ -667,6 +667,21 @@ if(BUILD_DENDRO_EXAMPLES)
     set_tests_properties(testGhostPackExact_sabotage${SAB}
                          PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
   endforeach()
+  # DENDRO_GHOST_RECV_CHECK: clean exchange passes, an undelivered range aborts
+  dendro_add_example(testGhostRecvCheck test/src/testGhostRecvCheck.cpp)
+  add_test(NAME testGhostRecvCheck_clean_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGhostRecvCheck>
+                   ${MPIEXEC_POSTFLAGS} clean)
+  set_tests_properties(testGhostRecvCheck_clean_2rank PROPERTIES TIMEOUT 300
+                       FAIL_REGULAR_EXPRESSION "words unwritten")
+  add_test(NAME testGhostRecvCheck_hole_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGhostRecvCheck>
+                   ${MPIEXEC_POSTFLAGS} hole)
+  set_tests_properties(testGhostRecvCheck_hole_2rank PROPERTIES TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "ghost recv check: rank 0 from 1: [0-9]+ of [0-9]+ words unwritten"
+                       FAIL_REGULAR_EXPRESSION "NOT detected")
   dendro_add_example(testUnzipPlanExact test/src/testUnzipPlanExact.cpp)
   foreach(SAB 1 2 3)
     dendro_add_example(testUnzipPlanExact_sabotage${SAB} test/src/testUnzipPlanExact.cpp)

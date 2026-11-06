@@ -731,6 +731,9 @@ void Mesh::readFromGhostBegin(T* vec, unsigned int dof) {
             for (unsigned int recv_p = 0; recv_p < recvProcList.size();
                  recv_p++) {
                 proc_id = recvProcList[recv_p];
+                if (ghost_recv_check::enabled())
+                    ghost_recv_check::poison(recvB + dof * nodeRecvOffset[proc_id],
+                                             (size_t)dof * nodeRecvCount[proc_id]);
                 par::Mpi_Irecv((recvB + dof * nodeRecvOffset[proc_id]),
                                dof * nodeRecvCount[proc_id], proc_id,
                                m_uiCommTag, commActive, &ctx.m_recv_req[recv_p]);
@@ -855,6 +858,13 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
         if (!cctx.m_recv_req.empty())
             MPI_Waitall(cctx.m_recv_req.size(), cctx.m_recv_req.data(),
                         MPI_STATUSES_IGNORE);
+        if (recvBSz && ghost_recv_check::enabled())
+            for (unsigned int recv_p = 0; recv_p < recvProcList.size(); recv_p++) {
+                const unsigned int pid = recvProcList[recv_p];
+                ghost_recv_check::verify_or_abort(
+                    (const T*)cctx.getRecvBuffer() + dof * nodeRecvOffset[pid], dof,
+                    nodeRecvCount[pid], (int)this->getMPIRank(), pid, this->getMPICommunicator());
+            }
         if (!cctx.m_send_req.empty())
             MPI_Waitall(cctx.m_send_req.size(), cctx.m_send_req.data(),
                         MPI_STATUSES_IGNORE);
@@ -960,6 +970,9 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
             for (unsigned int recv_p = 0; recv_p < recvProcList.size();
                  recv_p++) {
                 proc_id = recvProcList[recv_p];
+                if (ghost_recv_check::enabled())
+                    ghost_recv_check::poison(recvB + dof * nodeRecvOffset[proc_id],
+                                             (size_t)dof * nodeRecvCount[proc_id]);
                 par::Mpi_Irecv((recvB + dof * nodeRecvOffset[proc_id]),
                                dof * nodeRecvCount[proc_id], proc_id,
                                m_uiCommTag, commActive,
@@ -1080,6 +1093,13 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
                     MPI_STATUSES_IGNORE);
         MPI_Waitall(recvProcList.size(), ctx.m_recv_req.data(),
                     MPI_STATUSES_IGNORE);
+        if (recvBSz && ghost_recv_check::enabled())
+            for (unsigned int recv_p = 0; recv_p < recvProcList.size(); recv_p++) {
+                const unsigned int pid = recvProcList[recv_p];
+                ghost_recv_check::verify_or_abort(
+                    (const T*)ctx.getRecvBuffer() + dof * nodeRecvOffset[pid], dof,
+                    nodeRecvCount[pid], (int)this->getMPIRank(), pid, this->getMPICommunicator());
+            }
 #ifdef ENABLE_DENDRO_PROFILE_COUNTERS
         dendro::timer::t_ghost_wait.stop();
 #endif

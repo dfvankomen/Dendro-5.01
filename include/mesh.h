@@ -32,6 +32,7 @@
 #include "block.h"
 #include "dendro.h"
 #include "dendroProfileParams.h"  // only need to profile unzip_asyn for bssn. remove this header file later.
+#include "ghostRecvCheck.h"
 #include "key.h"
 #include "logger.h"
 #include "mesh_unzip_scatter_kernels.h"
