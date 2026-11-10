@@ -93,9 +93,10 @@ option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" ON)
 option(DENDRO_UNZIP_SPEEDUP
        "Master toggle for the MPI-safe unzip/zip speedups (integer-index scatter fast path + SIMD wavelet tensor kernels)"
        OFF)
+# Default ON: byte-identical output to the FP scatter, ~7% less wall time per step.
 option(DENDRO_UNZIP_SCATTER_FAST
        "Use the integer-index same-level scatter fast path in Mesh::unzip_scatter (Phase 1 optimization). No effect when DENDRO_UNZIP_OMP is ON: that path always uses the integer kernels."
-       OFF)
+       ON)
 option(DENDRO_ZIP_PLAN
        "Precompute zip()'s ownership filter into a flat index plan (~12 bytes per owned node)"
        ON)
