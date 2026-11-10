@@ -11449,6 +11449,18 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
 template <typename T>
 void Mesh::fillFineFaceRing(T* out, unsigned int dof, int blk_filter) const {
     if (!m_uiIsActive) return;
+    const ot::Block* blkList = m_uiLocalBlockList.data();
+    const unsigned int nBlk  = m_uiLocalBlockList.size();
+    for (unsigned int blk = 0; blk < nBlk; blk++) {
+        if (blk_filter >= 0 && (int)blkList[blk].getBlockType() != blk_filter)
+            continue;
+        this->fillFineFaceRingBlock(out, dof, blk);
+    }
+}
+
+template <typename T>
+void Mesh::fillFineFaceRingBlock(T* out, unsigned int dof,
+                                 unsigned int blk) const {
     // timing/debug hook only: DENDRO_WIDE_PADDING_NOFILL=1 skips the fill
     // (the trimmed operator has an exact-zero column there, so with
     // DVEC_ZERO_ALLOC buffers the result is unchanged unless a NaN appears)
@@ -11457,15 +11469,12 @@ void Mesh::fillFineFaceRing(T* out, unsigned int dof, int blk_filter) const {
         return e && e[0] == '1';
     }();
     if (nofill) return;
+    const ot::Block* blkList  = m_uiLocalBlockList.data();
+    const unsigned int fflag  = blkList[blk].getBlkFineFaceFlag();
+    if (fflag == 0) return;
     const unsigned int EX     = DENDRO_WIDE_PADDING_EXTRA;
     const unsigned int unSz   = this->getDegOfFreedomUnZip();
-    const ot::Block* blkList  = m_uiLocalBlockList.data();
-    const unsigned int nBlk   = m_uiLocalBlockList.size();
-    for (unsigned int blk = 0; blk < nBlk; blk++) {
-        const unsigned int fflag = blkList[blk].getBlkFineFaceFlag();
-        if (fflag == 0) continue;
-        if (blk_filter >= 0 && (int)blkList[blk].getBlockType() != blk_filter)
-            continue;
+    {
         const unsigned int lx     = blkList[blk].getAllocationSzX();
         const unsigned int ly     = blkList[blk].getAllocationSzY();
         const unsigned int lz     = blkList[blk].getAllocationSzZ();
@@ -11773,6 +11782,14 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 
     std::vector<ot::TreeNode> childOct;
     childOct.reserve(NUM_CHILDREN);
+
+#ifdef DENDRO_WIDE_PADDING
+    // fill each block's ring once its last element is scattered (cache-hot)
+    std::vector<unsigned int> blk_left(m_uiLocalBlockList.size(), 0);
+    for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++)
+        for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++)
+            blk_left[m_e2b_unzip_map[m_e2b_unzip_offset[ele] + i]]++;
+#endif
 
     for (unsigned int ele = 0; ele < m_uiNumTotalElements; ele++) {
         if (m_e2b_unzip_counts[ele] == 0) continue;
@@ -12097,10 +12114,17 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                 }
             }
         }
-    }
 #ifdef DENDRO_WIDE_PADDING
-    this->fillFineFaceRing(out, dof, blk_filter);
+        for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++) {
+            const unsigned int blk = m_e2b_unzip_map[m_e2b_unzip_offset[ele] + i];
+            if (--blk_left[blk] != 0) continue;
+            if (blk_filter >= 0 &&
+                (int)blkList[blk].getBlockType() != blk_filter)
+                continue;
+            this->fillFineFaceRingBlock(out, dof, blk);
+        }
 #endif
+    }
 }
 
 template <typename T>

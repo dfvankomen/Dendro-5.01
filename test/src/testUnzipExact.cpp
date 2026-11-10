@@ -93,6 +93,18 @@ int main(int argc, char** argv) {
         mesh->readFromGhostBegin(u, 1);
         mesh->readFromGhostEnd(u, 1);
         mesh->unzip(u, u_unzip, 1);
+#ifdef DENDRO_WIDE_PADDING
+        // a ring filled before its block's last scatter would change on refill
+        unsigned long refill_diff = 0;
+        {
+            const DendroIntL nUz = mesh->getDegOfFreedomUnZip();
+            std::vector<double> ur(u_unzip, u_unzip + nUz);
+            mesh->fillFineFaceRing(ur.data(), 1, -1);
+            for (DendroIntL i = 0; i < nUz; i++)
+                if (std::memcmp(&ur[i], &u_unzip[i], sizeof(double)))
+                    refill_diff++;
+        }
+#endif
 #if defined(DENDRO_UNZIP_OMP)
         // batched path (plan or ref) must match unzip() word for word,
         // ring fill included
@@ -202,10 +214,10 @@ int main(int argc, char** argv) {
                     census[p].wrong, census[p].worst);
         }
 #ifdef DENDRO_WIDE_PADDING
-        bad += ring_copy.unfilled;
+        bad += ring_copy.unfilled + refill_diff;
         if (!rank)
-            std::printf("  ring-copy checked=%-9lu unfilled=%-7lu\n",
-                        ring_copy.checked, ring_copy.unfilled);
+            std::printf("  ring-copy checked=%-9lu unfilled=%-7lu refill-diff=%lu\n",
+                        ring_copy.checked, ring_copy.unfilled, refill_diff);
 #endif
 #if defined(DENDRO_UNZIP_OMP)
         bad += batch_diff;

@@ -2859,6 +2859,10 @@ class Mesh {
      */
     template <typename T>
     void fillFineFaceRing(T *out, unsigned int dof, int blk_filter) const;
+
+    /** @brief fillFineFaceRing for one block (no-op if it has no fine face). */
+    template <typename T>
+    void fillFineFaceRingBlock(T *out, unsigned int dof, unsigned int blk) const;
 #endif
 
     /**
