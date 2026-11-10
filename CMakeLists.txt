@@ -586,6 +586,14 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS} 6 1e-3)
   set_tests_properties(testMeshInvariants testMeshInvariants_2rank
                        PROPERTIES TIMEOUT 600)
+  dendro_add_example(testSiblingPartition test/src/testSiblingPartition.cpp)
+  # 10 ranks: the split needs a few dozen elements per rank (fails at 10 and 12
+  # on unfixed code, passes at 2-8)
+  add_test(NAME testSiblingPartition_10rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 10
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testSiblingPartition>
+                   ${MPIEXEC_POSTFLAGS} 3 8)
+  set_tests_properties(testSiblingPartition_10rank PROPERTIES TIMEOUT 300)
   if(DENDRO_ENABLE_HDF5)
     dendro_add_example(testVTKHDF test/src/testVTKHDF.cpp)
     add_test(NAME testVTKHDF COMMAND testVTKHDF 6 1e-3)

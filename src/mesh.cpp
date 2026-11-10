@@ -432,6 +432,11 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
     shrinkOrExpandOctree(in, ld_tol, sf_k, m_uiIsActive, m_uiCommActive,
                          m_uiCommGlobal, getWeight);
 
+    // The shrink/expand repartition ignores sibling groups. A group split
+    // across ranks cannot coarsen (setMeshRefinementFlags), so the mesh would
+    // depend on the rank count. Keep each sibling group on one rank.
+    if (m_uiIsActive) enforceSiblingsAreNotPartitioned(in, m_uiCommActive);
+
     m_uiMeshDomain_min = 0;
     m_uiMeshDomain_max = (1u << (m_uiMaxDepth));
 
