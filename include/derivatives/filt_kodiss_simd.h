@@ -108,7 +108,7 @@ class SimdKODiss : public Filters {
                         const double dy, const double dz, const double coeff,
                         const unsigned int *sz,
                         const unsigned int bflag) override {
-        if (bflag)
+        if (bflag & DENDRO_BFLAG_PHYS_MASK)
             return stencil_->do_full_filter(input, output, workspace_x,
                                             workspace_y, workspace_z, dx, dy,
                                             dz, coeff, sz, bflag);
@@ -123,7 +123,7 @@ class SimdKODiss : public Filters {
                               const double *const coeff_field,
                               const unsigned int *sz,
                               const unsigned int bflag) override {
-        if (bflag)
+        if (bflag & DENDRO_BFLAG_PHYS_MASK)
             return stencil_->do_full_filter_field(
                 input, output, workspace_x, workspace_y, workspace_z, dx, dy,
                 dz, coeff_field, sz, bflag);
@@ -136,7 +136,7 @@ class SimdKODiss : public Filters {
                        const double coeff, const double dx, const double dy,
                        const double dz, const unsigned int *sz,
                        const unsigned int bflag) override {
-        if (bflag) {
+        if (bflag & DENDRO_BFLAG_PHYS_MASK) {
             const size_t tot = (size_t)sz[0] * sz[1] * sz[2];
             if (ws_.size() < 3 * tot) ws_.resize(3 * tot);
             stencil_->do_full_filter(u, rhs, ws_.data(), ws_.data() + tot,

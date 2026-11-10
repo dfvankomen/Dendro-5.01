@@ -3,6 +3,7 @@
 #include <array>
 #include <cmath>
 #include <iostream>
+#include <stdexcept>
 #include <vector>
 
 #include "derivatives/derivs_compact.h"
@@ -95,6 +96,13 @@ class BandedCompactDerivs : public CompactDerivs {
     // pick the variant whose factorization matches the boundary state
     // along the named axis
     inline Variant &select_x(unsigned int bflag) {
+#ifdef DENDRO_WIDE_PADDING
+        // no trimmed variants here: a fine-face bit would go unread
+        if (bflag & (DENDRO_FINE_FACE_BIT(OCT_DIR_LEFT) | DENDRO_FINE_FACE_BIT(OCT_DIR_RIGHT)))
+            throw std::runtime_error(
+                "DENDRO_WIDE_PADDING: banded compact scheme has no fine-face "
+                "variant.");
+#endif
         const bool L = bflag & (1u << OCT_DIR_LEFT);
         const bool R = bflag & (1u << OCT_DIR_RIGHT);
         BoundaryType bt = BoundaryType::NO_BOUNDARY;
@@ -106,6 +114,13 @@ class BandedCompactDerivs : public CompactDerivs {
                                   : variants_[BoundaryType::NO_BOUNDARY];
     }
     inline Variant &select_y(unsigned int bflag) {
+#ifdef DENDRO_WIDE_PADDING
+        // no trimmed variants here: a fine-face bit would go unread
+        if (bflag & (DENDRO_FINE_FACE_BIT(OCT_DIR_DOWN) | DENDRO_FINE_FACE_BIT(OCT_DIR_UP)))
+            throw std::runtime_error(
+                "DENDRO_WIDE_PADDING: banded compact scheme has no fine-face "
+                "variant.");
+#endif
         const bool L = bflag & (1u << OCT_DIR_DOWN);
         const bool R = bflag & (1u << OCT_DIR_UP);
         BoundaryType bt = BoundaryType::NO_BOUNDARY;
@@ -117,6 +132,13 @@ class BandedCompactDerivs : public CompactDerivs {
                                   : variants_[BoundaryType::NO_BOUNDARY];
     }
     inline Variant &select_z(unsigned int bflag) {
+#ifdef DENDRO_WIDE_PADDING
+        // no trimmed variants here: a fine-face bit would go unread
+        if (bflag & (DENDRO_FINE_FACE_BIT(OCT_DIR_BACK) | DENDRO_FINE_FACE_BIT(OCT_DIR_FRONT)))
+            throw std::runtime_error(
+                "DENDRO_WIDE_PADDING: banded compact scheme has no fine-face "
+                "variant.");
+#endif
         const bool L = bflag & (1u << OCT_DIR_BACK);
         const bool R = bflag & (1u << OCT_DIR_FRONT);
         BoundaryType bt = BoundaryType::NO_BOUNDARY;

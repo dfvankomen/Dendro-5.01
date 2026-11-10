@@ -151,29 +151,29 @@ class ExplicitSimdDerivs : public Derivs {
     // all z (may feed z); z: active only
     void do_grad_x(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) override {
-        if (bflag) return fallback_->do_grad_x(du, u, dx, sz, bflag);
+        if (bflag & DENDRO_BFLAG_PHYS_MASK) return fallback_->do_grad_x(du, u, dx, sz, bflag);
         run(du, u, 0, dx, sz, true, 0, sz[2]);
     }
     void do_grad_y(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) override {
-        if (bflag) return fallback_->do_grad_y(du, u, dx, sz, bflag);
+        if (bflag & DENDRO_BFLAG_PHYS_MASK) return fallback_->do_grad_y(du, u, dx, sz, bflag);
         run(du, u, 1, dx, sz, false, 0, sz[2]);
     }
     void do_grad_z(double *const du, const double *const u, const double dx,
                    const unsigned int *sz, const unsigned int bflag) override {
-        if (bflag) return fallback_->do_grad_z(du, u, dx, sz, bflag);
+        if (bflag & DENDRO_BFLAG_PHYS_MASK) return fallback_->do_grad_z(du, u, dx, sz, bflag);
         run(du, u, 2, dx, sz, false, p_pw, sz[2] - p_pw);
     }
     void do_grad_x_last(double *const du, const double *const u,
                         const double dx, const unsigned int *sz,
                         const unsigned int bflag) override {
-        if (bflag) return fallback_->do_grad_x_last(du, u, dx, sz, bflag);
+        if (bflag & DENDRO_BFLAG_PHYS_MASK) return fallback_->do_grad_x_last(du, u, dx, sz, bflag);
         run(du, u, 0, dx, sz, false, p_pw, sz[2] - p_pw);
     }
     void do_grad_y_last(double *const du, const double *const u,
                         const double dx, const unsigned int *sz,
                         const unsigned int bflag) override {
-        if (bflag) return fallback_->do_grad_y_last(du, u, dx, sz, bflag);
+        if (bflag & DENDRO_BFLAG_PHYS_MASK) return fallback_->do_grad_y_last(du, u, dx, sz, bflag);
         run(du, u, 1, dx, sz, false, p_pw, sz[2] - p_pw);
     }
 
@@ -182,7 +182,7 @@ class ExplicitSimdDerivs : public Derivs {
                             double *const ux, double *const uy, const double *const u,
                             const double dx, const double dy, const double dz,
                             const unsigned int *sz, const unsigned int bflag) override {
-        if (DerivOrder != 1 || bflag) return false;
+        if (DerivOrder != 1 || (bflag & DENDRO_BFLAG_PHYS_MASK)) return false;
         const unsigned int P = p_pw, a = p_pw - H, ny = sz[1], nz = sz[2];
         box(ux, u, 0, dx, sz, a, ny - a, P, nz - P);
         box(ux, u, 0, dx, sz, P, ny - P, a, P);
