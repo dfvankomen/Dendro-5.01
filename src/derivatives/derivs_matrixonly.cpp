@@ -23,7 +23,7 @@ namespace {
  * a finer octant has its outermost DENDRO_WIDE_PADDING_EXTRA padding rows
  * unfilled, so D is built with that many rows/cols trimmed at that end
  * (identity there, same mechanism as the physical-boundary trim of pw rows).
- * `solve(top, bottom, side, D)` builds one variant; the caller supplies it so
+ * `solve(m, top, bottom, side, D)` builds one m x m variant; the caller supplies it so
  * the plain, in-matrix-filter and per-side-diagonal builders each keep their
  * own arithmetic. Any variant that does not fit marks fine_valid = false and
  * the dispatch throws if it is ever requested.
@@ -52,7 +52,26 @@ void build_fine_face_variants(DerivMatrixStorage& st, const unsigned int pw,
     st.fine_valid            = true;
     for (const V& v : variants) {
         try {
-            solve(v.top, v.bottom, v.side, *v.D);
+            solve(n, v.top, v.bottom, v.side, *v.D);
+            // P and Q are I (+) core (+) I, so the core of D is the solve at
+            // the size with the extra ring stripped on each trimmed end. Solve
+            // it at that size so an all-trimmed block gets the stock operator
+            // bit for bit (a size-n solve differs from it at round-off).
+            const unsigned int st_ = v.top ? ft : 0, sb = v.bottom ? ft : 0;
+            if (st_ + sb == 0) continue;
+            const unsigned int m = n - st_ - sb;
+            std::vector<double> Dr((size_t)m * m, 0.0);
+            solve(m, v.top - st_, v.bottom - sb, v.side, Dr);
+            std::vector<double>& D = *v.D;
+            for (unsigned int j = 0; j < n; j++)
+                for (unsigned int i = 0; i < n; i++) {
+                    const bool ci = i >= st_ && i < n - sb;
+                    const bool cj = j >= st_ && j < n - sb;
+                    if (ci && cj)
+                        D[IDXN(i, j, n)] = Dr[IDXN(i - st_, j - st_, m)];
+                    else if (ci || cj)
+                        D[IDXN(i, j, n)] = 0.0;  // exact zero coupling
+                }
         } catch (const std::exception&) {
             st.fine_valid = false;
             return;
@@ -158,15 +177,15 @@ std::unique_ptr<DerivMatrixStorage> createMatrixSystemForSingleSize(
 #ifdef DENDRO_WIDE_PADDING
     build_fine_face_variants(
         *derivMatrixPtr, pw, n,
-        [&](unsigned int top, unsigned int bottom, int /*side*/,
+        [&](unsigned int m, unsigned int top, unsigned int bottom, int /*side*/,
             std::vector<double>& D) {
             std::vector<double> P_t =
-                create_P_from_diagonals(*diagEntries, n, 1.0, top, bottom);
+                create_P_from_diagonals(*diagEntries, m, 1.0, top, bottom);
             std::vector<double> Q_t = create_Q_from_diagonals(
-                *diagEntries, n, Q_parity, top, bottom);
+                *diagEntries, m, Q_parity, top, bottom);
             int info = 0;
-            lapack::lapack_DGESV_T(n, n, P_t.data(), n, Q_t.data(), D.data(),
-                                   n, info);
+            lapack::lapack_DGESV_T(m, m, P_t.data(), m, Q_t.data(), D.data(),
+                                   m, info);
         });
 #endif
 
@@ -273,20 +292,20 @@ filt_type == InMatFilterType::IMFT_Kim_08_P2)
 #ifdef DENDRO_WIDE_PADDING
     build_fine_face_variants(
         *derivMatrixPtr, pw, n,
-        [&](unsigned int top, unsigned int bottom, int /*side*/,
+        [&](unsigned int m, unsigned int top, unsigned int bottom, int /*side*/,
             std::vector<double>& D) {
             std::vector<double> P_t =
-                create_P_from_diagonals(*diagEntries, n, 1.0, top, bottom);
+                create_P_from_diagonals(*diagEntries, m, 1.0, top, bottom);
             std::vector<double> Q_t = create_Q_from_diagonals(
-                *diagEntries, n, Q_parity, top, bottom);
+                *diagEntries, m, Q_parity, top, bottom);
             std::vector<double> R_t =
-                create_P_from_diagonals(*filterEntries, n, 1.0, top, bottom);
+                create_P_from_diagonals(*filterEntries, m, 1.0, top, bottom);
             std::vector<double> S_t =
-                create_Q_from_diagonals(*filterEntries, n, 1.0, top, bottom);
+                create_Q_from_diagonals(*filterEntries, m, 1.0, top, bottom);
             std::vector<double> Pinv = P_t, Rinv = R_t, R1_S = R_t, QRS = R_t;
-            lapack::iterative_inverse(R_t.data(), Rinv.data(), n);
+            lapack::iterative_inverse(R_t.data(), Rinv.data(), m);
             lapack::square_matrix_multiplication(Rinv.data(), S_t.data(),
-                                                 R1_S.data(), n);
+                                                 R1_S.data(), m);
             if (filt_type == InMatFilterType::IMFT_KIM ||
                 filt_type == InMatFilterType::IMFT_KIM_1_P6 ||
                 filt_type == InMatFilterType::IMFT_KIM_2_P6 ||
@@ -301,13 +320,13 @@ filt_type == InMatFilterType::IMFT_Kim_08_P2)
                 filt_type == InMatFilterType::IMFT_Kim_09_P6 ||
                 filt_type == InMatFilterType::IMFT_Kim_09_P2 ||
                 filt_type == InMatFilterType::IMFT_Kim_08_P2) {
-                for (size_t idx = 0; idx < n; ++idx) R1_S[n * idx + idx] += 1.0;
+                for (size_t idx = 0; idx < m; ++idx) R1_S[m * idx + idx] += 1.0;
             }
             lapack::square_matrix_multiplication(Q_t.data(), R1_S.data(),
-                                                 QRS.data(), n);
-            lapack::iterative_inverse(P_t.data(), Pinv.data(), n);
+                                                 QRS.data(), m);
+            lapack::iterative_inverse(P_t.data(), Pinv.data(), m);
             lapack::square_matrix_multiplication(Pinv.data(), QRS.data(),
-                                                 D.data(), n);
+                                                 D.data(), m);
         });
 #endif
     return derivMatrixPtr;
@@ -426,18 +445,18 @@ createMatrixSystemForSingleSizeAllUniqueDiags(
     // uses that side's own diagonal set, as in the stock loop above
     build_fine_face_variants(
         *derivMatrixPtr, pw, n,
-        [&](unsigned int top, unsigned int bottom, int side,
+        [&](unsigned int m, unsigned int top, unsigned int bottom, int side,
             std::vector<double>& D) {
             const MatrixDiagonalEntries* de =
                 (side == 1) ? diagEntriesLeft
                             : (side == 2) ? diagEntriesRight : diagEntries;
             std::vector<double> P_t =
-                create_P_from_diagonals(*de, n, 1.0, top, bottom);
+                create_P_from_diagonals(*de, m, 1.0, top, bottom);
             std::vector<double> Q_t =
-                create_Q_from_diagonals(*de, n, Q_parity, top, bottom);
+                create_Q_from_diagonals(*de, m, Q_parity, top, bottom);
             int info = 0;
-            lapack::lapack_DGESV_T(n, n, P_t.data(), n, Q_t.data(), D.data(),
-                                   n, info);
+            lapack::lapack_DGESV_T(m, m, P_t.data(), m, Q_t.data(), D.data(),
+                                   m, info);
         });
 #endif
 
