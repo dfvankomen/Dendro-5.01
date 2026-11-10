@@ -20,6 +20,7 @@
 
 #include <cmath>
 #include <cstdio>
+#include <cstring>
 #include <functional>
 #include <vector>
 
@@ -92,11 +93,27 @@ int main(int argc, char** argv) {
         mesh->readFromGhostBegin(u, 1);
         mesh->readFromGhostEnd(u, 1);
         mesh->unzip(u, u_unzip, 1);
+#if defined(DENDRO_UNZIP_OMP)
+        // batched path (plan or ref) must match unzip() word for word,
+        // ring fill included
+        unsigned long batch_diff = 0;
+        {
+            const DendroIntL nUz = mesh->getDegOfFreedomUnZip();
+            std::vector<double> ub(nUz, SENTINEL);
+            const double* ins[1] = {u};
+            double* outs[1]      = {ub.data()};
+            mesh->unzip_scatter_batch(ins, outs, 1);
+            for (DendroIntL i = 0; i < nUz; i++)
+                if (std::memcmp(&ub[i], &u_unzip[i], sizeof(double)))
+                    batch_diff++;
+        }
+#endif
 
         const std::vector<ot::Block>& blks = mesh->getLocalBlockList();
         const ot::TreeNode* pNodes         = mesh->getAllElements().data();
         unsigned int lmin = m_uiMaxDepth, lmax = 0;
         Census census[4];
+        Census ring_copy;  // wide padding: copy-filled ring on fine faces
 
         for (size_t b = 0; b < blks.size(); b++) {
             const ot::TreeNode blkNode = blks[b].getBlockNode();
@@ -126,6 +143,27 @@ int main(int argc, char** argv) {
                             yy > dmax || zz > dmax)
                             continue;
 
+#ifdef DENDRO_WIDE_PADDING
+                        // outer ring of a fine-flagged face is a plane copy:
+                        // it must be filled and finite, not exact
+                        const unsigned int ff = blks[b].getBlkFineFaceFlag();
+                        const unsigned int EX = DENDRO_WIDE_PADDING_EXTRA;
+                        const bool copied =
+                            ((ff & (1u << OCT_DIR_LEFT)) && i < EX) ||
+                            ((ff & (1u << OCT_DIR_RIGHT)) && i >= lx - EX) ||
+                            ((ff & (1u << OCT_DIR_DOWN)) && j < EX) ||
+                            ((ff & (1u << OCT_DIR_UP)) && j >= ly - EX) ||
+                            ((ff & (1u << OCT_DIR_BACK)) && k < EX) ||
+                            ((ff & (1u << OCT_DIR_FRONT)) && k >= lz - EX);
+                        if (copied) {
+                            const double got =
+                                u_unzip[off + k * lx * ly + j * lx + i];
+                            ring_copy.checked++;
+                            if (got == SENTINEL || !std::isfinite(got))
+                                ring_copy.unfilled++;
+                            continue;
+                        }
+#endif
                         const int pad_axes =
                             (int)(i < PW || i >= lx - PW) +
                             (int)(j < PW || j >= ly - PW) +
@@ -163,6 +201,16 @@ int main(int argc, char** argv) {
                     names[p], census[p].checked, census[p].unfilled,
                     census[p].wrong, census[p].worst);
         }
+#ifdef DENDRO_WIDE_PADDING
+        bad += ring_copy.unfilled;
+        if (!rank)
+            std::printf("  ring-copy checked=%-9lu unfilled=%-7lu\n",
+                        ring_copy.checked, ring_copy.unfilled);
+#endif
+#if defined(DENDRO_UNZIP_OMP)
+        bad += batch_diff;
+        if (!rank) std::printf("  batch-vs-unzip differing words=%lu\n", batch_diff);
+#endif
         if (lmin == lmax) {
             if (!rank)
                 std::printf("  ERROR: mesh is uniform, no 2:1 jump exercised\n");

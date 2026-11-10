@@ -93,6 +93,21 @@ static unsigned int check_unzip(ot::Mesh* mesh, const double* cg) {
                         (blkNode.minZ() + (double(k) - pW) * hz) * scale +
                         D_MIN;
                     const double v = uz[off + (k * ly + j) * lx + i];
+#ifdef DENDRO_WIDE_PADDING
+                    // outer ring on a fine-flagged face is a plane copy:
+                    // finite, not exact (stale flags after a regroup fail)
+                    const unsigned int ff = blkList[b].getBlkFineFaceFlag();
+                    const unsigned int EX = DENDRO_WIDE_PADDING_EXTRA;
+                    if (((ff & (1u << OCT_DIR_LEFT)) && i < EX) ||
+                        ((ff & (1u << OCT_DIR_RIGHT)) && i >= lx - EX) ||
+                        ((ff & (1u << OCT_DIR_DOWN)) && j < EX) ||
+                        ((ff & (1u << OCT_DIR_UP)) && j >= ly - EX) ||
+                        ((ff & (1u << OCT_DIR_BACK)) && k < EX) ||
+                        ((ff & (1u << OCT_DIR_FRONT)) && k >= lz - EX)) {
+                        if (!std::isfinite(v)) bad++;
+                        continue;
+                    }
+#endif
                     if (!(std::fabs(v - poly(x, y, z)) < 1e-10)) bad++;
                 }
     }

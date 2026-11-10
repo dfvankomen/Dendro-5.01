@@ -24,7 +24,7 @@ int main() {
     unsigned long bad = 0, checked = 0;
     for (const std::string order : {"KO2", "KO4", "KO6", "KO8", "KO2Matrix", "KO4Matrix", "KO6Matrix", "KO8Matrix", "KO2Simd", "KO4Simd", "KO6Simd", "KO8Simd"}) {
         for (unsigned int eo : {4u, 6u, 8u, 10u}) {
-            const unsigned int n = 2 * eo + 1, pw = eo / 2;
+            const unsigned int pw = DENDRO_PAD_WIDTH_FOR_ORDER(eo), n = eo + 1 + 2 * pw;
             const size_t tot = (size_t)n * n * n;
             const unsigned int sz[3] = {n, n, n};
             const double dx = 0.5, dy = 0.25, dz = 0.125;
@@ -119,7 +119,7 @@ int main() {
     // KIMF: gate on the energy form + spectrum and report the transfer
     // (its Nyquist rate is 1 - G(pi), not the KO normalization)
     for (unsigned int eo : {4u, 6u, 10u}) {
-        const unsigned int n = 2 * eo + 1, pw = eo / 2;
+        const unsigned int pw = DENDRO_PAD_WIDTH_FOR_ORDER(eo), n = eo + 1 + 2 * pw;
         const size_t tot = (size_t)n * n * n;
         const unsigned int sz[3] = {n, n, n};
         std::unique_ptr<DendroDerivatives> d;
@@ -192,7 +192,7 @@ int main() {
     // vanish exactly) and require every eigenvalue to have Re <= 0
     for (const std::string order : {"KO2", "KO4", "KO6", "KO8", "KIMF"}) {
         for (unsigned int eo : {4u, 6u, 8u, 10u, 12u, 16u}) {
-            const unsigned int n = 2 * eo + 1, pw = eo / 2, na = n - 2 * pw;
+            const unsigned int pw = DENDRO_PAD_WIDTH_FOR_ORDER(eo), n = eo + 1 + 2 * pw, na = n - 2 * pw;
             const size_t tot = (size_t)n * n * n;
             const unsigned int sz[3] = {n, n, n};
             std::unique_ptr<DendroDerivatives> d;
