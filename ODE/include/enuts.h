@@ -949,6 +949,12 @@ void ExplicitNUTS<T, Ctx>::sync_blk_timestep(unsigned int blk,
 #endif
 
     ot::Mesh* pMesh = (ot::Mesh*)m_uiAppCtx->get_mesh();
+#ifdef DENDRO_WIDE_PADDING
+    // the per-block sync below does not fill the wide ring
+    std::cerr << "[DENDRO_WIDE_PADDING] ENUTS block sync is not supported."
+              << std::endl;
+    MPI_Abort(pMesh->getMPIGlobalCommunicator(), 1);
+#endif
     if ((!(pMesh->isActive())) || m_uiBVec[blk]._vec[rk_s].isSynced()) return;
 
     const ot::TreeNode* pNodes  = pMesh->getAllElements().data();

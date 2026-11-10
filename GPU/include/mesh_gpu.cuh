@@ -2471,6 +2471,12 @@ void MeshGPU::unzip_dg(const ot::Mesh* const pMesh,
                        const MeshGPU* const dptr_mesh, const T* const dptr_in,
                        T* const dptr_out, unsigned int dof, stream s) {
     if (!pMesh->isActive()) return;
+#ifdef DENDRO_WIDE_PADDING
+    // kernels bake pw = p/2 into their template arguments
+    std::cerr << "[DENDRO_WIDE_PADDING] GPU unzip is not supported."
+              << std::endl;
+    MPI_Abort(MPI_COMM_WORLD, 1);
+#endif
 
     assert(pMesh->getNumLocalMeshElements() ==
            pMesh->getLocalBlockList().size());
@@ -2494,6 +2500,12 @@ void MeshGPU::unzip_cg(const ot::Mesh* const pMesh,
                        const MeshGPU* const dptr_mesh, const T* const dptr_in,
                        T* const dptr_out, unsigned int dof, stream s) {
     if (!pMesh->isActive()) return;
+#ifdef DENDRO_WIDE_PADDING
+    // kernels bake pw = p/2 into their template arguments
+    std::cerr << "[DENDRO_WIDE_PADDING] GPU unzip is not supported."
+              << std::endl;
+    MPI_Abort(MPI_COMM_WORLD, 1);
+#endif
 
     assert(pMesh->getNumLocalMeshElements() ==
            pMesh->getLocalBlockList().size());

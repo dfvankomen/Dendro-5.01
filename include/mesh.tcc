@@ -9394,7 +9394,7 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
     std::cerr << "[DENDRO_WIDE_PADDING] legacy Mesh::unzip(blkIDs) is not "
                  "wide-padding aware; use unzip(in,out,dof) / unzip_scatter."
               << std::endl;
-    MPI_Abort(m_uiCommActive, 0);
+    MPI_Abort(m_uiCommActive, 1);
 #endif
 
     ot::TreeNode blkNode;
@@ -12296,6 +12296,10 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
             }
         }
     }  // omp parallel
+#ifdef DENDRO_WIDE_PADDING
+    for (unsigned int v = 0; v < n_vars; v++)
+        this->fillFineFaceRing(outs[v], 1, -1);
+#endif
 #endif
 }
 
@@ -12539,6 +12543,10 @@ void Mesh::unzip_scatter_batch_ref(const T* const* ins, T* const* outs,
             last_ele_tls = UINT_MAX;
         }
     }  // omp parallel
+#ifdef DENDRO_WIDE_PADDING
+    for (unsigned int v = 0; v < n_vars; v++)
+        this->fillFineFaceRing(outs[v], 1, -1);
+#endif
 #endif
 }
 
@@ -13294,6 +13302,12 @@ template <typename T>
 void Mesh::unzipDG(const T* in, T* out, const unsigned int* blkIDs,
                    unsigned int numblks, unsigned int dof) {
     if (!m_uiIsActive) return;
+#ifdef DENDRO_WIDE_PADDING
+    // no fine-face ring fill here
+    std::cerr << "[DENDRO_WIDE_PADDING] " << __func__
+              << " does not fill the wide ring; not supported." << std::endl;
+    MPI_Abort(m_uiCommActive, 1);
+#endif
 
     const ot::TreeNode* pNodes = m_uiAllElements.data();
     const ot::Block* blkList   = m_uiLocalBlockList.data();
@@ -13579,6 +13593,12 @@ void Mesh::unzipDG(const T* in, T* out, const unsigned int* blkIDs,
 template <typename T>
 void Mesh::unzipDG_scatter(const T* in, T* out, unsigned int dof) {
     if (!m_uiIsActive) return;
+#ifdef DENDRO_WIDE_PADDING
+    // no fine-face ring fill here
+    std::cerr << "[DENDRO_WIDE_PADDING] " << __func__
+              << " does not fill the wide ring; not supported." << std::endl;
+    MPI_Abort(m_uiCommActive, 1);
+#endif
 
     const ot::TreeNode* pNodes = m_uiAllElements.data();
     const ot::Block* blkList   = m_uiLocalBlockList.data();
