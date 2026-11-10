@@ -969,7 +969,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
 
         if (sendBSz) {
             sendB = (T*)ctx.getSendBuffer();
-#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+#if defined(ENABLE_DENDRO_PROFILE_COUNTERS) || defined(DENDRO_PROFILE_UNZIP_DETAIL)
             dendro::timer::t_ghost_pack.start();
 #endif
 #if defined(DENDRO_GHOST_PACK_FLAT)
@@ -1012,7 +1012,7 @@ void Mesh::readFromGhostBegin(AsyncExchangeContex& ctx, T* vec,
                 }
             }
 #endif
-#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+#if defined(ENABLE_DENDRO_PROFILE_COUNTERS) || defined(DENDRO_PROFILE_UNZIP_DETAIL)
             dendro::timer::t_ghost_pack.stop();
 #endif
 
@@ -1073,14 +1073,14 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
         // a rank that reaches this Waitall early because its neighbours are
         // still computing blocks will bill that neighbour imbalance to comm.
         // Rising t_ghost_wait therefore does NOT imply the network got slower.
-#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+#if defined(ENABLE_DENDRO_PROFILE_COUNTERS) || defined(DENDRO_PROFILE_UNZIP_DETAIL)
         dendro::timer::t_ghost_wait.start();
 #endif
         MPI_Waitall(sendProcList.size(), ctx.m_send_req.data(),
                     MPI_STATUSES_IGNORE);
         MPI_Waitall(recvProcList.size(), ctx.m_recv_req.data(),
                     MPI_STATUSES_IGNORE);
-#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+#if defined(ENABLE_DENDRO_PROFILE_COUNTERS) || defined(DENDRO_PROFILE_UNZIP_DETAIL)
         dendro::timer::t_ghost_wait.stop();
 #endif
 
@@ -1088,7 +1088,7 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
             // copy the recv data to the vec
             recvB = (T*)ctx.getRecvBuffer();
 
-#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+#if defined(ENABLE_DENDRO_PROFILE_COUNTERS) || defined(DENDRO_PROFILE_UNZIP_DETAIL)
             dendro::timer::t_ghost_unpack.start();
 #endif
 #if defined(DENDRO_GHOST_PACK_FLAT)
@@ -1131,7 +1131,7 @@ void Mesh::readFromGhostEnd(AsyncExchangeContex& ctx, T* vec,
                 }
             }
 #endif
-#ifdef ENABLE_DENDRO_PROFILE_COUNTERS
+#if defined(ENABLE_DENDRO_PROFILE_COUNTERS) || defined(DENDRO_PROFILE_UNZIP_DETAIL)
             dendro::timer::t_ghost_unpack.stop();
 #endif
         }
@@ -11523,6 +11523,7 @@ template <typename T>
 void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                          int blk_filter) {
     if (!m_uiIsActive) return;
+    UD_START(scatter_total);
 
     const ot::TreeNode* pNodes = m_uiAllElements.data();
     const ot::Block* blkList   = m_uiLocalBlockList.data();
@@ -11798,9 +11799,11 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
             p2c_interp_valid[ii] = false;
 
         // get the elemental_local(dg) values
+        UD_START(nodal);
         for (unsigned int v = 0; v < dof; v++)
             this->getElementNodalValues(in + v * cgSz, dgWVec + v * dgSz, ele,
                                         false);
+        UD_STOP(nodal);
 
         for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++) {
             const unsigned int e2b_offset = m_e2b_unzip_offset[ele];
@@ -11835,6 +11838,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 
             // no interpolation needed just copy.
             if (pNodes[ele].getLevel() == bLev) {
+                UD_START(same);
 #if defined(DENDRO_UNZIP_SCATTER_FAST)
                 // Fast path: integer-index reindex + contiguous row memcpy.
                 // Same-level scatter is a deterministic re-indexing — the
@@ -11910,8 +11914,10 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                     }
                 }
 #endif
+                UD_STOP(same);
 
             } else if (pNodes[ele].getLevel() > bLev) {
+                UD_START(f2c);
                 assert((bLev + 1) == pNodes[ele].getLevel());
                 const unsigned int cnum = pNodes[ele].getMortonIndex();
                 ot::TreeNode tmpParent  = pNodes[ele].getParent();
@@ -11945,6 +11951,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                         dgWVec, uzWVec, eOrder, dof, (std::size_t)unSz,
                         (std::size_t)dgSz, (std::size_t)offset, lx, ly, lz, i0,
                         j0, k0);
+                    UD_STOP(f2c);
                     continue;  // skip the FP fallback for this (ele,blk)
                 }
                 // Odd eOrder: fall through to FP path below.
@@ -12001,6 +12008,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                         }
                     }
                 }
+                UD_STOP(f2c);
 
             } else {
                 assert((bLev) == (pNodes[ele].getLevel() + 1));
@@ -12028,6 +12036,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
 
                     const unsigned int cnum = childOct[child].getMortonIndex();
                     if (!p2c_interp_valid[cnum]) {
+                        UD_START(c2f_interp);
                         for (unsigned int v = 0; v < dof; v++)
                             this->parent2ChildInterpolation(
                                 &dgWVec[v * dgSz],
@@ -12035,7 +12044,9 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                                 cnum, m_uiDim);
 
                         p2c_interp_valid[cnum] = true;
+                        UD_STOP(c2f_interp);
                     }
+                    UD_START(c2f_scat);
 
 #if defined(DENDRO_UNZIP_SCATTER_FAST)
                     // Child is at the SAME level as the block, so the scatter
@@ -12111,10 +12122,12 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                         }
                     }
 #endif
+                    UD_STOP(c2f_scat);
                 }
             }
         }
 #ifdef DENDRO_WIDE_PADDING
+        UD_START(ring);
         for (unsigned int i = 0; i < m_e2b_unzip_counts[ele]; i++) {
             const unsigned int blk = m_e2b_unzip_map[m_e2b_unzip_offset[ele] + i];
             if (--blk_left[blk] != 0) continue;
@@ -12123,8 +12136,10 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                 continue;
             this->fillFineFaceRingBlock(out, dof, blk);
         }
+        UD_STOP(ring);
 #endif
     }
+    UD_STOP(scatter_total);
 }
 
 template <typename T>

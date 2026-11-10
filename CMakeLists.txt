@@ -127,6 +127,9 @@ option(DENDRO_UNZIP_OMP
 option(DENDRO_WIDE_PADDING
        "Prototype: block padding eleOrder/2+1 (zero extra comm); fine faces fall back to eleOrder/2 closures"
        OFF)
+option(DENDRO_PROFILE_UNZIP_DETAIL
+       "Fine-grained unzip_sync timers (ghost pack/wait/unpack, scatter kinds, ring fill); OFF = no timers compiled in"
+       OFF)
 option(DENDRO_UNZIP_BATCH
        "Use Mesh::unzip_scatter_batch in Ctx::unzip (dof x smaller DG scratch, one fork/join per batch; default OFF = unchanged)"
        OFF)
@@ -423,6 +426,7 @@ dendro_add_def(DENDRO_RK_FUSE DENDRO_RK_FUSE)
 dendro_add_def(DENDRO_UNZIP_OVERLAP DENDRO_UNZIP_OVERLAP)
 dendro_add_def(DENDRO_UNZIP_BATCH DENDRO_UNZIP_BATCH)
 dendro_add_def(DENDRO_WIDE_PADDING DENDRO_WIDE_PADDING)
+dendro_add_def(DENDRO_PROFILE_UNZIP_DETAIL DENDRO_PROFILE_UNZIP_DETAIL)
 dendro_add_def(DENDRO_MESH_OMP DENDRO_MESH_OMP)
 
 if(ALLTOALLV_FIX)

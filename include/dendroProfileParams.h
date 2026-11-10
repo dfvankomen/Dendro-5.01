@@ -49,6 +49,22 @@ extern profiler_t t_ghost_pack;
 extern profiler_t t_ghost_wait;
 extern profiler_t t_ghost_unpack;
 
+#ifdef DENDRO_PROFILE_UNZIP_DETAIL
+// Mesh::unzip_scatter split (serial path); the ghost timers above also tick.
+extern profiler_t t_ud_scatter_total;  // whole unzip_scatter incl. ring fill
+extern profiler_t t_ud_nodal;          // getElementNodalValues per element
+extern profiler_t t_ud_same;           // same-level scatter
+extern profiler_t t_ud_f2c;            // fine->coarse scatter
+extern profiler_t t_ud_c2f_interp;     // coarse->fine parent2ChildInterpolation
+extern profiler_t t_ud_c2f_scat;       // coarse->fine scatter
+extern profiler_t t_ud_ring;           // fillFineFaceRing
+#define UD_START(n) dendro::timer::t_ud_##n.start()
+#define UD_STOP(n) dendro::timer::t_ud_##n.stop()
+#else
+#define UD_START(n) ((void)0)
+#define UD_STOP(n) ((void)0)
+#endif
+
 }  // end of namespace timer.
 
 }  // end namespace dendro

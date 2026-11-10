@@ -29,6 +29,16 @@ profiler_t t_ghost_pack;
 profiler_t t_ghost_wait;
 profiler_t t_ghost_unpack;
 
+#ifdef DENDRO_PROFILE_UNZIP_DETAIL
+profiler_t t_ud_scatter_total;
+profiler_t t_ud_nodal;
+profiler_t t_ud_same;
+profiler_t t_ud_f2c;
+profiler_t t_ud_c2f_interp;
+profiler_t t_ud_c2f_scat;
+profiler_t t_ud_ring;
+#endif
+
 }  // end of namespace timer
 
 }  // end of namespace dendro
