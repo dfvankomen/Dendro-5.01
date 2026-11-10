@@ -32,9 +32,15 @@
 
 namespace {
 
-double poly(double x, double y, double z) {
-    return 1.0 + 2.0 * x - 3.0 * y + 0.5 * z + x * x * y - y * y * z +
-           2.0 * x * y * z + z * z * z;
+// hi adds degree-5-per-axis terms (exact for eOrder >= 6; they make the
+// wide-padding ring check tell the degree-5 fill from a lower-degree one)
+double poly(double x, double y, double z, bool hi = false) {
+    const double p = 1.0 + 2.0 * x - 3.0 * y + 0.5 * z + x * x * y -
+                     y * y * z + 2.0 * x * y * z + z * z * z;
+    if (!hi) return p;
+    const double x5 = x * x * x * x * x, y5 = y * y * y * y * y,
+                 z5 = z * z * z * z * z;
+    return p + 3.0 * x5 - 2.0 * x * y5 + z5 * y * y + x5 * y5 * z5;
 }
 
 struct Census {
@@ -81,9 +87,10 @@ int main(int argc, char** argv) {
         }
         mesh->setDomainBounds(Point(0.0, 0.0, 0.0), Point(1.0, 1.0, 1.0));
 
+        const bool hi = eOrder >= 6;
         std::function<void(double, double, double, double*)> f =
-            [](double x, double y, double z, double* v) {
-                v[0] = poly(x, y, z);
+            [hi](double x, double y, double z, double* v) {
+                v[0] = poly(x, y, z, hi);
             };
         double* u       = mesh->createCGVector<double>(f, 1);
         double* u_unzip = mesh->createUnZippedVector<double>(1);
@@ -125,7 +132,7 @@ int main(int argc, char** argv) {
         const ot::TreeNode* pNodes         = mesh->getAllElements().data();
         unsigned int lmin = m_uiMaxDepth, lmax = 0;
         Census census[4];
-        Census ring_copy;  // wide padding: copy-filled ring on fine faces
+        Census ring;  // wide padding: degree-5-extrapolated ring on fine faces
 
         for (size_t b = 0; b < blks.size(); b++) {
             const ot::TreeNode blkNode = blks[b].getBlockNode();
@@ -156,8 +163,8 @@ int main(int argc, char** argv) {
                             continue;
 
 #ifdef DENDRO_WIDE_PADDING
-                        // outer ring of a fine-flagged face is a plane copy:
-                        // it must be filled and finite, not exact
+                        // outer ring of a fine-flagged face is a degree-5
+                        // extrapolation: exact for this polynomial
                         const unsigned int ff = blks[b].getBlkFineFaceFlag();
                         const unsigned int EX = DENDRO_WIDE_PADDING_EXTRA;
                         const bool copied =
@@ -170,9 +177,17 @@ int main(int argc, char** argv) {
                         if (copied) {
                             const double got =
                                 u_unzip[off + k * lx * ly + j * lx + i];
-                            ring_copy.checked++;
-                            if (got == SENTINEL || !std::isfinite(got))
-                                ring_copy.unfilled++;
+                            ring.checked++;
+                            if (got == SENTINEL || !std::isfinite(got)) {
+                                ring.unfilled++;
+                                continue;
+                            }
+                            const double want =
+                                poly(xx * scale, yy * scale, zz * scale, hi);
+                            const double err = std::fabs(got - want);
+                            ring.worst       = std::max(ring.worst, err);
+                            if (err > 1e-10 * (1.0 + std::fabs(want)))
+                                ring.wrong++;
                             continue;
                         }
 #endif
@@ -190,7 +205,7 @@ int main(int argc, char** argv) {
                             continue;
                         }
                         const double want =
-                            poly(xx * scale, yy * scale, zz * scale);
+                            poly(xx * scale, yy * scale, zz * scale, hi);
                         const double err = std::fabs(got - want);
                         c.worst          = std::max(c.worst, err);
                         if (err > 1e-10 * (1.0 + std::fabs(want))) c.wrong++;
@@ -214,10 +229,12 @@ int main(int argc, char** argv) {
                     census[p].wrong, census[p].worst);
         }
 #ifdef DENDRO_WIDE_PADDING
-        bad += ring_copy.unfilled + refill_diff;
+        bad += ring.unfilled + ring.wrong + refill_diff;
         if (!rank)
-            std::printf("  ring-copy checked=%-9lu unfilled=%-7lu refill-diff=%lu\n",
-                        ring_copy.checked, ring_copy.unfilled, refill_diff);
+            std::printf("  ring-deg5 checked=%-9lu unfilled=%-7lu wrong=%-7lu "
+                        "worst=%.3e refill-diff=%lu\n",
+                        ring.checked, ring.unfilled, ring.wrong, ring.worst,
+                        refill_diff);
 #endif
 #if defined(DENDRO_UNZIP_OMP)
         bad += batch_diff;

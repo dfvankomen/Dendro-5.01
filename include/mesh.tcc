@@ -11481,39 +11481,45 @@ void Mesh::fillFineFaceRingBlock(T* out, unsigned int dof,
         const unsigned int offset = blkList[blk].getOffset();
         for (unsigned int v = 0; v < dof; v++) {
             T* u = out + v * unSz + offset;
-            // x planes: copy plane EX -> [0,EX) and plane lx-EX-1 -> [lx-EX,lx)
+            // degree-5 extrapolation along the face normal from the 6 points
+            // inward (exact to degree 5; gives KO6 a stable edge row).
+            // Outermost plane last; x, y, z in turn, so edges/corners
+            // extrapolate already-filled planes.
+            auto extrap5 = [](T* q, long s) {
+                q[0] = 6 * q[s] - 15 * q[2 * s] + 20 * q[3 * s] -
+                       15 * q[4 * s] + 6 * q[5 * s] - q[6 * s];
+            };
+            const long sx = 1, sy = lx, sz = (long)lx * ly;
             if (fflag & (1u << OCT_DIR_LEFT))
                 for (unsigned int k = 0; k < lz; k++)
                     for (unsigned int j = 0; j < ly; j++)
-                        for (unsigned int i = 0; i < EX; i++)
-                            u[k * lx * ly + j * lx + i] =
-                                u[k * lx * ly + j * lx + EX];
+                        for (int i = (int)EX - 1; i >= 0; i--)
+                            extrap5(u + k * sz + j * sy + i, sx);
             if (fflag & (1u << OCT_DIR_RIGHT))
                 for (unsigned int k = 0; k < lz; k++)
                     for (unsigned int j = 0; j < ly; j++)
                         for (unsigned int i = lx - EX; i < lx; i++)
-                            u[k * lx * ly + j * lx + i] =
-                                u[k * lx * ly + j * lx + (lx - EX - 1)];
-            // y/z planes and rows are contiguous: copy them as blocks
+                            extrap5(u + k * sz + j * sy + i, -sx);
             if (fflag & (1u << OCT_DIR_DOWN))
                 for (unsigned int k = 0; k < lz; k++)
-                    for (unsigned int j = 0; j < EX; j++)
-                        std::memcpy(u + k * lx * ly + j * lx,
-                                    u + k * lx * ly + EX * lx, lx * sizeof(T));
+                    for (int j = (int)EX - 1; j >= 0; j--)
+                        for (unsigned int i = 0; i < lx; i++)
+                            extrap5(u + k * sz + j * sy + i, sy);
             if (fflag & (1u << OCT_DIR_UP))
                 for (unsigned int k = 0; k < lz; k++)
                     for (unsigned int j = ly - EX; j < ly; j++)
-                        std::memcpy(u + k * lx * ly + j * lx,
-                                    u + k * lx * ly + (ly - EX - 1) * lx,
-                                    lx * sizeof(T));
+                        for (unsigned int i = 0; i < lx; i++)
+                            extrap5(u + k * sz + j * sy + i, -sy);
             if (fflag & (1u << OCT_DIR_BACK))
-                for (unsigned int k = 0; k < EX; k++)
-                    std::memcpy(u + k * lx * ly, u + EX * lx * ly,
-                                lx * ly * sizeof(T));
+                for (int k = (int)EX - 1; k >= 0; k--)
+                    for (unsigned int j = 0; j < ly; j++)
+                        for (unsigned int i = 0; i < lx; i++)
+                            extrap5(u + k * sz + j * sy + i, sz);
             if (fflag & (1u << OCT_DIR_FRONT))
                 for (unsigned int k = lz - EX; k < lz; k++)
-                    std::memcpy(u + k * lx * ly, u + (lz - EX - 1) * lx * ly,
-                                lx * ly * sizeof(T));
+                    for (unsigned int j = 0; j < ly; j++)
+                        for (unsigned int i = 0; i < lx; i++)
+                            extrap5(u + k * sz + j * sy + i, -sz);
         }
     }
 }

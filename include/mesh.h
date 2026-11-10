@@ -2852,10 +2852,10 @@ class Mesh {
     /**
      * @brief DENDRO_WIDE_PADDING: after unzip, the outermost
      * DENDRO_WIDE_PADDING_EXTRA padding planes of a flagged face hold no data.
-     * Fill them by copying the nearest filled plane inward-to-outward (x, then
-     * y, then z) so the buffer is finite everywhere; the trimmed derivative
-     * operator never reads those planes, this only keeps NaN/garbage out of
-     * the GEMM (0 * NaN is NaN) and out of diagnostics.
+     * Fill them by degree-5 extrapolation along the face normal (x, then y,
+     * then z). The trimmed derivative operator gives them zero weight (this
+     * only keeps NaN out of the GEMM); KO6 reads them, and this fill gives it a stable,
+     * 6th-order edge closure.
      */
     template <typename T>
     void fillFineFaceRing(T *out, unsigned int dof, int blk_filter) const;
