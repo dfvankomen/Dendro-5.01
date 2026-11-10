@@ -10064,10 +10064,12 @@ void Mesh::flagBlockGhostDependancies() {
                                 blkDiagMap[dir * (2 * blk_ele_1d) + 2 * k +
                                            1]) {
                                 if ((this->getElementType(
-                                         blkDiagMap[2 * k + 0]) ==
+                                         blkDiagMap[dir * (2 * blk_ele_1d) +
+                                                    2 * k + 0]) ==
                                      EType::W_DEPENDENT) ||
                                     (this->getElementType(
-                                         blkDiagMap[2 * k + 1]) ==
+                                         blkDiagMap[dir * (2 * blk_ele_1d) +
+                                                    2 * k + 1]) ==
                                      EType::W_DEPENDENT))
                                     is_blk_independent = false;
 
@@ -10075,7 +10077,8 @@ void Mesh::flagBlockGhostDependancies() {
                                                   2 * k + 0] !=
                                        LOOK_UP_TABLE_DEFAULT) {
                                 if ((this->getElementType(
-                                         blkDiagMap[2 * k + 0]) ==
+                                         blkDiagMap[dir * (2 * blk_ele_1d) +
+                                                    2 * k + 0]) ==
                                      EType::W_DEPENDENT))
                                     is_blk_independent = false;
                             }
