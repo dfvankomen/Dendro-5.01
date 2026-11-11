@@ -3,6 +3,8 @@
 #include "derivatives/derivs_compact.h"
 #include "refel.h"
 
+#include <stdexcept>
+
 namespace dendroderivs {
 
 MatrixDiagonalEntries* createKimDiagonals() {
@@ -1411,74 +1413,10 @@ double alpha0 = 0.5770460201292381;
 	}
 
 MatrixDiagonalEntries* createBYU_KIM_17_Diagonals() {
-		double alpha0 = 0.5770460201292381;
-		double alpha = alpha0;
-		double beta = 0.08900836845092142;
-		double a1 = 0.6517078440898839;
-		double a2 = 0.24815882627035918;
-		double a3 = 0.006009630649852392;
-		double gamma01 = 7.382379779615977;
-		double gamma02 = 6.118391304628355;
-		double gamma10 = 0.0643250419496078;
-		double gamma12 = 2.2530485889042495;
-		double gamma13 = 0.8947355749693718;
-		double gamma20 = 0.014504838045567564;
-		double gamma21 = 0.2617273578999557;
-		double gamma23 = 1.1103024822053873;
-		double gamma24 = 0.3070536064807722;
-		double a00 =  - 3.438756041105928;
-		double a01 =  - 6.120972374525143;
-		double a02 = 7.819283685619206;
-		double a03 = 2.0327058980757524;
-		double a04 =  - 0.3578340204185375;
-		double a05 = 0.07704263923912963;
-		double a06 =  - 0.011469786857738811;
-		double a10 =  - 0.26336891217791125;
-		double a11 =  - 1.6681586712175933;
-		double a12 = 0.04049340369078189;
-		double a13 = 1.7567567175439678;
-		double a14 = 0.142593090701886;
-		double a15 =  - 0.00853232551642941;
-		double a16 = 0.0002166969599412292;
-		double a20 =  - 0.058823348930526466;
-		double a21 =  - 0.5249167357886829;
-		double a22 =  - 0.7144983957840794;
-		double a23 = 0.5832981939848182;
-		double a24 = 0.6747270495592943;
-		double a25 = 0.04258038995809657;
-		double a26 =  - 0.0023671529988773224;
-
-		// boundary elements for P matrix for 1st derivative
-		std::vector<std::vector<double>> P1DiagBoundary{
-			{1.0, gamma01, gamma02},
-			{gamma10, 1.0, gamma12, gamma13},
-			{gamma20, gamma21, 1.0, gamma23, gamma24}
-		};
-
-		// diagonal elements for P matrix for 1st derivative
-		std::vector<double> P1DiagInterior{
-			beta, alpha, 1.0, alpha, beta
-		};
-
-		// boundary elements for Q matrix for 1st derivative
-		std::vector<std::vector<double>> Q1DiagBoundary{
-			{a00, a01, a02, a03, a04, a05, a06},
-			{a10, a11, a12, a13, a14, a15, a16},
-			{a20, a21, a22, a23, a24, a25, a26}
-		};
-
-		// diagonal elements for Q matrix for 1st derivative
-		std::vector<double> Q1DiagInterior{
-			-a3, -a2, -a1, 0.0, a1, a2, a3
-		};
-
-		// store the entries for matrix creation
-		MatrixDiagonalEntries* diagEntries = new
-			MatrixDiagonalEntries{
-				P1DiagInterior, P1DiagBoundary, Q1DiagInterior, Q1DiagBoundary
-			};
-		return diagEntries;
+		// the coefficients here were a copy of KIM_3; real ones are not available
+		throw std::runtime_error("KIMBYU_17 is unavailable: its coefficients were a duplicate of KIMBYU_3");
 	}
+
 MatrixDiagonalEntries* createBYU_KIM_18_Diagonals() {
 		double alpha0 = 0.5770460201292381;
 		double alpha = alpha0;
