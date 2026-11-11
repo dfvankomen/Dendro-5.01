@@ -24,6 +24,10 @@
 
 #include "mesh.h"
 
+#include <cmath>
+#include <functional>
+#include <limits>
+
 #ifdef DENDRO_MESH_OMP
 // Don't rely on these arriving transitively: omp.h reaches here only via
 // profiler.h, and ompUtils.h only via sfcSort.h. Both are accidents of the
@@ -9974,7 +9978,13 @@ void Mesh::flagBlockGhostDependancies() {
             }
 
             bool is_blk_independent;
-            unsigned int lookup;
+            // a neighbor that is anything but INDEPENDENT (W_DEPENDENT, or
+            // UNKWON: a pure ghost element with no local CG nodes) means the
+            // block's unzip padding reads ghost data
+            auto nbrIsGhostDep = [&](unsigned int lk) {
+                return lk != LOOK_UP_TABLE_DEFAULT &&
+                       this->getElementType(lk) != EType::INDEPENDENT;
+            };
             if (is_blk_internal_independent) {
                 is_blk_independent = true;
                 for (unsigned int elem =
@@ -9997,56 +10007,39 @@ void Mesh::flagBlockGhostDependancies() {
 
                     if (ei == emin) {
                         // OCT_DIR_LEFT
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_LEFT];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_LEFT]))
                             is_blk_independent = false;
                     }
 
                     if (ei == emax) {  // OCT_DIR_RIGHT
 
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_RIGHT];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_RIGHT]))
                             is_blk_independent = false;
                     }
 
                     if (ej == emin) {  // OCT_DIR_DOWN
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_DOWN];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_DOWN]))
                             is_blk_independent = false;
                     }
 
                     if (ej == emax) {  // OCT_DIR_UP
-                        lookup = m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_UP];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(
+                                m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_UP]))
                             is_blk_independent = false;
                     }
 
                     if (ek == emin) {  // OCT_DIR_BACK
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_BACK];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_BACK]))
                             is_blk_independent = false;
                     }
 
                     if (ek == emax) {  // OCT_DIR_FRONT
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_FRONT];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_FRONT]))
                             is_blk_independent = false;
                     }
 
@@ -10068,23 +10061,20 @@ void Mesh::flagBlockGhostDependancies() {
                                            0] !=
                                 blkDiagMap[dir * (2 * blk_ele_1d) + 2 * k +
                                            1]) {
-                                if ((this->getElementType(
-                                         blkDiagMap[dir * (2 * blk_ele_1d) +
-                                                    2 * k + 0]) ==
-                                     EType::W_DEPENDENT) ||
-                                    (this->getElementType(
-                                         blkDiagMap[dir * (2 * blk_ele_1d) +
-                                                    2 * k + 1]) ==
-                                     EType::W_DEPENDENT))
+                                if (nbrIsGhostDep(
+                                        blkDiagMap[dir * (2 * blk_ele_1d) +
+                                                   2 * k + 0]) ||
+                                    nbrIsGhostDep(
+                                        blkDiagMap[dir * (2 * blk_ele_1d) +
+                                                   2 * k + 1]))
                                     is_blk_independent = false;
 
                             } else if (blkDiagMap[dir * (2 * blk_ele_1d) +
                                                   2 * k + 0] !=
                                        LOOK_UP_TABLE_DEFAULT) {
-                                if ((this->getElementType(
-                                         blkDiagMap[dir * (2 * blk_ele_1d) +
-                                                    2 * k + 0]) ==
-                                     EType::W_DEPENDENT))
+                                if (nbrIsGhostDep(
+                                        blkDiagMap[dir * (2 * blk_ele_1d) +
+                                                   2 * k + 0]))
                                     is_blk_independent = false;
                             }
                         }
@@ -10095,9 +10085,7 @@ void Mesh::flagBlockGhostDependancies() {
                     if (is_blk_independent) {
                         // check vertices.
                         for (unsigned int k = 0; k < blkVertMap.size(); k++) {
-                            if ((blkVertMap[k] != LOOK_UP_TABLE_DEFAULT) &&
-                                (this->getElementType(blkVertMap[k]) ==
-                                 EType::W_DEPENDENT)) {
+                            if (nbrIsGhostDep(blkVertMap[k])) {
                                 is_blk_independent = false;
                                 break;
                             }
@@ -10140,6 +10128,61 @@ void Mesh::flagBlockGhostDependancies() {
                              : 0.0);
         }
     }
+}
+
+DendroIntL Mesh::auditBlockTypeIndependence(const char *site) {
+    // unzip reads CG nodes through the element nodal values, so a block that
+    // reads any ghost slot gets a NaN in its unzip output. no ghost exchange
+    // is needed: only whether a block reads ghost slots matters, not their
+    // values.
+    if (!m_uiIsActive) return 0;
+
+    const unsigned int nAct = this->getDegOfFreedom();
+    std::function<double(double, double, double)> f =
+        [](double x, double y, double z) { return 1.0 + 1e-3 * (x + y + z); };
+    double *vc        = this->createVector<double>(f);
+    const double nanv = std::numeric_limits<double>::quiet_NaN();
+    for (unsigned int cg = 0; cg < nAct; cg++)
+        if (cg < m_uiNodeLocalBegin || cg >= m_uiNodeLocalEnd) vc[cg] = nanv;
+
+    double *u = this->createUnZippedVector<double>(0.0, 1);
+    this->unzip(vc, u, 1);
+
+    // indep, dep, independent-but-reads-ghost, dependent-but-reads-none
+    DendroIntL local_stats[4] = {0, 0, 0, 0};
+    for (const auto &b : m_uiLocalBlockList) {
+        const size_t off  = b.getOffset();
+        const size_t sz   = b.getAlignedBlockSz();
+        bool touchedGhost = false;
+        for (size_t i = off; i < off + sz; i++)
+            if (std::isnan(u[i])) {
+                touchedGhost = true;
+                break;
+            }
+        if (b.getBlockType() == BlockType::UNZIP_INDEPENDENT) {
+            local_stats[0]++;
+            if (touchedGhost) local_stats[2]++;
+        } else {
+            local_stats[1]++;
+            if (!touchedGhost) local_stats[3]++;
+        }
+    }
+
+    DendroIntL glob_stats[4] = {0, 0, 0, 0};
+    par::Mpi_Reduce(local_stats, glob_stats, 4, MPI_SUM, 0, m_uiCommActive);
+    if (!m_uiActiveRank)
+        std::cout << "[blktype-audit:" << (site ? site : "?")
+                  << "] indep=" << glob_stats[0] << " dep=" << glob_stats[1]
+                  << " MISCLASSIFIED_INDEP=" << glob_stats[2]
+                  << " (dep-but-clean=" << glob_stats[3] << ") "
+                  << (glob_stats[2] == 0 ? "PASS" : "FAIL") << std::endl;
+
+    DendroIntL global_bad = glob_stats[2];
+    par::Mpi_Bcast(&global_bad, 1, 0, m_uiCommActive);
+
+    delete[] vc;
+    delete[] u;
+    return global_bad;
 }
 
 void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
