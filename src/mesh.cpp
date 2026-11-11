@@ -435,6 +435,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
 
     shrinkOrExpandOctree(in, ld_tol, sf_k, m_uiIsActive, m_uiCommActive,
                          m_uiCommGlobal, getWeight);
+    const size_t szBeforeSiblings = in.size();
 
     // The shrink/expand repartition ignores sibling groups. A group split
     // across ranks cannot coarsen (setMeshRefinementFlags), so the mesh would
@@ -512,6 +513,10 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             std::cout << "rank: " << m_uiActiveRank << " input octree of size "
                       << in.size() << " is too small for the current comm.  "
                       << std::endl;
+            if (in.size() < szBeforeSiblings)
+                std::cout << "rank: " << m_uiActiveRank
+                          << " was emptied by the sibling repartition, exiting"
+                          << std::endl;
             exit(0);
         }
 
