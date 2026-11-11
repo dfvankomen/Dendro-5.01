@@ -107,15 +107,15 @@ int main(int argc, char** argv) {
         ot::Mesh* mesh = ot::createMesh(
             tmpNodes.data(), tmpNodes.size(), eOrder, MPI_COMM_WORLD, 1,
             ot::SM_TYPE::FDM, DENDRO_DEFAULT_GRAIN_SZ, 0.1, DENDRO_DEFAULT_SF_K);
+        // collective on the global comm (it broadcasts), so inactive ranks call it too
+        unsigned int lmin, lmax;
+        mesh->computeMinMaxLevel(lmin, lmax);
         if (!mesh->isActive()) {
             delete mesh;
             continue;
         }
         const double ext = (double)(1u << m_uiMaxDepth);
         mesh->setDomainBounds(Point(0.0, 0.0, 0.0), Point(ext, ext, ext));
-
-        unsigned int lmin, lmax;
-        mesh->computeMinMaxLevel(lmin, lmax);
         if (!rank)
             std::printf("  eOrder=%u blocks=%zu levels=%u..%u\n", eOrder,
                         mesh->getLocalBlockList().size(), lmin, lmax);
@@ -160,15 +160,9 @@ int main(int argc, char** argv) {
              i < mesh->getNodeLocalEnd(); i++)
             if (!std::isfinite(u[i])) cg_finite = false;
         failures += check("CG vector all finite", cg_finite, rank);
-        // Not gated. Its definition was unqualified, so ot::test::isDGGhostValid
-        // never linked and has never run; at eleOrder 6 on 2 ranks it reports
-        // values shifted by one node, which could as easily be the validator as
-        // the exchange. Reported until that is settled.
-        const bool dg_ghost =
-            ot::test::isDGGhostValid<double>(mesh, u_dg, f, 1e-10);
-        if (!rank)
-            std::printf("    %-34s %s (not gated)\n", "isDGGhostValid",
-                        dg_ghost ? "ok" : "reports mismatch");
+        failures += check("isDGGhostValid",
+                          ot::test::isDGGhostValid<double>(mesh, u_dg, f, 1e-10),
+                          rank);
 
         delete[] u;
         delete[] u_dg;
