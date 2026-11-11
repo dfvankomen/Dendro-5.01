@@ -1,3 +1,5 @@
+// RE-EMITTED BYU_C6_2nd_r_085_Op2.h: closure Q rows re-projected onto exact Taylor consistency (gamma unchanged unless a row needed a joint gamma+a correction).
+// per row: (row, order, max residual before, after, max |delta a|): (0,5,3.4e-08,2.4e-12,2.1e-10); (1,5,2.2e-11,7.3e-12,5.7e-13)
 // yHat0 = 1.5
 // yHat1 = 0.19
 
@@ -15,14 +17,14 @@ MatrixDiagonalEntries* createBYU_C6_2ND_R085_OP2_Diagonals(
 		double gamma10 =  - 2.9502081272124125;
 		double gamma12 = 170.7524038549336;
 		double gamma13 = 30.502081272124034;
-		double a00 = 11.625000000000858;
-		double a01 =  - 18.000000000182425;
-		double a02 = 0.7500000002727678;
-		double a03 = 6.0000000000568585;
-		double a04 =  - 0.3750000000073313;
-		double a10 =  - 24.45931413162457;
-		double a11 = 261.7390359997942;
-		double a12 =  - 439.15694620979014;
+		double a00 = 11.624999999983705;
+		double a01 =  -18.000000000105832;
+		double a02 = 0.7500000002692606;
+		double a03 = 5.999999999842983;
+		double a04 =  -0.37499999999011974;
+		double a10 =  -24.45931413162431;
+		double a11 = 261.73903599979366;
+		double a12 =  -439.1569462097898;
 		double a13 = 190.93404094669594;
 		double a14 = 10.943183394924528;
 
