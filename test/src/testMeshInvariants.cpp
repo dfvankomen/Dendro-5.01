@@ -107,15 +107,15 @@ int main(int argc, char** argv) {
         ot::Mesh* mesh = ot::createMesh(
             tmpNodes.data(), tmpNodes.size(), eOrder, MPI_COMM_WORLD, 1,
             ot::SM_TYPE::FDM, DENDRO_DEFAULT_GRAIN_SZ, 0.1, DENDRO_DEFAULT_SF_K);
+        // collective on the global comm (it broadcasts), so inactive ranks call it too
+        unsigned int lmin, lmax;
+        mesh->computeMinMaxLevel(lmin, lmax);
         if (!mesh->isActive()) {
             delete mesh;
             continue;
         }
         const double ext = (double)(1u << m_uiMaxDepth);
         mesh->setDomainBounds(Point(0.0, 0.0, 0.0), Point(ext, ext, ext));
-
-        unsigned int lmin, lmax;
-        mesh->computeMinMaxLevel(lmin, lmax);
         if (!rank)
             std::printf("  eOrder=%u blocks=%zu levels=%u..%u\n", eOrder,
                         mesh->getLocalBlockList().size(), lmin, lmax);
