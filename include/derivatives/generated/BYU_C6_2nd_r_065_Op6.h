@@ -1,3 +1,5 @@
+// RE-EMITTED BYU_C6_2nd_r_065_Op6.h: closure Q rows re-projected onto exact Taylor consistency (gamma unchanged unless a row needed a joint gamma+a correction).
+// per row: (row, order, max residual before, after, max |delta a|): (0,5,1.8e-08,4.0e-12,9.0e-11); (1,5,2.1e-10,8.0e-15,7.0e-13)
 // yHat0 = 1.26
 // yHat1 = 3.7
 
@@ -15,16 +17,16 @@ MatrixDiagonalEntries* createBYU_C6_2ND_R065_OP6_Diagonals(
 		double gamma10 = 0.07231631569177628;
 		double gamma12 = 1.0780699904951552;
 		double gamma13 = 0.27683684308230744;
-		double a00 = 11.868243243275927;
-		double a01 =  - 21.891891891990483;
-		double a02 = 8.047297297340974;
-		double a03 = 2.108108108151334;
-		double a04 =  - 0.13175675675469503;
-		double a10 = 1.014680351302942;
-		double a11 =  - 0.7637024676417271;
-		double a12 =  - 1.3697515556242674;
-		double a13 = 0.9718891089616396;
-		double a14 = 0.1468845630017792;
+		double a00 = 11.868243243289172;
+		double a01 =  -21.891891892022795;
+		double a02 = 8.047297297426033;
+		double a03 = 2.1081081080615465;
+		double a04 =  -0.13175675675395662;
+		double a10 = 1.0146803513028702;
+		double a11 =  -0.7637024676410266;
+		double a12 =  -1.3697515556249205;
+		double a13 = 0.9718891089614357;
+		double a14 = 0.14688456300164107;
 
 		// boundary elements for P matrix for 2nd derivative
 		std::vector<std::vector<double>> P2DiagBoundary{

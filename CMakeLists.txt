@@ -93,9 +93,10 @@ option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" ON)
 option(DENDRO_UNZIP_SPEEDUP
        "Master toggle for the MPI-safe unzip/zip speedups (integer-index scatter fast path + SIMD wavelet tensor kernels)"
        OFF)
+# Default ON: byte-identical output to the FP scatter, ~7% less wall time per step.
 option(DENDRO_UNZIP_SCATTER_FAST
        "Use the integer-index same-level scatter fast path in Mesh::unzip_scatter (Phase 1 optimization). No effect when DENDRO_UNZIP_OMP is ON: that path always uses the integer kernels."
-       OFF)
+       ON)
 option(DENDRO_ZIP_PLAN
        "Precompute zip()'s ownership filter into a flat index plan (~12 bytes per owned node)"
        ON)
@@ -693,6 +694,7 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testIsReMeshUnzip test/src/testIsReMeshUnzip.cpp)
   dendro_add_example(testInterpFaceClamp test/src/testInterpFaceClamp.cpp)
   dendro_add_example(testAehBhahahaGuards test/src/testAehBhahahaGuards.cpp)
+  add_test(NAME testAehBhahahaGuards COMMAND testAehBhahahaGuards)
   dendro_add_example(testAehCheckpointStatus
                      test/src/testAehCheckpointStatus.cpp)
   add_test(NAME testAehCheckpointStatus COMMAND testAehCheckpointStatus)
@@ -783,6 +785,8 @@ if(BUILD_DENDRO_EXAMPLES)
   add_test(NAME testMixedSetTrim COMMAND testMixedSetTrim)
   set_tests_properties(testMixedSetTrim PROPERTIES TIMEOUT 300)
   dendro_add_deriv_test(testKOSign test/src/testKOSign.cpp)
+  dendro_add_deriv_test(testKimByu17 test/src/testKimByu17.cpp)
+  add_test(NAME testKimByu17 COMMAND testKimByu17)
   dendro_add_deriv_test(testCloneNewSize test/src/testCloneNewSize.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
   dendro_add_deriv_test(testMeshTimeIntegrator test/src/testMeshTimeIntegrator.cpp)
