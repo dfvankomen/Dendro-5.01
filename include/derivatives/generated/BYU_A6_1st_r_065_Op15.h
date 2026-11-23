@@ -1,3 +1,5 @@
+// RE-EMITTED BYU_A6_1st_r_065_Op15.h: closure Q rows re-projected onto exact Taylor consistency (gamma unchanged unless a row needed a joint gamma+a correction).
+// per row: (row, order, max residual before, after, max |delta a|): (0,6,1.4e-07,4.5e-13,1.1e-10); (1,6,6.1e-11,1.1e-13,5.9e-14); (2,6,7.9e-10,1.1e-13,8.4e-13)
 // yHat0 = 0.57
 // yHat1 = 0.89
 // yHat2 = 2.94
@@ -21,27 +23,27 @@ MatrixDiagonalEntries* createBYU_A6_1ST_R065_OP15_Diagonals(
 		double gamma21 = 0.3584579212732618;
 		double gamma23 = 0.3875867220777551;
 		double gamma24 =  - 0.06309251107149001;
-		double a00 =  - 3.7753216121109903;
-		double a01 =  - 12.132641305499735;
-		double a02 = 11.373775337563174;
-		double a03 = 5.486036675841435;
-		double a04 =  - 1.1475873162452228;
-		double a05 = 0.21806642602666762;
-		double a06 =  - 0.02232820554754837;
-		double a10 =  - 0.3328788024749603;
-		double a11 =  - 1.3178767783220673;
-		double a12 = 0.7398079063964412;
-		double a13 = 0.9034684013034955;
-		double a14 = 0.003476763516665529;
-		double a15 = 0.004598509667748392;
-		double a16 =  - 0.0005960000873368163;
-		double a20 =  - 0.074236128613826;
-		double a21 =  - 0.6947396651955677;
-		double a22 =  - 0.13283856555706447;
-		double a23 = 0.929727913362122;
-		double a24 =  - 0.009105857995626859;
-		double a25 =  - 0.019909961595161806;
-		double a26 = 0.0011022655947215759;
+		double a00 =  -3.775321612119103;
+		double a01 =  -12.132641305611944;
+		double a02 = 11.373775337586688;
+		double a03 = 5.486036675873892;
+		double a04 =  -1.147587316203904;
+		double a05 = 0.2180664260212003;
+		double a06 =  -0.02232820554682865;
+		double a10 =  -0.3328788024749459;
+		double a11 =  -1.3178767783220997;
+		double a12 = 0.7398079063964711;
+		double a13 = 0.9034684013035457;
+		double a14 = 0.0034767635166063566;
+		double a15 = 0.004598509667760109;
+		double a16 =  -0.0005960000873376748;
+		double a20 =  -0.07423612861376216;
+		double a21 =  -0.6947396651953873;
+		double a22 =  -0.13283856555770268;
+		double a23 = 0.9297279133629615;
+		double a24 =  -0.009105857995732637;
+		double a25 =  -0.019909961595087376;
+		double a26 = 0.0011022655947106998;
 
 		// boundary elements for P matrix for 1st derivative
 		std::vector<std::vector<double>> P1DiagBoundary{
