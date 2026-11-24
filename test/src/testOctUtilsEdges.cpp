@@ -1,17 +1,9 @@
-// function2Octree driven past m_uiMaxDepth must stay inside the domain and
-// return a valid octree.
-//
-// A unit spike at the origin corner splits exactly one octant per depth, so
-// on 2 ranks the rank-0 serial phase refines all the way to max_ref_level =
-// m_uiMaxDepth + 1 and on 1 rank the parallel phase does. Both overloads are
-// checked: every fx sample lies in the domain, and the result is sorted,
-// unique and covers the domain. enforceSiblingsAreNotPartitioned on the
-// result must keep it so (the zero-count exchange is the common case).
-// octree2BlockDecomposition must treat a uniform tree the same at every
-// maxDepth.
+// function2Octree driven past m_uiMaxDepth must sample only inside the domain
+// and return a sorted, unique octree that covers it; sibling enforcement must
+// keep it so, and octree2BlockDecomposition must treat a uniform tree the same
+// at every maxDepth.
 //
 // Usage: testOctUtilsEdges [maxDepth=4]
-// Exit code 0 = pass.
 
 #include <mpi.h>
 
@@ -45,6 +37,7 @@ int main(int argc, char** argv) {
         failures += bad;
     };
 
+    // splits one octant per depth, so refinement reaches m_uiMaxDepth + 1
     bool outside = false;
     auto spike   = [&](double x, double y, double z) {
         if (x < 0 || y < 0 || z < 0 || x > side || y > side || z > side)
