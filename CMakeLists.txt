@@ -585,7 +585,7 @@ if(BUILD_DENDRO_EXAMPLES)
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
                    ${MPIEXEC_POSTFLAGS} 6 1e-3)
-  # 3 ranks: the order-4 mesh leaves one rank inactive, which 2 ranks never do
+  # 3 ranks: catches an inactive rank skipping the collective computeMinMaxLevel
   add_test(NAME testMeshInvariants_3rank
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>

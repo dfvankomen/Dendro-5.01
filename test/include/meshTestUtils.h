@@ -2778,15 +2778,9 @@ bool ot::test::isDGGhostValid(ot::Mesh* pMesh, T* vec,
                 for (unsigned int k = 0; k < eOrder + 1; k++)
                     for (unsigned int j = 0; j < eOrder + 1; j++)
                         for (unsigned int i = 0; i < eOrder + 1; i++) {
-                            const double x =
-                                pNodes[ele].minX() +
-                                i * h;
-                            const double y =
-                                pNodes[ele].minY() +
-                                j * h;
-                            const double z =
-                                pNodes[ele].minZ() +
-                                k * h;
+                            const double x = pNodes[ele].minX() + i * h;
+                            const double y = pNodes[ele].minY() + j * h;
+                            const double z = pNodes[ele].minZ() + k * h;
                             fn(x, y, z, &val);
                             const double diff = std::fabs(
                                 (vec +
@@ -2795,7 +2789,7 @@ bool ot::test::isDGGhostValid(ot::Mesh* pMesh, T* vec,
                                             j * (eOrder + 1) + i] -
                                 val);
 
-                            if (diff > 1e-3) {
+                            if (diff > tol) {
                                 std::cout
                                     << "rank: " << rank << " ele: " << ele
                                     << " DG vec:"

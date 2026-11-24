@@ -160,6 +160,8 @@ int main(int argc, char** argv) {
              i < mesh->getNodeLocalEnd(); i++)
             if (!std::isfinite(u[i])) cg_finite = false;
         failures += check("CG vector all finite", cg_finite, rank);
+        // absolute; ghosts are copies, and the domain is the octant box, so
+        // only roundoff separates them from the recomputed field
         failures += check("isDGGhostValid",
                           ot::test::isDGGhostValid<double>(mesh, u_dg, f, 1e-10),
                           rank);
