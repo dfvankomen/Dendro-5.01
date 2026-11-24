@@ -23,7 +23,8 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &npes);
     if (npes < 2) {
-        if (!rank) std::fprintf(stderr, "usage: mpirun -np <n >= 2> %s\n", argv[0]);
+        if (!rank)
+            std::fprintf(stderr, "usage: mpirun -np <n >= 2> %s\n", argv[0]);
         MPI_Abort(comm, 2);
     }
 
@@ -62,7 +63,8 @@ int main(int argc, char** argv) {
         std::printf("  [rank %d] inactive\n", rank);
     } else {
         if (!rank)
-            std::printf("testDGScatterMap: mesh not split over 2+ active ranks\n");
+            std::printf(
+                "testDGScatterMap: mesh not split over 2+ active ranks\n");
         local_fail = 1;
     }
 

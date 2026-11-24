@@ -12563,14 +12563,17 @@ void ot::Mesh::SET_FACE_TO_ELEMENT_MAP(unsigned int ele, unsigned int dir,
                 m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 0] =
                     (dir << ODA_FLAGS_TOTAL);
                 m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 1] = ele;
-                m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 2] = lookup;
+                m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 2] =
+                    lookup;
                 // unique_faces.push_back((ele*NUM_FACES+dir));
 
             } else {
                 m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 0] =
                     (dirOp << ODA_FLAGS_TOTAL);
-                m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 1] = lookup;
-                m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 2] = ele;
+                m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 1] =
+                    lookup;
+                m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 2] =
+                    ele;
                 // unique_faces.push_back((lookup*NUM_FACES+dirOp));
             }
 
@@ -12578,7 +12581,8 @@ void ot::Mesh::SET_FACE_TO_ELEMENT_MAP(unsigned int ele, unsigned int dir,
             // winner, is lookup octant.
             m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 0] =
                 (dirOp << ODA_FLAGS_TOTAL);
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 1] = lookup;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 1] =
+                lookup;
             // unique_faces.push_back((lookup*NUM_FACES+dirOp));
 
             // in the morton ordering.
@@ -12596,16 +12600,21 @@ void ot::Mesh::SET_FACE_TO_ELEMENT_MAP(unsigned int ele, unsigned int dir,
             assert(lookup2 != LOOK_UP_TABLE_DEFAULT);
             assert(lookup3 != LOOK_UP_TABLE_DEFAULT);
 
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 2] = lookup0;
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 3] = lookup1;
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 4] = lookup2;
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 5] = lookup3;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 2] =
+                lookup0;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 3] =
+                lookup1;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 4] =
+                lookup2;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 5] =
+                lookup3;
 
         } else {
             assert(l1 < l2);
 
             // winner, is ele octant.
-            m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 0] = (dir << ODA_FLAGS_TOTAL);
+            m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 0] =
+                (dir << ODA_FLAGS_TOTAL);
             m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 1] = ele;
             // unique_faces.push_back((ele*NUM_FACES+dir));
 
@@ -12630,7 +12639,8 @@ void ot::Mesh::SET_FACE_TO_ELEMENT_MAP(unsigned int ele, unsigned int dir,
         }
 
     } else {
-        m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 0] = (dir << ODA_FLAGS_TOTAL);
+        m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 0] =
+            (dir << ODA_FLAGS_TOTAL);
         m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 1] = ele;
         // unique_faces.push_back((ele*NUM_FACES+dir));
     }
