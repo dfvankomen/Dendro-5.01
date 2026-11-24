@@ -5309,7 +5309,7 @@ void Mesh::computeNodalScatterMapDG(MPI_Comm comm) {
         m_uiGhostElementRound1Index.size() * m_uiNpE) {
         std::cout << "Error: " << __func__ << " line: " << __LINE__
                   << " send and recv DG node mismatch " << std::endl;
-        MPI_Abort(comm, 0);
+        MPI_Abort(comm, 1);
     }
 
     m_uiScatterMapActualNodeSend.clear();
@@ -13697,7 +13697,7 @@ EType ot::Mesh::getElementType(unsigned int eleID) {
             if( (ownerrank[i] == LOOK_UP_TABLE_DEFAULT ))
             {
                 std::cout<<"error: "<<__func__<<" sending key : "<<m_uiUnzip_3pt_keys[i]<<" to proc: "<<ownerrank[i]<<std::endl;
-                MPI_Abort(m_uiCommActive,0);
+                MPI_Abort(m_uiCommActive,1);
             }
             
             m_uiSendCountRePt[ownerrank[i]]++;
@@ -13812,7 +13812,7 @@ EType ot::Mesh::getElementType(unsigned int eleID) {
             if( !(rkey_merged[i].getFlag() & OCT_FOUND) )
             {
                 std::cout<<"Error["<<m_uiActiveRank<<"] : "<<__func__<<" requested key : "<<rkey_merged[i]<<" node is not found at any local partition "<<std::endl;
-                MPI_Abort(m_uiCommActive,0);
+                MPI_Abort(m_uiCommActive,1);
             }
 
             const unsigned eleID = rkey_merged[i].getSearchResult();
@@ -14390,7 +14390,7 @@ void Mesh::interGridTransferSendRecvCompute(const ot::Mesh *pMesh) {
                   << " [Inter-grid Transfer error ]: Recvn M2' elements: "
                   << total_recv_elements << " m2 num local elements "
                   << pMesh->getNumLocalMeshElements() << std::endl;
-        MPI_Abort(comm, 0);
+        MPI_Abort(comm, 1);
     }
 
     m_uiIsIGTSetup = true;
