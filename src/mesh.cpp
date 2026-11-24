@@ -5302,7 +5302,7 @@ void Mesh::computeNodalScatterMapDG(MPI_Comm comm) {
         m_uiRecvNodeCount[p]  = m_uiRecvEleCount[p] * m_uiNpE;
 
         m_uiSendNodeOffset[p] = m_uiSendEleOffset[p] * m_uiNpE;
-        m_uiRecvNodeOffset[p] = m_uiRecvNodeOffset[p] * m_uiNpE;
+        m_uiRecvNodeOffset[p] = m_uiRecvEleOffset[p] * m_uiNpE;
     }
 
     if ((m_uiRecvNodeOffset[npes - 1] + m_uiRecvNodeCount[npes - 1]) !=

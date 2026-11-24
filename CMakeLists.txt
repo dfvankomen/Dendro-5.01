@@ -572,6 +572,17 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
   dendro_add_example(testUnzipExact test/src/testUnzipExact.cpp)
   dendro_add_example(testMeshInvariants test/src/testMeshInvariants.cpp)
+  dendro_add_example(testDGScatterMap test/src/testDGScatterMap.cpp)
+  add_test(NAME testDGScatterMap_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testDGScatterMap>
+                   ${MPIEXEC_POSTFLAGS})
+  add_test(NAME testDGScatterMap_3rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testDGScatterMap>
+                   ${MPIEXEC_POSTFLAGS})
+  set_tests_properties(testDGScatterMap_2rank testDGScatterMap_3rank PROPERTIES
+                       TIMEOUT 300 PASS_REGULAR_EXPRESSION "testDGScatterMap: PASS")
   dendro_add_example(testOctreeStructure test/src/testOctreeStructure.cpp)
   add_test(NAME testOctreeStructure COMMAND testOctreeStructure 6 1e-3)
   add_test(NAME testOctreeStructure_2rank
