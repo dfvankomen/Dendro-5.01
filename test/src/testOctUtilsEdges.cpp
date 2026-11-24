@@ -1,8 +1,7 @@
-// function2Octree driven past m_uiMaxDepth must sample only inside the domain
-// and return a sorted, unique octree that covers it; sibling enforcement must
-// keep it so, and octree2BlockDecomposition must treat a uniform tree the same
-// at every maxDepth.
-//
+// Oracle: function2Octree past m_uiMaxDepth samples only inside the domain and
+// returns a sorted, unique, covering octree that sibling enforcement keeps; a
+// uniform tree is 8 level-1 blocks at maxDepth 10-12. Catches: child shift -1
+// at max depth, null TreeNode& on an empty exchange, 32-bit block-volume wrap.
 // Usage: testOctUtilsEdges [maxDepth=4]
 
 #include <mpi.h>
