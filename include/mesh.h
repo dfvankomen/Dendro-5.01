@@ -2481,11 +2481,11 @@ class Mesh {
      * @brief Finish gatherFromGhostBegin: collect every ghost copy of each
      * owned node. Aborts if vec had no matching Begin.
      *
-     * @tparam T
+     * @tparam T : element type of vec.
      * @param vec : the vector passed to gatherFromGhostBegin.
      * @param gatherV : out; for owned node k with ghost copies, gatherV[k]
      * holds dof blocks of `copies` values, variable-major.
-     * @param dof : degrees of freedom.
+     * @param dof : number of variables in vec.
      */
     template <typename T>
     void gatherFromGhostEnd(T *vec, std::vector<std::vector<T>> &gatherV,

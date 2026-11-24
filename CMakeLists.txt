@@ -584,7 +584,7 @@ if(BUILD_DENDRO_EXAMPLES)
   set_tests_properties(testGatherFromGhost_values_2rank PROPERTIES TIMEOUT 300
                        PASS_REGULAR_EXPRESSION "testGatherFromGhost values: PASS")
   set_tests_properties(testGatherFromGhost_unknown_2rank PROPERTIES TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "async ctx not found"
+                       PASS_REGULAR_EXPRESSION "async ctx not found for vec: .* in gatherFromGhostEnd"
                        FAIL_REGULAR_EXPRESSION "NOT detected")
   dendro_add_example(testOctreeStructure test/src/testOctreeStructure.cpp)
   add_test(NAME testOctreeStructure COMMAND testOctreeStructure 6 1e-3)
