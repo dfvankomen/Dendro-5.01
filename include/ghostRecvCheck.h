@@ -24,11 +24,25 @@ namespace ghost_recv_check {
 constexpr std::uint64_t SENTINEL_F64 = 0x7ff4dead5eed0001ull;
 constexpr std::uint32_t SENTINEL_F32 = 0x7fa5eed1u;
 
-/// true when DENDRO_GHOST_RECV_CHECK is set to a value other than "0" (read once)
+/// DENDRO_GHOST_RECV_CHECK, read once: 1/true/yes/on or 0/false/no/off, unset
+/// or empty is off, else abort. Owner: dfvankomen. Remove once no target
+/// cluster's MPI completes a receive unwritten (UCX under ASan).
 inline bool enabled() {
     static const bool on = [] {
         const char* s = std::getenv("DENDRO_GHOST_RECV_CHECK");
-        return s != nullptr && s[0] != '\0' && std::strcmp(s, "0") != 0;
+        if (s == nullptr || s[0] == '\0') return false;
+        const char* const on_words[]  = {"1", "true", "yes", "on"};
+        const char* const off_words[] = {"0", "false", "no", "off"};
+        for (const char* w : on_words)
+            if (std::strcmp(s, w) == 0) return true;
+        for (const char* w : off_words)
+            if (std::strcmp(s, w) == 0) return false;
+        std::fprintf(stderr,
+                     "DENDRO_GHOST_RECV_CHECK=%s: expected 1/true/yes/on or "
+                     "0/false/no/off\n",
+                     s);
+        MPI_Abort(MPI_COMM_WORLD, 1);
+        return false;
     }();
     return on;
 }
