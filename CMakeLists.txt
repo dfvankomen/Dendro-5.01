@@ -592,6 +592,8 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS} 6 1e-3)
   set_tests_properties(testMeshInvariants testMeshInvariants_2rank
                        testMeshInvariants_3rank PROPERTIES TIMEOUT 600)
+  set_tests_properties(testMeshInvariants_3rank PROPERTIES
+                       PASS_REGULAR_EXPRESSION "mesh invariants: PASS")
   if(DENDRO_ENABLE_HDF5)
     dendro_add_example(testVTKHDF test/src/testVTKHDF.cpp)
     add_test(NAME testVTKHDF COMMAND testVTKHDF 6 1e-3)
