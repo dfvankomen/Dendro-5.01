@@ -1,13 +1,9 @@
 /**
  * @file ghostRecvCheck.h
  * @brief Opt-in check that a completed ghost receive was actually written.
- *
  * With DENDRO_GHOST_RECV_CHECK=1, readFromGhostBegin fills each receive range
- * with a signaling-NaN sentinel, and readFromGhostEnd aborts with the peer and
- * range if any sentinel survives MPI_Waitall. Off by default: nothing is filled
- * or scanned. Only float and double buffers are checked, and the sentinel is
- * handled as raw bits, so no floating-point operation touches it.
- */
+ * with a sentinel and readFromGhostEnd aborts if one survives MPI_Waitall.
+ * Only float and double buffers are checked. */
 #pragma once
 
 #include <mpi.h>
@@ -95,7 +91,11 @@ inline std::size_t count_unwritten(const float* buf, std::size_t n, std::size_t*
 /**
  * @brief scan one peer's received range; print and abort if any word is unwritten
  * @param buf start of the peer's range (dof * count words)
+ * @param dof variables in the range, each count words long
  * @param count nodes received from the peer (words per variable)
+ * @param rank this rank, for the message
+ * @param from the peer the range came from
+ * @param comm communicator to abort
  */
 template <typename T>
 inline void verify_or_abort(const T* buf, unsigned int dof, unsigned int count,

@@ -1,13 +1,8 @@
-// DENDRO_GHOST_RECV_CHECK: a ghost receive that MPI completes without writing
-// every word must abort with the peer and range; a correct exchange must pass.
-//
-//   clean  legacy and ctx paths with the check on: every ghost word written,
-//          both paths bit-identical
-//   hole   a PMPI MPI_Waitall wrapper puts the sentinel back over part of
-//          rank 0's received range; the check must abort ("words unwritten")
-//
-// Needs 2 ranks. The wrapper writes the sentinel bits itself, so this file
-// also builds against a library without the check.
+// Oracle: with DENDRO_GHOST_RECV_CHECK on, a correct exchange passes and a
+// receive completed with words unwritten aborts. Catches: an unwritten ghost.
+//   clean  legacy and ctx paths: every ghost word written, paths bit-identical
+//   hole   a PMPI MPI_Waitall wrapper restores the sentinel; must abort
+// Usage: mpirun -np 2 testGhostRecvCheck clean|hole
 
 #include <mpi.h>
 
@@ -124,7 +119,7 @@ int main(int argc, char** argv) {
         fill(vCtx.data());
 
         if (mode == "hole" && rank == 0) {
-            // part of variable 1 from rank 1, as on kingspeak (a contiguous run)
+            // part of variable 1 from rank 1 (a contiguous run)
             const unsigned int p = 1;
             g_hole_reqs          = ctx[0].m_recv_req.data();
             g_hole_ptr = (double*)ctx[0].getRecvBuffer() + dof * rOff[p] + rCnt[p];

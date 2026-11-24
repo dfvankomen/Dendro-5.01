@@ -675,6 +675,7 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGhostRecvCheck>
                    ${MPIEXEC_POSTFLAGS} clean)
   set_tests_properties(testGhostRecvCheck_clean_2rank PROPERTIES TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "testGhostRecvCheck clean: PASS"
                        FAIL_REGULAR_EXPRESSION "words unwritten")
   add_test(NAME testGhostRecvCheck_hole_2rank
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
