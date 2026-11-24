@@ -572,6 +572,20 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
   dendro_add_example(testUnzipExact test/src/testUnzipExact.cpp)
   dendro_add_example(testMeshInvariants test/src/testMeshInvariants.cpp)
+  dendro_add_example(testGatherFromGhost test/src/testGatherFromGhost.cpp)
+  add_test(NAME testGatherFromGhost_values_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGatherFromGhost>
+                   ${MPIEXEC_POSTFLAGS} values)
+  add_test(NAME testGatherFromGhost_unknown_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGatherFromGhost>
+                   ${MPIEXEC_POSTFLAGS} unknown)
+  set_tests_properties(testGatherFromGhost_values_2rank PROPERTIES TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "testGatherFromGhost values: PASS")
+  set_tests_properties(testGatherFromGhost_unknown_2rank PROPERTIES TIMEOUT 300
+                       PASS_REGULAR_EXPRESSION "async ctx not found"
+                       FAIL_REGULAR_EXPRESSION "NOT detected")
   dendro_add_example(testOctreeStructure test/src/testOctreeStructure.cpp)
   add_test(NAME testOctreeStructure COMMAND testOctreeStructure 6 1e-3)
   add_test(NAME testOctreeStructure_2rank
