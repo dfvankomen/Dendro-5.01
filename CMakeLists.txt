@@ -555,9 +555,8 @@ if(BUILD_DENDRO_EXAMPLES)
   endfunction()
 
   dendro_add_example(genHtables Hilbert/src/genHTables.cpp include/radix.h)
-  # Oracle: the generator exits 0; in optimized glibc builds _FORTIFY_SOURCE
-  # aborts a sprintf past its buffer (no bite at -O0). Catches: rotation-string
-  # buffers one byte short.
+  # Oracle: exit 0; optimized glibc builds abort via _FORTIFY_SOURCE on a sprintf
+  # overflow (no bite at -O0 or an unset build type). Catches: buffers one byte short.
   if(CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
     target_compile_options(genHtables PRIVATE -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2)
   endif()
