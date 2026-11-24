@@ -10325,9 +10325,8 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
         mergeKeys(blkSkeys, blkKeys);
         blkSkeys.clear();
         SFC::seqSearch::SFC_treeSearch(
-            &(*(blkKeys.begin())), &(*(m_uiAllElements.begin())), 0,
-            blkKeys.size(), 0, m_uiAllElements.size(), m_uiMaxDepth,
-            m_uiMaxDepth, ROOT_ROTATION);
+            blkKeys.data(), m_uiAllElements.data(), 0, blkKeys.size(), 0,
+            m_uiAllElements.size(), m_uiMaxDepth, m_uiMaxDepth, ROOT_ROTATION);
 
         for (unsigned int i = 0; i < blkKeys.size(); i++) {
             assert(blkKeys[i].getFlag() & OCT_FOUND);
