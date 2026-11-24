@@ -437,9 +437,8 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                          m_uiCommGlobal, getWeight);
     const size_t szBeforeSiblings = in.size();
 
-    // The shrink/expand repartition ignores sibling groups. A group split
-    // across ranks cannot coarsen (setMeshRefinementFlags), so the mesh would
-    // depend on the rank count. Keep each sibling group on one rank.
+    // a sibling group split across ranks cannot coarsen, which makes the mesh
+    // depend on the rank count; shrinkOrExpandOctree does not prevent it
     if (m_uiIsActive) enforceSiblingsAreNotPartitioned(in, m_uiCommActive);
 
     m_uiMeshDomain_min = 0;
@@ -10135,11 +10134,9 @@ void Mesh::flagBlockGhostDependancies() {
     }
 }
 
-DendroIntL Mesh::auditBlockTypeIndependence(const char *site) {
+DendroIntL Mesh::auditBlockTypeIndependence(DendroIntL *numIndependent) {
     // unzip reads CG nodes through the element nodal values, so a block that
-    // reads any ghost slot gets a NaN in its unzip output. no ghost exchange
-    // is needed: only whether a block reads ghost slots matters, not their
-    // values.
+    // reads any ghost slot gets a NaN in its unzip output; no exchange needed
     if (!m_uiIsActive) return 0;
 
     const unsigned int nAct = this->getDegOfFreedom();
@@ -10153,41 +10150,29 @@ DendroIntL Mesh::auditBlockTypeIndependence(const char *site) {
     double *u = this->createUnZippedVector<double>(0.0, 1);
     this->unzip(vc, u, 1);
 
-    // indep, dep, independent-but-reads-ghost, dependent-but-reads-none
-    DendroIntL local_stats[4] = {0, 0, 0, 0};
+    // independent blocks, and those among them that read ghost data
+    DendroIntL local[2] = {0, 0};
     for (const auto &b : m_uiLocalBlockList) {
-        const size_t off  = b.getOffset();
-        const size_t sz   = b.getAlignedBlockSz();
-        bool touchedGhost = false;
-        for (size_t i = off; i < off + sz; i++)
+        if (b.getBlockType() != BlockType::UNZIP_INDEPENDENT) continue;
+        local[0]++;
+        const size_t off = b.getOffset();
+        for (size_t i = off; i < off + b.getAlignedBlockSz(); i++)
             if (std::isnan(u[i])) {
-                touchedGhost = true;
+                local[1]++;
                 break;
             }
-        if (b.getBlockType() == BlockType::UNZIP_INDEPENDENT) {
-            local_stats[0]++;
-            if (touchedGhost) local_stats[2]++;
-        } else {
-            local_stats[1]++;
-            if (!touchedGhost) local_stats[3]++;
-        }
     }
-
-    DendroIntL glob_stats[4] = {0, 0, 0, 0};
-    par::Mpi_Reduce(local_stats, glob_stats, 4, MPI_SUM, 0, m_uiCommActive);
-    if (!m_uiActiveRank)
-        std::cout << "[blktype-audit:" << (site ? site : "?")
-                  << "] indep=" << glob_stats[0] << " dep=" << glob_stats[1]
-                  << " MISCLASSIFIED_INDEP=" << glob_stats[2]
-                  << " (dep-but-clean=" << glob_stats[3] << ") "
-                  << (glob_stats[2] == 0 ? "PASS" : "FAIL") << std::endl;
-
-    DendroIntL global_bad = glob_stats[2];
-    par::Mpi_Bcast(&global_bad, 1, 0, m_uiCommActive);
+    DendroIntL global[2] = {0, 0};
+    par::Mpi_Allreduce(local, global, 2, MPI_SUM, m_uiCommActive);
+    dendro::logger::debug(
+        dendro::logger::Scope{"MESH"},
+        "block-type audit: {} independent, {} read ghost data", global[0],
+        global[1]);
 
     delete[] vc;
     delete[] u;
-    return global_bad;
+    if (numIndependent) *numIndependent = global[0];
+    return global[1];
 }
 
 void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,

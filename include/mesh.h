@@ -1310,15 +1310,13 @@ class Mesh {
     void flagBlockGhostDependancies();
 
     /**
-     * @brief ground-truth audit of the UNZIP_INDEPENDENT/DEPENDENT block
-     * classification: poisons every ghost CG node with NaN, unzips once, and
-     * counts the UNZIP_INDEPENDENT blocks whose unzip output catches a NaN
-     * (they read ghost data, so they are unsafe for DENDRO_UNZIP_OVERLAP).
-     * Collective on the active comm; inactive ranks return 0.
-     * @param site label for the one-line report printed by active rank 0
-     * @return global count of misclassified independent blocks (0 = correct)
+     * @brief Count UNZIP_INDEPENDENT blocks that read ghost data, by unzipping
+     * a vector whose ghost CG nodes are NaN. Collective on the active comm.
+     * @param numIndependent : out if not null; global independent-block count.
+     * @return global count of independent blocks that read a ghost node; 0 on
+     * inactive ranks.
      */
-    DendroIntL auditBlockTypeIndependence(const char *site = "");
+    DendroIntL auditBlockTypeIndependence(DendroIntL *numIndependent = nullptr);
 
     /**@brief: returns if the block setup has performed or not*/
     inline bool isBlockSetep() { return m_uiIsBlockSetup; }

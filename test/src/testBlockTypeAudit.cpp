@@ -1,16 +1,8 @@
-/**
- * @file testBlockTypeAudit.cpp
- * @brief Every block flagged UNZIP_INDEPENDENT must read no ghost data.
- *
- * The DENDRO_UNZIP_OVERLAP path unzips UNZIP_INDEPENDENT blocks while the
- * ghost exchange is in flight, so a block that is flagged independent but
- * reads a ghost node gets stale data. Mesh::auditBlockTypeIndependence poisons
- * every ghost CG node with NaN, unzips once, and counts the independent blocks
- * that catch a NaN; that count must be 0.
- *
- * Usage: testBlockTypeAudit [maxDepth=6] [waveletTol=1e-3] [grain=8]
- * A small grain keeps many ranks active, so most blocks touch a rank boundary.
- */
+// Oracle: no UNZIP_INDEPENDENT block reads a ghost node (ghost CG nodes set to
+// NaN, one unzip), and some blocks are independent. Catches: a classifier that
+// flags a ghost-reading block independent, which DENDRO_UNZIP_OVERLAP unzips
+// while the exchange is in flight.
+// Usage: testBlockTypeAudit [maxDepth=6] [waveletTol=1e-3] [grain=8]
 
 #include <mpi.h>
 
@@ -56,22 +48,24 @@ int main(int argc, char** argv) {
         const double ext = (double)(1u << m_uiMaxDepth);
         mesh->setDomainBounds(Point(0.0, 0.0, 0.0), Point(ext, ext, ext));
 
-        char site[32];
-        std::snprintf(site, sizeof(site), "np%d eOrder%u", npes, eOrder);
         // collective on the active comm only; inactive ranks return 0
-        DendroIntL bad   = mesh->auditBlockTypeIndependence(site);
-        DendroIntL bad_g = 0;
-        par::Mpi_Allreduce(&bad, &bad_g, 1, MPI_MAX, MPI_COMM_WORLD);
-        bad_total += bad_g;
+        DendroIntL counts[2]   = {0, 0};  // independent, read ghost data
+        counts[1]              = mesh->auditBlockTypeIndependence(&counts[0]);
+        DendroIntL counts_g[2] = {0, 0};
+        par::Mpi_Allreduce(counts, counts_g, 2, MPI_MAX, MPI_COMM_WORLD);
+        if (!rank)
+            std::printf(
+                "  np %d eOrder %u: %lld independent, %lld read ghosts\n", npes,
+                eOrder, (long long)counts_g[0], (long long)counts_g[1]);
+        bad_total += counts_g[1];
+        if (counts_g[0] == 0) bad_total++;  // nothing audited
         delete mesh;
     }
 
     if (!rank)
-        std::printf(
-            "testBlockTypeAudit np %d grain %u: %lld misclassified "
-            "independent block(s): %s\n",
-            npes, grain, (long long)bad_total,
-            bad_total == 0 ? "PASS" : "FAIL");
+        std::printf("testBlockTypeAudit np %d grain %u: %lld failure(s): %s\n",
+                    npes, grain, (long long)bad_total,
+                    bad_total == 0 ? "PASS" : "FAIL");
     MPI_Finalize();
     return bad_total == 0 ? 0 : 1;
 }
