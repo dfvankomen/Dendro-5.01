@@ -2771,10 +2771,12 @@ bool ot::test::isDGGhostValid(ot::Mesh* pMesh, T* vec,
             for (unsigned int ee = recvEleOffset[p];
                  ee < (recvEleOffset[p] + recvEleCounts[p]); ee++) {
                 const unsigned int ele = recvESM[ee];
-                // double division: 2^d / eOrder truncates when eOrder is not a power of two
-                const double h = static_cast<double>(
-                                     1u << (m_uiMaxDepth - pNodes[ele].getLevel())) /
-                                 eOrder;
+                // double division: 2^d / eOrder truncates when eOrder is not a
+                // power of two
+                const double h =
+                    static_cast<double>(
+                        1u << (m_uiMaxDepth - pNodes[ele].getLevel())) /
+                    eOrder;
                 for (unsigned int k = 0; k < eOrder + 1; k++)
                     for (unsigned int j = 0; j < eOrder + 1; j++)
                         for (unsigned int i = 0; i < eOrder + 1; i++) {

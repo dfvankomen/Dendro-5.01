@@ -107,7 +107,8 @@ int main(int argc, char** argv) {
         ot::Mesh* mesh = ot::createMesh(
             tmpNodes.data(), tmpNodes.size(), eOrder, MPI_COMM_WORLD, 1,
             ot::SM_TYPE::FDM, DENDRO_DEFAULT_GRAIN_SZ, 0.1, DENDRO_DEFAULT_SF_K);
-        // collective on the global comm (it broadcasts), so inactive ranks call it too
+        // collective on the global comm (it broadcasts), so inactive ranks call
+        // it too
         unsigned int lmin, lmax;
         mesh->computeMinMaxLevel(lmin, lmax);
         if (!mesh->isActive()) {
@@ -162,9 +163,9 @@ int main(int argc, char** argv) {
         failures += check("CG vector all finite", cg_finite, rank);
         // absolute; ghosts are copies, and the domain is the octant box, so
         // only roundoff separates them from the recomputed field
-        failures += check("isDGGhostValid",
-                          ot::test::isDGGhostValid<double>(mesh, u_dg, f, 1e-10),
-                          rank);
+        failures +=
+            check("isDGGhostValid",
+                  ot::test::isDGGhostValid<double>(mesh, u_dg, f, 1e-10), rank);
 
         delete[] u;
         delete[] u_dg;
