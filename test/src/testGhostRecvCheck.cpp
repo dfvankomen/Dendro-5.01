@@ -1,21 +1,13 @@
 // DENDRO_GHOST_RECV_CHECK: a ghost receive that MPI completes without writing
-// every word must abort with the peer and range, and a correct exchange must
-// pass untouched.
+// every word must abort with the peer and range; a correct exchange must pass.
 //
-//   testGhostRecvCheck clean  both exchange paths (legacy and ctx) with the
-//                             check on: every ghost word written, both paths
-//                             bit-identical, exit 0
-//   testGhostRecvCheck hole   ctx path; a PMPI MPI_Waitall wrapper puts the
-//                             sentinel back over part of rank 0's received
-//                             range after the real wait, which is what a
-//                             transport that reports completion without
-//                             delivering leaves behind (kingspeak, 2026-11-05).
-//                             The check must abort ("words unwritten"); if
-//                             the exchange returns, the hole went through to
-//                             the ghost nodes and the test fails
+//   clean  legacy and ctx paths with the check on: every ghost word written,
+//          both paths bit-identical
+//   hole   a PMPI MPI_Waitall wrapper puts the sentinel back over part of
+//          rank 0's received range; the check must abort ("words unwritten")
 //
-// Needs 2 ranks. The wrapper writes the sentinel bits itself so this file
-// builds against a library without the check (the before run).
+// Needs 2 ranks. The wrapper writes the sentinel bits itself, so this file
+// also builds against a library without the check.
 
 #include <mpi.h>
 

@@ -2,23 +2,11 @@
  * @file ghostRecvCheck.h
  * @brief Opt-in check that a completed ghost receive was actually written.
  *
- * With DENDRO_GHOST_RECV_CHECK=1 in the environment, Mesh::readFromGhostBegin
- * fills the receive buffer with a signaling-NaN sentinel before posting the
- * Irecvs, and Mesh::readFromGhostEnd scans each peer's range after MPI_Waitall.
- * A sentinel that survives means the transport reported the message complete
- * (full count) without writing those words; the rank prints the peer, the
- * range and the count, and aborts. Off by default: nothing is filled or
- * scanned, so results are unchanged.
- *
- * Why: on kingspeak (Open MPI 5.0.3 + UCX 1.15, ASan build run with
- * `--mca memory ^patcher`) 272,576 of 1,888,848 words of one ghost message
- * were never written while MPI_Waitall returned the full count, and the stale
- * words became NaN constraints at t = 0.
- *
- * Only float and double buffers are checked (a NaN sentinel cannot collide
- * with data the solver produces); other types pass through unchecked. The
- * sentinel is written and compared as raw bits, so no floating-point
- * operation touches it (safe under feenableexcept).
+ * With DENDRO_GHOST_RECV_CHECK=1, readFromGhostBegin fills each receive range
+ * with a signaling-NaN sentinel, and readFromGhostEnd aborts with the peer and
+ * range if any sentinel survives MPI_Waitall. Off by default: nothing is filled
+ * or scanned. Only float and double buffers are checked, and the sentinel is
+ * handled as raw bits, so no floating-point operation touches it.
  */
 #pragma once
 
