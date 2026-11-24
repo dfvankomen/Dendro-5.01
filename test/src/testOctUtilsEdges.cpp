@@ -1,7 +1,7 @@
 // Oracle: function2Octree past m_uiMaxDepth samples only inside the domain and
 // returns a sorted, unique, covering octree that sibling enforcement keeps; a
 // uniform tree is 8 level-1 blocks at maxDepth 10-12. Catches: child shift -1
-// at max depth, null TreeNode& on an empty exchange, 32-bit block-volume wrap.
+// at max depth, 32-bit block-volume wrap, null TreeNode& (UBSan only).
 // Usage: testOctUtilsEdges [maxDepth=4]
 
 #include <mpi.h>
@@ -45,12 +45,13 @@ int main(int argc, char** argv) {
     };
 
     auto check_tree = [&](const std::vector<ot::TreeNode>& tree) {
-        __int128 vol = 0;
+        DendroUInt_128 vol = 0;
         bool sorted = true, levels = true;
         for (size_t i = 0; i < tree.size(); i++) {
             const unsigned int lev = tree[i].getLevel();
             if (lev < 1 || lev > m_uiMaxDepth) levels = false;
-            const __int128 len = (__int128)1 << (m_uiMaxDepth - lev);
+            const DendroUInt_128 len = DendroUInt_128(1)
+                                       << (m_uiMaxDepth - lev);
             vol += len * len * len;
             if (i && !(tree[i - 1] < tree[i])) sorted = false;
         }
@@ -87,7 +88,6 @@ int main(int argc, char** argv) {
         check(!outside, "vector overload samples inside the domain");
         check_tree(tree);
 
-        // a rank with no straddling sibling group receives zero octants
         const std::vector<ot::TreeNode> before = tree;
         enforceSiblingsAreNotPartitioned(tree, MPI_COMM_WORLD);
         check_tree(tree);
@@ -96,7 +96,7 @@ int main(int argc, char** argv) {
     }
 
     // a uniform level-3 tiling is the same 8 level-1 blocks at any maxDepth;
-    // from 12 on a level-1 block's volume 2^(3*(maxDepth-1)) overflows 32 bits
+    // a level-l block volume 2^(3*(maxDepth-l)) needs 33+ bits at maxDepth-l=11
     const unsigned int savedDepth = m_uiMaxDepth;
     for (unsigned int D : {10u, 11u, 12u}) {
         m_uiMaxDepth = D;

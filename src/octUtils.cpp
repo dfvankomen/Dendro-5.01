@@ -999,7 +999,7 @@ void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
         assert(in.size() >= sendCount);
         std::vector<ot::TreeNode> recvBuffer;
         recvBuffer.resize(recvCount);
-        // recvBuffer is usually empty, so no &*begin()
+        // data(): begin() of an empty buffer is not dereferenceable
         par::Mpi_Sendrecv(in.data(), sendCount, prev, 2, recvBuffer.data(),
                           recvCount, next, 2, comm, &status);
         // std::cout<<"rank: "<<m_uiActiveRank<<" send recv ended "<<std::endl;
