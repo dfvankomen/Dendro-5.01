@@ -47,15 +47,15 @@ int main(int argc, char** argv) {
         tmpNodes.data(), tmpNodes.size(), eOrder, comm, 1, ot::SM_TYPE::FDM,
         DENDRO_DEFAULT_GRAIN_SZ, 0.1, DENDRO_DEFAULT_SF_K);
 
-    if (mesh->isActive() && mesh->getMPICommSize() == 2) {
+    const bool onTwo = mesh->isActive() && mesh->getMPICommSize() == 2;
+    if (onTwo) {
         std::vector<double> vec(mesh->getDegOfFreedom(), 0.0);
         mesh->readFromGhostEnd(vec.data(), 1);
-        // reached only if the library did not abort
         std::printf("testAbortExitCode: library did NOT abort\n");
     } else if (!rank) {
         std::printf("testAbortExitCode: setup failed, mesh not on 2 ranks\n");
     }
     delete mesh;
     MPI_Finalize();
-    return 0;
+    return onTwo ? 0 : 1;
 }
