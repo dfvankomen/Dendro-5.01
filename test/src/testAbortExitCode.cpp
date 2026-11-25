@@ -1,7 +1,7 @@
-// Oracle: run by test/expect_abort.cmake, which needs a nonzero mpirun exit and
-// the library's abort message. Calls readFromGhostEnd on a vector that had no
-// Begin, a fatal library error. Catches: MPI_Abort(comm, 0), which Open MPI
-// turns into mpirun exit 0, so the fatal error looked like a pass.
+// Oracle: test/expect_abort.cmake passes only if mpirun exits nonzero and the
+// output has "async ctx not found". readFromGhostEnd on a vector that had no
+// Begin is a fatal library error. Catches: MPI_Abort(comm, 0), which made
+// mpirun exit 0 under Open MPI 5, so the fatal error looked like a pass.
 // Usage: mpirun -np 2 testAbortExitCode
 
 #include <mpi.h>
@@ -50,10 +50,11 @@ int main(int argc, char** argv) {
     if (mesh->isActive() && mesh->getMPICommSize() == 2) {
         std::vector<double> vec(mesh->getDegOfFreedom(), 0.0);
         mesh->readFromGhostEnd(vec.data(), 1);
+        // reached only if the library did not abort
+        std::printf("testAbortExitCode: library did NOT abort\n");
+    } else if (!rank) {
+        std::printf("testAbortExitCode: setup failed, mesh not on 2 ranks\n");
     }
-    // Reached only if the library did not abort; the wrapper then fails on the
-    // missing abort message.
-    if (!rank) std::printf("testAbortExitCode: library did NOT abort\n");
     delete mesh;
     MPI_Finalize();
     return 0;
