@@ -1,7 +1,7 @@
-// Oracle: an FEM_DG mesh on 2+ active ranks builds, and each rank's DG nodal
-// recv offsets are its element recv offsets times nodes per element.
-// Catches: nodal offsets copied onto themselves ("DG node mismatch" abort);
-// under ASan, buildF2EMap's heap overflow and the delete of unset splitters.
+// Oracle: an FEM_DG mesh builds on 2+ active ranks and the run exits 0 (see
+// test/expect_pass.cmake); the offset check restates the fix. Catches: the "DG
+// node mismatch" abort; under ASan, buildF2EMap's overflow and the delete of
+// splitters the DG path never allocates. F2E map contents are not checked.
 // Usage: mpirun -np <n >= 2> testDGScatterMap
 
 #include <mpi.h>
