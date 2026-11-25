@@ -585,8 +585,15 @@ if(BUILD_DENDRO_EXAMPLES)
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
                    ${MPIEXEC_POSTFLAGS} 6 1e-3)
+  # 3 ranks: catches an inactive rank skipping the collective computeMinMaxLevel
+  add_test(NAME testMeshInvariants_3rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3)
   set_tests_properties(testMeshInvariants testMeshInvariants_2rank
-                       PROPERTIES TIMEOUT 600)
+                       testMeshInvariants_3rank PROPERTIES TIMEOUT 600)
+  set_tests_properties(testMeshInvariants_3rank PROPERTIES
+                       PASS_REGULAR_EXPRESSION "mesh invariants: PASS")
   if(DENDRO_ENABLE_HDF5)
     dendro_add_example(testVTKHDF test/src/testVTKHDF.cpp)
     add_test(NAME testVTKHDF COMMAND testVTKHDF 6 1e-3)
