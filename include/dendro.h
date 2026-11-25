@@ -161,7 +161,6 @@ extern unsigned int MAXDEAPTH_LEVEL_DIFF;
 #define VERTEX_OFFSET     4
 #define ROTATION_OFFSET   8
 #define MAX_HANGING_FACES 2
-#define F2E_MAP_OFFSET    4
 #else
 #define NUM_CHILDREN      8
 #define NUM_FACES         6
@@ -170,7 +169,6 @@ extern unsigned int MAXDEAPTH_LEVEL_DIFF;
 #define VERTEX_OFFSET     18
 #define ROTATION_OFFSET   16
 #define MAX_HANGING_FACES 4
-#define F2E_MAP_OFFSET    6
 #endif
 
 #define F2E_FACE_DIR_OFFSET  3
@@ -196,8 +194,6 @@ extern unsigned int MAXDEAPTH_LEVEL_DIFF;
 #define ODA_INDEPENDENT_FLAG_BIT 0
 #define ODA_W_DEPENDENT_FLAG_BIT 1
 #define ODA_W_BOUNDARY_FLAG_BIT  2
-// used in face to element map.
-#define ODA_FLAGS_TOTAL 3
 
 void __handler(int sig);
 

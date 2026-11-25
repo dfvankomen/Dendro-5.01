@@ -545,19 +545,11 @@ class Mesh {
     /**@brief: ghost elements needed for FEM computation*/
     std::vector<unsigned int> m_uiFEMGhostLev1IDs;
 
-    //===== maps needed for DG computations.
-
-    /**@brief: stores the face to element map. */
-    std::vector<unsigned int> m_uiF2EMap;
-
     /**@brief: indicate octree to block decomposition performed or not*/
     bool m_uiIsBlockSetup;
 
     /** type of the build scatter map.*/
     SM_TYPE m_uiScatterMapType;
-
-    /**@brief indicates whether the f2e map has build or not*/
-    bool m_uiIsF2ESetup;
 
     /**@brief: async comunication context to support async ghost exchange*/
     std::vector<AsyncExchangeContex> m_uiMPIContexts;
@@ -941,18 +933,6 @@ class Mesh {
         std::vector<unsigned int> &edgeOwnerIndex);
 
     /**
-     * @brief: Computes the FACE to element map for each face direction.
-     * @param[in] ele: element ID
-     * @param[in] dir: primary face direction
-     * @param[in] dirOp: opposite face direction for dir
-     * @param[in] dir1: direction 1 (dir 1 and dir2 used to )
-     * @param[in] dir2: direction 2
-     * */
-    void SET_FACE_TO_ELEMENT_MAP(unsigned int ele, unsigned int dir,
-                                 unsigned int dirOp, unsigned int dir1,
-                                 unsigned int dir2);
-
-    /**
      * @brief maps the corner nodes of an elements to a  corresponsing elements.
      * @param[in] child element id in corsideration.
      *  */
@@ -1298,12 +1278,6 @@ class Mesh {
      * */
     void performBlocksSetup(unsigned int cLev, unsigned int *tag,
                             unsigned int tsz);
-
-    /**
-     * @brief computes the face to element map.
-     * needs to be called after e2e and e2n maps has built.
-     **/
-    void buildF2EMap();
 
     /*** @brief: perform block dependancy flags flag block unzip depends on
      * ghost nodes.  */
