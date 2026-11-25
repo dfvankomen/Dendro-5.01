@@ -688,7 +688,13 @@ if(BUILD_DENDRO_EXAMPLES)
                    "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};2;${MPIEXEC_PREFLAGS};$<TARGET_FILE:testAbortExitCode>;${MPIEXEC_POSTFLAGS}"
                    "-DEXPECT=async ctx not found"
                    -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_abort.cmake)
-  set_tests_properties(testAbortExitCode_2rank PROPERTIES TIMEOUT 300)
+  add_test(NAME testAbortExitCode_interp_2rank
+           COMMAND ${CMAKE_COMMAND}
+                   "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};2;${MPIEXEC_PREFLAGS};$<TARGET_FILE:testAbortExitCode>;interp;${MPIEXEC_POSTFLAGS}"
+                   "-DEXPECT=not lies in the element"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_abort.cmake)
+  set_tests_properties(testAbortExitCode_2rank testAbortExitCode_interp_2rank
+                       PROPERTIES TIMEOUT 300)
   dendro_add_example(testUnzipPlanExact test/src/testUnzipPlanExact.cpp)
   foreach(SAB 1 2 3)
     dendro_add_example(testUnzipPlanExact_sabotage${SAB} test/src/testUnzipPlanExact.cpp)

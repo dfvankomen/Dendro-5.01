@@ -164,7 +164,7 @@ void inline initDataFuncToPhysCoords(const double xx1, const double yy1,
 
         default:
             std::cout << "Unknown ID type: " << DERIV_TEST_ID_TYPE << std::endl;
-            exit(0);
+            exit(1);
             break;
     }
 }
@@ -195,7 +195,7 @@ void inline analyticalDerivs(const double xx1, const double yy1,
 
         default:
             std::cout << "Unknown ID type: " << DERIV_TEST_ID_TYPE << std::endl;
-            exit(0);
+            exit(1);
             break;
     }
 }

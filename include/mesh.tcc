@@ -8059,7 +8059,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_BACK_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [LEFT_DOWN_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8091,7 +8091,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_BACK_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [LEFT_DOWN_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8222,7 +8222,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_BACK_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_DOWN_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8254,7 +8254,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_BACK_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_DOWN_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8385,7 +8385,7 @@ void Mesh::OCT_DIR_LEFT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [LEFT_UP_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8417,7 +8417,7 @@ void Mesh::OCT_DIR_LEFT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [LEFT_UP_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8548,7 +8548,7 @@ void Mesh::OCT_DIR_RIGHT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [RIGHT_UP_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8580,7 +8580,7 @@ void Mesh::OCT_DIR_RIGHT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [RIGHT_UP_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8712,7 +8712,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [LEFT_DOWN_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8744,7 +8744,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [LEFT_DOWN_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8875,7 +8875,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_DOWN_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8907,7 +8907,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_DOWN_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -9038,7 +9038,7 @@ void Mesh::OCT_DIR_LEFT_UP_FRONT_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [LEFT_UP_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -9070,7 +9070,7 @@ void Mesh::OCT_DIR_LEFT_UP_FRONT_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [LEFT_UP_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -9201,7 +9201,7 @@ void Mesh::OCT_DIR_RIGHT_UP_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_UP_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -9233,7 +9233,7 @@ void Mesh::OCT_DIR_RIGHT_UP_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_UP_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 

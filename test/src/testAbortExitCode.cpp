@@ -1,17 +1,19 @@
-// Oracle: test/expect_abort.cmake passes only if mpirun exits nonzero and the
-// output has "async ctx not found". readFromGhostEnd on a vector that had no
-// Begin is a fatal library error. Catches: MPI_Abort(comm, 0); the launcher
-// may then exit 0 (implementation-defined), and the fatal error passes.
-// Usage: mpirun -np 2 testAbortExitCode
+// Oracle: test/expect_abort.cmake passes only on a nonzero exit plus the mode's
+// message. ghost: End with no Begin ("async ctx not found"); interp: rank 0
+// reads a point outside its element ("not lies in the element"), rank 1 waits.
+// Catches: MPI_Abort(comm, 0) or exit(0) on a fatal error (launcher exits 0).
+// Usage: mpirun -np 2 testAbortExitCode [ghost|interp]
 
 #include <mpi.h>
 
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <string>
 #include <vector>
 
 #include "TreeNode.h"
+#include "daUtils.h"
 #include "dendro.h"
 #include "mesh.h"
 #include "meshUtils.h"
@@ -22,8 +24,11 @@ int main(int argc, char** argv) {
     int rank, npes;
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &npes);
-    if (npes != 2) {
-        if (!rank) std::fprintf(stderr, "usage: mpirun -np 2 %s\n", argv[0]);
+    const std::string mode = (argc > 1) ? argv[1] : "ghost";
+    if (npes != 2 || (mode != "ghost" && mode != "interp")) {
+        if (!rank)
+            std::fprintf(stderr, "usage: mpirun -np 2 %s [ghost|interp]\n",
+                         argv[0]);
         MPI_Abort(comm, 2);
     }
 
@@ -50,8 +55,18 @@ int main(int argc, char** argv) {
     const bool onTwo = mesh->isActive() && mesh->getMPICommSize() == 2;
     if (onTwo) {
         std::vector<double> vec(mesh->getDegOfFreedom(), 0.0);
-        mesh->readFromGhostEnd(vec.data(), 1);
-        std::printf("testAbortExitCode: library did NOT abort\n");
+        if (mode == "ghost") {
+            mesh->readFromGhostEnd(vec.data(), 1);
+        } else if (!mesh->getMPIRank()) {
+            double x[3] = {5.0, 0.5, 0.5};  // outside [0,1]^3
+            ot::da::lagrangeInterpElementToCoord(
+                mesh, vec.data(), x, Point(0, 0, 0), Point(1, 1, 1),
+                mesh->getElementLocalBegin(), eOrder);
+        }
+        MPI_Barrier(mesh->getMPICommunicator());
+        if (!mesh->getMPIRank())
+            std::printf("testAbortExitCode %s: library did NOT abort\n",
+                        mode.c_str());
     } else if (!rank) {
         std::printf("testAbortExitCode: setup failed, mesh not on 2 ranks\n");
     }

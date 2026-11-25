@@ -304,7 +304,7 @@ static inline int cuda_mpi_aware_init() {
     } else {
         std::cout
             << "local rank extraction through env. vars failed for cuda init";
-        exit(0);
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
     cudaGetDeviceCount(&devCount);

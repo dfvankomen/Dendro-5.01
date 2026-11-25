@@ -72,7 +72,7 @@ T lagrangeInterpElementToCoord(const ot::Mesh* mesh, const T* in,
                   << allElements[elementID] << std::endl;
         std::cout << "d_point : " << d_pt << " pt_min : " << pt_min
                   << " pt_max: " << pt_max << std::endl;
-        exit(0);
+        MPI_Abort(mesh->getMPIGlobalCommunicator(), 1);
     }
 
     if (domain_coord[1] < pt_min.y() || domain_coord[1] > pt_max.y()) {
@@ -82,7 +82,7 @@ T lagrangeInterpElementToCoord(const ot::Mesh* mesh, const T* in,
                   << allElements[elementID] << std::endl;
         std::cout << "d_point : " << d_pt << " pt_min : " << pt_min
                   << " pt_max: " << pt_max << std::endl;
-        exit(0);
+        MPI_Abort(mesh->getMPIGlobalCommunicator(), 1);
     }
 
     if (domain_coord[2] < pt_min.z() || domain_coord[2] > pt_max.z()) {
@@ -92,7 +92,7 @@ T lagrangeInterpElementToCoord(const ot::Mesh* mesh, const T* in,
                   << allElements[elementID] << std::endl;
         std::cout << "d_point : " << d_pt << " pt_min : " << pt_min
                   << " pt_max: " << pt_max << std::endl;
-        exit(0);
+        MPI_Abort(mesh->getMPIGlobalCommunicator(), 1);
     }
 
     std::vector<T> nodalValues;
@@ -231,7 +231,7 @@ T linear_lagrange(const ot::Mesh* mesh, const T* in, double* domain_coord,
                   << allElements[elementID] << std::endl;
         std::cout << "d_point : " << d_pt << " pt_min : " << pt_min
                   << " pt_max: " << pt_max << std::endl;
-        exit(0);
+        MPI_Abort(mesh->getMPIGlobalCommunicator(), 1);
     }
 
     if (domain_coord[1] < pt_min.y() || domain_coord[1] > pt_max.y()) {
@@ -241,7 +241,7 @@ T linear_lagrange(const ot::Mesh* mesh, const T* in, double* domain_coord,
                   << allElements[elementID] << std::endl;
         std::cout << "d_point : " << d_pt << " pt_min : " << pt_min
                   << " pt_max: " << pt_max << std::endl;
-        exit(0);
+        MPI_Abort(mesh->getMPIGlobalCommunicator(), 1);
     }
 
     if (domain_coord[2] < pt_min.z() || domain_coord[2] > pt_max.z()) {
@@ -251,7 +251,7 @@ T linear_lagrange(const ot::Mesh* mesh, const T* in, double* domain_coord,
                   << allElements[elementID] << std::endl;
         std::cout << "d_point : " << d_pt << " pt_min : " << pt_min
                   << " pt_max: " << pt_max << std::endl;
-        exit(0);
+        MPI_Abort(mesh->getMPIGlobalCommunicator(), 1);
     }
 
     std::vector<T> nodalValues;
