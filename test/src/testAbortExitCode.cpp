@@ -1,7 +1,7 @@
 // Oracle: test/expect_abort.cmake passes only if mpirun exits nonzero and the
 // output has "async ctx not found". readFromGhostEnd on a vector that had no
-// Begin is a fatal library error. Catches: MPI_Abort(comm, 0), which made
-// mpirun exit 0 under Open MPI 5, so the fatal error looked like a pass.
+// Begin is a fatal library error. Catches: MPI_Abort(comm, 0); the launcher
+// may then exit 0 (implementation-defined), and the fatal error passes.
 // Usage: mpirun -np 2 testAbortExitCode
 
 #include <mpi.h>
