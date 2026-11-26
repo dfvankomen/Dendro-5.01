@@ -1,7 +1,7 @@
 // Oracle: INJECTION intergrid transfer of a tensor-degree-eleOrder polynomial
 // (dof = 2) onto a remeshed grid that both split and coarsened octants equals
 // the polynomial at every new local node, to roundoff. Catches: wrong child
-// interpolation (split), dof stride; a mutated injection index was not caught.
+// interpolation (split) or injection index (coarsen), dof stride, NaN output.
 // Usage: mpirun -np <n> testInterGridTransfer [maxDepth=6]
 
 #include <mpi.h>
@@ -140,8 +140,10 @@ int main(int argc, char** argv) {
             for (unsigned int d = 0; d < dof; d++)
                 for (unsigned int i = mB->getNodeLocalBegin();
                      i < mB->getNodeLocalEnd(); i++) {
-                    err = std::max(
-                        err, std::fabs(out[d * nN + i] - expect[d * nN + i]));
+                    // a NaN output must fail: std::max would drop it
+                    const double e =
+                        std::fabs(out[d * nN + i] - expect[d * nN + i]);
+                    err  = std::isnan(e) ? INFINITY : std::max(err, e);
                     fmax = std::max(fmax, std::fabs(expect[d * nN + i]));
                 }
             delete[] expect;
