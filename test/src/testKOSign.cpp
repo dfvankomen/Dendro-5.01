@@ -225,9 +225,8 @@ int main() {
         }
     }
 
-    // KIM in-matrix filter: one coefficient leaves kc = pi, the identity, so it
-    // must refuse; {1, 0.5} must change the JTT6 operator (measured 0.65
-    // relative, the identity 7e-16, so the 1e-3 gate splits them)
+    // KIM in-matrix: one coefficient leaves kc = pi (identity filter), so it
+    // must throw; {1, 0.5} must change the JTT6 operator
     {
         const unsigned int eo = 10, n = 21; const size_t tot = (size_t)n * n * n; const unsigned int sz[3] = {n, n, n};
         auto make = [&](const std::vector<double>& c) { return std::make_unique<DendroDerivatives>("JTT6", "E6", eo, std::vector<double>(), std::vector<double>(), 0u, 0u, c.empty() ? "none" : "KIM", "none", c, std::vector<double>(), "KO4"); };
@@ -248,7 +247,7 @@ int main() {
     }
 
     // info: does an in-matrix filter change the first-derivative operator?
-    for (const std::string f : {"KIM", "BYUT6"}) {
+    for (const std::string f : {"BYUT6"}) {
         const unsigned int eo = 10, n = 21; const size_t tot = (size_t)n * n * n; const unsigned int sz[3] = {n, n, n};
         try {
             DendroDerivatives a("JTT6", "E6", eo, std::vector<double>(), std::vector<double>(), 0u, 0u, "none", "none", std::vector<double>(), std::vector<double>(), "KO4");

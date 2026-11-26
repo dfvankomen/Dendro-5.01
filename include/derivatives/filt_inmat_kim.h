@@ -23,11 +23,10 @@ inline MatrixDiagonalEntries* create_Kim_filter_diagonals(
 
     const double pi = 3.141592654;
 
-    // kc_factor defaults to 1, i.e. kc = pi, where the filter is the identity
     if (F_coeffs.size() < 2) {
         throw std::invalid_argument(
-            "KIM in-matrix filter needs at least {sigma, kc_factor}; with "
-            "fewer, kc = pi and the filter does nothing");
+            "KIM in-matrix filter needs kc_factor as its second coefficient; "
+            "without it kc = pi and the filter is the identity");
     }
 
     // New layout:
