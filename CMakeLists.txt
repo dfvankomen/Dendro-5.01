@@ -598,6 +598,36 @@ if(BUILD_DENDRO_EXAMPLES)
   endif()
   add_test(NAME testUnzipExact COMMAND testUnzipExact 6 1e-3)
   set_tests_properties(testUnzipExact PROPERTIES TIMEOUT 600)
+  # unzip and zip exactness off one rank, the active count part of the expected
+  # output: grain 1000000 keeps 2 of 3 ranks active, grain 10 all 4 (measured)
+  foreach(CASE "3;1000000;2" "4;10;4")
+    list(GET CASE 0 NP)
+    list(GET CASE 1 GRAIN)
+    list(GET CASE 2 ACT)
+    add_test(NAME testUnzipExact_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testUnzipExact>;${MPIEXEC_POSTFLAGS};6;1e-3;${GRAIN}"
+                     "-DEXPECT=active ranks: ${ACT} of ${NP}.*unzip exactness: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    add_test(NAME testZipExact_eO6_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testZipExact>;${MPIEXEC_POSTFLAGS};6;1e-3;0.1;6;4;${GRAIN}"
+                     "-DEXPECT=active ranks: ${ACT} of ${NP}.*testZipExact: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testUnzipExact_${NP}rank testZipExact_eO6_${NP}rank
+                         PROPERTIES TIMEOUT 600)
+  endforeach()
+  # remesh decision: 8 ranks carry the premerge label
+  dendro_add_example(testRemeshFlags test/src/testRemeshFlags.cpp)
+  foreach(NP 1 3 8)
+    add_test(NAME testRemeshFlags_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testRemeshFlags>;${MPIEXEC_POSTFLAGS}"
+                     "-DEXPECT=testRemeshFlags np ${NP}: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testRemeshFlags_${NP}rank PROPERTIES TIMEOUT 300)
+  endforeach()
+  set_tests_properties(testRemeshFlags_8rank PROPERTIES LABELS premerge)
   add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
   dendro_add_example(testBlockRegroupE2B test/src/testBlockRegroupE2B.cpp)
   add_test(NAME testBlockRegroupE2B COMMAND testBlockRegroupE2B)
