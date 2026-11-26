@@ -6,6 +6,7 @@
  * School of Computing, University of Utah.
  * @brief contains utilitity functions of mesh based distributed array(da)
  * */
+#include <algorithm>
 #include <iostream>
 
 #include "TreeNode.h"
@@ -444,6 +445,12 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
         std::vector<ot::SearchKey> coordOcts_skey;
         unsigned int octree_coords[m_uiDim];
 
+        // a point on an upper domain face maps to the grid's top, outside
+        // every half-open octant: clamp it into the last octant below
+        const unsigned int grid_top[3] = {
+            (unsigned int)grid_limit[1].x() - 1,
+            (unsigned int)grid_limit[1].y() - 1,
+            (unsigned int)grid_limit[1].z() - 1};
         unsigned int n_skipped = 0;
         for (unsigned int i = 0; i < numPts; i++) {
             const double cx = domain_coords[m_uiDim * i + 0];
@@ -469,6 +476,8 @@ void interpolateToCoords(const ot::Mesh* mesh, const T* in,
             octree_coords[2] = (unsigned int)(grid_limit[0].z() +
                                               (cz - domain_limit[0].z()) *
                                                   (gridRangeZ / domainRangeZ));
+            for (unsigned int d = 0; d < m_uiDim; d++)
+                octree_coords[d] = std::min(octree_coords[d], grid_top[d]);
 
             coordOcts_skey.push_back(ot::SearchKey(
                 octree_coords[0], octree_coords[1], octree_coords[2],

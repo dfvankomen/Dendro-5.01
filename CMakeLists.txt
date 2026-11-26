@@ -700,6 +700,15 @@ if(BUILD_DENDRO_EXAMPLES)
   set_tests_properties(testStabilityEvolution_eO8 PROPERTIES TIMEOUT 300)
   dendro_add_example(testIsReMeshUnzip test/src/testIsReMeshUnzip.cpp)
   dendro_add_example(testInterpFaceClamp test/src/testInterpFaceClamp.cpp)
+  dendro_add_example(testPointInterp test/src/testPointInterp.cpp)
+  foreach(NP 1 3)
+    add_test(NAME testPointInterp_${NP}rank
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${NP}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testPointInterp>
+                     ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(testPointInterp_${NP}rank PROPERTIES TIMEOUT 300
+                         PASS_REGULAR_EXPRESSION "testPointInterp np ${NP}: PASS")
+  endforeach()
   dendro_add_example(testAehBhahahaGuards test/src/testAehBhahahaGuards.cpp)
   add_test(NAME testAehBhahahaGuards COMMAND testAehBhahahaGuards)
   dendro_add_example(testAehCheckpointStatus
