@@ -77,7 +77,8 @@ static int dropCase(const std::vector<ot::TreeNode>& all,
     MPI_Comm_size(comm, &npes);
     std::vector<ot::TreeNode> in(all.begin() + begin[rank],
                                  all.begin() + begin[rank + 1]);
-    ot::Mesh mesh(in, 1, 2, npes, comm);
+    // unsigned: an int npes is ambiguous when MPI_Comm is int (MPICH)
+    ot::Mesh mesh(in, 1, 2, (unsigned int)npes, comm);
     std::vector<unsigned int> flags(mesh.getNumLocalMeshElements(), OCT_COARSE);
     mesh.setMeshRefinementFlags(flags);
     DendroIntL loc = mesh.getNumCoarsenDroppedAtRankBoundary(), got = 0;
