@@ -171,11 +171,6 @@ extern unsigned int MAXDEAPTH_LEVEL_DIFF;
 #define MAX_HANGING_FACES 4
 #endif
 
-#define F2E_FACE_DIR_OFFSET  3
-#define F2E_NUM_MAX_FACE_DIR 7
-#define F2E_FACE_INDEPEN_BIT 3
-#define F2E_FACE_DEPEN_BIT   4
-
 // AMR coarsening factor.
 #define DENDRO_AMR_COARSEN_FAC 0.1
 

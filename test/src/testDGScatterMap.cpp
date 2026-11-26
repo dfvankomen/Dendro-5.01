@@ -1,8 +1,7 @@
 // Oracle: an FEM_DG mesh builds on 2+ active ranks and the run exits 0 (see
-// test/expect_pass.cmake). It also checks nodal recv offsets == element recv
-// offsets x nodes per element (a regression guard only).
-// Catches: the "DG node mismatch" abort; under ASan, the delete of splitters
-// the DG path never allocates.
+// test/expect_pass.cmake); nodal recv offsets == element recv offsets x nodes
+// per element (a regression guard only). Catches: the "DG node mismatch" abort;
+// under ASan, the delete of splitters the DG path never allocates.
 // Usage: mpirun -np <n >= 2> testDGScatterMap
 
 #include <mpi.h>
