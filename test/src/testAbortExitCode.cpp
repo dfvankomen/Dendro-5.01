@@ -1,8 +1,8 @@
-// Oracle: test/expect_abort.cmake passes only on a nonzero exit plus the mode's
-// message. ghost: End with no Begin ("async ctx not found"); interp: rank 0
-// reads a point outside its element ("not lies in the element"), rank 1 waits.
-// Catches: MPI_Abort(comm, 0) or exit(0) on a fatal error (launcher exits 0).
-// Usage: mpirun -np 2 testAbortExitCode [ghost|interp]
+// Oracle: test/expect_abort.cmake needs a nonzero exit plus the mode's message.
+// ghost (2 ranks): End with no Begin. interp: rank 0 reads a point outside its
+// element; rank 1, if any, waits. Catches: MPI_Abort(comm, 0); exit(0) in the
+// singleton interp run (mpirun itself exits 1 on an unfinalized exit(0)).
+// Usage: [mpirun -np 2] testAbortExitCode [ghost|interp] (ghost: 2 ranks)
 
 #include <mpi.h>
 
@@ -25,10 +25,14 @@ int main(int argc, char** argv) {
     MPI_Comm_rank(comm, &rank);
     MPI_Comm_size(comm, &npes);
     const std::string mode = (argc > 1) ? argv[1] : "ghost";
-    if (npes != 2 || (mode != "ghost" && mode != "interp")) {
+    const bool sizeOk      = npes == 2 || (mode == "interp" && npes == 1);
+    if (!sizeOk || (mode != "ghost" && mode != "interp")) {
         if (!rank)
-            std::fprintf(stderr, "usage: mpirun -np 2 %s [ghost|interp]\n",
-                         argv[0]);
+            std::fprintf(
+                stderr,
+                "usage: [mpirun -np 2] %s [ghost|interp] (ghost needs 2 "
+                "ranks)\n",
+                argv[0]);
         MPI_Abort(comm, 2);
     }
 
@@ -52,8 +56,8 @@ int main(int argc, char** argv) {
         tmpNodes.data(), tmpNodes.size(), eOrder, comm, 1, ot::SM_TYPE::FDM,
         DENDRO_DEFAULT_GRAIN_SZ, 0.1, DENDRO_DEFAULT_SF_K);
 
-    const bool onTwo = mesh->isActive() && mesh->getMPICommSize() == 2;
-    if (onTwo) {
+    const bool onAll = mesh->isActive() && mesh->getMPICommSize() == npes;
+    if (onAll) {
         std::vector<double> vec(mesh->getDegOfFreedom(), 0.0);
         if (mode == "ghost") {
             mesh->readFromGhostEnd(vec.data(), 1);
@@ -68,9 +72,10 @@ int main(int argc, char** argv) {
             std::printf("testAbortExitCode %s: library did NOT abort\n",
                         mode.c_str());
     } else if (!rank) {
-        std::printf("testAbortExitCode: setup failed, mesh not on 2 ranks\n");
+        std::printf("testAbortExitCode: setup failed, mesh not on %d ranks\n",
+                    npes);
     }
     delete mesh;
     MPI_Finalize();
-    return onTwo ? 0 : 1;
+    return onAll ? 0 : 1;
 }
