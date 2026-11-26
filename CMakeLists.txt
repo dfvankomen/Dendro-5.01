@@ -581,7 +581,13 @@ if(BUILD_DENDRO_EXAMPLES)
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGatherFromGhost>
                    ${MPIEXEC_POSTFLAGS} unknown)
-  set_tests_properties(testGatherFromGhost_values_2rank PROPERTIES TIMEOUT 300
+  # 4 ranks: some owned nodes have 2+ ghost copies
+  add_test(NAME testGatherFromGhost_values_4rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGatherFromGhost>
+                   ${MPIEXEC_POSTFLAGS} values)
+  set_tests_properties(testGatherFromGhost_values_2rank
+                       testGatherFromGhost_values_4rank PROPERTIES TIMEOUT 300
                        PASS_REGULAR_EXPRESSION "testGatherFromGhost values: PASS")
   set_tests_properties(testGatherFromGhost_unknown_2rank PROPERTIES TIMEOUT 300
                        PASS_REGULAR_EXPRESSION "async ctx not found for vec: .* in gatherFromGhostEnd"
