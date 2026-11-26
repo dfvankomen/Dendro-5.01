@@ -2465,8 +2465,8 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                       << "[E2E Error]: Local edge or vertex key missing after "
                          "R1 (face edge vertex) ghost exchange: "
                       << m_uiKeysPtr[k] << std::endl;
-            MPI_Abort(m_uiCommGlobal, 1);  // no point in continuing if this fails E2N fails for sure
-                      // :)
+            // no point in continuing: if this fails, E2N fails for sure
+            MPI_Abort(m_uiCommGlobal, 1);
         }
     }
 

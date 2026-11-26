@@ -693,8 +693,8 @@ if(BUILD_DENDRO_EXAMPLES)
                    "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};2;${MPIEXEC_PREFLAGS};$<TARGET_FILE:testAbortExitCode>;interp;${MPIEXEC_POSTFLAGS}"
                    "-DEXPECT=not lies in the element"
                    -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_abort.cmake)
-  # no launcher: mpirun exits 1 on an unfinalized exit(0), hiding it; an MPI
-  # that cannot start a singleton fails this test (intended, no skip)
+  # singleton (no launcher), so an exit(0) is seen; an MPI that cannot start a
+  # singleton fails this test (intended, no skip)
   add_test(NAME testAbortExitCode_interp_singleton
            COMMAND ${CMAKE_COMMAND}
                    "-DCMD=$<TARGET_FILE:testAbortExitCode>;interp"

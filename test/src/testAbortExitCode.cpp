@@ -1,7 +1,7 @@
 // Oracle: test/expect_abort.cmake needs a nonzero exit plus the mode's message.
 // ghost (2 ranks): End with no Begin. interp: rank 0 reads a point outside its
-// element; rank 1, if any, waits. Catches: MPI_Abort(comm, 0); exit(0) in the
-// singleton interp run (mpirun itself exits 1 on an unfinalized exit(0)).
+// element; rank 1, if any, waits. Catches: MPI_Abort(comm, 0) or exit(0) on
+// a fatal error (exit(0) only in the singleton run).
 // Usage: [mpirun -np 2] testAbortExitCode [ghost|interp] (ghost: 2 ranks)
 
 #include <mpi.h>
