@@ -603,6 +603,30 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS} 6 1e-3 8)
   set_tests_properties(testBlockTypeAudit_4rank PROPERTIES TIMEOUT 300
                        PASS_REGULAR_EXPRESSION "testBlockTypeAudit np 4 .*: PASS")
+  # coarsening must not depend on the rank count; label premerge: above 4 ranks
+  dendro_add_example(testCoarsenRankIndependence
+                     test/src/testCoarsenRankIndependence.cpp)
+  foreach(NP 1 2 3 4 8)
+    add_test(NAME testCoarsenRankIndependence_${NP}rank
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${NP}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testCoarsenRankIndependence>
+                     ${MPIEXEC_POSTFLAGS} 8)
+    set_tests_properties(testCoarsenRankIndependence_${NP}rank PROPERTIES
+                         TIMEOUT 300 PASS_REGULAR_EXPRESSION
+                         "testCoarsenRankIndependence np ${NP} .*: PASS")
+  endforeach()
+  set_tests_properties(testCoarsenRankIndependence_8rank PROPERTIES
+                       LABELS premerge)
+  dendro_add_example(testSiblingEnforce test/src/testSiblingEnforce.cpp)
+  foreach(NP 3 4 8)
+    add_test(NAME testSiblingEnforce_${NP}rank
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${NP}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testSiblingEnforce>
+                     ${MPIEXEC_POSTFLAGS})
+    set_tests_properties(testSiblingEnforce_${NP}rank PROPERTIES TIMEOUT 120
+                         PASS_REGULAR_EXPRESSION "testSiblingEnforce np ${NP}: PASS")
+  endforeach()
+  set_tests_properties(testSiblingEnforce_8rank PROPERTIES LABELS premerge)
   if(DENDRO_ENABLE_HDF5)
     dendro_add_example(testVTKHDF test/src/testVTKHDF.cpp)
     add_test(NAME testVTKHDF COMMAND testVTKHDF 6 1e-3)
