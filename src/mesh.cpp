@@ -515,6 +515,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                       << m_uiActiveNpes << std::endl;
 
         if (in.size() <= 1) {
+            // std::cout, not the logger: written before MPI_Abort ends the run
             std::cout << "rank: " << m_uiActiveRank << " input octree of size "
                       << in.size() << " is too small for the current comm.  "
                       << std::endl;
@@ -14561,8 +14562,8 @@ bool Mesh::setMeshRefinementFlags(
     if (m_uiNumCoarsenDroppedAtRankBoundary)
         dendro::logger::warn(
             dendro::logger::Scope{"MESH"},
-            "rank {}: {} coarsen request(s) dropped: a rank boundary splits "
-            "their sibling group",
+            "rank {}: {} element(s) flagged to coarsen whose sibling group "
+            "spans a rank boundary (upper bound on blocked merges)",
             m_uiActiveRank, m_uiNumCoarsenDroppedAtRankBoundary);
     return isMeshChangeLocal;
 }

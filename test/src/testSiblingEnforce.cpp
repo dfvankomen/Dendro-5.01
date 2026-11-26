@@ -2,8 +2,7 @@
 // octants unchanged (a group over three ranks; every boundary cutting one); on
 // a cut partition with all elements coarsening, exactly 8 per cut group count
 // as dropped. Catches: a single pass leaving the 3-rank group split; a dropped
-// counter that misses or overcounts. Usage: mpirun -np <3..8>
-// testSiblingEnforce
+// counter that misses or overcounts. Usage: mpirun -np 3..8 testSiblingEnforce
 
 #include <mpi.h>
 

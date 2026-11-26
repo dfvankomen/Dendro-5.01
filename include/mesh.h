@@ -559,7 +559,7 @@ class Mesh {
     /**@brief indicates whether the f2e map has build or not*/
     bool m_uiIsF2ESetup;
 
-    /**@brief coarsen requests the last setMeshRefinementFlags dropped */
+    /**@brief see getNumCoarsenDroppedAtRankBoundary() */
     DendroIntL m_uiNumCoarsenDroppedAtRankBoundary = 0;
 
     /**@brief: async comunication context to support async ghost exchange*/
@@ -2817,8 +2817,9 @@ class Mesh {
     bool setMeshRefinementFlags(const std::vector<unsigned int> &refine_flags);
 
     /**
-     * @brief Local count of coarsen requests the last setMeshRefinementFlags
-     * dropped because a rank boundary splits their full sibling group.
+     * @brief Local count, from the last setMeshRefinementFlags, of elements
+     * flagged to coarsen whose sibling group spans a rank boundary (an upper
+     * bound on blocked merges).
      */
     DendroIntL getNumCoarsenDroppedAtRankBoundary() const {
         return m_uiNumCoarsenDroppedAtRankBoundary;

@@ -1042,6 +1042,7 @@ void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
     if (!siblingGroupsAreWhole(in, comm)) {
         int rank;
         MPI_Comm_rank(comm, &rank);
+        // std::cout, not the logger: written before MPI_Abort ends the run
         if (!rank)
             std::cout << "enforceSiblingsAreNotPartitioned: a sibling group "
                          "still spans a rank boundary"
