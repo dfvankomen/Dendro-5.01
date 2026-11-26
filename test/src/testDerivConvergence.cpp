@@ -32,7 +32,6 @@
 #include <iomanip>
 #include <iostream>
 #include <memory>
-#include <span>
 #include <string>
 #include <vector>
 
@@ -660,7 +659,9 @@ static const OrderBaseline kBaselineO8[] = {
     {"E8Simd", 2, 7.5, 5.0},   {"E8Matrix", 2, 7.5, 5.0},
 };
 
-static std::span<const OrderBaseline> g_baseline = kBaseline;
+// a copy, not std::span: the library builds as C++17
+static std::vector<OrderBaseline> g_baseline(std::begin(kBaseline),
+                                             std::end(kBaseline));
 
 static bool g_gate = false;
 static unsigned int g_gate_checked = 0, g_gate_failed = 0;
@@ -865,7 +866,7 @@ int main(int argc, char **argv) {
         std::cout << std::string(85, '-') << "\n";
     }
 
-    g_baseline = kBaselineO8;
+    g_baseline.assign(std::begin(kBaselineO8), std::end(kBaselineO8));
     N_SWEEP    = {25, 33, 41, 49, 57};
     for (unsigned int eo : {8u, 10u}) {
         ELEORDER = eo;
