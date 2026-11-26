@@ -585,8 +585,15 @@ if(BUILD_DENDRO_EXAMPLES)
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
                    ${MPIEXEC_POSTFLAGS} 6 1e-3)
+  # 3 ranks: catches an inactive rank skipping the collective computeMinMaxLevel
+  add_test(NAME testMeshInvariants_3rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3)
   set_tests_properties(testMeshInvariants testMeshInvariants_2rank
-                       PROPERTIES TIMEOUT 600)
+                       testMeshInvariants_3rank PROPERTIES TIMEOUT 600)
+  set_tests_properties(testMeshInvariants_3rank PROPERTIES
+                       PASS_REGULAR_EXPRESSION "mesh invariants: PASS")
   dendro_add_example(testSiblingPartition test/src/testSiblingPartition.cpp)
   # 10 ranks: the split needs a few dozen elements per rank
   add_test(NAME testSiblingPartition_10rank
@@ -594,6 +601,7 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testSiblingPartition>
                    ${MPIEXEC_POSTFLAGS} 3 8)
   set_tests_properties(testSiblingPartition_10rank PROPERTIES TIMEOUT 300
+                       LABELS premerge
                        PASS_REGULAR_EXPRESSION "testSiblingPartition np 10 .*: PASS")
   dendro_add_example(testBlockTypeAudit test/src/testBlockTypeAudit.cpp)
   # 4 ranks: both orders keep independent blocks next to rank boundaries
@@ -750,6 +758,12 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS})
   set_tests_properties(testAehTrackedCenter testAehTrackedCenter_2rank
                        PROPERTIES TIMEOUT 300 ENVIRONMENT OMP_NUM_THREADS=2)
+  dendro_add_example(testOctUtilsEdges test/src/testOctUtilsEdges.cpp)
+  add_test(NAME testOctUtilsEdges COMMAND testOctUtilsEdges)
+  add_test(NAME testOctUtilsEdges_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testOctUtilsEdges>
+                   ${MPIEXEC_POSTFLAGS})
   dendro_add_example(testETSErrorControl test/src/testETSErrorControl.cpp)
   add_test(NAME testETSErrorControl COMMAND testETSErrorControl 4 4)
   add_test(NAME testETSErrorControl_2rank
