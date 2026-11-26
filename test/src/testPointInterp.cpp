@@ -88,7 +88,14 @@ int main(int argc, char** argv) {
         MPI_Allgatherv(corners.data(), nc, MPI_UNSIGNED, allCorners.data(),
                        cnt.data(), off.data(), MPI_UNSIGNED, comm);
         for (unsigned int g : allCorners) pts.push_back(toDom(g));
-        // the domain's upper faces
+        // the domain's upper faces: each face alone, each upper edge, the
+        // corner; then the x face against the lower faces
+        const double m = lo + 0.37 * (hi - lo);
+        for (double x : {m, hi})
+            for (double y : {m, hi})
+                for (double z : {m, hi})
+                    if (x == hi || y == hi || z == hi)
+                        pts.insert(pts.end(), {x, y, z});
         for (double a : {lo, 0.5 * (lo + hi), hi})
             for (double b : {lo, hi}) pts.insert(pts.end(), {hi, a, b});
         const unsigned int n = pts.size() / 3;
@@ -126,8 +133,8 @@ int main(int argc, char** argv) {
             faceMiss += face && found_g[i] != 1;
             notOnce += found_g[i] != 1;
         }
-        // relative to max|f|: degree-p polynomials are reproduced exactly, so
-        // only roundoff remains (measured worst 1.1e-15; 1e-12 leaves 1000x)
+        // relative to max|f|; degree-p polynomials are exact, so a roundoff
+        // bound
         const double rel = err_g / fmax_g;
         const bool ok    = rel < 1e-12 && notOnce == 0;
         if (!rank)

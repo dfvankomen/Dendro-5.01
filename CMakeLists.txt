@@ -703,11 +703,11 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testPointInterp test/src/testPointInterp.cpp)
   foreach(NP 1 3)
     add_test(NAME testPointInterp_${NP}rank
-             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${NP}
-                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testPointInterp>
-                     ${MPIEXEC_POSTFLAGS})
-    set_tests_properties(testPointInterp_${NP}rank PROPERTIES TIMEOUT 300
-                         PASS_REGULAR_EXPRESSION "testPointInterp np ${NP}: PASS")
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testPointInterp>;${MPIEXEC_POSTFLAGS}"
+                     "-DEXPECT=testPointInterp np ${NP}: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testPointInterp_${NP}rank PROPERTIES TIMEOUT 300)
   endforeach()
   dendro_add_example(testAehBhahahaGuards test/src/testAehBhahahaGuards.cpp)
   add_test(NAME testAehBhahahaGuards COMMAND testAehBhahahaGuards)
