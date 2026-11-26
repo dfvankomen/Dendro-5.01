@@ -573,24 +573,22 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testUnzipExact test/src/testUnzipExact.cpp)
   dendro_add_example(testMeshInvariants test/src/testMeshInvariants.cpp)
   dendro_add_example(testGatherFromGhost test/src/testGatherFromGhost.cpp)
-  add_test(NAME testGatherFromGhost_values_2rank
-           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
-                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGatherFromGhost>
-                   ${MPIEXEC_POSTFLAGS} values)
+  # 3 and 4 ranks: some owned nodes have 2+ ghost copies
+  foreach(NP 2 3 4)
+    add_test(NAME testGatherFromGhost_values_${NP}rank
+             COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} ${NP}
+                     ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGatherFromGhost>
+                     ${MPIEXEC_POSTFLAGS} values)
+    set_tests_properties(testGatherFromGhost_values_${NP}rank PROPERTIES
+                         TIMEOUT 300
+                         PASS_REGULAR_EXPRESSION "testGatherFromGhost values: PASS")
+  endforeach()
   add_test(NAME testGatherFromGhost_unknown_2rank
-           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
-                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGatherFromGhost>
-                   ${MPIEXEC_POSTFLAGS} unknown)
-  # 4 ranks: some owned nodes have 2+ ghost copies
-  add_test(NAME testGatherFromGhost_values_4rank
-           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 4
-                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testGatherFromGhost>
-                   ${MPIEXEC_POSTFLAGS} values)
-  set_tests_properties(testGatherFromGhost_values_2rank
-                       testGatherFromGhost_values_4rank PROPERTIES TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "testGatherFromGhost values: PASS")
+           COMMAND ${CMAKE_COMMAND}
+                   "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};2;${MPIEXEC_PREFLAGS};$<TARGET_FILE:testGatherFromGhost>;unknown;${MPIEXEC_POSTFLAGS}"
+                   "-DEXPECT=async ctx not found for vec: .* in gatherFromGhostEnd"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_abort.cmake)
   set_tests_properties(testGatherFromGhost_unknown_2rank PROPERTIES TIMEOUT 300
-                       PASS_REGULAR_EXPRESSION "async ctx not found for vec: .* in gatherFromGhostEnd"
                        FAIL_REGULAR_EXPRESSION "NOT detected")
   dendro_add_example(testOctreeStructure test/src/testOctreeStructure.cpp)
   add_test(NAME testOctreeStructure COMMAND testOctreeStructure 6 1e-3)

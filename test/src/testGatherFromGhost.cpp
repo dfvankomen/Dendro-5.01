@@ -1,7 +1,7 @@
 // Oracle: gatherFromGhostEnd (dof 2) gives each shared owned node, per
-// variable, the values its ghosting ranks (per the send map) hold, each rank's
-// copies offset by rank and variable; End without a Begin aborts. Catches:
-// wrong copy/variable layout (needs nodes with 2+ copies, np >= 3), context 0.
+// variable, the values its ghosting ranks (send map) hold, each rank's copies
+// offset by rank and variable; End without a Begin aborts. Catches: wrong copy
+// layout (needs 2+ copies, np >= 3); ctxIndex defaulting to 0 with no Begin.
 // Usage: mpirun -np <2..4> testGatherFromGhost values|unknown
 
 #include <mpi.h>
@@ -124,8 +124,8 @@ int main(int argc, char** argv) {
                     std::sort(got.begin(), got.end());
                     std::sort(want.begin(), want.end());
                     if (got != want) bad++;
-                    // NOTE: pins End's overwrite of the owner entry (last
-                    // ghosting rank in receive order wins); relax if it goes
+                    // NOTE: intentional pin of End's overwrite of the owner
+                    // entry (last ghosting rank in receive order wins)
                     if (vec[var * n + k] !=
                         owner[var * n + k] + off(ghosters[k].back(), var))
                         vecBad++;
