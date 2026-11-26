@@ -43,6 +43,9 @@ int main(int argc, char** argv) {
             ot::createMesh(tmp.data(), tmp.size(), p, comm, 1, ot::SM_TYPE::FDM,
                            DENDRO_DEFAULT_GRAIN_SZ, 0.1, DENDRO_DEFAULT_SF_K);
         mesh->setDomainBounds(Point(0, 0, 0), Point(1, 1, 1));
+        int act = mesh->isActive(), nAct = 0;
+        MPI_Allreduce(&act, &nAct, 1, MPI_INT, MPI_SUM, comm);
+        if (!rank) std::printf("active ranks: %d of %d\n", nAct, npes);
 
         // tensor degree q; >= 1 on [0,1]^3, so relative and absolute agree
         auto poly = [](unsigned int q) {
