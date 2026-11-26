@@ -96,6 +96,7 @@ static void blockErrors(unsigned int level, MPI_Comm comm, double err[2]) {
                                 d[i + sz[0] * (j + (size_t)sz[1] * k)];
                             const double wall =
                                 std::min({x, 1 - x, y, 1 - y, z, 1 - z});
+                            // grid points sit at whole spacings: > 2.5 is 3+
                             const int at = wall > 2.5 * hx ? 0 : 1;
                             e[at]        = std::max(e[at], std::fabs(got - ex));
                         }
@@ -122,8 +123,9 @@ int main(int argc, char** argv) {
     blockErrors(3, comm, fine);
     const double ordIn  = std::log2(coarse[0] / fine[0]);
     const double ordBdy = std::log2(coarse[1] / fine[1]);
-    // deriv644: 6th order inside, 4th-order closures. Floors (0.5 margin is a
-    // judgment): E6 block floor 5.5 less 0.5 for 2:1 padding; closure 4 - 0.5
+    // floors on log2(coarse max error / fine max error), not error tolerances.
+    // deriv644_x (include/derivatives/derivs_explicit.h): order 6 inside, 4 in
+    // closures. Floors: 6 - 1.0 (padding at 2:1 jumps) and 4 - 0.5
     const bool ok       = ordIn >= 5.0 && ordBdy >= 3.5;
     if (!rank)
         std::printf(
