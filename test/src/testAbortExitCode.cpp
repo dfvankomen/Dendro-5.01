@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <iostream>
 #include <string>
 #include <vector>
 
@@ -19,6 +20,11 @@
 #include "meshUtils.h"
 
 int main(int argc, char** argv) {
+    // unbuffered, so the library's error print reaches the launcher before
+    // MPI_Abort (MPICH's launcher drops what an aborting rank left buffered)
+    std::cout << std::unitbuf;
+    std::cerr << std::unitbuf;
+    setvbuf(stdout, nullptr, _IONBF, 0);
     MPI_Init(&argc, &argv);
     MPI_Comm comm = MPI_COMM_WORLD;
     int rank, npes;
