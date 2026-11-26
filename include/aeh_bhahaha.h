@@ -2,6 +2,7 @@
 
 #include <math.h>
 
+#include <cmath>
 #include <algorithm>
 #include <cstdlib>
 #include <functional>
@@ -174,6 +175,38 @@ class AEH_BHaHAHA {
     // rank 3 is only a valid root once there are more than 3 ranks
     static unsigned int checkpoint_root_rank(const unsigned int npesActive) {
         return npesActive > 3 ? 3u : 0u;
+    }
+
+    // AH3 search radius for a geometric reseed. After a failed AH3 find the
+    // radius may only grow: take the largest of the geometric estimate, the
+    // last good AH3 radius plus padding, and the previous guess, capped at the
+    // max search radius. Non-finite or non-positive inputs are ignored. The
+    // AH1/AH2 data behind r_geom are frozen after merger, so r_geom alone can
+    // shrink the search below a growing remnant.
+    static double common_horizon_reseed_radius(
+        const double r_geom, const bool after_failed_find,
+        const double r3_last_good, const double r_prev_guess,
+        const double padding, const double max_search_radius) {
+        auto ok = [](double v) { return std::isfinite(v) && v > 0.0; };
+        double r = ok(r_geom) ? r_geom : max_search_radius;
+        if (after_failed_find) {
+            if (ok(r3_last_good)) r = std::max(r, r3_last_good + padding);
+            if (ok(r_prev_guess)) r = std::max(r, r_prev_guess);
+        }
+        return std::min(r, max_search_radius);
+    }
+
+    // a guess BHaHAHA cannot grid becomes the full search sphere; true if so
+    static bool sanitize_radius_guess(double& r_min, double& r_max,
+                                      const double max_search_radius) {
+        const bool bad = !std::isfinite(r_min) || !std::isfinite(r_max) ||
+                         r_max <= 0.0 || r_max < r_min ||
+                         r_min >= max_search_radius;
+        if (bad) {
+            r_min = 0.0;
+            r_max = max_search_radius;
+        }
+        return bad;
     }
 
     // add more input types for data...
@@ -564,7 +597,7 @@ class AEH_BHaHAHA {
 
     void bah_sum_shared_arrays(const ot::Mesh* mesh);
 
-    void reseed_common_horizon_geometric_();
+    void reseed_common_horizon_geometric_(bool after_failed_find = false);
 
     void fill_domain_coords(const int which_horizon, const int n_r,
                             const int n_theta, const int n_phi,
@@ -621,7 +654,9 @@ class AEH_BHaHAHA {
         return common_horizon_found() ? qoi_[2].r_mean : -1.0;
     }
 
-    void create_checkpoint(
+    // collective over the active comm; nonzero on every active rank if the
+    // file was not fully written
+    int create_checkpoint(
         const ot::Mesh* mesh,
         const std::string& checkpoint_output = "aeh_bha_chkpt.json");
 

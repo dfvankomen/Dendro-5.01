@@ -12,7 +12,7 @@
 #
 # ##############################################################################
 
-cmake_minimum_required(VERSION 3.15)
+cmake_minimum_required(VERSION 3.18)
 project(Dendro-5.0-Library C CXX Fortran)
 
 
@@ -68,7 +68,6 @@ option(DENDRO_ENABLE_HDF5 "Build the VTKHDF (parallel HDF5) output writer (defau
 option(ALLTOALL_SPARSE "Use isend/irecv for ghost exchange" OFF)
 option(ENABLE_DENDRO_PROFILE_COUNTERS "Enable dendro internal profile counters" OFF)
 option(PROFILE_MESH "Report per-stage mesh construction timings (sort/balance/e2e/e2n/sm/blk)" OFF)
-option(RK_SOLVER_OVERLAP_COMM_AND_COMP "Enable RK solver comm/comp overlap" ON)
 option(WITH_CUDA "Build dendro with CUDA" OFF)
 option(BUILD_WITH_PETSC "Build dendro with PETSc" OFF)
 option(USE_FD_INTERP_FOR_UNZIP "Use FD style interpolation for unzip" OFF)
@@ -94,9 +93,10 @@ option(DVEC_ZERO_ALLOC "Initialize dvec memory to zero" ON)
 option(DENDRO_UNZIP_SPEEDUP
        "Master toggle for the MPI-safe unzip/zip speedups (integer-index scatter fast path + SIMD wavelet tensor kernels)"
        OFF)
+# Default ON: byte-identical output to the FP scatter, ~7% less wall time per step.
 option(DENDRO_UNZIP_SCATTER_FAST
        "Use the integer-index same-level scatter fast path in Mesh::unzip_scatter (Phase 1 optimization). No effect when DENDRO_UNZIP_OMP is ON: that path always uses the integer kernels."
-       OFF)
+       ON)
 option(DENDRO_ZIP_PLAN
        "Precompute zip()'s ownership filter into a flat index plan (~12 bytes per owned node)"
        ON)
@@ -327,8 +327,14 @@ macro(dendro_add_def OPTION_NAME DEF_NAME)
   endif()
 endmacro()
 
+target_compile_features(dendro_config INTERFACE cxx_std_17)
 target_compile_definitions(dendro_config INTERFACE -DMATVEC_PROFILE)
-target_compile_definitions(dendro_config INTERFACE -DOCT2BLK_COARSEST_LEV=${OCT2BLK_COARSEST_LEV})
+if(WITH_CUDA)
+  set(DENDRO_OCT2BLK_COARSEST_LEV 31)
+else()
+  set(DENDRO_OCT2BLK_COARSEST_LEV ${OCT2BLK_COARSEST_LEV})
+endif()
+target_compile_definitions(dendro_config INTERFACE -DOCT2BLK_COARSEST_LEV=${DENDRO_OCT2BLK_COARSEST_LEV})
 target_compile_definitions(dendro_config INTERFACE -DOCT2BLK_MAX_SPAN=${OCT2BLK_MAX_SPAN})
 
 dendro_add_def(USE_64BIT_INDICES USE_64BIT_INDICES)
@@ -337,7 +343,6 @@ dendro_add_def(RUN_WEAK_SCALING RUN_WEAK_SCALING)
 dendro_add_def(DIM_2 DIM_2)
 dendro_add_def(PROFILE_TREE_SORT PROFILE_TREE_SORT)
 dendro_add_def(ALLTOALL_SPARSE ALLTOALL_SPARSE)
-dendro_add_def(RK_SOLVER_OVERLAP_COMM_AND_COMP RK_SOLVER_OVERLAP_COMM_AND_COMP)
 dendro_add_def(USE_FD_INTERP_FOR_UNZIP USE_FD_INTERP_FOR_UNZIP)
 dendro_add_def(DVEC_ZERO_ALLOC DVEC_ZERO_ALLOC)
 dendro_add_def(DENDRO_UNZIP_SCATTER_FAST DENDRO_UNZIP_SCATTER_FAST)
@@ -520,11 +525,10 @@ if(WITH_CUDA)
   find_package(CUDAToolkit REQUIRED)
 
   target_include_directories(dendro_config INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/GPU/include)
-  set(OCT2BLK_COARSEST_LEV 31 CACHE STRING "Coarsest Level for CUDA" FORCE)
-  target_compile_definitions(dendro_config INTERFACE WITH_CUDA OCT2BLK_COARSEST_LEV=31)
+  target_compile_definitions(dendro_config INTERFACE WITH_CUDA)
 
   if(MPIX_CUDA_AWARE_SUPPORT)
-    target_compile_definitions(dendro_config PUBLIC MPIX_CUDA_AWARE_SUPPORT)
+    target_compile_definitions(dendro_config INTERFACE MPIX_CUDA_AWARE_SUPPORT)
   endif()
 
   target_sources(dendro5 PRIVATE
@@ -581,8 +585,15 @@ if(BUILD_DENDRO_EXAMPLES)
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
                    ${MPIEXEC_POSTFLAGS} 6 1e-3)
+  # 3 ranks: catches an inactive rank skipping the collective computeMinMaxLevel
+  add_test(NAME testMeshInvariants_3rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3)
   set_tests_properties(testMeshInvariants testMeshInvariants_2rank
-                       PROPERTIES TIMEOUT 600)
+                       testMeshInvariants_3rank PROPERTIES TIMEOUT 600)
+  set_tests_properties(testMeshInvariants_3rank PROPERTIES
+                       PASS_REGULAR_EXPRESSION "mesh invariants: PASS")
   if(DENDRO_ENABLE_HDF5)
     dendro_add_example(testVTKHDF test/src/testVTKHDF.cpp)
     add_test(NAME testVTKHDF COMMAND testVTKHDF 6 1e-3)
@@ -595,6 +606,12 @@ if(BUILD_DENDRO_EXAMPLES)
   add_test(NAME testUnzipExact COMMAND testUnzipExact 6 1e-3)
   set_tests_properties(testUnzipExact PROPERTIES TIMEOUT 600)
   add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
+  dendro_add_example(testBlockRegroupE2B test/src/testBlockRegroupE2B.cpp)
+  add_test(NAME testBlockRegroupE2B COMMAND testBlockRegroupE2B)
+  add_test(NAME testBlockRegroupE2B_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testBlockRegroupE2B>
+                   ${MPIEXEC_POSTFLAGS})
 
   # Self-checking, no arguments, no MPI, well under a second each.
   foreach(T testBlkAsyncZeroInit testCloneNewSize testDerivSet testExplicitSimd testKOMatrix testKOSign testKOSimd)
@@ -684,6 +701,28 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testIsReMeshUnzip test/src/testIsReMeshUnzip.cpp)
   dendro_add_example(testInterpFaceClamp test/src/testInterpFaceClamp.cpp)
   dendro_add_example(testAehBhahahaGuards test/src/testAehBhahahaGuards.cpp)
+  add_test(NAME testAehBhahahaGuards COMMAND testAehBhahahaGuards)
+  dendro_add_example(testAehCheckpointStatus
+                     test/src/testAehCheckpointStatus.cpp)
+  add_test(NAME testAehCheckpointStatus COMMAND testAehCheckpointStatus)
+  add_test(NAME testAehCheckpointStatus_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testAehCheckpointStatus>
+                   ${MPIEXEC_POSTFLAGS})
+  dendro_add_example(testAehTrackedCenter test/src/testAehTrackedCenter.cpp)
+  add_test(NAME testAehTrackedCenter COMMAND testAehTrackedCenter)
+  add_test(NAME testAehTrackedCenter_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testAehTrackedCenter>
+                   ${MPIEXEC_POSTFLAGS})
+  set_tests_properties(testAehTrackedCenter testAehTrackedCenter_2rank
+                       PROPERTIES TIMEOUT 300 ENVIRONMENT OMP_NUM_THREADS=2)
+  dendro_add_example(testOctUtilsEdges test/src/testOctUtilsEdges.cpp)
+  add_test(NAME testOctUtilsEdges COMMAND testOctUtilsEdges)
+  add_test(NAME testOctUtilsEdges_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testOctUtilsEdges>
+                   ${MPIEXEC_POSTFLAGS})
   dendro_add_example(testETSErrorControl test/src/testETSErrorControl.cpp)
   add_test(NAME testETSErrorControl COMMAND testETSErrorControl 4 4)
   add_test(NAME testETSErrorControl_2rank
@@ -754,6 +793,8 @@ if(BUILD_DENDRO_EXAMPLES)
   add_test(NAME testMixedSetTrim COMMAND testMixedSetTrim)
   set_tests_properties(testMixedSetTrim PROPERTIES TIMEOUT 300)
   dendro_add_deriv_test(testKOSign test/src/testKOSign.cpp)
+  dendro_add_deriv_test(testKimByu17 test/src/testKimByu17.cpp)
+  add_test(NAME testKimByu17 COMMAND testKimByu17)
   dendro_add_deriv_test(testCloneNewSize test/src/testCloneNewSize.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
   dendro_add_deriv_test(testMeshTimeIntegrator test/src/testMeshTimeIntegrator.cpp)

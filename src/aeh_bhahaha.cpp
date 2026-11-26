@@ -5,7 +5,7 @@
 
 namespace dendro_aeh {
 
-void AEH_BHaHAHA::reseed_common_horizon_geometric_() {
+void AEH_BHaHAHA::reseed_common_horizon_geometric_(bool after_failed_find) {
     const int inspiral_bh1   = 0;
     const int inspiral_bh2   = 1;
     const int common_horizon = 2;
@@ -23,9 +23,13 @@ void AEH_BHaHAHA::reseed_common_horizon_geometric_() {
     const double mid_x       = 0.5 * (x1 + x2);
     const double mid_y       = 0.5 * (y1 + y2);
     const double mid_z       = 0.5 * (z1 + z2);
-    const double r_geom =
-        std::min(0.5 * sep + std::max(r1, r2) + bah_ah3_radius_padding_,
-                 bah_max_search_radius_[common_horizon]);
+    // read before the AH3 history is wiped below
+    const double r3_last_good = r_max_m1_[common_horizon];
+    const double r_prev_guess = r_max_guess_[common_horizon];
+    const double r_geom       = common_horizon_reseed_radius(
+        0.5 * sep + std::max(r1, r2) + bah_ah3_radius_padding_,
+        after_failed_find, r3_last_good, r_prev_guess,
+        bah_ah3_radius_padding_, bah_max_search_radius_[common_horizon]);
 
     x_center_m1_[common_horizon] = mid_x;
     y_center_m1_[common_horizon] = mid_y;
@@ -163,6 +167,7 @@ void AEH_BHaHAHA::find_horizons(
         // (closely-spaced finds + long extrapolation = polynomial blowup).
         // if the new guess is non-finite or way off from the last known
         // good center, fall back to that center.
+        bool clamped = false;
         {
             constexpr double k_clamp = 5.0;
             const double r_search    = bah_max_search_radius_[which_horizon];
@@ -191,7 +196,39 @@ void AEH_BHaHAHA::find_horizons(
                 x_center = x_center_m1_[which_horizon];
                 y_center = y_center_m1_[which_horizon];
                 z_center = z_center_m1_[which_horizon];
+                clamped  = true;
             }
+        }
+
+        // a failing or clamped inspiral horizon follows its tracked puncture
+        if (is_bbh_ && which_horizon < common_horizon &&
+            which_horizon < (int)tracked_location_data.size() &&
+            (failed_last_find_[which_horizon] || clamped)) {
+            const Point& p = tracked_location_data[which_horizon];
+            if (bah_verbosity_level_ > 0 &&
+                rankActive == which_horizon % npesActive) {
+                std::cout << "\tAH NOTICE rank " << std::setw(4) << rankActive
+                          << " horizon " << std::setw(4) << (which_horizon + 1)
+                          << ": centering the search on the tracked puncture "
+                             "location: "
+                          << p << std::endl;
+            }
+            x_center = p.x();
+            y_center = p.y();
+            z_center = p.z();
+        }
+
+        if (!bah_params_and_data->use_fixed_radius_guess_on_full_sphere &&
+            sanitize_radius_guess(r_min, r_max,
+                                  bah_max_search_radius_[which_horizon])) {
+            if (bah_verbosity_level_ > 0 &&
+                rankActive == which_horizon % npesActive) {
+                std::cout << GRN
+                          << "[BAH]: radius guess clamp h=" << which_horizon
+                          << " -> full search sphere r_max=" << r_max << NRM
+                          << std::endl;
+            }
+            bah_params_and_data->use_fixed_radius_guess_on_full_sphere = 1;
         }
 
         // need to make sure that we force a full guess if the parameters
@@ -422,6 +459,7 @@ void AEH_BHaHAHA::find_horizons(
         const bool bh_centers_valid =
             (t_m1_[inspiral_bh1] >= 0.0) && (t_m1_[inspiral_bh2] >= 0.0);
 
+        bool ah3_sanity_failed = false;
         if (common_active_now && ah3_ever_found && bh_centers_valid) {
             const double r3 = r_max_m1_[common_horizon];
             const double d31 =
@@ -436,6 +474,7 @@ void AEH_BHaHAHA::find_horizons(
 
             const bool insane = (r3 <= 0.0) || (d31 > k_r3) || (d32 > k_r3);
             if (insane) {
+                ah3_sanity_failed = true;
                 if (bah_verbosity_level_ > 0 && rankActive == 0) {
                     std::cout
                         << GRN << "BBH AH3 SANITY FAIL: r3=" << std::fixed
@@ -457,7 +496,9 @@ void AEH_BHaHAHA::find_horizons(
              failed_last_find_[common_horizon]);
 
         if (needs_reseed) {
-            reseed_common_horizon_geometric_();
+            // a real failed find (not a sanity wipe) may only grow the radius
+            reseed_common_horizon_geometric_(failed_last_find_[common_horizon] &&
+                                             !ah3_sanity_failed);
             // the struct was filled before the reseed, bring it up to date
             transfer_to_bhahaha_from_persistent(
                 &bha_param_data_[common_horizon]);
@@ -647,29 +688,6 @@ void AEH_BHaHAHA::find_horizons(
                 r_min_guess_[which_horizon]                               = 0.0;
                 r_max_guess_[which_horizon] =
                     bah_max_search_radius_[which_horizon];
-
-                // update the guess with the BH data for this horizon
-                // taken from the bh history if possible
-                if (!tracked_location_data.empty() &&
-                    which_horizon != common_horizon) {
-                    if (bah_verbosity_level_ > 0) {
-                        std::cout
-                            << "\tAH NOTICE rank " << std::setw(4) << rankActive
-                            << " horizon " << std::setw(4)
-                            << (which_horizon + 1)
-                            << ": Last find failed, overwriting guess points "
-                               "to tracked puncture location: "
-                            << tracked_location_data[which_horizon]
-                            << std::endl;
-                    }
-                    // update center location
-                    x_guess_[which_horizon] =
-                        tracked_location_data[which_horizon].x();
-                    y_guess_[which_horizon] =
-                        tracked_location_data[which_horizon].y();
-                    z_guess_[which_horizon] =
-                        tracked_location_data[which_horizon].z();
-                }
             }
         }
 
@@ -1231,10 +1249,10 @@ void AEH_BHaHAHA::synchronize_to_root(const ot::Mesh* mesh,
     }
 }
 
-void AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
-                                    const std::string& checkpoint_output) {
+int AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
+                                   const std::string& checkpoint_output) {
     // return if we're not active...
-    if (!mesh->isActive()) return;
+    if (!mesh->isActive()) return 0;
 
     unsigned int rankActive    = mesh->getMPIRank();
     unsigned int npesActive    = mesh->getMPICommSize();
@@ -1251,6 +1269,7 @@ void AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
     // make sure we synchronize to root
     this->synchronize_to_root(mesh, procUse);
 
+    int status = 0;
     if (rankActive == procUse) {
         nlohmann::json checkPoint;
 
@@ -1296,12 +1315,22 @@ void AEH_BHaHAHA::create_checkpoint(const ot::Mesh* mesh,
         if (!outfile) {
             std::cout << checkpoint_output
                       << " file open failed for BAH checkpoint" << std::endl;
-            return;
+            status = 1;
+        } else {
+            outfile << std::setw(4) << checkPoint << std::endl;
+            outfile.close();
+            if (!outfile) {
+                std::cout << checkpoint_output
+                          << " file write failed for BAH checkpoint"
+                          << std::endl;
+                status = 1;
+            }
         }
-
-        outfile << std::setw(4) << checkPoint << std::endl;
-        outfile.close();
     }
+
+    int status_global = 0;
+    MPI_Allreduce(&status, &status_global, 1, MPI_INT, MPI_MAX, commActive);
+    return status_global;
 }
 
 void AEH_BHaHAHA::restore_checkpoint(const ot::Mesh* mesh,
