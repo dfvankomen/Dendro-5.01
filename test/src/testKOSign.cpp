@@ -11,6 +11,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -222,6 +223,28 @@ int main() {
                 else if (axis == 0) std::printf("  %-4s n=%2u  both faces closed: max Re(eig) = %+.2e of |eig|max %.2e -> dissipative\n", order.c_str(), n, remax, amax);
             }
         }
+    }
+
+    // KIM in-matrix filter: one coefficient leaves kc = pi, the identity, so it
+    // must refuse; {1, 0.5} must change the JTT6 operator (measured 0.65
+    // relative, the identity 7e-16, so the 1e-3 gate splits them)
+    {
+        const unsigned int eo = 10, n = 21; const size_t tot = (size_t)n * n * n; const unsigned int sz[3] = {n, n, n};
+        auto make = [&](const std::vector<double>& c) { return std::make_unique<DendroDerivatives>("JTT6", "E6", eo, std::vector<double>(), std::vector<double>(), 0u, 0u, c.empty() ? "none" : "KIM", "none", c, std::vector<double>(), "KO4"); };
+        bool refused = false;
+        try { make({0.5}); } catch (const std::invalid_argument&) { refused = true; }
+        checked++;
+        if (!refused) { bad++; std::printf("  KIM in-matrix with one coefficient was accepted (kc = pi, identity filter)\n"); }
+        auto a = make({}), b = make({1.0, 0.5});
+        a->set_maximum_block_size(tot); b->set_maximum_block_size(tot);
+        std::vector<double> u(tot), oa(tot), ob(tot);
+        for (size_t i = 0; i < tot; i++) u[i] = std::sin(0.37 * i) + 0.3 * std::cos(0.011 * i * i);
+        a->grad_x(oa.data(), u.data(), 0.1, sz, 0); b->grad_x(ob.data(), u.data(), 0.1, sz, 0);
+        double md = 0.0, sc = 0.0;
+        for (size_t i = 0; i < tot; i++) { md = std::max(md, std::fabs(oa[i] - ob[i])); sc = std::max(sc, std::fabs(oa[i])); }
+        checked++;
+        std::printf("  KIM in-matrix {1, 0.5}: JTT6 grad_x max rel diff vs none %.3e\n", md / sc);
+        if (!(md / sc > 1e-3)) { bad++; std::printf("  KIM in-matrix {1, 0.5} left the operator unchanged\n"); }
     }
 
     // info: does an in-matrix filter change the first-derivative operator?
