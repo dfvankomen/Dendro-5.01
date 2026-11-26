@@ -7,6 +7,7 @@
 #include <mpi.h>
 
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <functional>
@@ -56,10 +57,25 @@ int main(int argc, char** argv) {
                 v[d] = std::sin(1.3 * x + d) * std::cos(0.7 * y - d) + z * d;
         };
 
+    // per active rank: local element count and an order-free hash of the keys
+    auto keys = [](const ot::Mesh* m, std::uint64_t* out) {
+        const auto& e = m->getAllElements();
+        out[0]        = m->getElementLocalEnd() - m->getElementLocalBegin();
+        out[1]        = 0;
+        for (unsigned int i = m->getElementLocalBegin();
+             i < m->getElementLocalEnd(); i++)
+            out[1] += (std::uint64_t(e[i].minX()) * 73856093u) ^
+                      (std::uint64_t(e[i].minY()) * 19349663u) ^
+                      (std::uint64_t(e[i].minZ()) * 83492791u) ^
+                      e[i].getLevel();
+    };
+    std::vector<std::uint64_t> orig(2 * activeNpes, 0);
+
     int bad = 0;
     if (mesh->isActive()) {
         const int a   = mesh->getMPIRank();
         const auto& e = mesh->getAllElements();
+        keys(mesh, &orig[2 * a]);
         std::vector<ot::TreeNode> local(
             e.begin() + mesh->getElementLocalBegin(),
             e.begin() + mesh->getElementLocalEnd());
@@ -82,6 +98,8 @@ int main(int argc, char** argv) {
             bad++;
         delete[] vec;
     }
+    MPI_Allreduce(MPI_IN_PLACE, orig.data(), 2 * activeNpes, MPI_UINT64_T,
+                  MPI_SUM, comm);
     MPI_Barrier(comm);  // every file is written before any rank reads one
 
     // restore: global ranks below activeNpes read the octree and rebuild
@@ -91,7 +109,10 @@ int main(int argc, char** argv) {
                                                back) != 0;
     ot::Mesh* restored = new ot::Mesh(back, 1, p, activeNpes, comm);
     if (restored->isActive()) {
-        const int a     = restored->getMPIRank();
+        const int a = restored->getMPIRank();
+        std::uint64_t mine[2];
+        keys(restored, mine);  // same elements as the original active rank a
+        bad += mine[0] != orig[2 * a] || mine[1] != orig[2 * a + 1];
         const size_t nN = restored->getDegOfFreedom();
         double* want    = restored->createCGVector<double>(fv, nv);
         double* r       = restored->createCGVector<double>(0.0, nv);
