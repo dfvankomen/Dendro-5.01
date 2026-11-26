@@ -67,5 +67,6 @@ jobs:
       - name: Test Laplace Equation Solver
         run: cd build && mpirun -np 4 ./laplaceEq 8 1e-5 1e-5 6 100
 
+      # the per-push tier; scripts/premerge.sh runs the premerge label too
       - name: Run ctest
-        run: cd build && ctest --output-on-failure --timeout 300
+        run: cd build && ctest --output-on-failure --timeout 300 -LE premerge
