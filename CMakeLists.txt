@@ -693,6 +693,16 @@ if(BUILD_DENDRO_EXAMPLES)
   set_tests_properties(testStabilityEvolution_eO8 PROPERTIES TIMEOUT 300)
   dendro_add_example(testIsReMeshUnzip test/src/testIsReMeshUnzip.cpp)
   dendro_add_example(testInterpFaceClamp test/src/testInterpFaceClamp.cpp)
+  dendro_add_example(testInterGridTransfer test/src/testInterGridTransfer.cpp)
+  foreach(NP 1 3 8)
+    add_test(NAME testInterGridTransfer_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testInterGridTransfer>;${MPIEXEC_POSTFLAGS}"
+                     "-DEXPECT=testInterGridTransfer np ${NP}: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testInterGridTransfer_${NP}rank PROPERTIES TIMEOUT 300)
+  endforeach()
+  set_tests_properties(testInterGridTransfer_8rank PROPERTIES LABELS premerge)
   dendro_add_example(testAehBhahahaGuards test/src/testAehBhahahaGuards.cpp)
   add_test(NAME testAehBhahahaGuards COMMAND testAehBhahahaGuards)
   dendro_add_example(testAehCheckpointStatus
