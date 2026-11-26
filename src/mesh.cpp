@@ -138,6 +138,12 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
     m_uiIsActive = m_uiGlobalRank < activeNpes;
 
     par::splitComm2way(m_uiIsActive, &m_uiCommActive, m_uiCommGlobal);
+    // no repartition here (restore keeps the written partition), so check
+    if (m_uiIsActive && !siblingGroupsAreWhole(in, m_uiCommActive) &&
+        m_uiGlobalRank == 0)
+        dendro::logger::warn(dendro::logger::Scope{"MESH"},
+                             "input partition splits a sibling group; it "
+                             "cannot coarsen on this mesh");
 
     m_uiMeshDomain_min = 0;
     m_uiMeshDomain_max = (1u << (m_uiMaxDepth));
@@ -514,9 +520,10 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                       << std::endl;
             if (in.size() < szBeforeSiblings)
                 std::cout << "rank: " << m_uiActiveRank
-                          << " was emptied by the sibling repartition, exiting"
+                          << " was emptied by the sibling repartition; raise "
+                             "the grain size"
                           << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         /*m_uiElementOrder=pOrder;
@@ -14470,6 +14477,7 @@ bool Mesh::setMeshRefinementFlags(
                                       m_uiAllElements[ele].getLevel()));
 
     bool isMeshChangeLocal = false;
+    m_uiNumCoarsenDroppedAtRankBoundary = 0;
 
     for (unsigned int ele = m_uiElementLocalBegin; ele < m_uiElementLocalEnd;
          ele++) {
@@ -14518,6 +14526,18 @@ bool Mesh::setMeshRefinementFlags(
                 m_uiAllElements[ele].setFlag(
                     ((OCT_NO_CHANGE << NUM_LEVEL_BITS) |
                      m_uiAllElements[ele].getLevel()));
+                // ghosts included: a full group cut by a rank boundary
+                const ot::TreeNode parent = m_uiAllElements[ele].getParent();
+                unsigned int lo = ele, hi = ele;
+                while (lo > m_uiElementPreGhostBegin &&
+                       m_uiAllElements[lo - 1].getParent() == parent)
+                    lo--;
+                while (hi + 1 < m_uiElementPostGhostEnd &&
+                       m_uiAllElements[hi + 1].getParent() == parent)
+                    hi++;
+                if (hi - lo + 1 == NUM_CHILDREN &&
+                    (lo < m_uiElementLocalBegin || hi >= m_uiElementLocalEnd))
+                    m_uiNumCoarsenDroppedAtRankBoundary++;
             }
 
         } else if (refine_flags[rid] == OCT_SPLIT) {
@@ -14538,6 +14558,12 @@ bool Mesh::setMeshRefinementFlags(
         }
     }
 
+    if (m_uiNumCoarsenDroppedAtRankBoundary)
+        dendro::logger::warn(
+            dendro::logger::Scope{"MESH"},
+            "rank {}: {} coarsen request(s) dropped: a rank boundary splits "
+            "their sibling group",
+            m_uiActiveRank, m_uiNumCoarsenDroppedAtRankBoundary);
     return isMeshChangeLocal;
 }
 
