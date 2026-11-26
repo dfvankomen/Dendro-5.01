@@ -123,7 +123,7 @@ int function2Octree(std::function<void(double, double, double, double*)> fx,
  * @param [in] in: input octree.
  * @param [in] comm: MPI communicator.
  * @param [out] in : octree with enforced partition constraint.
- *
+ * Repeats until no rank sends; aborts comm if a group still spans a boundary.
  * */
 void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
                                       MPI_Comm comm);

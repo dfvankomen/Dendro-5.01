@@ -1,12 +1,9 @@
-// Oracle: after enforceSiblingsAreNotPartitioned no rank boundary separates two
-// leaves with the same parent, and the global octant list is unchanged. Cases:
-// a group spread over three ranks (3 leaves each), and every boundary cutting a
-// group once. Then a mesh on the cut partition (restore constructor, no
-// repartition) with every element flagged to coarsen must count exactly the
-// cut groups' 8 requests each as dropped at a rank boundary.
-// Catches: a single pass that leaves the 3-rank group split; a dropped-coarsen
-// counter that misses or overcounts.
-// Usage: mpirun -np <3..8> testSiblingEnforce
+// Oracle: enforceSiblingsAreNotPartitioned leaves no sibling group cut and the
+// octants unchanged (a group over three ranks; every boundary cutting one); on
+// a cut partition with all elements coarsening, exactly 8 per cut group count
+// as dropped. Catches: a single pass leaving the 3-rank group split; a dropped
+// counter that misses or overcounts. Usage: mpirun -np <3..8>
+// testSiblingEnforce
 
 #include <mpi.h>
 
@@ -73,7 +70,7 @@ static int runCase(const char* name, const std::vector<ot::TreeNode>& all,
 
 // a mesh built on a partition that cuts groups, through the restore
 // constructor (no repartition), with every element asking to coarsen: each
-// cut group's 8 requests are dropped and counted, uncut groups coarsen
+// cut group's 8 requests are dropped and counted
 static int dropCase(const std::vector<ot::TreeNode>& all,
                     const std::vector<unsigned int>& begin, MPI_Comm comm) {
     int rank, npes;

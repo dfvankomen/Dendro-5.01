@@ -1,9 +1,8 @@
-// Oracle: from the same octree and the same per-element flags, ReMesh gives the
-// same global sorted octant list at any rank count as a one-rank build on rank
-// 0 (MPI_COMM_SELF). Cases: coarsen every element, and mixed coarsen/split;
-// each must change the mesh (new octants where its flags asked for them).
-// Catches: a coarsen request dropped because a rank boundary split its sibling
-// group. Usage: mpirun -np <n> testCoarsenRankIndependence [grain=8]
+// Oracle: from the same octree and per-element flags, ReMesh gives the same
+// global octant list at any rank count as a one-rank build (MPI_COMM_SELF), for
+// coarsen-all and mixed coarsen/split, and each changes the mesh. A regression
+// guard: it passes without the sibling fix too (no group spans 3 ranks here).
+// Usage: mpirun -np <n> testCoarsenRankIndependence [grain=8]
 
 #include <mpi.h>
 
