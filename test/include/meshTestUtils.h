@@ -2771,24 +2771,18 @@ bool ot::test::isDGGhostValid(ot::Mesh* pMesh, T* vec,
             for (unsigned int ee = recvEleOffset[p];
                  ee < (recvEleOffset[p] + recvEleCounts[p]); ee++) {
                 const unsigned int ele = recvESM[ee];
+                // double division: 2^d / eOrder truncates when eOrder is not a
+                // power of two
+                const double h =
+                    static_cast<double>(
+                        1u << (m_uiMaxDepth - pNodes[ele].getLevel())) /
+                    eOrder;
                 for (unsigned int k = 0; k < eOrder + 1; k++)
                     for (unsigned int j = 0; j < eOrder + 1; j++)
                         for (unsigned int i = 0; i < eOrder + 1; i++) {
-                            const double x =
-                                pNodes[ele].minX() +
-                                i * ((1u << m_uiMaxDepth -
-                                                pNodes[ele].getLevel()) /
-                                     eOrder);
-                            const double y =
-                                pNodes[ele].minY() +
-                                j * ((1u << m_uiMaxDepth -
-                                                pNodes[ele].getLevel()) /
-                                     eOrder);
-                            const double z =
-                                pNodes[ele].minZ() +
-                                k * ((1u << m_uiMaxDepth -
-                                                pNodes[ele].getLevel()) /
-                                     eOrder);
+                            const double x = pNodes[ele].minX() + i * h;
+                            const double y = pNodes[ele].minY() + j * h;
+                            const double z = pNodes[ele].minZ() + k * h;
                             fn(x, y, z, &val);
                             const double diff = std::fabs(
                                 (vec +
@@ -2797,7 +2791,7 @@ bool ot::test::isDGGhostValid(ot::Mesh* pMesh, T* vec,
                                             j * (eOrder + 1) + i] -
                                 val);
 
-                            if (diff > 1e-3) {
+                            if (diff > tol) {
                                 std::cout
                                     << "rank: " << rank << " ele: " << ele
                                     << " DG vec:"

@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
         if (!rank)
             std::fprintf(stderr,
                          "Usage: %s maxDepth wavelet_tol partition_tol "
-                         "eleOrder [n_fields=8]\n",
+                         "eleOrder [n_fields=8] [grain]\n",
                          argv[0]);
         MPI_Abort(comm, 1);
     }
@@ -36,6 +36,9 @@ int main(int argc, char** argv) {
     double partition_tol  = std::atof(argv[3]);
     unsigned int eOrder   = (unsigned int)std::atoi(argv[4]);
     unsigned int n_fields = (argc > 5) ? (unsigned int)std::atoi(argv[5]) : 8u;
+    // a large grain leaves ranks inactive (fewer active ranks than npes)
+    const unsigned int grain =
+        (argc > 6) ? (unsigned int)std::atoi(argv[6]) : DENDRO_DEFAULT_GRAIN_SZ;
 
     _InitializeHcurve(m_uiDim);
 
@@ -72,8 +75,11 @@ int main(int argc, char** argv) {
     function2Octree(fr, tmpNodes, m_uiMaxDepth, wavelet_tol, eOrder, comm);
     ot::Mesh* mesh = ot::createMesh(
         tmpNodes.data(), tmpNodes.size(), eOrder, comm, 1, ot::SM_TYPE::FDM,
-        DENDRO_DEFAULT_GRAIN_SZ, partition_tol, DENDRO_DEFAULT_SF_K);
+        grain, partition_tol, DENDRO_DEFAULT_SF_K);
     mesh->setDomainBounds(pt_min, pt_max);
+    int act = mesh->isActive(), nAct = 0;
+    MPI_Allreduce(&act, &nAct, 1, MPI_INT, MPI_SUM, comm);
+    if (!rank) std::printf("active ranks: %d of %d\n", nAct, npes);
 
     unsigned int lmin, lmax;
     mesh->computeMinMaxLevel(lmin, lmax);
@@ -192,7 +198,7 @@ int main(int argc, char** argv) {
                 refine_flag.push_back(OCT_NO_CHANGE);
         }
         mesh->setMeshRefinementFlags(refine_flag);
-        ot::Mesh* newMesh = mesh->ReMesh();
+        ot::Mesh* newMesh = mesh->ReMesh(grain);
         newMesh->setDomainBounds(pt_min, pt_max);
         if (!rank) std::printf("-- after ReMesh --\n");
         check_mesh(newMesh, "remeshed");

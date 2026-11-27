@@ -73,7 +73,7 @@ int main(int argc, char** argv) {
             std::cout << "Usage: " << argv[0]
                       << " maxDepth wavelet_tol partition_tol eleOrder run_gpu"
                       << std::endl;
-        MPI_Abort(comm, 0);
+        MPI_Abort(comm, 1);
     }
 
     m_uiMaxDepth            = atoi(argv[1]);

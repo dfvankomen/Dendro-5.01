@@ -555,6 +555,12 @@ if(BUILD_DENDRO_EXAMPLES)
   endfunction()
 
   dendro_add_example(genHtables Hilbert/src/genHTables.cpp include/radix.h)
+  # Oracle: exit 0; optimized glibc builds abort via _FORTIFY_SOURCE on a sprintf
+  # overflow (no bite at -O0 or an unset build type). Catches: buffers one byte short.
+  if(CMAKE_BUILD_TYPE MATCHES "^(Release|RelWithDebInfo|MinSizeRel)$")
+    target_compile_options(genHtables PRIVATE -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2)
+  endif()
+  add_test(NAME genHtables COMMAND genHtables)
   dendro_add_example(genSFCMatVecTables Hilbert/src/sfcMatvecTable.cpp)
 
   dendro_add_example(ptsSort examples/src/ptsSort.cpp)
@@ -572,6 +578,16 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
   dendro_add_example(testUnzipExact test/src/testUnzipExact.cpp)
   dendro_add_example(testMeshInvariants test/src/testMeshInvariants.cpp)
+  dendro_add_example(testDGScatterMap test/src/testDGScatterMap.cpp)
+  # exit 0 and the PASS line both required (see test/expect_pass.cmake)
+  foreach(NP 2 3)
+    add_test(NAME testDGScatterMap_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testDGScatterMap>;${MPIEXEC_POSTFLAGS}"
+                     "-DEXPECT=testDGScatterMap: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testDGScatterMap_${NP}rank PROPERTIES TIMEOUT 300)
+  endforeach()
   dendro_add_example(testOctreeStructure test/src/testOctreeStructure.cpp)
   add_test(NAME testOctreeStructure COMMAND testOctreeStructure 6 1e-3)
   add_test(NAME testOctreeStructure_2rank
@@ -585,8 +601,15 @@ if(BUILD_DENDRO_EXAMPLES)
            COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
                    ${MPIEXEC_POSTFLAGS} 6 1e-3)
+  # 3 ranks: catches an inactive rank skipping the collective computeMinMaxLevel
+  add_test(NAME testMeshInvariants_3rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 3
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testMeshInvariants>
+                   ${MPIEXEC_POSTFLAGS} 6 1e-3)
   set_tests_properties(testMeshInvariants testMeshInvariants_2rank
-                       PROPERTIES TIMEOUT 600)
+                       testMeshInvariants_3rank PROPERTIES TIMEOUT 600)
+  set_tests_properties(testMeshInvariants_3rank PROPERTIES
+                       PASS_REGULAR_EXPRESSION "mesh invariants: PASS")
   if(DENDRO_ENABLE_HDF5)
     dendro_add_example(testVTKHDF test/src/testVTKHDF.cpp)
     add_test(NAME testVTKHDF COMMAND testVTKHDF 6 1e-3)
@@ -598,6 +621,38 @@ if(BUILD_DENDRO_EXAMPLES)
   endif()
   add_test(NAME testUnzipExact COMMAND testUnzipExact 6 1e-3)
   set_tests_properties(testUnzipExact PROPERTIES TIMEOUT 600)
+  # unzip and zip exactness off one rank, the active count part of the expected
+  # output: grain 1000000 keeps 2 of 3 ranks active, grain 10 all 4
+  foreach(CASE "3;1000000;2" "4;10;4")
+    list(GET CASE 0 NP)
+    list(GET CASE 1 GRAIN)
+    list(GET CASE 2 ACT)
+    add_test(NAME testUnzipExact_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testUnzipExact>;${MPIEXEC_POSTFLAGS};6;1e-3;${GRAIN}"
+                     "-DEXPECT=active ranks: ${ACT} of ${NP}.*unzip exactness: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    add_test(NAME testZipExact_eO6_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testZipExact>;${MPIEXEC_POSTFLAGS};6;1e-3;0.1;6;4;${GRAIN}"
+                     "-DEXPECT=active ranks: ${ACT} of ${NP}.*testZipExact: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testUnzipExact_${NP}rank testZipExact_eO6_${NP}rank
+                         PROPERTIES TIMEOUT 600)
+  endforeach()
+  # remesh decision; 8 ranks keep 4 active (512 elements), premerge label
+  dendro_add_example(testRemeshFlags test/src/testRemeshFlags.cpp)
+  foreach(CASE "1;1" "3;3" "8;4")
+    list(GET CASE 0 NP)
+    list(GET CASE 1 ACT)
+    add_test(NAME testRemeshFlags_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testRemeshFlags>;${MPIEXEC_POSTFLAGS}"
+                     "-DEXPECT=active ranks: ${ACT} of ${NP}.*testRemeshFlags np ${NP}: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testRemeshFlags_${NP}rank PROPERTIES TIMEOUT 300)
+  endforeach()
+  set_tests_properties(testRemeshFlags_8rank PROPERTIES LABELS premerge)
   add_test(NAME testUnzipScatterKernels COMMAND testUnzipScatterKernels)
   dendro_add_example(testBlockRegroupE2B test/src/testBlockRegroupE2B.cpp)
   add_test(NAME testBlockRegroupE2B COMMAND testBlockRegroupE2B)
@@ -668,6 +723,27 @@ if(BUILD_DENDRO_EXAMPLES)
     set_tests_properties(testGhostPackExact_sabotage${SAB}
                          PROPERTIES TIMEOUT 600 WILL_FAIL TRUE)
   endforeach()
+  # a fatal library error must make mpirun exit nonzero
+  dendro_add_example(testAbortExitCode test/src/testAbortExitCode.cpp)
+  add_test(NAME testAbortExitCode_2rank
+           COMMAND ${CMAKE_COMMAND}
+                   "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};2;${MPIEXEC_PREFLAGS};$<TARGET_FILE:testAbortExitCode>;${MPIEXEC_POSTFLAGS}"
+                   "-DEXPECT=async ctx not found"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_abort.cmake)
+  add_test(NAME testAbortExitCode_interp_2rank
+           COMMAND ${CMAKE_COMMAND}
+                   "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};2;${MPIEXEC_PREFLAGS};$<TARGET_FILE:testAbortExitCode>;interp;${MPIEXEC_POSTFLAGS}"
+                   "-DEXPECT=not lies in the element"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_abort.cmake)
+  # singleton (no launcher), so an exit(0) is seen; an MPI that cannot start a
+  # singleton fails this test (intended, no skip)
+  add_test(NAME testAbortExitCode_interp_singleton
+           COMMAND ${CMAKE_COMMAND}
+                   "-DCMD=$<TARGET_FILE:testAbortExitCode>;interp"
+                   "-DEXPECT=not lies in the element"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_abort.cmake)
+  set_tests_properties(testAbortExitCode_2rank testAbortExitCode_interp_2rank
+                       testAbortExitCode_interp_singleton PROPERTIES TIMEOUT 300)
   dendro_add_example(testUnzipPlanExact test/src/testUnzipPlanExact.cpp)
   foreach(SAB 1 2 3)
     dendro_add_example(testUnzipPlanExact_sabotage${SAB} test/src/testUnzipPlanExact.cpp)
@@ -703,6 +779,15 @@ if(BUILD_DENDRO_EXAMPLES)
     set_tests_properties(testInterGridTransfer_${NP}rank PROPERTIES TIMEOUT 300)
   endforeach()
   set_tests_properties(testInterGridTransfer_8rank PROPERTIES LABELS premerge)
+  dendro_add_example(testPointInterp test/src/testPointInterp.cpp)
+  foreach(NP 1 3)
+    add_test(NAME testPointInterp_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testPointInterp>;${MPIEXEC_POSTFLAGS}"
+                     "-DEXPECT=testPointInterp np ${NP}: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testPointInterp_${NP}rank PROPERTIES TIMEOUT 300)
+  endforeach()
   dendro_add_example(testAehBhahahaGuards test/src/testAehBhahahaGuards.cpp)
   add_test(NAME testAehBhahahaGuards COMMAND testAehBhahahaGuards)
   dendro_add_example(testAehCheckpointStatus
@@ -720,6 +805,12 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS})
   set_tests_properties(testAehTrackedCenter testAehTrackedCenter_2rank
                        PROPERTIES TIMEOUT 300 ENVIRONMENT OMP_NUM_THREADS=2)
+  dendro_add_example(testOctUtilsEdges test/src/testOctUtilsEdges.cpp)
+  add_test(NAME testOctUtilsEdges COMMAND testOctUtilsEdges)
+  add_test(NAME testOctUtilsEdges_2rank
+           COMMAND ${MPIEXEC_EXECUTABLE} ${MPIEXEC_NUMPROC_FLAG} 2
+                   ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testOctUtilsEdges>
+                   ${MPIEXEC_POSTFLAGS})
   dendro_add_example(testETSErrorControl test/src/testETSErrorControl.cpp)
   add_test(NAME testETSErrorControl COMMAND testETSErrorControl 4 4)
   add_test(NAME testETSErrorControl_2rank
@@ -776,6 +867,16 @@ if(BUILD_DENDRO_EXAMPLES)
   add_test(NAME testDerivConvergence_orderGate
            COMMAND testDerivConvergence convergence_results.csv --gate)
   set_tests_properties(testDerivConvergence_orderGate PROPERTIES TIMEOUT 900)
+  # premerge tier (plain `ctest`, or scripts/premerge.sh): derivatives through
+  # a real mesh's blocks, unzip padding and boundary flags
+  dendro_add_deriv_test(testDerivOnMesh test/src/testDerivOnMesh.cpp)
+  add_test(NAME testDerivOnMesh_2rank
+           COMMAND ${CMAKE_COMMAND}
+                   "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};2;${MPIEXEC_PREFLAGS};$<TARGET_FILE:testDerivOnMesh>;${MPIEXEC_POSTFLAGS}"
+                   "-DEXPECT=testDerivOnMesh np 2: .*PASS"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+  set_tests_properties(testDerivOnMesh_2rank PROPERTIES TIMEOUT 300
+                       LABELS premerge)
   dendro_add_deriv_test(testBandedVsXSMM test/src/testBandedVsXSMM.cpp)
   dendro_add_deriv_test(testCCFD test/src/testCCFD.cpp)
   dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)

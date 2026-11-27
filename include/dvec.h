@@ -200,7 +200,7 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
             " unknown type in DVector, expected a value between 0 and 3, "
             "got: " +
             std::to_string(m_vec_type));
-        MPI_Abort(m_comm, 0);
+        MPI_Abort(m_comm, 1);
     }
 
     if (sz > std::numeric_limits<I>::max()) {
@@ -325,7 +325,7 @@ void DVector<T, I>::create_vector(const ot::Mesh* pMesh, DVEC_TYPE type,
             " unknown vector allocation location specified, should be HOST (0) "
             "or DEVICE (1), got: " +
             std::to_string(m_vec_loc));
-        MPI_Abort(m_comm, 0);
+        MPI_Abort(m_comm, 1);
     }
 }
 
@@ -355,7 +355,7 @@ void DVector<T, I>::set_vec_ptr(T*& ptr, const ot::Mesh* pMesh, DVEC_TYPE type,
                          : m_size = pMesh->getNumLocalMeshElements() * m_dof;
     else {
         dendro_log(" unknown type in DVector");
-        MPI_Abort(m_comm, 0);
+        MPI_Abort(m_comm, 1);
     }
 
     if (!(pMesh->isActive())) return;
@@ -381,7 +381,7 @@ void DVector<T, I>::destroy_vector() {
 #endif
     } else {
         dendro_log(" unknown vector deallocation location specified");
-        MPI_Abort(m_comm, 0);
+        MPI_Abort(m_comm, 1);
     }
 
     m_data_ptr = nullptr;
@@ -625,7 +625,7 @@ void DVector<T, I>::grid_transfer(ot::Mesh* m_old, const ot::Mesh* m_new,
         m_old->interGridTransferCellVec(in, out, m_new, dof);
     else {
         dendro_log("Invalid vec mode for intergrid transfer");
-        MPI_Abort(dvec.get_communicator(), 0);
+        MPI_Abort(dvec.get_communicator(), 1);
     }
 
     // printf("%p\n", vec_tmp.get_vec_ptr());

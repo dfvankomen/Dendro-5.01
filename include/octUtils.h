@@ -612,7 +612,7 @@ void shrinkOrExpandOctree(std::vector<T>& in, const double ld_tol,
             std::cout << "[Shrink/Expand Error]: active communicator does not "
                          "include global rank=0. "
                       << std::endl;
-            exit(0);
+            MPI_Abort(globalComm, 1);
         }
     }
 
@@ -626,7 +626,7 @@ void shrinkOrExpandOctree(std::vector<T>& in, const double ld_tol,
         std::cout << "[Shrink/Expand Error]: active communicator size is "
                      "larger than the global comm. "
                   << std::endl;
-        exit(0);
+        MPI_Abort(globalComm, 1);
     }
 
     int* sendCount  = new int[npes_g];
