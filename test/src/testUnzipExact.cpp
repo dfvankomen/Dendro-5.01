@@ -13,7 +13,7 @@
  * it. Mismatches are reported grouped by how many padding axes the sample sits
  * on, which localises a failure to interior / face / edge / corner.
  *
- * Usage: testUnzipExact [maxDepth] [waveletTol]
+ * Usage: testUnzipExact [maxDepth] [waveletTol] [grain]
  */
 
 #include <mpi.h>
@@ -54,6 +54,9 @@ int main(int argc, char** argv) {
     m_uiMaxDepth              = (argc > 1) ? std::atoi(argv[1]) : 6;
     const double wavelet_tol  = (argc > 2) ? std::atof(argv[2]) : 1e-3;
     const double partition_tol = 0.1;
+    // a large grain leaves ranks inactive (fewer active ranks than npes)
+    const unsigned int grain =
+        (argc > 3) ? std::atoi(argv[3]) : DENDRO_DEFAULT_GRAIN_SZ;
     const double SENTINEL     = -1.0e300;
     const double scale        = 1.0 / (double)(1u << m_uiMaxDepth);
 
@@ -72,8 +75,11 @@ int main(int argc, char** argv) {
                         MPI_COMM_WORLD);
         ot::Mesh* mesh = ot::createMesh(
             tmpNodes.data(), tmpNodes.size(), eOrder, MPI_COMM_WORLD, 1,
-            ot::SM_TYPE::FDM, DENDRO_DEFAULT_GRAIN_SZ, partition_tol,
+            ot::SM_TYPE::FDM, grain, partition_tol,
             DENDRO_DEFAULT_SF_K);
+        int act = mesh->isActive(), nAct = 0;
+        MPI_Allreduce(&act, &nAct, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+        if (!rank) std::printf("active ranks: %d of %d\n", nAct, npes);
         if (!mesh->isActive()) {
             delete mesh;
             continue;
