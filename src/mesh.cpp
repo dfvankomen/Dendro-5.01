@@ -160,7 +160,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             std::cout << "[COMM Shrink/Expansion error]: global_rank: "
                       << m_uiGlobalRank << " is active: " << m_uiIsActive
                       << " balOct sz: " << in.size() << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiElementPreGhostBegin  = 0;
@@ -206,7 +206,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             std::cout << "rank: " << m_uiActiveRank << " input octree of size "
                       << in.size() << " is too small for the current comm.  "
                       << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         /*m_uiElementOrder=pOrder;
@@ -457,7 +457,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             std::cout << "[COMM Shrink/Expansion error]: global_rank: "
                       << m_uiGlobalRank << " is active: " << m_uiIsActive
                       << " balOct sz: " << in.size() << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiElementPreGhostBegin  = 0;
@@ -503,7 +503,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             std::cout << "rank: " << m_uiActiveRank << " input octree of size "
                       << in.size() << " is too small for the current comm.  "
                       << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         /*m_uiElementOrder=pOrder;
@@ -2090,7 +2090,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                       << "[E2E Error]: Local  face key missing after R1 face-1 "
                          "& face-2 ghost exchange: "
                       << m_uiKeysPtr[k] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         stencilIndexDirection = m_uiKeysPtr[k].getStencilIndexDirectionList();
@@ -2392,7 +2392,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                       << "[E2E Error]: Local  face key missing after R1 (face "
                          "edge vertex) ghost exchange: "
                       << m_uiKeysPtr[k] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         if (ownerList->size())
@@ -2465,8 +2465,8 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                       << "[E2E Error]: Local edge or vertex key missing after "
                          "R1 (face edge vertex) ghost exchange: "
                       << m_uiKeysPtr[k] << std::endl;
-            exit(0);  // no point in continuing if this fails E2N fails for sure
-                      // :)
+            // no point in continuing: if this fails, E2N fails for sure
+            MPI_Abort(m_uiCommGlobal, 1);
         }
     }
 
@@ -7052,7 +7052,7 @@ void Mesh::computeNodalScatterMap(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -7748,7 +7748,7 @@ void Mesh::computeNodalScatterMap1(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -8248,7 +8248,7 @@ void Mesh::computeNodalScatterMap2(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -9158,7 +9158,7 @@ void Mesh::computeNodalScatterMap3(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -9669,7 +9669,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
             std::cout << "rank: " << m_uiActiveRank
                       << " SM4 Error: Allocated key<" << recvNodal_keys[e]
                       << " not found. " << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         assert(recvNodal_keys[e].getFlag() & OCT_FOUND);
@@ -9861,7 +9861,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
                   << (m_uiRecvNodeOffset[npes - 1] +
                       m_uiRecvNodeCount[npes - 1])
                   << std::endl;
-        exit(0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     std::vector<SearchKey> recvNodeSKeys;
@@ -9909,7 +9909,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -11519,7 +11519,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                     std::cout << "[Remesh Error]: rank: " << m_uiActiveRank
                               << " M1 & M2 front alignment failed "
                               << std::endl;
-                    exit(0);
+                    MPI_Abort(m_uiCommGlobal, 1);
                 }
 
                 if (!(m_uiAllElements[m_uiElementLocalEnd - 1] ==
@@ -11530,7 +11530,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                           balOct1.back().getParent())) {
                     std::cout << "[Remesh Error]: rank: " << m_uiActiveRank
                               << " M1 & M2 back alignment failed " << std::endl;
-                    exit(0);
+                    MPI_Abort(m_uiCommGlobal, 1);
                 }
 
                 /* while( (count2<balOct1.size()) &&
@@ -11550,7 +11550,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                             << " ele: " << ele << "pNodes1: " << pNodes1[ele]
                             << " count2: " << count2
                             << " pNodes2: " << pNodes2[count2] << std::endl;
-                        exit(0);
+                        MPI_Abort(m_uiCommGlobal, 1);
                     }
 
                     assert(count2 < balOct1.size());

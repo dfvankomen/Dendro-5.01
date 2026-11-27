@@ -713,7 +713,7 @@ void init_data(const uint32_t init_type, double_t *u_var,
         default:
             std::cout << "UNRECOGNIZED INITIAL DATA FUNCTION... EXITING"
                       << std::endl;
-            exit(0);
+            exit(1);
             break;
     }
 
