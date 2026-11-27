@@ -21,8 +21,10 @@ int main() {
     for (const Cfg &c : cfgs) {
         std::unique_ptr<DendroDerivatives> orig;
         try {
+            // KIM in-matrix needs {sigma, kc_factor}
+            const std::vector<double> fc = c.filt == "KIM" ? std::vector<double>{1.0, 0.5} : std::vector<double>();
             orig = std::make_unique<DendroDerivatives>(c.d1, c.d2, eo, std::vector<double>(),
-                                                       std::vector<double>(), 0, 0, c.filt, c.filt);
+                                                       std::vector<double>(), 0, 0, c.filt, c.filt, fc, fc);
         } catch (const std::exception &e) {
             std::printf("  [skip] %s/%s filter %s: %s\n", c.d1.c_str(), c.d2.c_str(), c.filt.c_str(), e.what());
             continue;

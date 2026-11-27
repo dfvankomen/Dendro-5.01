@@ -1,5 +1,7 @@
 #pragma once
 
+#include <stdexcept>
+
 #include "derivatives/derivs_compact.h"
 #include "derivatives/filt_inmat.h"
 
@@ -20,6 +22,12 @@ inline MatrixDiagonalEntries* create_Kim_filter_diagonals(
     const std::vector<double>& F_coeffs) {
 
     const double pi = 3.141592654;
+
+    if (F_coeffs.size() < 2) {
+        throw std::invalid_argument(
+            "KIM in-matrix filter needs kc_factor as its second coefficient; "
+            "without it kc = pi and the filter is the identity");
+    }
 
     // New layout:
     //   F_coeffs[0] -> sigma (filter strength)
