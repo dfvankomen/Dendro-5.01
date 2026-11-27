@@ -21,7 +21,7 @@ T* Mesh::createVector() const {
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     return vec;
@@ -38,7 +38,7 @@ T* Mesh::createCGVector(T initVal, unsigned int dof) const {
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     for (unsigned int i = 0; i < m_uiNumActualNodes * dof; i++)
@@ -59,7 +59,7 @@ T* Mesh::createCGVector(std::function<void(T, T, T, T*)> func,
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     for (unsigned int i = 0; i < m_uiNumActualNodes * dof; i++) vec[i] = (T)0;
@@ -129,7 +129,7 @@ T* Mesh::createElementVector(T initVal, unsigned int dof) const {
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     for (unsigned int i = 0; i < m_uiNumTotalElements * dof; i++)
@@ -149,7 +149,7 @@ T* Mesh::createDGVector(T initVal, unsigned int dof) const {
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     for (unsigned int i = 0; i < m_uiNumTotalElements * m_uiNpE * dof; i++)
@@ -170,7 +170,7 @@ T* Mesh::createDGVector(std::function<void(T, T, T, T*)> func,
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     for (unsigned int i = 0; i < m_uiNumTotalElements * m_uiNpE * dof; i++)
@@ -223,7 +223,7 @@ T* Mesh::createVector(const T initValue) const {
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     for (unsigned int k = 0; k < m_uiNumActualNodes; k++) vec[k] = initValue;
@@ -243,7 +243,7 @@ T* Mesh::createVector(std::function<T(T, T, T)> func) const {
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     unsigned int nodeLookUp_CG;
@@ -381,7 +381,7 @@ T* Mesh::createUnZippedVector(unsigned int dof) const {
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     return uvec;
@@ -398,7 +398,7 @@ T* Mesh::createUnZippedVector(const T initValue, unsigned int dof) const {
     } catch (const std::bad_alloc& e) {
         std::cout << " rank: " << m_uiActiveRank << " func: " << __func__
                   << " bad allocation error " << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     for (unsigned int k = 0; k < (dof * m_uiUnZippedVecSz); k++)
@@ -846,7 +846,7 @@ void Mesh::readFromGhostEnd(T* vec, unsigned int dof) {
             std::cout << "rank: " << m_uiActiveRank
                       << " async ctx not found for vec: " << &vec
                       << " in async comm end: " << __LINE__ << std::endl;
-            MPI_Abort(m_uiCommActive, 0);
+            MPI_Abort(m_uiCommActive, 1);
         }
 
         // wait for all posted recvs + sends (one MPI_Waitall each; the request
@@ -1245,7 +1245,7 @@ void Mesh::readFromGhostEndElementVec(T* vec, unsigned int dof) {
             std::cout << "rank: " << m_uiActiveRank
                       << " async ctx not found for vec: " << &vec
                       << " in async comm end: " << __LINE__ << std::endl;
-            MPI_Abort(m_uiCommActive, 0);
+            MPI_Abort(m_uiCommActive, 1);
         }
 
         assert(m_uiMPIContexts[ctxIndex].getBuffer() == vec);
@@ -1410,7 +1410,7 @@ void Mesh::readFromGhostEndEleDGVec(T* vec, unsigned int dof) {
             std::cout << "rank: " << m_uiActiveRank
                       << " async ctx not found for vec: " << &vec
                       << " in async comm end: " << __LINE__ << std::endl;
-            MPI_Abort(m_uiCommActive, 0);
+            MPI_Abort(m_uiCommActive, 1);
         }
 
         assert(m_uiMPIContexts[ctxIndex].getBuffer() == vec);
@@ -1601,7 +1601,7 @@ void Mesh::writeFromGhostEnd(T* vec, ot::GWMode mode, unsigned int dof) {
             std::cout << "rank: " << m_uiActiveRank
                       << " async ctx not found for vec: " << &vec
                       << " in async comm end: " << __LINE__ << std::endl;
-            MPI_Abort(m_uiCommActive, 0);
+            MPI_Abort(m_uiCommActive, 1);
         }
 
         MPI_Status status;
@@ -2767,7 +2767,7 @@ bool Mesh::isReMeshUnzip(
                         << " padding width should be half the eleOrder for "
                            "generic wavelet computations. "
                         << std::endl;
-                    MPI_Abort(this->getMPICommunicator(), 0);
+                    MPI_Abort(this->getMPICommunicator(), 1);
                 }
 
                 for (unsigned int ele = blkList[blk].getLocalElementBegin();
@@ -4442,7 +4442,7 @@ void Mesh::interGridTransfer(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
                                  "elements: "
                               << numM2PrimeElems << " m2 num local elements "
                               << pMesh->getNumLocalMeshElements() << std::endl;
-                    MPI_Abort(comm, 0);
+                    MPI_Abort(comm, 1);
                 }
 
                 const unsigned int* e2n = &(*(pMesh->getE2NMapping().begin()));
@@ -4684,7 +4684,7 @@ void Mesh::interGridTransfer_DG(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
                                  "elements: "
                               << numM2PrimeElems << " m2 num local elements "
                               << pMesh->getNumLocalMeshElements() << std::endl;
-                    MPI_Abort(comm, 0);
+                    MPI_Abort(comm, 1);
                 }
 
                 const unsigned int* e2n = &(*(pMesh->getE2NMapping().begin()));
@@ -4843,7 +4843,7 @@ void Mesh::interGridTransferCellVec(T* vecIn, T* vecOut, const ot::Mesh* pMesh,
                                  "elements: "
                               << numM2PrimeElems << " m2 num local elements "
                               << pMesh->getNumLocalMeshElements() << std::endl;
-                    MPI_Abort(comm, 0);
+                    MPI_Abort(comm, 1);
                 }
 
                 const unsigned int* e2n = &(*(pMesh->getE2NMapping().begin()));
@@ -8068,7 +8068,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_BACK_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [LEFT_DOWN_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8100,7 +8100,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_BACK_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [LEFT_DOWN_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8231,7 +8231,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_BACK_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_DOWN_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8263,7 +8263,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_BACK_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_DOWN_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8394,7 +8394,7 @@ void Mesh::OCT_DIR_LEFT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [LEFT_UP_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8426,7 +8426,7 @@ void Mesh::OCT_DIR_LEFT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [LEFT_UP_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8557,7 +8557,7 @@ void Mesh::OCT_DIR_RIGHT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [RIGHT_UP_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8589,7 +8589,7 @@ void Mesh::OCT_DIR_RIGHT_UP_BACK_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [RIGHT_UP_BACK Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8721,7 +8721,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [LEFT_DOWN_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8753,7 +8753,7 @@ void Mesh::OCT_DIR_LEFT_DOWN_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [LEFT_DOWN_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -8884,7 +8884,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_DOWN_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -8916,7 +8916,7 @@ void Mesh::OCT_DIR_RIGHT_DOWN_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_DOWN_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -9047,7 +9047,7 @@ void Mesh::OCT_DIR_LEFT_UP_FRONT_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [LEFT_UP_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -9079,7 +9079,7 @@ void Mesh::OCT_DIR_LEFT_UP_FRONT_Unzip(const ot::Block& blk, const T* zippedVec,
                 << "rank: " << rank
                 << " [LEFT_UP_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -9210,7 +9210,7 @@ void Mesh::OCT_DIR_RIGHT_UP_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_UP_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert(pNodes[lookUp].getLevel() == (regLev - 1));
         T* lookUpVec = &eleDGVec[lookUp * m_uiNpE];
@@ -9242,7 +9242,7 @@ void Mesh::OCT_DIR_RIGHT_UP_FRONT_Unzip(const ot::Block& blk,
                 << "rank: " << rank
                 << " [RIGHT_UP_FRONT Unzip]: 2:1 balance violation blk node: "
                 << blkNode << " lookup : " << pNodes[lookUp] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
         assert((pNodes[lookUp].getLevel()) == regLev + 1);
 
@@ -9485,7 +9485,7 @@ void Mesh::unzip(const T* in, T* out, const unsigned int* blkIDs,
                   << " paddiging with size : " << paddWidth
                   << " is too large for element order : " << m_uiElementOrder
                   << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     assert(numblks <= m_uiLocalBlockList.size());
@@ -11470,7 +11470,7 @@ void Mesh::unzip_scatter(const T* in, T* out, unsigned int dof,
                   << " DENDRO_UNZIP_OMP does not support odd element order "
                   << m_uiElementOrder << "; rebuild with DENDRO_UNZIP_OMP=OFF"
                   << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     // OpenMP block-parallel path: parallelize over blocks (disjoint uzWVec
@@ -12088,7 +12088,7 @@ void Mesh::unzip_scatter_batch(const T* const* ins, T* const* outs,
                   << " DENDRO_UNZIP_OMP does not support odd element order "
                   << m_uiElementOrder << "; rebuild with DENDRO_UNZIP_OMP=OFF"
                   << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     if (!m_uiUnzipPlanBuilt) buildUnzipPlan();
@@ -12245,7 +12245,7 @@ void Mesh::unzip_scatter_batch_ref(const T* const* ins, T* const* outs,
                   << " DENDRO_UNZIP_OMP does not support odd element order "
                   << m_uiElementOrder << "; rebuild with DENDRO_UNZIP_OMP=OFF"
                   << std::endl;
-        MPI_Abort(m_uiCommGlobal, 0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     const ot::TreeNode* pNodes = m_uiAllElements.data();
@@ -12743,7 +12743,7 @@ int Mesh::getFaceNeighborValues(unsigned int eleID, const T* in, T* out,
                           << " dir: " << face
                           << " is invalid. Function : " << __func__
                           << std::endl;
-                MPI_Abort(m_uiCommGlobal, 0);
+                MPI_Abort(m_uiCommGlobal, 1);
                 break;
         }
 
@@ -12875,7 +12875,7 @@ int Mesh::getFaceNeighborValues(unsigned int eleID, const T* in, T* out,
                           << " dir: " << face
                           << " is invalid. Function : " << __func__
                           << std::endl;
-                MPI_Abort(m_uiCommGlobal, 0);
+                MPI_Abort(m_uiCommGlobal, 1);
         }
 
         for (unsigned int child = 0; child < (NUM_CHILDREN >> 1); child++) {

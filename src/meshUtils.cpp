@@ -82,7 +82,7 @@ Mesh* createMesh(const ot::TreeNode* oct, unsigned int num,
             std::cout << "Error: " << __LINE__ << " rank_g: " << rank
                       << " isActive: " << isActive
                       << " f2O octants: " << tmpNodes.size() << std::endl;
-            MPI_Abort(comm, 0);
+            MPI_Abort(comm, 1);
         }
 
     std::vector<ot::TreeNode> balOct;

@@ -217,7 +217,7 @@ int hilbert_rotation_pattern_2d() {
             rot[i][3] = rot_current[3];
 
             rotate(i, rot[i], rot_index, 2);
-            char str[4];  // buffer size so never overflow
+            char str[5];  // 4 digits + NUL
             sprintf(str, "%d%d%d%d", rot[i][0], rot[i][1], rot[i][2],
                     rot[i][3]);
             // std::cout<<"new rotation: "<<str<<std::endl;
@@ -264,7 +264,7 @@ void generateTable_2d() {
             rot[w][3] = rot_current[3];
 
             rotate(rot_index_str.at(w) - '0', rot[w], rot_index, 2);
-            char str[4];  // buffer size so never overflow
+            char str[5];  // 4 digits + NUL
             sprintf(str, "%d%d%d%d", rot[w][0], rot[w][1], rot[w][2],
                     rot[w][3]);
             // insert_unique(std::string(str));
@@ -311,7 +311,7 @@ int hilbert_rotation_pattern() {
             rot[i][7] = rot_current[7];
 
             rotate(i, rot[i], rot_index, 3);
-            char str[8];  // buffer size so never overflow
+            char str[9];  // 8 digits + NUL
             sprintf(str, "%d%d%d%d%d%d%d%d", rot[i][0], rot[i][1], rot[i][2],
                     rot[i][3], rot[i][4], rot[i][5], rot[i][6], rot[i][7]);
             // std::cout<<"Rotation pattern found: "<<str<<std::endl;
@@ -365,7 +365,7 @@ void generateTable() {
             rot[w][7] = rot_current[7];
 
             rotate(rot_index_str.at(w) - '0', rot[w], rot_index, 3);
-            char str[8];  // buffer size so never overflow
+            char str[9];  // 8 digits + NUL
             sprintf(str, "%d%d%d%d%d%d%d%d", rot[w][0], rot[w][1], rot[w][2],
                     rot[w][3], rot[w][4], rot[w][5], rot[w][6], rot[w][7]);
             // insert_unique(std::string(str));

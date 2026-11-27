@@ -61,7 +61,7 @@ class Launcher {
                           << " jobs with " << m_uiNodesPerJob << " nodes with "
                           << m_uiCoresPerNode << " cores per node" << std::endl;
 
-            MPI_Abort(m_uiCommGlobal, 0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         const unsigned int cores_per_job = m_uiCoresPerNode * m_uiNodesPerJob;

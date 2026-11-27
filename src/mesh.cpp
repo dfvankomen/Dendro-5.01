@@ -160,7 +160,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             std::cout << "[COMM Shrink/Expansion error]: global_rank: "
                       << m_uiGlobalRank << " is active: " << m_uiIsActive
                       << " balOct sz: " << in.size() << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiElementPreGhostBegin  = 0;
@@ -206,7 +206,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             std::cout << "rank: " << m_uiActiveRank << " input octree of size "
                       << in.size() << " is too small for the current comm.  "
                       << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         /*m_uiElementOrder=pOrder;
@@ -457,7 +457,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             std::cout << "[COMM Shrink/Expansion error]: global_rank: "
                       << m_uiGlobalRank << " is active: " << m_uiIsActive
                       << " balOct sz: " << in.size() << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiElementPreGhostBegin  = 0;
@@ -503,7 +503,7 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
             std::cout << "rank: " << m_uiActiveRank << " input octree of size "
                       << in.size() << " is too small for the current comm.  "
                       << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         /*m_uiElementOrder=pOrder;
@@ -2090,7 +2090,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                       << "[E2E Error]: Local  face key missing after R1 face-1 "
                          "& face-2 ghost exchange: "
                       << m_uiKeysPtr[k] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         stencilIndexDirection = m_uiKeysPtr[k].getStencilIndexDirectionList();
@@ -2392,7 +2392,7 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                       << "[E2E Error]: Local  face key missing after R1 (face "
                          "edge vertex) ghost exchange: "
                       << m_uiKeysPtr[k] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         if (ownerList->size())
@@ -2465,8 +2465,8 @@ void Mesh::buildE2EMap(std::vector<ot::TreeNode> &in, MPI_Comm comm) {
                       << "[E2E Error]: Local edge or vertex key missing after "
                          "R1 (face edge vertex) ghost exchange: "
                       << m_uiKeysPtr[k] << std::endl;
-            exit(0);  // no point in continuing if this fails E2N fails for sure
-                      // :)
+            // no point in continuing: if this fails, E2N fails for sure
+            MPI_Abort(m_uiCommGlobal, 1);
         }
     }
 
@@ -5302,14 +5302,14 @@ void Mesh::computeNodalScatterMapDG(MPI_Comm comm) {
         m_uiRecvNodeCount[p]  = m_uiRecvEleCount[p] * m_uiNpE;
 
         m_uiSendNodeOffset[p] = m_uiSendEleOffset[p] * m_uiNpE;
-        m_uiRecvNodeOffset[p] = m_uiRecvNodeOffset[p] * m_uiNpE;
+        m_uiRecvNodeOffset[p] = m_uiRecvEleOffset[p] * m_uiNpE;
     }
 
     if ((m_uiRecvNodeOffset[npes - 1] + m_uiRecvNodeCount[npes - 1]) !=
         m_uiGhostElementRound1Index.size() * m_uiNpE) {
         std::cout << "Error: " << __func__ << " line: " << __LINE__
                   << " send and recv DG node mismatch " << std::endl;
-        MPI_Abort(comm, 0);
+        MPI_Abort(comm, 1);
     }
 
     m_uiScatterMapActualNodeSend.clear();
@@ -7052,7 +7052,7 @@ void Mesh::computeNodalScatterMap(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -7748,7 +7748,7 @@ void Mesh::computeNodalScatterMap1(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -8248,7 +8248,7 @@ void Mesh::computeNodalScatterMap2(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -9158,7 +9158,7 @@ void Mesh::computeNodalScatterMap3(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -9669,7 +9669,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
             std::cout << "rank: " << m_uiActiveRank
                       << " SM4 Error: Allocated key<" << recvNodal_keys[e]
                       << " not found. " << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         assert(recvNodal_keys[e].getFlag() & OCT_FOUND);
@@ -9861,7 +9861,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
                   << (m_uiRecvNodeOffset[npes - 1] +
                       m_uiRecvNodeCount[npes - 1])
                   << std::endl;
-        exit(0);
+        MPI_Abort(m_uiCommGlobal, 1);
     }
 
     std::vector<SearchKey> recvNodeSKeys;
@@ -9909,7 +9909,7 @@ void Mesh::computeNodalScatterMap4(MPI_Comm comm) {
             std::cout << "rank: " << rank << " allocated[" << alCount
                       << "]: " << allocatedNodes[alCount] << " received[" << e
                       << "]: " << recvNodeSKeys[e] << std::endl;
-            exit(0);
+            MPI_Abort(m_uiCommGlobal, 1);
         }
 
         m_uiScatterMapActualNodeRecv[recvNodeSKeys[e].getOwner()] =
@@ -10325,9 +10325,8 @@ void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
         mergeKeys(blkSkeys, blkKeys);
         blkSkeys.clear();
         SFC::seqSearch::SFC_treeSearch(
-            &(*(blkKeys.begin())), &(*(m_uiAllElements.begin())), 0,
-            blkKeys.size(), 0, m_uiAllElements.size(), m_uiMaxDepth,
-            m_uiMaxDepth, ROOT_ROTATION);
+            blkKeys.data(), m_uiAllElements.data(), 0, blkKeys.size(), 0,
+            m_uiAllElements.size(), m_uiMaxDepth, m_uiMaxDepth, ROOT_ROTATION);
 
         for (unsigned int i = 0; i < blkKeys.size(); i++) {
             assert(blkKeys[i].getFlag() & OCT_FOUND);
@@ -11520,7 +11519,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                     std::cout << "[Remesh Error]: rank: " << m_uiActiveRank
                               << " M1 & M2 front alignment failed "
                               << std::endl;
-                    exit(0);
+                    MPI_Abort(m_uiCommGlobal, 1);
                 }
 
                 if (!(m_uiAllElements[m_uiElementLocalEnd - 1] ==
@@ -11531,7 +11530,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                           balOct1.back().getParent())) {
                     std::cout << "[Remesh Error]: rank: " << m_uiActiveRank
                               << " M1 & M2 back alignment failed " << std::endl;
-                    exit(0);
+                    MPI_Abort(m_uiCommGlobal, 1);
                 }
 
                 /* while( (count2<balOct1.size()) &&
@@ -11551,7 +11550,7 @@ ot::Mesh *Mesh::ReMesh(unsigned int grainSz, double ld_tol, unsigned int sfK,
                             << " ele: " << ele << "pNodes1: " << pNodes1[ele]
                             << " count2: " << count2
                             << " pNodes2: " << pNodes2[count2] << std::endl;
-                        exit(0);
+                        MPI_Abort(m_uiCommGlobal, 1);
                     }
 
                     assert(count2 < balOct1.size());
@@ -12560,25 +12559,29 @@ void ot::Mesh::SET_FACE_TO_ELEMENT_MAP(unsigned int ele, unsigned int dir,
         const unsigned int l2 = m_uiAllElements[lookup].getLevel();
         if (l1 == l2) {
             if (ele < lookup) {
-                m_uiF2EMap[(ele * NUM_FACES + dir) + 0] =
+                m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 0] =
                     (dir << ODA_FLAGS_TOTAL);
-                m_uiF2EMap[(ele * NUM_FACES + dir) + 1] = ele;
-                m_uiF2EMap[(ele * NUM_FACES + dir) + 2] = lookup;
+                m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 1] = ele;
+                m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 2] =
+                    lookup;
                 // unique_faces.push_back((ele*NUM_FACES+dir));
 
             } else {
-                m_uiF2EMap[(ele * NUM_FACES + dir) + 0] =
+                m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 0] =
                     (dirOp << ODA_FLAGS_TOTAL);
-                m_uiF2EMap[(lookup * NUM_FACES + dirOp) + 1] = lookup;
-                m_uiF2EMap[(lookup * NUM_FACES + dirOp) + 2] = ele;
+                m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 1] =
+                    lookup;
+                m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 2] =
+                    ele;
                 // unique_faces.push_back((lookup*NUM_FACES+dirOp));
             }
 
         } else if (l1 > l2) {
             // winner, is lookup octant.
-            m_uiF2EMap[(ele * NUM_FACES + dir) + 0] =
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 0] =
                 (dirOp << ODA_FLAGS_TOTAL);
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) + 1] = lookup;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 1] =
+                lookup;
             // unique_faces.push_back((lookup*NUM_FACES+dirOp));
 
             // in the morton ordering.
@@ -12596,17 +12599,22 @@ void ot::Mesh::SET_FACE_TO_ELEMENT_MAP(unsigned int ele, unsigned int dir,
             assert(lookup2 != LOOK_UP_TABLE_DEFAULT);
             assert(lookup3 != LOOK_UP_TABLE_DEFAULT);
 
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) + 2] = lookup0;
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) + 3] = lookup1;
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) + 4] = lookup2;
-            m_uiF2EMap[(lookup * NUM_FACES + dirOp) + 5] = lookup3;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 2] =
+                lookup0;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 3] =
+                lookup1;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 4] =
+                lookup2;
+            m_uiF2EMap[(lookup * NUM_FACES + dirOp) * F2E_MAP_OFFSET + 5] =
+                lookup3;
 
         } else {
             assert(l1 < l2);
 
             // winner, is ele octant.
-            m_uiF2EMap[(ele * NUM_FACES + dir) + 0] = (dir << ODA_FLAGS_TOTAL);
-            m_uiF2EMap[(ele * NUM_FACES + dir) + 1] = ele;
+            m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 0] =
+                (dir << ODA_FLAGS_TOTAL);
+            m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 1] = ele;
             // unique_faces.push_back((ele*NUM_FACES+dir));
 
             // in the morton ordering.
@@ -12623,15 +12631,16 @@ void ot::Mesh::SET_FACE_TO_ELEMENT_MAP(unsigned int ele, unsigned int dir,
             assert(lookup2 != LOOK_UP_TABLE_DEFAULT);
             assert(lookup3 != LOOK_UP_TABLE_DEFAULT);
 
-            m_uiF2EMap[(ele * NUM_FACES + dir) + 2] = lookup0;
-            m_uiF2EMap[(ele * NUM_FACES + dir) + 3] = lookup1;
-            m_uiF2EMap[(ele * NUM_FACES + dir) + 4] = lookup2;
-            m_uiF2EMap[(ele * NUM_FACES + dir) + 5] = lookup3;
+            m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 2] = lookup0;
+            m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 3] = lookup1;
+            m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 4] = lookup2;
+            m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 5] = lookup3;
         }
 
     } else {
-        m_uiF2EMap[(ele * NUM_FACES + dir) + 0] = (dir << ODA_FLAGS_TOTAL);
-        m_uiF2EMap[(ele * NUM_FACES + dir) + 1] = ele;
+        m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 0] =
+            (dir << ODA_FLAGS_TOTAL);
+        m_uiF2EMap[(ele * NUM_FACES + dir) * F2E_MAP_OFFSET + 1] = ele;
         // unique_faces.push_back((ele*NUM_FACES+dir));
     }
 }
@@ -12657,11 +12666,12 @@ void ot::Mesh::buildF2EMap() {
     unsigned int g1Count = 0;
     for (unsigned int ele = m_uiElementPreGhostBegin;
          ele < m_uiElementPostGhostEnd; ele++) {
-        if ((ele < m_uiElementLocalBegin || ele >= m_uiElementLocalEnd) &&
-            (ele != m_uiGhostElementRound1Index[g1Count]))
-            continue;
-        else
+        if (ele < m_uiElementLocalBegin || ele >= m_uiElementLocalEnd) {
+            if (g1Count >= m_uiGhostElementRound1Index.size() ||
+                ele != m_uiGhostElementRound1Index[g1Count])
+                continue;
             g1Count++;
+        }
 
         // 1. OCT_DIR_LEFT
 
@@ -12721,36 +12731,39 @@ void ot::Mesh::buildF2EMap() {
     DendroIntL uniqueFaceCount = 0;
     for (unsigned int ele = m_uiElementPreGhostBegin;
          ele < m_uiElementPostGhostEnd; ele++) {
-        if (m_uiF2EMap[ele * NUM_FACES + 0] != LOOK_UP_TABLE_DEFAULT)
-            uniqueFaceCount++;
+        for (unsigned int f = 0; f < NUM_FACES; f++)
+            if (m_uiF2EMap[(ele * NUM_FACES + f) * F2E_MAP_OFFSET] !=
+                LOOK_UP_TABLE_DEFAULT)
+                uniqueFaceCount++;
     }
 
     std::vector<unsigned int> tmpMap;
     std::swap(tmpMap, m_uiF2EMap);
 
     m_uiF2EMap.clear();
-    m_uiF2EMap.resize(uniqueFaceCount, LOOK_UP_TABLE_DEFAULT);
+    m_uiF2EMap.resize(uniqueFaceCount * F2E_MAP_OFFSET, LOOK_UP_TABLE_DEFAULT);
 
     uniqueFaceCount    = 0;
     unsigned int owner = 0;
     bool isIndependent = true;
     bool isWdependent  = true;
     bool isBoundary    = false;
-    for (unsigned int ele = m_uiElementPreGhostBegin;
-         ele < m_uiElementPostGhostEnd; ele++) {
-        if (tmpMap[ele * NUM_FACES + 0] != LOOK_UP_TABLE_DEFAULT) {
+    // one record per (element, face), F2E_MAP_OFFSET words each
+    for (unsigned int rec = m_uiElementPreGhostBegin * NUM_FACES;
+         rec < m_uiElementPostGhostEnd * NUM_FACES; rec++) {
+        if (tmpMap[rec * F2E_MAP_OFFSET + 0] != LOOK_UP_TABLE_DEFAULT) {
             m_uiF2EMap[uniqueFaceCount * (F2E_MAP_OFFSET) + 0] =
-                tmpMap[ele * NUM_FACES + 0];
+                tmpMap[rec * F2E_MAP_OFFSET + 0];
             m_uiF2EMap[uniqueFaceCount * (F2E_MAP_OFFSET) + 1] =
-                tmpMap[ele * NUM_FACES + 1];
+                tmpMap[rec * F2E_MAP_OFFSET + 1];
             m_uiF2EMap[uniqueFaceCount * (F2E_MAP_OFFSET) + 2] =
-                tmpMap[ele * NUM_FACES + 2];
+                tmpMap[rec * F2E_MAP_OFFSET + 2];
             m_uiF2EMap[uniqueFaceCount * (F2E_MAP_OFFSET) + 3] =
-                tmpMap[ele * NUM_FACES + 3];
+                tmpMap[rec * F2E_MAP_OFFSET + 3];
             m_uiF2EMap[uniqueFaceCount * (F2E_MAP_OFFSET) + 4] =
-                tmpMap[ele * NUM_FACES + 4];
+                tmpMap[rec * F2E_MAP_OFFSET + 4];
             m_uiF2EMap[uniqueFaceCount * (F2E_MAP_OFFSET) + 5] =
-                tmpMap[ele * NUM_FACES + 5];
+                tmpMap[rec * F2E_MAP_OFFSET + 5];
 
             dir = (m_uiF2EMap[uniqueFaceCount * (F2E_MAP_OFFSET) + 0] >>
                    ODA_FLAGS_TOTAL);
@@ -13094,7 +13107,8 @@ void ot::Mesh::buildF2EMap() {
                     isIndependent = true;
                     isWdependent  = false;
 
-                    if ((m_uiAllElements[owner].maxZ() == 0)) {
+                    if ((m_uiAllElements[owner].maxZ() ==
+                         (1u << m_uiMaxDepth))) {
                         isBoundary = true;
                         assert(m_uiF2EMap[uniqueFaceCount * (F2E_MAP_OFFSET) +
                                           2] == LOOK_UP_TABLE_DEFAULT);
@@ -13697,7 +13711,7 @@ EType ot::Mesh::getElementType(unsigned int eleID) {
             if( (ownerrank[i] == LOOK_UP_TABLE_DEFAULT ))
             {
                 std::cout<<"error: "<<__func__<<" sending key : "<<m_uiUnzip_3pt_keys[i]<<" to proc: "<<ownerrank[i]<<std::endl;
-                MPI_Abort(m_uiCommActive,0);
+                MPI_Abort(m_uiCommActive,1);
             }
             
             m_uiSendCountRePt[ownerrank[i]]++;
@@ -13812,7 +13826,7 @@ EType ot::Mesh::getElementType(unsigned int eleID) {
             if( !(rkey_merged[i].getFlag() & OCT_FOUND) )
             {
                 std::cout<<"Error["<<m_uiActiveRank<<"] : "<<__func__<<" requested key : "<<rkey_merged[i]<<" node is not found at any local partition "<<std::endl;
-                MPI_Abort(m_uiCommActive,0);
+                MPI_Abort(m_uiCommActive,1);
             }
 
             const unsigned eleID = rkey_merged[i].getSearchResult();
@@ -14390,7 +14404,7 @@ void Mesh::interGridTransferSendRecvCompute(const ot::Mesh *pMesh) {
                   << " [Inter-grid Transfer error ]: Recvn M2' elements: "
                   << total_recv_elements << " m2 num local elements "
                   << pMesh->getNumLocalMeshElements() << std::endl;
-        MPI_Abort(comm, 0);
+        MPI_Abort(comm, 1);
     }
 
     m_uiIsIGTSetup = true;

@@ -2582,7 +2582,7 @@ void ExplicitNUTS<T, Ctx>::remesh(unsigned int grain_sz, double ld_tol,
         std::cout << "rank: " << pMesh->getMPIRankGlobal()
                   << " elements in blocks synced constraint failed. "
                   << std::endl;
-        MPI_Abort(pMesh->getMPICommunicator(), 0);
+        MPI_Abort(pMesh->getMPICommunicator(), 1);
     }
 
     for (unsigned int blk = 0; blk < blkList.size(); blk++) {

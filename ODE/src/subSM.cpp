@@ -153,7 +153,7 @@ void ot::SubScatterMap::compute_L2SM() {
                 oss << __func__ << " inconsistent send recv counts for level "
                     << l << " encountered. ";
                 print_error(oss.str().c_str());
-                MPI_Abort(commActive, 0);
+                MPI_Abort(commActive, 1);
             }
     }
     rCts.clear();
