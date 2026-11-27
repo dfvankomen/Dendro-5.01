@@ -107,7 +107,9 @@ int main(int argc, char** argv) {
     if (rank < activeNpes)
         bad += io::checkpoint::readOctFromFile(name(rank, ".oct").c_str(),
                                                back) != 0;
-    ot::Mesh* restored = new ot::Mesh(back, 1, p, activeNpes, comm);
+    // unsigned: an int count is ambiguous when MPI_Comm is int (MPICH)
+    ot::Mesh* restored =
+        new ot::Mesh(back, 1, p, static_cast<unsigned int>(activeNpes), comm);
     if (restored->isActive()) {
         const int a = restored->getMPIRank();
         std::uint64_t mine[2];
