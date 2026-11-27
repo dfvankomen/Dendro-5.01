@@ -1346,7 +1346,7 @@ unsigned int rankSelectRule(unsigned int size_global, unsigned int rank_global,
     if (size_local > size_global) {
         std::cout << "[Error] : " << __func__ << " rank: " << rank_global
                   << " size_local > size_global " << std::endl;
-        exit(0);
+        MPI_Abort(MPI_COMM_WORLD, 1);
     }
 
 // Rule 1 [enable this code to choose consecative ranks (deafult) works with any

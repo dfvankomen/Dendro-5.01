@@ -272,7 +272,7 @@ class Mesh {
                                     // nodes.
 
     /**Splitter Node for each processor*/
-    ot::TreeNode *m_uiSplitterNodes;
+    ot::TreeNode *m_uiSplitterNodes = nullptr;
 
     // Pre  and Post ghost octants.
 
