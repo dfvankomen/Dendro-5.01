@@ -1714,12 +1714,20 @@ void Mesh::gatherFromGhostEnd(T* vec, std::vector<std::vector<T> >& gatherV,
             nodeRecvOffset[activeNpes - 1] + nodeRecvCount[activeNpes - 1];
         unsigned int proc_id;
 
-        unsigned int ctxIndex = 0;
+        int ctxIndex = -1;
         for (unsigned int i = 0; i < m_uiMPIContexts.size(); i++) {
             if (m_uiMPIContexts[i].getBuffer() == vec) {
                 ctxIndex = i;
                 break;
             }
+        }
+
+        if (ctxIndex == -1) {
+            std::cout << "rank: " << m_uiActiveRank
+                      << " async ctx not found for vec: "
+                      << static_cast<const void*>(vec)
+                      << " in gatherFromGhostEnd: " << __LINE__ << std::endl;
+            MPI_Abort(m_uiCommActive, 1);
         }
 
         MPI_Status status;
@@ -1756,15 +1764,16 @@ void Mesh::gatherFromGhostEnd(T* vec, std::vector<std::vector<T> >& gatherV,
                 for (unsigned int k = nodeRecvOffset[proc_id];
                      k < (nodeRecvOffset[proc_id] + nodeRecvCount[proc_id]);
                      k++) {
-                    const unsigned int gsz = gatherV[recvNodeSM[k]].size();
+                    const unsigned int copies =
+                        gatherV[recvNodeSM[k]].size() / dof;
                     for (unsigned int v = 0; v < dof; v++) {
                         gatherV[recvNodeSM[k]]
-                               [v * gsz + gcounts[recvNodeSM[k]]] =
+                               [v * copies + gcounts[recvNodeSM[k]]] =
                                    recvB[dof * (nodeRecvOffset[proc_id]) +
                                          (v * nodeRecvCount[proc_id]) +
                                          (k - nodeRecvOffset[proc_id])];
-                        gcounts[recvNodeSM[k]] += 1;
                     }
+                    gcounts[recvNodeSM[k]] += 1;
                 }
             }
 
