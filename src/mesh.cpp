@@ -12811,6 +12811,7 @@ void ot::Mesh::buildF2EMap() {
                                            0],
                                 ODA_W_DEPENDENT_FLAG_BIT);
                     } else {
+                        isIndependent = false;  // a ghost owner is never INDEP
                         for (unsigned int k = 0; k < (m_uiElementOrder + 1);
                              k++)
                             for (unsigned int j = 0; j < (m_uiElementOrder + 1);
@@ -12878,6 +12879,7 @@ void ot::Mesh::buildF2EMap() {
                                            0],
                                 ODA_W_DEPENDENT_FLAG_BIT);
                     } else {
+                        isIndependent = false;  // a ghost owner is never INDEP
                         for (unsigned int k = 0; k < (m_uiElementOrder + 1);
                              k++)
                             for (unsigned int j = 0; j < (m_uiElementOrder + 1);
@@ -12944,6 +12946,7 @@ void ot::Mesh::buildF2EMap() {
                                            0],
                                 ODA_W_DEPENDENT_FLAG_BIT);
                     } else {
+                        isIndependent = false;  // a ghost owner is never INDEP
                         for (unsigned int k = 0; k < (m_uiElementOrder + 1);
                              k++)
                             for (unsigned int i = 0; i < (m_uiElementOrder + 1);
@@ -13011,6 +13014,7 @@ void ot::Mesh::buildF2EMap() {
                                            0],
                                 ODA_W_DEPENDENT_FLAG_BIT);
                     } else {
+                        isIndependent = false;  // a ghost owner is never INDEP
                         for (unsigned int k = 0; k < (m_uiElementOrder + 1);
                              k++)
                             for (unsigned int i = 0; i < (m_uiElementOrder + 1);
@@ -13077,6 +13081,7 @@ void ot::Mesh::buildF2EMap() {
                                            0],
                                 ODA_W_DEPENDENT_FLAG_BIT);
                     } else {
+                        isIndependent = false;  // a ghost owner is never INDEP
                         for (unsigned int j = 0; j < (m_uiElementOrder + 1);
                              j++)
                             for (unsigned int i = 0; i < (m_uiElementOrder + 1);
@@ -13144,6 +13149,7 @@ void ot::Mesh::buildF2EMap() {
                                            0],
                                 ODA_W_DEPENDENT_FLAG_BIT);
                     } else {
+                        isIndependent = false;  // a ghost owner is never INDEP
                         for (unsigned int j = 0; j < (m_uiElementOrder + 1);
                              j++)
                             for (unsigned int i = 0; i < (m_uiElementOrder + 1);

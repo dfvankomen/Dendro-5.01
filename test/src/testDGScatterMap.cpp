@@ -2,7 +2,8 @@
 // test/expect_pass.cmake). It also checks nodal recv offsets == element recv
 // offsets x nodes per element; that is the fixed line, so it cannot fail alone.
 // Catches: the "DG node mismatch" abort; under ASan, buildF2EMap's overflow and
-// the delete of splitters the DG path never allocates. F2E contents unchecked.
+// the delete of splitters the DG path never allocates. testF2EMap checks the
+// F2E contents.
 // Usage: mpirun -np <n >= 2> testDGScatterMap
 
 #include <mpi.h>

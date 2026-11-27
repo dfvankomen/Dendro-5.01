@@ -588,6 +588,16 @@ if(BUILD_DENDRO_EXAMPLES)
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
     set_tests_properties(testDGScatterMap_${NP}rank PROPERTIES TIMEOUT 300)
   endforeach()
+  dendro_add_example(testF2EMap test/src/testF2EMap.cpp)
+  # the map is built only on 2+ active ranks, so no 1-rank case
+  foreach(NP 2 3)
+    add_test(NAME testF2EMap_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testF2EMap>;${MPIEXEC_POSTFLAGS}"
+                     "-DEXPECT=testF2EMap np ${NP}: 0 failed, PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testF2EMap_${NP}rank PROPERTIES TIMEOUT 300)
+  endforeach()
   dendro_add_example(testOctreeStructure test/src/testOctreeStructure.cpp)
   add_test(NAME testOctreeStructure COMMAND testOctreeStructure 6 1e-3)
   add_test(NAME testOctreeStructure_2rank
