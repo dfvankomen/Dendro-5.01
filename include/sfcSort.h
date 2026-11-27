@@ -543,7 +543,7 @@ void SFC_treeSort(T* pNodes, DendroIntL n, std::vector<T>& pOutSorted,
                            2)
                     : cnum_prev = 1;
                 numElements = count[cnum + 2] - count[cnum_prev];
-                if ((options & TS_CONSTRUCT_OCTREE) |
+                if ((options & TS_CONSTRUCT_OCTREE) ||
                     (options & TS_BALANCE_OCTREE)) {
                     x    = parent.getX() +
                            (((int)((bool)(cnum & 1u))) << (pMaxDepthBit));
@@ -559,7 +559,7 @@ void SFC_treeSort(T* pNodes, DendroIntL n, std::vector<T>& pOutSorted,
                                  pOutSorted, pOutConstruct, pOutBalanced,
                                  (pMaxDepthBit), pMaxDepth, temp, rotation, k,
                                  options);
-                } else if ((options & TS_CONSTRUCT_OCTREE) |
+                } else if ((options & TS_CONSTRUCT_OCTREE) ||
                            (options & TS_BALANCE_OCTREE)) {
                     if (options & TS_CONSTRUCT_OCTREE) {
                         pOutConstruct.push_back(temp);
@@ -2516,7 +2516,7 @@ void SFC_treeSort(std::vector<T>& pNodes, std::vector<T>& pOutSorted,
 
 #endif
 
-    if ((options & TS_CONSTRUCT_OCTREE) | (options & TS_BALANCE_OCTREE)) {
+    if ((options & TS_CONSTRUCT_OCTREE) || (options & TS_BALANCE_OCTREE)) {
         MPI_Comm_rank(pcomm, &rank);
         MPI_Comm_size(pcomm, &npes);
 

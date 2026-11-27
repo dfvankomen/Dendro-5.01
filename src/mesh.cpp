@@ -14599,9 +14599,7 @@ void Mesh::computeTreeNodeOwnerProc(const ot::TreeNode *pNodes, unsigned int n,
                      w < key_merged[k].getOwnerList()->size(); w++) {
                     const unsigned kowner =
                         (*(key_merged[k].getOwnerList()))[w];
-                    if (kowner >= 0) {
-                        ownerranks[kowner] = p;
-                    }
+                    ownerranks[kowner] = p;
                 }
             }
         }
