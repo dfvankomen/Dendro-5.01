@@ -825,6 +825,16 @@ if(BUILD_DENDRO_EXAMPLES)
   add_test(NAME testDerivConvergence_orderGate
            COMMAND testDerivConvergence convergence_results.csv --gate)
   set_tests_properties(testDerivConvergence_orderGate PROPERTIES TIMEOUT 900)
+  # premerge tier (plain `ctest`, or scripts/premerge.sh): derivatives through
+  # a real mesh's blocks, unzip padding and boundary flags
+  dendro_add_deriv_test(testDerivOnMesh test/src/testDerivOnMesh.cpp)
+  add_test(NAME testDerivOnMesh_2rank
+           COMMAND ${CMAKE_COMMAND}
+                   "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};2;${MPIEXEC_PREFLAGS};$<TARGET_FILE:testDerivOnMesh>;${MPIEXEC_POSTFLAGS}"
+                   "-DEXPECT=testDerivOnMesh np 2: .*PASS"
+                   -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+  set_tests_properties(testDerivOnMesh_2rank PROPERTIES TIMEOUT 300
+                       LABELS premerge)
   dendro_add_deriv_test(testBandedVsXSMM test/src/testBandedVsXSMM.cpp)
   dendro_add_deriv_test(testCCFD test/src/testCCFD.cpp)
   dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)
