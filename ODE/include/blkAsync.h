@@ -78,7 +78,9 @@ class BlockAsyncVector {
             return;
         }
 
-        m_uiVec = new T[m_uiDof * NN];
+        // zero-filled: padding that no sync writes (outside the domain) must
+        // read as 0
+        m_uiVec = new T[m_uiDof * NN]();
 
         return;
     }

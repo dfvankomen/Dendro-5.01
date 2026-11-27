@@ -662,7 +662,7 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_POSTFLAGS})
 
   # Self-checking, no arguments, no MPI, well under a second each.
-  foreach(T testCloneNewSize testDerivSet testExplicitSimd testKOMatrix testKOSign testKOSimd)
+  foreach(T testBlkAsyncZeroInit testCloneNewSize testDerivSet testExplicitSimd testKOMatrix testKOSign testKOSimd)
     add_test(NAME ${T} COMMAND ${T})
     set_tests_properties(${T} PROPERTIES TIMEOUT 120 LABELS unit)
   endforeach()
@@ -817,6 +817,7 @@ if(BUILD_DENDRO_EXAMPLES)
   endif()
 
   dendro_add_example(testLTSBlkVec ODE/examples/testLTSBlkVec.cpp)
+  dendro_add_example(testBlkAsyncZeroInit test/src/testBlkAsyncZeroInit.cpp)
   dendro_add_example(dgVecTest FEM/examples/src/dgVecTest.cpp)
   dendro_add_example(testInterp FEM/examples/src/testInterp.cpp)
   dendro_add_example(meshLoop examples/src/meshLooping.cpp)
