@@ -1430,6 +1430,14 @@ class Mesh {
         return m_uiE2EMapping;
     }
 
+    /**@brief face-to-element map; built only for FEM_DG on 2+ active ranks.
+     * One F2E_MAP_OFFSET-word record per face: [0] dir << ODA_FLAGS_TOTAL |
+     * ODA flags, [1] owner element, [2..] neighbor(s), LOOK_UP_TABLE_DEFAULT
+     * where absent. */
+    inline const std::vector<unsigned int> &getF2EMap() const {
+        return m_uiF2EMap;
+    }
+
     /**@breif returns const e2n mapping instance */
     inline const std::vector<unsigned int> &getE2NMapping() const {
         return m_uiE2NMapping_CG;
