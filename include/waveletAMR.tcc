@@ -96,7 +96,7 @@ bool compute_wavelet_remesh_flags(
                 std::cout << " padding width should be half the eleOrder for "
                              "generic wavelet computations. "
                           << std::endl;
-                MPI_Abort(pMesh->getMPICommunicator(), 0);
+                MPI_Abort(pMesh->getMPICommunicator(), 1);
             }
 
             const unsigned int nx = (2 * eOrder + 1);

@@ -229,7 +229,7 @@ void SubScatterMap::readFromGhostEnd(T* vec, unsigned int l, unsigned int dof) {
                       << " [SubSM Error]: " << __LINE__
                       << " readFromGhostEnd async context not foound:  "
                       << std::endl;
-            MPI_Abort(m_uiMesh->getMPICommunicator(), 0);
+            MPI_Abort(m_uiMesh->getMPICommunicator(), 1);
         }
 
         ot::AsyncCommByLev ctx = m_uiAsyncCtxList[ctxIndex];
