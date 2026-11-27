@@ -578,6 +578,16 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_example(testUnzipScatterKernels test/src/testUnzipScatterKernels.cpp)
   dendro_add_example(testUnzipExact test/src/testUnzipExact.cpp)
   dendro_add_example(testMeshInvariants test/src/testMeshInvariants.cpp)
+  dendro_add_example(testDGScatterMap test/src/testDGScatterMap.cpp)
+  # exit 0 and the PASS line both required (see test/expect_pass.cmake)
+  foreach(NP 2 3)
+    add_test(NAME testDGScatterMap_${NP}rank
+             COMMAND ${CMAKE_COMMAND}
+                     "-DCMD=${MPIEXEC_EXECUTABLE};${MPIEXEC_NUMPROC_FLAG};${NP};${MPIEXEC_PREFLAGS};$<TARGET_FILE:testDGScatterMap>;${MPIEXEC_POSTFLAGS}"
+                     "-DEXPECT=testDGScatterMap: PASS"
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/test/expect_pass.cmake)
+    set_tests_properties(testDGScatterMap_${NP}rank PROPERTIES TIMEOUT 300)
+  endforeach()
   dendro_add_example(testOctreeStructure test/src/testOctreeStructure.cpp)
   add_test(NAME testOctreeStructure COMMAND testOctreeStructure 6 1e-3)
   add_test(NAME testOctreeStructure_2rank
