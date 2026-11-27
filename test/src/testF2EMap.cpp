@@ -1,9 +1,7 @@
-// Oracle: every face-to-element record matches geometry, not E2E: a fixed
-// octree (4^3 level-2 octants, the one at (1,1,1) split into 8) gives each
-// face's neighbors by coordinates; owner rule, face-Morton order of hanging
-// neighbors, one record per local face, and the ODA flag bits by definition.
-// Catches: W_BOUNDARY set on a ghost-owned boundary face with no INDEP/W_DEP
-// bit; under ASan, the old record-stride overflow in buildF2EMap.
+// Oracle: each face-to-element record matches geometry (4^3 level-2 octree,
+// the one at (1,1,1) split): owner rule, hanging neighbors in face-Morton
+// order, one record per local face, and the ODA flag bits by definition.
+// Catches: W_BOUNDARY on a ghost-owned boundary face; ASan: record overflow.
 // Usage: mpirun -np <n >= 2> testF2EMap   (the map is not built on 1 rank)
 
 #include <mpi.h>
@@ -115,8 +113,8 @@ int main(int argc, char** argv) {
         0, ot::SM_TYPE::FEM_DG, 4, 0.1, DENDRO_DEFAULT_SF_K);
 
     unsigned long fails[NUM_FAIL] = {0};
-    // records seen: same-level, hanging, boundary, ghost-owned boundary
-    // (premise: all four occur)
+    // records seen: same-level, hanging, boundary, and ghost-owned boundary
+    // with no local node on the face (premise: all four occur)
     unsigned long kinds[4]        = {0, 0, 0, 0};
     unsigned int shown[NUM_FAIL]  = {0};
     auto fail = [&](Fail f, const char* fmt, unsigned int a, unsigned int b,
@@ -201,6 +199,7 @@ int main(int argc, char** argv) {
             } else if (nb.size() == 1 && nb[0].lev == ob.lev) {
                 kinds[0]++;
                 expect[0] = local(nb[0]);
+                // needs the neighbor's index: only if it is in this rank's list
                 if (expect[0] != D && !(o < expect[0]))
                     fail(OWNER_RULE, "same-level face owned by %u, not %u", o,
                          expect[0]);
@@ -227,7 +226,7 @@ int main(int argc, char** argv) {
                                       (wdep << ODA_W_DEPENDENT_FLAG_BIT) |
                                       (bdy << ODA_W_BOUNDARY_FLAG_BIT);
             const unsigned int got  = rec[0] & ((1u << ODA_FLAGS_TOTAL) - 1);
-            if (!ownerLocal && domainBoundary) kinds[3]++;
+            if (!ownerLocal && domainBoundary && !wdep) kinds[3]++;
             if (got != want)
                 fail(FLAGS, "owner %u dir %u, owner local %u: bits %u, want %u",
                      o, d, ownerLocal, got, want);
@@ -243,7 +242,7 @@ int main(int argc, char** argv) {
                      k % NUM_FACES);
         std::printf(
             "  [rank %d] %u records: %lu same-level, %lu hanging, %lu "
-            "boundary (%lu ghost-owned)\n",
+            "boundary (%lu ghost-owned, no local node)\n",
             rank, nRec, kinds[0], kinds[1], kinds[2], kinds[3]);
     }
 
