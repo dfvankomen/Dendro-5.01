@@ -661,11 +661,9 @@ if(BUILD_DENDRO_EXAMPLES)
                    ${MPIEXEC_PREFLAGS} $<TARGET_FILE:testBlockRegroupE2B>
                    ${MPIEXEC_POSTFLAGS})
 
-  # Self-checking, no arguments, no MPI, well under a second each.
-  foreach(T testBlkAsyncZeroInit testCloneNewSize testDerivSet testExplicitSimd testKOMatrix testKOSign testKOSimd)
-    add_test(NAME ${T} COMMAND ${T})
-    set_tests_properties(${T} PROPERTIES TIMEOUT 120 LABELS unit)
-  endforeach()
+  # its own process: whether a dirty page comes back depends on malloc's state
+  add_test(NAME testBlkAsyncZeroInit COMMAND testBlkAsyncZeroInit)
+  set_tests_properties(testBlkAsyncZeroInit PROPERTIES TIMEOUT 120 LABELS unit)
 
   # --- doctest-based unit tests (serial, registered with ctest) ---
   if(NOT TARGET doctest::doctest)
@@ -872,17 +870,11 @@ if(BUILD_DENDRO_EXAMPLES)
   dendro_add_deriv_test(testCCFD test/src/testCCFD.cpp)
   dendro_add_deriv_test(testFusedMixed test/src/testFusedMixed.cpp)
   dendro_add_deriv_test(testRhsWorkflow test/src/testRhsWorkflow.cpp)
-  dendro_add_deriv_test(testDerivSet test/src/testDerivSet.cpp)
   dendro_add_deriv_test(benchDerivBlockStage test/src/benchDerivBlockStage.cpp)
-  dendro_add_deriv_test(testKOMatrix test/src/testKOMatrix.cpp)
-  dendro_add_deriv_test(testExplicitSimd test/src/testExplicitSimd.cpp)
-  dendro_add_deriv_test(testKOSimd test/src/testKOSimd.cpp)
-  dendro_add_deriv_test(testMixedSetTrim test/src/testMixedSetTrim.cpp)
-  add_test(NAME testMixedSetTrim COMMAND testMixedSetTrim)
-  set_tests_properties(testMixedSetTrim PROPERTIES TIMEOUT 300)
-  dendro_add_deriv_test(testKOSign test/src/testKOSign.cpp)
-  dendro_add_deriv_test(testKimByu17 test/src/testKimByu17.cpp)
-  add_test(NAME testKimByu17 COMMAND testKimByu17)
+  # the derivative and KO unit gates, one section per former executable
+  dendro_add_deriv_test(testDerivs test/src/testDerivs.cpp)
+  add_test(NAME testDerivs COMMAND testDerivs)
+  set_tests_properties(testDerivs PROPERTIES TIMEOUT 300 LABELS unit)
   # checkpoint round trip; 8 ranks carry the premerge label
   dendro_add_example(testCheckpointRoundTrip test/src/testCheckpointRoundTrip.cpp)
   foreach(NP 1 3 8)
@@ -894,7 +886,6 @@ if(BUILD_DENDRO_EXAMPLES)
     set_tests_properties(testCheckpointRoundTrip_${NP}rank PROPERTIES TIMEOUT 300)
   endforeach()
   set_tests_properties(testCheckpointRoundTrip_8rank PROPERTIES LABELS premerge)
-  dendro_add_deriv_test(testCloneNewSize test/src/testCloneNewSize.cpp)
   dendro_add_deriv_test(testTimeIntegratorOrder test/src/testTimeIntegratorOrder.cpp)
   dendro_add_deriv_test(testMeshTimeIntegrator test/src/testMeshTimeIntegrator.cpp)
 
