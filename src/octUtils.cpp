@@ -936,8 +936,10 @@ void blockListToVtk(std::vector<ot::Block>& blkList,
     }
 }
 
-void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
-                                      MPI_Comm comm) {
+// one pass: each rank hands its leading partial sibling group to the previous
+// non-empty rank; returns whether this rank sent anything
+static int enforceSiblingsOnce(std::vector<ot::TreeNode>& in, MPI_Comm comm) {
+    int sent = 0;
     // handles the empty octree case.
     MPI_Comm newComm;
     par::splitComm2way(in.empty(), &newComm, comm);
@@ -1004,6 +1006,7 @@ void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
                           recvCount, next, 2, comm, &status);
         // std::cout<<"rank: "<<m_uiActiveRank<<" send recv ended "<<std::endl;
 
+        sent = sendCount > 0;
         if (sendCount) {
             std::vector<ot::TreeNode> tmpElements;
             std::swap(in, tmpElements);
@@ -1024,7 +1027,49 @@ void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
     }
 
     MPI_Comm_free(&newComm);
-    return;
+    return sent;
+}
+
+void enforceSiblingsAreNotPartitioned(std::vector<ot::TreeNode>& in,
+                                      MPI_Comm comm) {
+    // a group spanning three or more ranks needs more than one pass; elements
+    // only move to lower ranks, so this ends
+    int any = 1;
+    while (any) {
+        int sent = enforceSiblingsOnce(in, comm);
+        par::Mpi_Allreduce(&sent, &any, 1, MPI_MAX, comm);
+    }
+    if (!siblingGroupsAreWhole(in, comm)) {
+        int rank;
+        MPI_Comm_rank(comm, &rank);
+        // std::cout, not the logger: written before MPI_Abort ends the run
+        if (!rank)
+            std::cout << "enforceSiblingsAreNotPartitioned: a sibling group "
+                         "still spans a rank boundary"
+                      << std::endl;
+        MPI_Abort(comm, 1);
+    }
+}
+
+bool siblingGroupsAreWhole(const std::vector<ot::TreeNode>& in, MPI_Comm comm) {
+    MPI_Comm nonEmpty;
+    par::splitComm2way(in.empty(), &nonEmpty, comm);
+    int cut = 0;
+    if (!in.empty()) {
+        int rank, npes;
+        MPI_Comm_rank(nonEmpty, &rank);
+        MPI_Comm_size(nonEmpty, &npes);
+        ot::TreeNode first = in.front(), next;
+        MPI_Status status;
+        par::Mpi_Sendrecv(&first, 1, rank > 0 ? rank - 1 : MPI_PROC_NULL, 3,
+                          &next, 1, rank + 1 < npes ? rank + 1 : MPI_PROC_NULL,
+                          3, nonEmpty, &status);
+        cut = rank + 1 < npes && in.back().getParent() == next.getParent();
+    }
+    MPI_Comm_free(&nonEmpty);
+    int anyCut = 0;
+    par::Mpi_Allreduce(&cut, &anyCut, 1, MPI_MAX, comm);
+    return !anyCut;
 }
 
 void mergeKeys(std::vector<ot::SearchKey>& sKeys, std::vector<ot::Key>& keys) {

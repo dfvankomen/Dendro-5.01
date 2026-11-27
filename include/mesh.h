@@ -559,6 +559,9 @@ class Mesh {
     /**@brief indicates whether the f2e map has build or not*/
     bool m_uiIsF2ESetup;
 
+    /**@brief see getNumCoarsenDroppedAtRankBoundary() */
+    DendroIntL m_uiNumCoarsenDroppedAtRankBoundary = 0;
+
     /**@brief: async comunication context to support async ghost exchange*/
     std::vector<AsyncExchangeContex> m_uiMPIContexts;
 
@@ -1308,6 +1311,15 @@ class Mesh {
     /*** @brief: perform block dependancy flags flag block unzip depends on
      * ghost nodes.  */
     void flagBlockGhostDependancies();
+
+    /**
+     * @brief Count UNZIP_INDEPENDENT blocks that read ghost data, by unzipping
+     * a vector whose ghost CG nodes are NaN. Collective on the active comm.
+     * @param numIndependent : out if not null; global independent-block count.
+     * @return global count of independent blocks that read a ghost node; 0 on
+     * inactive ranks.
+     */
+    DendroIntL auditBlockTypeIndependence(DendroIntL *numIndependent = nullptr);
 
     /**@brief: returns if the block setup has performed or not*/
     inline bool isBlockSetep() { return m_uiIsBlockSetup; }
@@ -2803,6 +2815,15 @@ class Mesh {
      *
      */
     bool setMeshRefinementFlags(const std::vector<unsigned int> &refine_flags);
+
+    /**
+     * @brief Local count, from the last setMeshRefinementFlags, of elements
+     * flagged to coarsen whose sibling group spans a rank boundary (an upper
+     * bound on blocked merges).
+     */
+    DendroIntL getNumCoarsenDroppedAtRankBoundary() const {
+        return m_uiNumCoarsenDroppedAtRankBoundary;
+    }
 
     /**
      * @brief Perform linear transformation from octree coordinate to domain

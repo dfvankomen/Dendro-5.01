@@ -24,6 +24,10 @@
 
 #include "mesh.h"
 
+#include <cmath>
+#include <functional>
+#include <limits>
+
 #ifdef DENDRO_MESH_OMP
 // Don't rely on these arriving transitively: omp.h reaches here only via
 // profiler.h, and ompUtils.h only via sfcSort.h. Both are accidents of the
@@ -134,6 +138,12 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
     m_uiIsActive = m_uiGlobalRank < activeNpes;
 
     par::splitComm2way(m_uiIsActive, &m_uiCommActive, m_uiCommGlobal);
+    // no repartition here (restore keeps the written partition), so check
+    if (m_uiIsActive && !siblingGroupsAreWhole(in, m_uiCommActive) &&
+        m_uiGlobalRank == 0)
+        dendro::logger::warn(dendro::logger::Scope{"MESH"},
+                             "input partition splits a sibling group; it "
+                             "cannot coarsen on this mesh");
 
     m_uiMeshDomain_min = 0;
     m_uiMeshDomain_max = (1u << (m_uiMaxDepth));
@@ -431,6 +441,11 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
 
     shrinkOrExpandOctree(in, ld_tol, sf_k, m_uiIsActive, m_uiCommActive,
                          m_uiCommGlobal, getWeight);
+    const size_t szBeforeSiblings = in.size();
+
+    // a sibling group split across ranks cannot coarsen, which makes the mesh
+    // depend on the rank count; shrinkOrExpandOctree does not prevent it
+    if (m_uiIsActive) enforceSiblingsAreNotPartitioned(in, m_uiCommActive);
 
     m_uiMeshDomain_min = 0;
     m_uiMeshDomain_max = (1u << (m_uiMaxDepth));
@@ -500,9 +515,15 @@ Mesh::Mesh(std::vector<ot::TreeNode> &in, unsigned int k_s, unsigned int pOrder,
                       << m_uiActiveNpes << std::endl;
 
         if (in.size() <= 1) {
+            // std::cout, not the logger: written before MPI_Abort ends the run
             std::cout << "rank: " << m_uiActiveRank << " input octree of size "
                       << in.size() << " is too small for the current comm.  "
                       << std::endl;
+            if (in.size() < szBeforeSiblings)
+                std::cout << "rank: " << m_uiActiveRank
+                          << " was emptied by the sibling repartition; raise "
+                             "the grain size"
+                          << std::endl;
             MPI_Abort(m_uiCommGlobal, 1);
         }
 
@@ -9969,7 +9990,13 @@ void Mesh::flagBlockGhostDependancies() {
             }
 
             bool is_blk_independent;
-            unsigned int lookup;
+            // a neighbor that is anything but INDEPENDENT (W_DEPENDENT, or
+            // UNKWON: a pure ghost element with no local CG nodes) means the
+            // block's unzip padding reads ghost data
+            auto nbrIsGhostDep = [&](unsigned int lk) {
+                return lk != LOOK_UP_TABLE_DEFAULT &&
+                       this->getElementType(lk) != EType::INDEPENDENT;
+            };
             if (is_blk_internal_independent) {
                 is_blk_independent = true;
                 for (unsigned int elem =
@@ -9992,56 +10019,39 @@ void Mesh::flagBlockGhostDependancies() {
 
                     if (ei == emin) {
                         // OCT_DIR_LEFT
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_LEFT];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_LEFT]))
                             is_blk_independent = false;
                     }
 
                     if (ei == emax) {  // OCT_DIR_RIGHT
 
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_RIGHT];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_RIGHT]))
                             is_blk_independent = false;
                     }
 
                     if (ej == emin) {  // OCT_DIR_DOWN
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_DOWN];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_DOWN]))
                             is_blk_independent = false;
                     }
 
                     if (ej == emax) {  // OCT_DIR_UP
-                        lookup = m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_UP];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(
+                                m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_UP]))
                             is_blk_independent = false;
                     }
 
                     if (ek == emin) {  // OCT_DIR_BACK
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_BACK];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_BACK]))
                             is_blk_independent = false;
                     }
 
                     if (ek == emax) {  // OCT_DIR_FRONT
-                        lookup =
-                            m_uiE2EMapping[elem * NUM_FACES + OCT_DIR_FRONT];
-                        if (lookup != LOOK_UP_TABLE_DEFAULT &&
-                            (this->getElementType(lookup) ==
-                             EType::W_DEPENDENT))
+                        if (nbrIsGhostDep(m_uiE2EMapping[elem * NUM_FACES +
+                                                         OCT_DIR_FRONT]))
                             is_blk_independent = false;
                     }
 
@@ -10063,20 +10073,20 @@ void Mesh::flagBlockGhostDependancies() {
                                            0] !=
                                 blkDiagMap[dir * (2 * blk_ele_1d) + 2 * k +
                                            1]) {
-                                if ((this->getElementType(
-                                         blkDiagMap[2 * k + 0]) ==
-                                     EType::W_DEPENDENT) ||
-                                    (this->getElementType(
-                                         blkDiagMap[2 * k + 1]) ==
-                                     EType::W_DEPENDENT))
+                                if (nbrIsGhostDep(
+                                        blkDiagMap[dir * (2 * blk_ele_1d) +
+                                                   2 * k + 0]) ||
+                                    nbrIsGhostDep(
+                                        blkDiagMap[dir * (2 * blk_ele_1d) +
+                                                   2 * k + 1]))
                                     is_blk_independent = false;
 
                             } else if (blkDiagMap[dir * (2 * blk_ele_1d) +
                                                   2 * k + 0] !=
                                        LOOK_UP_TABLE_DEFAULT) {
-                                if ((this->getElementType(
-                                         blkDiagMap[2 * k + 0]) ==
-                                     EType::W_DEPENDENT))
+                                if (nbrIsGhostDep(
+                                        blkDiagMap[dir * (2 * blk_ele_1d) +
+                                                   2 * k + 0]))
                                     is_blk_independent = false;
                             }
                         }
@@ -10087,9 +10097,7 @@ void Mesh::flagBlockGhostDependancies() {
                     if (is_blk_independent) {
                         // check vertices.
                         for (unsigned int k = 0; k < blkVertMap.size(); k++) {
-                            if ((blkVertMap[k] != LOOK_UP_TABLE_DEFAULT) &&
-                                (this->getElementType(blkVertMap[k]) ==
-                                 EType::W_DEPENDENT)) {
+                            if (nbrIsGhostDep(blkVertMap[k])) {
                                 is_blk_independent = false;
                                 break;
                             }
@@ -10132,6 +10140,47 @@ void Mesh::flagBlockGhostDependancies() {
                              : 0.0);
         }
     }
+}
+
+DendroIntL Mesh::auditBlockTypeIndependence(DendroIntL *numIndependent) {
+    // unzip reads CG nodes through the element nodal values, so a block that
+    // reads any ghost slot gets a NaN in its unzip output; no exchange needed
+    if (!m_uiIsActive) return 0;
+
+    const unsigned int nAct = this->getDegOfFreedom();
+    std::function<double(double, double, double)> f =
+        [](double x, double y, double z) { return 1.0 + 1e-3 * (x + y + z); };
+    double *vc        = this->createVector<double>(f);
+    const double nanv = std::numeric_limits<double>::quiet_NaN();
+    for (unsigned int cg = 0; cg < nAct; cg++)
+        if (cg < m_uiNodeLocalBegin || cg >= m_uiNodeLocalEnd) vc[cg] = nanv;
+
+    double *u = this->createUnZippedVector<double>(0.0, 1);
+    this->unzip(vc, u, 1);
+
+    // independent blocks, and those among them that read ghost data
+    DendroIntL local[2] = {0, 0};
+    for (const auto &b : m_uiLocalBlockList) {
+        if (b.getBlockType() != BlockType::UNZIP_INDEPENDENT) continue;
+        local[0]++;
+        const size_t off = b.getOffset();
+        for (size_t i = off; i < off + b.getAlignedBlockSz(); i++)
+            if (std::isnan(u[i])) {
+                local[1]++;
+                break;
+            }
+    }
+    DendroIntL global[2] = {0, 0};
+    par::Mpi_Allreduce(local, global, 2, MPI_SUM, m_uiCommActive);
+    dendro::logger::debug(
+        dendro::logger::Scope{"MESH"},
+        "block-type audit: {} independent, {} read ghost data", global[0],
+        global[1]);
+
+    delete[] vc;
+    delete[] u;
+    if (numIndependent) *numIndependent = global[0];
+    return global[1];
 }
 
 void Mesh::performBlocksSetup(unsigned int cLev, unsigned int *tag,
@@ -14443,6 +14492,7 @@ bool Mesh::setMeshRefinementFlags(
                                       m_uiAllElements[ele].getLevel()));
 
     bool isMeshChangeLocal = false;
+    m_uiNumCoarsenDroppedAtRankBoundary = 0;
 
     for (unsigned int ele = m_uiElementLocalBegin; ele < m_uiElementLocalEnd;
          ele++) {
@@ -14491,6 +14541,18 @@ bool Mesh::setMeshRefinementFlags(
                 m_uiAllElements[ele].setFlag(
                     ((OCT_NO_CHANGE << NUM_LEVEL_BITS) |
                      m_uiAllElements[ele].getLevel()));
+                // ghosts included: a full group cut by a rank boundary
+                const ot::TreeNode parent = m_uiAllElements[ele].getParent();
+                unsigned int lo = ele, hi = ele;
+                while (lo > m_uiElementPreGhostBegin &&
+                       m_uiAllElements[lo - 1].getParent() == parent)
+                    lo--;
+                while (hi + 1 < m_uiElementPostGhostEnd &&
+                       m_uiAllElements[hi + 1].getParent() == parent)
+                    hi++;
+                if (hi - lo + 1 == NUM_CHILDREN &&
+                    (lo < m_uiElementLocalBegin || hi >= m_uiElementLocalEnd))
+                    m_uiNumCoarsenDroppedAtRankBoundary++;
             }
 
         } else if (refine_flags[rid] == OCT_SPLIT) {
@@ -14511,6 +14573,12 @@ bool Mesh::setMeshRefinementFlags(
         }
     }
 
+    if (m_uiNumCoarsenDroppedAtRankBoundary)
+        dendro::logger::warn(
+            dendro::logger::Scope{"MESH"},
+            "rank {}: {} element(s) flagged to coarsen whose sibling group "
+            "spans a rank boundary (upper bound on blocked merges)",
+            m_uiActiveRank, m_uiNumCoarsenDroppedAtRankBoundary);
     return isMeshChangeLocal;
 }
 
